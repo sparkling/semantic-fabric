@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Key, Tag, XChaCha20Poly1305, XNonce};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{SpillError, SpillIdentity};
 
@@ -30,13 +30,35 @@ pub(super) struct FrameBinding {
     pub(super) identity: SpillIdentity,
 }
 
-pub(super) struct EphemeralKey([u8; 32]);
+/// Stable heap owner for the per-query secret. The allocation is established
+/// while still all-zero and entropy is written directly into that allocation,
+/// so moving `EphemeralKey` moves only the `Box` pointer.
+pub(super) struct EphemeralKey(Box<Zeroizing<[u8; 32]>>);
 
 impl EphemeralKey {
     pub(super) fn generate() -> Result<Self, SpillError> {
-        let mut bytes = [0_u8; 32];
-        fill_key(&mut bytes, getrandom::fill)?;
-        Ok(Self(bytes))
+        Self::generate_with(getrandom::fill)
+    }
+
+    fn generate_with<E>(fill: impl FnOnce(&mut [u8]) -> Result<(), E>) -> Result<Self, SpillError> {
+        // Only zeroes are moved while constructing the allocation. Secret
+        // material is subsequently filled in place at its stable address.
+        let mut key = Self(Box::new(Zeroizing::new([0_u8; 32])));
+        key.fill_with(fill)?;
+        Ok(key)
+    }
+
+    fn fill_with<E>(
+        &mut self,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), E>,
+    ) -> Result<(), SpillError> {
+        if fill(&mut **self.0).is_err() {
+            // Do not rely solely on Drop: make partial entropy writes disappear
+            // before the error is constructed and returned.
+            self.erase();
+            return Err(SpillError::EntropyUnavailable);
+        }
+        Ok(())
     }
 
     fn bytes(&self) -> &[u8; 32] {
@@ -44,29 +66,22 @@ impl EphemeralKey {
     }
 
     pub(super) fn erase(&mut self) {
-        self.0.zeroize();
+        (**self.0).zeroize();
     }
 
     #[cfg(test)]
-    fn from_test_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    fn from_test_byte(byte: u8) -> Self {
+        Self::generate_with(|output| {
+            output.fill(byte);
+            Ok::<(), ()>(())
+        })
+        .expect("infallible test fill")
     }
 
     #[cfg(test)]
     fn is_erased(&self) -> bool {
-        self.0 == [0; 32]
+        self.bytes() == &[0; 32]
     }
-}
-
-fn fill_key<E>(
-    bytes: &mut [u8; 32],
-    fill: impl FnOnce(&mut [u8]) -> Result<(), E>,
-) -> Result<(), SpillError> {
-    if fill(bytes).is_err() {
-        bytes.zeroize();
-        return Err(SpillError::EntropyUnavailable);
-    }
-    Ok(())
 }
 
 impl fmt::Debug for EphemeralKey {
@@ -117,6 +132,9 @@ pub(super) fn seal(
 
     let (header, body_and_tag) = scratch.split_at_mut(HEADER_LEN);
     let (body, tag_output) = body_and_tag.split_at_mut(plaintext.len());
+    // RustCrypto's `ChaChaPoly1305` implements `ZeroizeOnDrop` when its
+    // `chacha20` backend has the enabled zeroize support. Thus its unavoidable
+    // working-key copy is erased independently of our stable owner.
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.bytes()));
     let tag = cipher
         .encrypt_in_place_detached(XNonce::from_slice(&nonce), header, body)
@@ -185,6 +203,8 @@ pub(super) fn open(
     tag.copy_from_slice(&scratch[tag_offset..]);
     let (header, body_and_tag) = scratch.split_at_mut(HEADER_LEN);
     let body = &mut body_and_tag[..payload_len];
+    // The RustCrypto cipher's owned working-key state implements
+    // `ZeroizeOnDrop`; see the compile-time trait assertion below.
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.bytes()));
     cipher
         .decrypt_in_place_detached(
@@ -240,7 +260,7 @@ mod tests {
             run: [7; 16],
             identity: SpillIdentity::new([8; 32], [9; 32], [10; 32]),
         };
-        let key = EphemeralKey::from_test_bytes([11; 32]);
+        let key = EphemeralKey::from_test_byte(11);
         let mut scratch = Vec::with_capacity(encoded_len(3).unwrap());
         seal(&mut scratch, &key, binding, 12, b"rdf").unwrap();
         assert_eq!(scratch.len(), HEADER_LEN + 3 + TAG_LEN);
@@ -258,20 +278,41 @@ mod tests {
 
     #[test]
     fn key_erasure_primitive_overwrites_all_bytes() {
-        let mut key = EphemeralKey::from_test_bytes([0xa5; 32]);
+        let mut key = EphemeralKey::from_test_byte(0xa5);
         key.erase();
         assert!(key.is_erased());
     }
 
     #[test]
     fn partial_entropy_failure_is_erased_before_error_return() {
-        let mut bytes = [0xa5; 32];
-        let result = fill_key(&mut bytes, |output| {
+        let mut key = EphemeralKey::from_test_byte(0xa5);
+        let result = key.fill_with(|output| {
             output[..7].fill(0x5a);
             Err::<(), ()>(())
         });
         assert_eq!(result, Err(SpillError::EntropyUnavailable));
-        assert_eq!(bytes, [0; 32]);
+        assert!(key.is_erased());
+    }
+
+    #[test]
+    fn entropy_is_filled_at_the_stable_owner_address() {
+        let mut fill_address = std::ptr::null();
+        let key = EphemeralKey::generate_with(|output| {
+            fill_address = output.as_ptr();
+            output.fill(0x5a);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        assert_eq!(fill_address, key.bytes().as_ptr());
+
+        let moved_owner = (key,);
+        assert_eq!(fill_address, moved_owner.0.bytes().as_ptr());
+    }
+
+    #[test]
+    fn rustcrypto_cipher_working_key_is_zeroized_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<XChaCha20Poly1305>();
     }
 
     #[test]
@@ -280,7 +321,7 @@ mod tests {
             run: [1; 16],
             identity: SpillIdentity::new([2; 32], [3; 32], [4; 32]),
         };
-        let key = EphemeralKey::from_test_bytes([5; 32]);
+        let key = EphemeralKey::from_test_byte(5);
         let capacity = encoded_len(7).unwrap();
         let mut original = Vec::with_capacity(capacity);
         seal(&mut original, &key, binding, 0, b"binding").unwrap();

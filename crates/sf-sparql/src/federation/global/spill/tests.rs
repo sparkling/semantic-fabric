@@ -177,9 +177,32 @@ fn bounded_blocks_round_trip_as_one_reused_borrowed_buffer() {
 
     run.write_block(b"first bounded block").unwrap();
     run.write_block(b"second bounded block").unwrap();
-    assert_eq!(run.read_next().unwrap(), b"first bounded block");
-    assert_eq!(run.read_next().unwrap(), b"second bounded block");
+    let first = run.read_next().unwrap();
+    let first_address = first.as_ptr();
+    assert_eq!(first, b"first bounded block");
+    let second = run.read_next().unwrap();
+    assert_eq!(
+        second.as_ptr(),
+        first_address,
+        "scratch allocation is reused"
+    );
+    assert_eq!(second, b"second bounded block");
     assert_eq!(run.read_next(), Err(SpillError::EndOfBlocks));
+}
+
+#[test]
+fn reader_refuses_to_grow_beyond_the_preallocated_scratch_capacity() {
+    let fixture = Fixture::new();
+    let config = SpillConfig::new(64, 1).unwrap();
+    let budget = budget_for(config.reservation_shape().unwrap());
+    let mut run = SecureSpillRun::create(fixture.root(), &budget, identity(35), config).unwrap();
+    run.write_block(b"authenticated but no longer capacity-backed")
+        .unwrap();
+    run.test_discard_scratch_capacity();
+
+    assert_eq!(run.read_next(), Err(SpillError::LengthMismatch));
+    assert!(run.test_scratch_is_erased());
+    assert_eq!(run.read_next(), Err(SpillError::RunFailed));
 }
 
 #[test]
@@ -334,7 +357,7 @@ fn cancellation_before_read_rejects_and_drop_cleans_the_existing_block() {
 }
 
 #[test]
-fn seal_failure_is_sticky_and_cleanup_failure_takes_precedence() {
+fn seal_failure_is_sticky_and_cleanup_residue_is_outside_released_admission() {
     let fixture = Fixture::new();
     let config = SpillConfig::new(16, 1).unwrap();
     let shape = config.reservation_shape().unwrap();
@@ -361,7 +384,10 @@ fn seal_failure_is_sticky_and_cleanup_failure_takes_precedence() {
     let sibling = run_path.join("unowned");
     fs::write(&sibling, b"keep").unwrap();
     assert_eq!(run.finish(), Err(SpillError::CleanupFailed));
+    // The residue is real, but a per-query admission token cannot honestly
+    // represent global disk high-water after its owner has ended.
     assert_eq!(budget.reserved(), ReservationShape::ZERO);
     assert!(sibling.exists());
+    assert_eq!(fs::read(&sibling).unwrap(), b"keep");
     assert_eq!(fs::read_dir(&run_path).unwrap().count(), 1);
 }

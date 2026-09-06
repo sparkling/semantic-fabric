@@ -7,11 +7,17 @@
 //! here because Linux offers no unprivileged compare-and-unlink-by-inode call.
 //! Retained-byte accounting covers the reusable logical frame buffer; fixed
 //! stack state and allocator bookkeeping remain outside QueryBudget's model.
+//! A cleanup failure releases the per-query admission token even if residue
+//! remains. This is not a global disk high-water accounting scheme; production
+//! use requires a janitor plus global residue accounting. Successful reads keep
+//! one bounded plaintext block resident until the next mutation or run drop;
+//! memory locking, swap exclusion, and plaintext copied by callers are outside
+//! this prototype's claim.
 
 use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::ops::Range;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use sf_core::query_control::{QueryBudget, QueryControl, ReservationShape, ReservationToken};
 use zeroize::Zeroize;
@@ -23,7 +29,6 @@ use filesystem::{OwnedArtifacts, MAX_BLOCKS};
 use frame::{EphemeralKey, FrameBinding, HEADER_LEN, TAG_LEN};
 
 const MAX_PLAINTEXT_BLOCK: usize = 16 * 1024 * 1024;
-const MAX_ROOT_COMPONENTS: usize = 64;
 const HELD_FILE_DESCRIPTORS: u64 = 3;
 const HELD_OPERATOR_TASKS: u64 = 1;
 
@@ -181,7 +186,9 @@ impl SecureSpillRun {
         identity: SpillIdentity,
         config: SpillConfig,
     ) -> Result<Self, SpillError> {
-        validate_root(root)?;
+        // Validate before reservation, then validate again inside the
+        // descriptor-opening authority so it remains safe when called alone.
+        filesystem::validate_root_path(root)?;
         let shape = config.reservation_shape()?;
 
         // This single all-or-nothing token is acquired before the first heap
@@ -284,6 +291,10 @@ impl SecureSpillRun {
             .map_err(|_| SpillError::IoFailure)
     }
 
+    /// Returns plaintext borrowed from the one quota-reserved scratch buffer.
+    /// Its residency is bounded by the run and it is overwritten/erased by the
+    /// next mutable operation or Drop. Callers can copy it; those copies are
+    /// intentionally outside this private substrate's accounting claim.
     fn read_next(&mut self) -> Result<&[u8], SpillError> {
         if self.failed {
             return Err(SpillError::RunFailed);
@@ -329,6 +340,11 @@ impl SecureSpillRun {
         if opened.size != expected as u64 {
             return Err(SpillError::LengthMismatch);
         }
+        // Never let an authenticated or malformed length turn this reader into
+        // an allocator. Capacity was admitted and allocated exactly once.
+        if expected > self.scratch.capacity() {
+            return Err(SpillError::LengthMismatch);
+        }
 
         self.scratch.zeroize();
         self.scratch.resize(expected, 0);
@@ -362,6 +378,10 @@ impl SecureSpillRun {
         self.cleaned = complete;
         self.scratch.zeroize();
         self.key.erase();
+        // `_reservation` is deliberately released when `self` drops even on
+        // CleanupFailed. Retaining/leaking it would not govern orphaned bytes
+        // and would falsely present per-query admission as global high-water
+        // accounting. Such residue remains a non-production janitor concern.
         if !complete {
             Err(SpillError::CleanupFailed)
         } else if was_failed {
@@ -437,31 +457,6 @@ impl Drop for SecureSpillRun {
         self.key.erase();
         // `_reservation` then drops exactly once and restores all dimensions.
     }
-}
-
-fn validate_root(root: &Path) -> Result<(), SpillError> {
-    if !root.is_absolute() || root == Path::new("/") {
-        return Err(SpillError::InvalidConfiguration);
-    }
-    let mut normal_components = 0_usize;
-    for component in root.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(_) => {
-                normal_components = normal_components
-                    .checked_add(1)
-                    .ok_or(SpillError::InvalidConfiguration)?;
-                if normal_components > MAX_ROOT_COMPONENTS {
-                    return Err(SpillError::InvalidConfiguration);
-                }
-            }
-            _ => return Err(SpillError::InvalidConfiguration),
-        }
-    }
-    if normal_components == 0 {
-        return Err(SpillError::InvalidConfiguration);
-    }
-    Ok(())
 }
 
 fn read_exact_redacted(reader: &mut impl Read, buffer: &mut [u8]) -> Result<(), SpillError> {

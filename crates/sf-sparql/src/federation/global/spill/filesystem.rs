@@ -10,6 +10,7 @@ use rustix::io::Errno;
 use super::SpillError;
 
 pub(super) const MAX_BLOCKS: usize = 64;
+const MAX_ROOT_COMPONENTS: usize = 64;
 const NAME_LEN: usize = 37;
 const NAME_ATTEMPTS: usize = 8;
 const RUN_PREFIX: &[u8; 4] = b"run-";
@@ -340,7 +341,35 @@ impl OwnedArtifacts {
     }
 }
 
+pub(super) fn validate_root_path(path: &Path) -> Result<(), SpillError> {
+    if !path.is_absolute() || path == Path::new("/") {
+        return Err(SpillError::InvalidConfiguration);
+    }
+    let mut normal_components = 0_usize;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(_) => {
+                normal_components = normal_components
+                    .checked_add(1)
+                    .ok_or(SpillError::InvalidConfiguration)?;
+                if normal_components > MAX_ROOT_COMPONENTS {
+                    return Err(SpillError::InvalidConfiguration);
+                }
+            }
+            _ => return Err(SpillError::InvalidConfiguration),
+        }
+    }
+    if normal_components == 0 {
+        return Err(SpillError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
 fn open_root(path: &Path) -> Result<File, SpillError> {
+    // Defense in depth: `OwnedArtifacts` validates independently rather than
+    // trusting its caller to have enforced the bounded component walk.
+    validate_root_path(path)?;
     let root_fd = open("/", directory_open_flags(), Mode::empty())
         .map_err(|_| SpillError::RootUnavailable)?;
     let mut current = File::from(root_fd);
@@ -405,5 +434,17 @@ mod tests {
         assert_eq!(std::fs::read_dir(run).unwrap().count(), 0);
         assert!(artifacts.cleanup());
         assert_eq!(fixture.entries(), 0);
+    }
+
+    #[test]
+    fn owned_artifact_entry_rejects_an_overlong_component_walk_itself() {
+        let mut path = std::path::PathBuf::from("/");
+        for _ in 0..=MAX_ROOT_COMPONENTS {
+            path.push("bounded");
+        }
+        assert!(matches!(
+            OwnedArtifacts::create(&path),
+            Err(SpillError::InvalidConfiguration)
+        ));
     }
 }
