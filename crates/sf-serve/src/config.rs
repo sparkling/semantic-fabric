@@ -248,7 +248,7 @@ impl ServeConfig {
         self.max_form_body_len
     }
 
-    /// Current redacted readiness and activation identity.
+    /// Current redacted readiness, generation identity, and opaque state revision.
     pub fn runtime_readiness(&self) -> Result<RuntimeReadiness, ActivationError> {
         self.runtime.readiness()
     }
@@ -272,22 +272,49 @@ impl ServeConfig {
         expected: RuntimeReadiness,
         candidate: RuntimeSnapshot,
     ) -> Result<ActivationId, ActivationError> {
+        self.ensure_runtime_transitions_open()?;
         for source_id in self.query_mode.source_ids().into_iter().flatten() {
             if !candidate.registry().contains_source(source_id) {
                 return Err(ActivationError::CandidateMissingSource { source_id });
             }
         }
-        self.runtime.activate(expected, candidate)
+        self.ensure_runtime_transitions_open()?;
+        let result = self.runtime.activate(expected, candidate);
+        self.normalize_shutdown_race(result)
     }
 
-    /// Reject new requests for the current generation while preserving every
-    /// lease already in flight.
+    /// Reject new requests only if the complete expected state is current,
+    /// while preserving every lease already in flight.
     pub fn mark_runtime_not_ready(
         &self,
-        expected: ActivationId,
+        expected: RuntimeReadiness,
         cause: ReadinessCause,
-    ) -> Result<(), ActivationError> {
-        self.runtime.mark_not_ready(expected, cause)
+    ) -> Result<RuntimeReadiness, ActivationError> {
+        self.ensure_runtime_transitions_open()?;
+        let result = self.runtime.mark_not_ready(expected, cause);
+        self.normalize_shutdown_race(result)
+    }
+
+    fn ensure_runtime_transitions_open(&self) -> Result<(), ActivationError> {
+        if *self.shutdown.borrow() == ShutdownPhase::Running {
+            Ok(())
+        } else {
+            Err(ActivationError::ShuttingDown)
+        }
+    }
+
+    fn normalize_shutdown_race<T>(
+        &self,
+        result: Result<T, ActivationError>,
+    ) -> Result<T, ActivationError> {
+        match result {
+            Err(ActivationError::StaleState { .. })
+                if *self.shutdown.borrow() != ShutdownPhase::Running =>
+            {
+                Err(ActivationError::ShuttingDown)
+            }
+            result => result,
+        }
     }
 
     pub(crate) fn runtime_lease(&self) -> Result<RuntimeSnapshotLease, SnapshotUnavailable> {
@@ -319,12 +346,7 @@ impl ServeConfig {
     }
 
     pub(crate) fn begin_shutdown(&self) {
-        if let Ok(RuntimeReadiness::Ready { activation_id }) = self.runtime_readiness() {
-            let _ = self
-                .runtime
-                .mark_not_ready(activation_id, ReadinessCause::Administrative);
-        }
-        self.shutdown.send_if_modified(|phase| {
+        let began = self.shutdown.send_if_modified(|phase| {
             if *phase == ShutdownPhase::Running {
                 *phase = ShutdownPhase::Draining;
                 true
@@ -332,6 +354,11 @@ impl ServeConfig {
                 false
             }
         });
+        if began {
+            let _ = self
+                .runtime
+                .mark_current_not_ready(ReadinessCause::Administrative);
+        }
     }
 
     /// Cancel identities that did not complete within the graceful drain bound.

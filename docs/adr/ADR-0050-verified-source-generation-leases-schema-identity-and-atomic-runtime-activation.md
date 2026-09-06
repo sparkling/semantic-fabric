@@ -18,10 +18,10 @@ Identity V1 kernel is implemented as a non-authorizing content-identity utility.
 the first closed production-shaped profile. Its private, opt-in `sf-sql`
 diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after bounded
 rich observation, but its two-version operator observations are untracked and
-its evidence runner explicitly withholds qualification. The planned
-committed-unavailability path is incomplete, and no serving binding carries the
-three Observed Schema Identity digests. Serving bindings now carry separate
-ontology and sealed semantic-admission digests; neither is schema authority.
+its evidence runner explicitly withholds qualification. The committed snapshot
+now carries either that whole identity or one closed unavailable reason into an
+exact backend/`SourceId`-bound serving field. It remains non-authorizing and the
+three identity digests enter no compiler, cache, readiness or execution input.
 
 The 2026-09-05 Phase 5 foundation is implemented in Rust: `RuntimeSnapshot` owns
 a source-keyed immutable registry and deterministic compile identities; one
@@ -31,18 +31,24 @@ polling and retains it through response EOF, error, cancellation, or drop; and
 generation-bound not-ready state rejects new requests as a redacted pre-I/O
 `503`. Checked activation identities prevent ABA, complete expected-readiness
 comparison rejects ready-to-not-ready and slow-candidate races, and stale
-watchers cannot mark a newer activation unavailable. Deterministic tests cover
-old/new HTTP results, failed construction, stale and slow candidates, response
-lifetime, and last-pin release.
+watchers cannot mark a newer activation unavailable. An opaque checked state
+revision now advances on activation and every accepted not-ready observation,
+including same-cause repeats. Request-generation failures carry their exact
+ready-state witness; shutdown atomically fences the current state after closing
+transitions, so it cannot leave a racing activation ready, and a transition
+losing that race reports `ShuttingDown` rather than a misleading stale state. Deterministic tests
+cover these races, old/new HTTP results, failed construction, response lifetime,
+and last-pin release. Checked revision exhaustion terminalizes readiness with a
+closed `StateRevisionExhausted` cause before reporting the counter error.
 
 The publication primitive is crate-private and deliberately non-authorizing.
 The construction path now requires bounded sealed `M ⋈ T` validation before a
 binding, and its policy-v2 receipt partitions compile/cache identity. The
 all-or-nothing registry validates every source before constructing any binding. There is still
 no general off-path reload candidate builder, automatic catalogue observation,
-capability validation, repeated-not-ready state revision, drift watcher,
-backend-generation lease, Observed Schema Identity propagation, public reload
-surface, or live Direct Mapping. Therefore this is not full Phase 5 completion
+capability validation, drift watcher, backend-generation lease, authorizing
+Observed Schema Identity admission, public reload surface, or live Direct
+Mapping. Therefore this is not full Phase 5 completion
 and grants no live Direct Mapping, backend or production admission.
 
 The current Rust serving path places its startup mapping, ontology,
@@ -306,12 +312,11 @@ persist across generations.
    mapping, ontology, capability and policy digest has a canonical contract.
 4. **PostgreSQL verified lease:** bind one owned protected transaction through
    revalidation, compilation and complete streaming.
-5. **Atomic activation and drift (foundation implemented 2026-09-05):** the
+5. **Atomic activation and drift (revision fence implemented 2026-09-06):** the
    immutable registry, private whole-state publication primitive, readiness,
-   ready-to-not-ready/slow-candidate rejection and body-lifetime leases are
-   implemented. The general off-path reload candidate builder, automatic
-   watcher, opaque revision for repeated not-ready observations and public
-   reload lifecycle remain.
+   body-lifetime leases, full-state CAS, repeated-not-ready revision and
+   shutdown/activation fence are implemented. The general off-path reload
+   candidate builder, automatic watcher and public reload lifecycle remain.
 6. **Typed row identity and Direct Mapping:** validate/generate from the leased
    schema and admit backend profiles one at a time.
 

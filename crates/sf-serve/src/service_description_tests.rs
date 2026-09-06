@@ -302,9 +302,9 @@ async fn accept_and_method_contract_is_exact() {
 #[tokio::test]
 async fn discovery_bypasses_query_admission_and_runtime_readiness() {
     let config = single_config();
-    let activation = config.runtime_readiness().unwrap().activation_id();
+    let expected = config.runtime_readiness().unwrap();
     config
-        .mark_runtime_not_ready(activation, ReadinessCause::SourceUnavailable)
+        .mark_runtime_not_ready(expected, ReadinessCause::SourceUnavailable)
         .unwrap();
     let held = config
         .request_admission_permits()

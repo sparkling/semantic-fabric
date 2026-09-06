@@ -89,7 +89,9 @@ mod semantic_admission_tests;
 #[cfg(test)]
 mod test_support;
 
-pub use activation::{ActivationError, ActivationId, ReadinessCause, RuntimeReadiness};
+pub use activation::{
+    ActivationError, ActivationId, ReadinessCause, RuntimeReadiness, RuntimeStateRevision,
+};
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::BackendProfile;
 pub use config::{

@@ -39,6 +39,28 @@ impl ActivationId {
     }
 }
 
+/// Opaque process-local ordering token for every runtime-state transition.
+///
+/// Unlike [`ActivationId`], this advances when readiness changes without publishing a new snapshot.
+/// Callers can retain and compare the token but cannot construct or advance it.
+///
+/// ```compile_fail
+/// let _forged = sf_serve::RuntimeStateRevision(7);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RuntimeStateRevision(u64);
+
+impl RuntimeStateRevision {
+    const INITIAL: Self = Self(1);
+
+    fn successor(self) -> Result<Self, ActivationError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(ActivationError::StateRevisionExhausted { current: self })
+    }
+}
+
 /// Closed, non-sensitive reason why new requests may not acquire a snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadinessCause {
@@ -46,6 +68,7 @@ pub enum ReadinessCause {
     SourceUnavailable,
     CapabilityDrift,
     Administrative,
+    StateRevisionExhausted,
 }
 
 /// Public readiness view; it never carries source names, SQL, paths, or secrets.
@@ -53,9 +76,11 @@ pub enum ReadinessCause {
 pub enum RuntimeReadiness {
     Ready {
         activation_id: ActivationId,
+        revision: RuntimeStateRevision,
     },
     NotReady {
         activation_id: ActivationId,
+        revision: RuntimeStateRevision,
         cause: ReadinessCause,
     },
 }
@@ -63,7 +88,15 @@ pub enum RuntimeReadiness {
 impl RuntimeReadiness {
     pub const fn activation_id(self) -> ActivationId {
         match self {
-            Self::Ready { activation_id } | Self::NotReady { activation_id, .. } => activation_id,
+            Self::Ready { activation_id, .. } | Self::NotReady { activation_id, .. } => {
+                activation_id
+            }
+        }
+    }
+
+    pub const fn state_revision(self) -> RuntimeStateRevision {
+        match self {
+            Self::Ready { revision, .. } | Self::NotReady { revision, .. } => revision,
         }
     }
 }
@@ -72,12 +105,20 @@ impl RuntimeReadiness {
 #[derive(Clone)]
 pub(crate) struct RuntimeSnapshotLease {
     activation_id: ActivationId,
+    state_revision: RuntimeStateRevision,
     snapshot: Arc<RuntimeSnapshot>,
 }
 
 impl RuntimeSnapshotLease {
     pub const fn activation_id(&self) -> ActivationId {
         self.activation_id
+    }
+
+    pub(crate) const fn ready_state_witness(&self) -> RuntimeReadiness {
+        RuntimeReadiness::Ready {
+            activation_id: self.activation_id,
+            revision: self.state_revision,
+        }
     }
 
     #[cfg(test)]
@@ -155,6 +196,7 @@ impl fmt::Debug for RuntimeSnapshotLease {
         formatter
             .debug_struct("RuntimeSnapshotLease")
             .field("activation_id", &self.activation_id)
+            .field("state_revision", &self.state_revision)
             .field("epoch", &self.snapshot.epoch())
             .field("ontology_digest", &self.snapshot.ontology_digest())
             .finish()
@@ -164,10 +206,12 @@ impl fmt::Debug for RuntimeSnapshotLease {
 enum RuntimeState {
     Ready {
         activation_id: ActivationId,
+        revision: RuntimeStateRevision,
         snapshot: Arc<RuntimeSnapshot>,
     },
     NotReady {
         activation_id: ActivationId,
+        revision: RuntimeStateRevision,
         cause: ReadinessCause,
     },
 }
@@ -181,18 +225,52 @@ impl RuntimeState {
         }
     }
 
+    const fn state_revision(&self) -> RuntimeStateRevision {
+        match self {
+            Self::Ready { revision, .. } | Self::NotReady { revision, .. } => *revision,
+        }
+    }
+
     const fn readiness(&self) -> RuntimeReadiness {
         match self {
-            Self::Ready { activation_id, .. } => RuntimeReadiness::Ready {
+            Self::Ready {
+                activation_id,
+                revision,
+                ..
+            } => RuntimeReadiness::Ready {
                 activation_id: *activation_id,
+                revision: *revision,
             },
             Self::NotReady {
                 activation_id,
+                revision,
                 cause,
             } => RuntimeReadiness::NotReady {
                 activation_id: *activation_id,
+                revision: *revision,
                 cause: *cause,
             },
+        }
+    }
+
+    fn not_ready_transition(&self, cause: ReadinessCause) -> (Self, Option<ActivationError>) {
+        match self.state_revision().successor() {
+            Ok(revision) => (
+                Self::NotReady {
+                    activation_id: self.activation_id(),
+                    revision,
+                    cause,
+                },
+                None,
+            ),
+            Err(error) => (
+                Self::NotReady {
+                    activation_id: self.activation_id(),
+                    revision: self.state_revision(),
+                    cause: ReadinessCause::StateRevisionExhausted,
+                },
+                Some(error),
+            ),
         }
     }
 }
@@ -200,8 +278,8 @@ impl RuntimeState {
 /// Single owner of runtime readiness and whole-generation publication.
 ///
 /// Candidate construction is complete before [`Self::activate`] is called. The
-/// final write-lock section only compares the expected identity and replaces the
-/// complete state, so readers observe either the old or new generation.
+/// final write-lock section compares the complete expected state and replaces
+/// it, so readers observe either the old or new generation.
 pub(crate) struct RuntimeManager {
     state: RwLock<RuntimeState>,
 }
@@ -211,6 +289,7 @@ impl RuntimeManager {
         Self {
             state: RwLock::new(RuntimeState::Ready {
                 activation_id: ActivationId::INITIAL,
+                revision: RuntimeStateRevision::INITIAL,
                 snapshot: Arc::new(initial),
             }),
         }
@@ -237,14 +316,17 @@ impl RuntimeManager {
         match &*state {
             RuntimeState::Ready {
                 activation_id,
+                revision,
                 snapshot,
             } => Ok(RuntimeSnapshotLease {
                 activation_id: *activation_id,
+                state_revision: *revision,
                 snapshot: snapshot.clone(),
             }),
             RuntimeState::NotReady {
                 activation_id,
                 cause,
+                ..
             } => Err(SnapshotUnavailable::NotReady {
                 activation_id: *activation_id,
                 cause: *cause,
@@ -271,7 +353,6 @@ impl RuntimeManager {
         expected: RuntimeReadiness,
         candidate: RuntimeSnapshot,
     ) -> Result<ActivationId, ActivationError> {
-        let next = expected.activation_id().successor()?;
         let candidate = Arc::new(candidate);
         let mut state = self
             .state
@@ -281,10 +362,13 @@ impl RuntimeManager {
         if actual != expected {
             return Err(ActivationError::StaleState { expected, actual });
         }
+        let next = actual.activation_id().successor()?;
+        let revision = actual.state_revision().successor()?;
         let previous = std::mem::replace(
             &mut *state,
             RuntimeState::Ready {
                 activation_id: next,
+                revision,
                 snapshot: candidate,
             },
         );
@@ -297,32 +381,41 @@ impl RuntimeManager {
     /// administrative transition. Existing leases remain valid.
     pub(crate) fn mark_not_ready(
         &self,
-        expected: ActivationId,
+        expected: RuntimeReadiness,
         cause: ReadinessCause,
-    ) -> Result<(), ActivationError> {
+    ) -> Result<RuntimeReadiness, ActivationError> {
         let mut state = self
             .state
             .write()
             .map_err(|_| ActivationError::StatePoisoned)?;
-        let actual = state.activation_id();
+        let actual = state.readiness();
         if actual != expected {
-            return Err(ActivationError::StaleGeneration { expected, actual });
+            return Err(ActivationError::StaleState { expected, actual });
         }
-        if matches!(&*state, RuntimeState::NotReady { .. }) {
-            return Err(ActivationError::AlreadyNotReady {
-                activation_id: actual,
-            });
-        }
-        let previous = std::mem::replace(
-            &mut *state,
-            RuntimeState::NotReady {
-                activation_id: actual,
-                cause,
-            },
-        );
+        let (next, error) = state.not_ready_transition(cause);
+        let readiness = next.readiness();
+        let previous = std::mem::replace(&mut *state, next);
         drop(state);
         drop(previous);
-        Ok(())
+        error.map_or(Ok(readiness), Err)
+    }
+
+    /// Establish an administrative fence against whichever generation and
+    /// readiness event is current at the write-lock linearization point.
+    pub(crate) fn mark_current_not_ready(
+        &self,
+        cause: ReadinessCause,
+    ) -> Result<RuntimeReadiness, ActivationError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ActivationError::StatePoisoned)?;
+        let (next, error) = state.not_ready_transition(cause);
+        let readiness = next.readiness();
+        let previous = std::mem::replace(&mut *state, next);
+        drop(state);
+        drop(previous);
+        error.map_or(Ok(readiness), Err)
     }
 }
 
@@ -348,22 +441,58 @@ pub(crate) enum SnapshotUnavailable {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ActivationError {
-    #[error("runtime activation expected state {expected:?} but found {actual:?}")]
+    #[error("runtime transition expected state {expected:?} but found {actual:?}")]
     StaleState {
         expected: RuntimeReadiness,
         actual: RuntimeReadiness,
     },
-    #[error("runtime activation expected {expected:?} but found {actual:?}")]
-    StaleGeneration {
-        expected: ActivationId,
-        actual: ActivationId,
-    },
     #[error("runtime activation identity is exhausted at {current:?}")]
     ActivationIdExhausted { current: ActivationId },
-    #[error("runtime generation {activation_id:?} is already not ready")]
-    AlreadyNotReady { activation_id: ActivationId },
+    #[error("runtime state revision is exhausted at {current:?}")]
+    StateRevisionExhausted { current: RuntimeStateRevision },
     #[error("runtime candidate does not contain selected {source_id}")]
     CandidateMissingSource { source_id: SourceId },
+    #[error("runtime transition is unavailable during shutdown")]
+    ShuttingDown,
     #[error("runtime activation state is unavailable")]
     StatePoisoned,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_and_state_counters_fail_closed_at_exhaustion() {
+        let activation = ActivationId(u64::MAX);
+        assert!(matches!(
+            activation.successor(),
+            Err(ActivationError::ActivationIdExhausted { current }) if current == activation
+        ));
+
+        let revision = RuntimeStateRevision(u64::MAX);
+        assert_eq!(
+            revision.successor(),
+            Err(ActivationError::StateRevisionExhausted { current: revision })
+        );
+
+        let state = RuntimeState::NotReady {
+            activation_id: ActivationId::INITIAL,
+            revision,
+            cause: ReadinessCause::SchemaDrift,
+        };
+        let (terminal, error) = state.not_ready_transition(ReadinessCause::SourceUnavailable);
+        assert_eq!(
+            terminal.readiness(),
+            RuntimeReadiness::NotReady {
+                activation_id: ActivationId::INITIAL,
+                revision,
+                cause: ReadinessCause::StateRevisionExhausted,
+            }
+        );
+        assert_eq!(
+            error,
+            Some(ActivationError::StateRevisionExhausted { current: revision })
+        );
+    }
 }

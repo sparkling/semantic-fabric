@@ -206,6 +206,7 @@ fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
 
     let next_id = manager.activate(old_state, snapshot("second")).unwrap();
     assert!(next_id > old_id);
+    assert!(manager.readiness().unwrap().state_revision() > old_state.state_revision());
     assert_eq!(
         old_lease
             .snapshot()
@@ -219,7 +220,7 @@ fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
         manager.activate(old_state, snapshot("stale")),
         Err(ActivationError::StaleState {
             expected,
-            actual: RuntimeReadiness::Ready { activation_id },
+            actual: RuntimeReadiness::Ready { activation_id, .. },
         }) if expected == old_state && activation_id == next_id
     ));
     assert_eq!(
@@ -267,15 +268,17 @@ fn rejected_candidate_construction_leaves_the_active_snapshot_unchanged() {
 fn drift_blocks_new_leases_until_a_new_generation_activates() {
     let manager = RuntimeManager::new(snapshot("active"));
     let in_flight = manager.lease().unwrap();
+    let original_state = manager.readiness().unwrap();
     let original_id = in_flight.activation_id();
 
-    manager
-        .mark_not_ready(original_id, ReadinessCause::SchemaDrift)
+    let drifted = manager
+        .mark_not_ready(original_state, ReadinessCause::SchemaDrift)
         .unwrap();
     assert_eq!(
         manager.readiness().unwrap(),
         RuntimeReadiness::NotReady {
             activation_id: original_id,
+            revision: drifted.state_revision(),
             cause: ReadinessCause::SchemaDrift,
         }
     );
@@ -286,26 +289,35 @@ fn drift_blocks_new_leases_until_a_new_generation_activates() {
             cause: ReadinessCause::SchemaDrift,
         }) if activation_id == original_id
     ));
+    let repeated_drift = manager
+        .mark_not_ready(drifted, ReadinessCause::SchemaDrift)
+        .unwrap();
+    assert_eq!(repeated_drift.activation_id(), original_id);
+    assert!(repeated_drift.state_revision() > drifted.state_revision());
+    let unavailable = manager
+        .mark_not_ready(repeated_drift, ReadinessCause::SourceUnavailable)
+        .unwrap();
+    assert_eq!(unavailable.activation_id(), original_id);
+    assert!(unavailable.state_revision() > drifted.state_revision());
     assert!(matches!(
-        manager.mark_not_ready(original_id, ReadinessCause::SourceUnavailable),
-        Err(ActivationError::AlreadyNotReady { activation_id })
-            if activation_id == original_id
+        manager.mark_not_ready(drifted, ReadinessCause::CapabilityDrift),
+        Err(ActivationError::StaleState { expected, actual })
+            if expected == drifted && actual == unavailable
     ));
 
-    let not_ready = manager.readiness().unwrap();
     let replacement_id = manager
-        .activate(not_ready, snapshot("replacement"))
+        .activate(unavailable, snapshot("replacement"))
         .unwrap();
     assert!(replacement_id > original_id);
     assert!(matches!(
         manager.readiness().unwrap(),
-        RuntimeReadiness::Ready { activation_id } if activation_id == replacement_id
+        RuntimeReadiness::Ready { activation_id, .. } if activation_id == replacement_id
     ));
     assert_eq!(in_flight.activation_id(), original_id);
     assert!(matches!(
-        manager.mark_not_ready(original_id, ReadinessCause::SchemaDrift),
-        Err(ActivationError::StaleGeneration { expected, actual })
-            if expected == original_id && actual == replacement_id
+        manager.mark_not_ready(original_state, ReadinessCause::SchemaDrift),
+        Err(ActivationError::StaleState { expected, actual })
+            if expected == original_state && actual.activation_id() == replacement_id
     ));
 }
 
@@ -327,7 +339,7 @@ fn slow_candidate_cannot_overwrite_a_faster_successor() {
         slow.join().unwrap(),
         Err(ActivationError::StaleState {
             expected: stale,
-            actual: RuntimeReadiness::Ready { activation_id },
+            actual: RuntimeReadiness::Ready { activation_id, .. },
         }) if stale == expected && activation_id == fast_id
     ));
     assert_eq!(
@@ -357,7 +369,7 @@ fn candidate_built_before_drift_cannot_heal_the_not_ready_state() {
     });
 
     manager
-        .mark_not_ready(activation_id, ReadinessCause::SchemaDrift)
+        .mark_not_ready(expected, ReadinessCause::SchemaDrift)
         .unwrap();
     let drifted = manager.readiness().unwrap();
     release_slow.send(()).unwrap();

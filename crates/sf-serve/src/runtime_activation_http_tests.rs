@@ -109,9 +109,9 @@ async fn new_http_requests_switch_whole_snapshots_after_activation() {
 #[tokio::test]
 async fn not_ready_rejects_before_polling_the_request_body() {
     let config = Arc::new(config("Alice"));
-    let activation_id = config.runtime_readiness().unwrap().activation_id();
+    let expected = config.runtime_readiness().unwrap();
     config
-        .mark_runtime_not_ready(activation_id, ReadinessCause::SchemaDrift)
+        .mark_runtime_not_ready(expected, ReadinessCause::SchemaDrift)
         .unwrap();
 
     let polled = Arc::new(AtomicBool::new(false));

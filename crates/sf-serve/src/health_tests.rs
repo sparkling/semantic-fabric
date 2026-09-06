@@ -56,9 +56,9 @@ async fn body(response: axum::response::Response) -> Bytes {
 #[tokio::test]
 async fn livez_reports_only_event_loop_liveness() {
     let config = config();
-    let activation = config.runtime_readiness().unwrap().activation_id();
+    let expected = config.runtime_readiness().unwrap();
     config
-        .mark_runtime_not_ready(activation, ReadinessCause::SourceUnavailable)
+        .mark_runtime_not_ready(expected, ReadinessCause::SourceUnavailable)
         .unwrap();
 
     let response = router(config)
@@ -84,9 +84,9 @@ async fn readyz_tracks_ready_not_ready_and_reactivated_snapshots() {
     assert_eq!(ready.headers()["x-content-type-options"], "nosniff");
     assert_eq!(body(ready).await, r#"{"status":"ready"}"#);
 
-    let activation = config.runtime_readiness().unwrap().activation_id();
+    let expected = config.runtime_readiness().unwrap();
     config
-        .mark_runtime_not_ready(activation, ReadinessCause::SchemaDrift)
+        .mark_runtime_not_ready(expected, ReadinessCause::SchemaDrift)
         .unwrap();
     let not_ready = router(config.clone())
         .oneshot(request("/readyz", Body::empty()))
