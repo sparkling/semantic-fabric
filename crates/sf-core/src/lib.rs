@@ -38,6 +38,7 @@ pub mod ir;
 pub mod query_control;
 pub mod schema;
 pub mod schema_identity;
+pub mod security_context;
 pub mod term;
 
 pub use affinity::{SourceId, SourceIdError, SourceMapping};
