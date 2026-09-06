@@ -6,5 +6,10 @@
 mod mapping;
 mod semantic_key;
 
+// This is a private Linux comparison substrate only. It is deliberately not
+// wired into planning or serving while ADR-0040 remains proposed.
+#[cfg(target_os = "linux")]
+mod spill;
+
 #[cfg(test)]
 mod tests;

@@ -30,6 +30,10 @@ oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-
 thiserror.workspace = true
 libc.workspace = true          # Linux parser-worker process containment (ADR-0053)
 sha2.workspace = true          # observed held-executable fingerprint; not release authority
+chacha20poly1305 = { version = "=0.10.1", default-features = false } # private ADR-0040 comparison: audited pure-Rust XChaCha20-Poly1305
+getrandom = "=0.3.4"           # OS CSPRNG for ephemeral spill keys and non-secret names
+rustix = { version = "=1.1.4", features = ["fs"] } # descriptor-relative no-follow spill authority
+zeroize = "=1.9.0"             # explicit ephemeral-key erasure on every drop path
 rayon = "1.12"                  # chunked term-gen batch parallelism, exec_core (ADR-0006 rayon/tokio pool separation, M4 wave-2 batch restructure)
 quick_cache = "0.7"             # PlanCache production drop-in (ADR-0007 cache.rs doc comment): approximately-LRU, never a wholesale clear
 rusqlite = { workspace = true, features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
