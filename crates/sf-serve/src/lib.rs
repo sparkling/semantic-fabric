@@ -34,6 +34,8 @@ pub mod run;
 pub mod source;
 pub mod stream;
 
+#[allow(dead_code)] // ADR-0018 vocabulary; no enforcement call site exists yet.
+mod access_telemetry;
 mod activation;
 mod admission;
 mod backend;
