@@ -1,3 +1,4 @@
+use super::context::{context_read, validate_runtime_role, PgRuntimeRoleFacts};
 use super::*;
 use crate::source::POSTGRES_GENERATION_SCOPE_SETTING;
 
@@ -14,6 +15,38 @@ fn valid_context() -> PgSessionContext {
         row_security: "on".to_owned(),
         session_replication_role: "origin".to_owned(),
     }
+}
+
+fn valid_runtime_role() -> PgRuntimeRoleFacts {
+    PgRuntimeRoleFacts {
+        superuser: false,
+        inherits_privileges: false,
+        creates_roles: false,
+        creates_databases: false,
+        replicates: false,
+        bypasses_row_security: false,
+        has_role_memberships: false,
+        owns_database: false,
+        owns_public_schema: false,
+        owns_mapped_table: false,
+        database_connect: true,
+        database_create: false,
+        database_temporary: false,
+        schema_usage: true,
+        schema_create: false,
+        every_mapped_table_select: true,
+        any_mapped_table_mutation: false,
+        collation_probe_execute: true,
+    }
+}
+
+fn assert_runtime_role_drift(change: impl FnOnce(&mut PgRuntimeRoleFacts)) {
+    let mut facts = valid_runtime_role();
+    change(&mut facts);
+    assert!(matches!(
+        validate_runtime_role(&facts),
+        Err(PgGenerationError::CapabilityDrift)
+    ));
 }
 
 fn observed_identity() -> ObservedSchemaIdentityV1 {
@@ -47,14 +80,50 @@ fn direct_generation(source_id: SourceId) -> Arc<PostgresDirectGeneration> {
 #[test]
 fn session_context_rejects_role_or_policy_drift() {
     let valid = valid_context();
-    assert!(validate_session_context(&valid, 42, false, false).is_ok());
+    assert!(validate_session_context(&valid, 42).is_ok());
 
     let mut changed = valid.clone();
     changed.session_role_oid += 1;
-    assert!(validate_session_context(&changed, 42, false, false).is_err());
-    assert!(validate_session_context(&valid, 0, false, false).is_err());
-    assert!(validate_session_context(&valid, 42, true, false).is_err());
-    assert!(validate_session_context(&valid, 42, false, true).is_err());
+    assert!(matches!(
+        validate_session_context(&changed, 42),
+        Err(PgGenerationError::CapabilityDrift)
+    ));
+    assert!(matches!(
+        validate_session_context(&valid, 0),
+        Err(PgGenerationError::CapabilityDrift)
+    ));
+}
+
+#[test]
+fn unreadable_session_context_is_source_unavailable() {
+    assert!(matches!(
+        context_read::<(), _>(Err("transport or row-decode failure")),
+        Err(PgGenerationError::SourceUnavailable)
+    ));
+}
+
+#[test]
+fn runtime_role_requires_the_exact_restricted_privilege_boundary() {
+    assert!(validate_runtime_role(&valid_runtime_role()).is_ok());
+
+    assert_runtime_role_drift(|facts| facts.superuser = true);
+    assert_runtime_role_drift(|facts| facts.inherits_privileges = true);
+    assert_runtime_role_drift(|facts| facts.creates_roles = true);
+    assert_runtime_role_drift(|facts| facts.creates_databases = true);
+    assert_runtime_role_drift(|facts| facts.replicates = true);
+    assert_runtime_role_drift(|facts| facts.bypasses_row_security = true);
+    assert_runtime_role_drift(|facts| facts.has_role_memberships = true);
+    assert_runtime_role_drift(|facts| facts.owns_database = true);
+    assert_runtime_role_drift(|facts| facts.owns_public_schema = true);
+    assert_runtime_role_drift(|facts| facts.owns_mapped_table = true);
+    assert_runtime_role_drift(|facts| facts.database_connect = false);
+    assert_runtime_role_drift(|facts| facts.database_create = true);
+    assert_runtime_role_drift(|facts| facts.database_temporary = true);
+    assert_runtime_role_drift(|facts| facts.schema_usage = false);
+    assert_runtime_role_drift(|facts| facts.schema_create = true);
+    assert_runtime_role_drift(|facts| facts.every_mapped_table_select = false);
+    assert_runtime_role_drift(|facts| facts.any_mapped_table_mutation = true);
+    assert_runtime_role_drift(|facts| facts.collation_probe_execute = false);
 }
 
 #[test]

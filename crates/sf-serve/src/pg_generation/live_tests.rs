@@ -22,6 +22,8 @@ mod budget_expiry;
 mod fixture;
 #[path = "live_tests/request_route.rs"]
 mod request_route;
+#[path = "live_tests/runtime_role.rs"]
+mod runtime_role;
 use fixture::*;
 
 const LIVE_TEST_URL: &str = "SF_PG_GENERATION_TEST_URL";
@@ -183,6 +185,7 @@ async fn verified_generation_lifecycle_is_coherent_and_fail_closed() {
     let fixture = Arc::new(Fixture::create(root_config).await);
     let work_fixture = Arc::clone(&fixture);
     let outcome = tokio::spawn(async move {
+        runtime_role::exercise(&work_fixture).await;
         request_route::exercise(&work_fixture).await;
         exercise_verified_generation_lifecycle(work_fixture).await;
     })

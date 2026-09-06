@@ -10,8 +10,8 @@ pub(super) struct Fixture {
     root: Client,
     pub(super) admin: Client,
     pub(super) pool: deadpool_postgres::Pool,
-    database: String,
-    role: String,
+    pub(super) database: String,
+    pub(super) role: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -40,20 +40,30 @@ impl Fixture {
         let provisioned = async {
             root.batch_execute(&format!(
                 "CREATE ROLE {role} LOGIN PASSWORD '{READER_PASSWORD}' \
-                 NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+                 NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE \
+                 NOREPLICATION NOBYPASSRLS"
             ))
             .await
             .map_err(|error| error.to_string())?;
             root.batch_execute(&format!("CREATE DATABASE {database}"))
                 .await
                 .map_err(|error| error.to_string())?;
+            root.batch_execute(&format!(
+                "REVOKE ALL ON DATABASE {database} FROM PUBLIC; \
+                 REVOKE ALL ON DATABASE {database} FROM {role}; \
+                 GRANT CONNECT ON DATABASE {database} TO {role};"
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
 
             let mut database_config = root_config.clone();
             database_config.dbname(&database);
             let admin = connect_result(database_config.clone()).await?;
             admin
                 .batch_execute(&format!(
-                    "CREATE TABLE public.parent (id integer PRIMARY KEY, label text NOT NULL); \
+                    "REVOKE ALL ON SCHEMA public FROM PUBLIC; \
+                 REVOKE ALL ON SCHEMA public FROM {role}; \
+                 CREATE TABLE public.parent (id integer PRIMARY KEY, label text NOT NULL); \
                  CREATE TABLE public.child ( \
                    id integer PRIMARY KEY, parent_id integer NOT NULL, \
                    alternate_parent_id integer, label text NOT NULL, \
@@ -62,9 +72,12 @@ impl Fixture {
                  ); \
                  INSERT INTO public.parent VALUES (1, 'parent'); \
                  INSERT INTO public.child VALUES (1, 1, 1, 'child'); \
-                 GRANT CONNECT ON DATABASE {database} TO {role}; \
+                 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC; \
+                 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role}; \
                  GRANT USAGE ON SCHEMA public TO {role}; \
-                 GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role};"
+                 GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role}; \
+                 GRANT EXECUTE ON FUNCTION \
+                   pg_catalog.pg_database_collation_actual_version(oid) TO {role};"
                 ))
                 .await
                 .map_err(|error| error.to_string())?;
