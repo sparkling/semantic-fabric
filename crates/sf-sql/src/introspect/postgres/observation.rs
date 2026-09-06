@@ -2,20 +2,14 @@
 
 use std::fmt;
 
-use tokio_postgres::{GenericClient, Row};
-
 use sf_core::schema_identity::{
     ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
     SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
-    MAX_RELATIONS_V1,
 };
-
-use tokio_postgres::types::Type;
 
 use crate::schema::TableSchema;
 
-use super::legacy_query::{query_bounded_mapped, TypedQueryParameter};
-
+mod capture;
 #[allow(dead_code)]
 mod catalog_decode;
 #[allow(dead_code)]
@@ -33,20 +27,8 @@ mod source_type;
 #[allow(dead_code)]
 mod trigger_evidence;
 
+pub(super) use capture::{capture_registered_observation, qualify_profile_guard};
 pub(in crate::introspect::postgres) use catalog_sql::RICH_CAPTURE_QUERY_INVENTORY_V1;
-
-pub(super) async fn qualify_profile_guard<C>(
-    client: &C,
-) -> Result<(), PostgresSchemaIdentityUnavailableV1>
-where
-    C: GenericClient + Sync,
-{
-    let row: Row = client
-        .query_one(catalog_sql::RichCatalogueQueryV1::Guard.sql(), &[])
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
-    catalog_decode::decode_guard_row_v1(&row).map(|_| ())
-}
 
 pub const POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.structural-v1";
@@ -103,102 +85,6 @@ fn build_registered_observation(
         identity,
         direct_mapping_tables,
     })
-}
-
-/// Assemble a registered observation from the private normalized relation
-/// graph and bounded raw constraint evidence. This is the single pure seam
-/// that the eventual SQL snapshot adapter must call.
-#[allow(dead_code)]
-fn build_registered_observation_from_raw(
-    server_version_num: i32,
-    relations: relation::Postgres16NormalizedRelationsV1,
-    raw_constraints: Vec<constraints::Postgres16RawConstraintV1>,
-) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
-    let constraints =
-        constraints::normalize_postgres16_constraints_v1(&relations, raw_constraints)?;
-    build_registered_observation(server_version_num, relations.into_relations(), constraints)
-}
-
-/// Capture and assemble the rich profile inside one caller-owned snapshot.
-/// Every row is decoded and bounded before the pure normalizers run.
-#[allow(dead_code)]
-pub(super) async fn capture_registered_observation<C>(
-    client: &C,
-    schema_name: &str,
-    legacy_tables: &[TableSchema],
-) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1>
-where
-    C: GenericClient + Sync,
-{
-    let guard_row = client
-        .query_one(catalog_sql::RichCatalogueQueryV1::Guard.sql(), &[])
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
-    let guard = catalog_decode::decode_guard_row_v1(&guard_row)?;
-    let server_version_num = guard.server_version_num;
-    let text_limit = catalog_decode::MAX_CATALOG_TEXT_BYTES_V1 as i32;
-    let relation_limit = MAX_RELATIONS_V1 as i64 + 1;
-    let relations = query_bounded_mapped(
-        client,
-        catalog_sql::RichCatalogueQueryV1::Relations.sql(),
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&text_limit, Type::INT4),
-            TypedQueryParameter::new(&relation_limit, Type::INT8),
-        ],
-        MAX_RELATIONS_V1,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::RichRelations,
-            )
-        },
-        |row| catalog_decode::decode_relation_row_v1(&row)?.into_catalog_fact(),
-    )
-    .await?;
-    let attribute_limit = relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1 as i64 + 1;
-    let attributes = query_bounded_mapped(
-        client,
-        catalog_sql::RichCatalogueQueryV1::Attributes.sql(),
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&text_limit, Type::INT4),
-            TypedQueryParameter::new(&attribute_limit, Type::INT8),
-        ],
-        relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes,
-            )
-        },
-        |row| catalog_decode::decode_attribute_row_v1(&row)?.into_catalog_fact(&guard),
-    )
-    .await?;
-    let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
-    relation::compare_postgres16_legacy_coordinates_v1(legacy_tables, &normalized)?;
-    let mut raw_constraints = constraints::observed_not_null_constraints_v1(&normalized)?;
-    let (remaining_constraints, constraint_limit) =
-        constraint_budget::constraint_catalog_budget_v1(raw_constraints.len())?;
-    let mut catalog_constraints = query_bounded_mapped(
-        client,
-        catalog_sql::RichCatalogueQueryV1::Constraints.sql(),
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&constraint_limit, Type::INT8),
-        ],
-        remaining_constraints,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::RawConstraints,
-            )
-        },
-        |row| catalog_decode::decode_constraint_row_v1(&row)?.into_raw_constraint(),
-    )
-    .await?;
-    raw_constraints.append(&mut catalog_constraints);
-    build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
 }
 
 fn registered_profile_id(

@@ -8,7 +8,7 @@ mod guard;
 mod relation_attribute;
 
 pub(super) use constraint::{decode_constraint_row_v1, CatalogConstraintRowV1};
-pub(super) use guard::decode_guard_row_v1;
+pub(super) use guard::{decode_guard_row_v1, CatalogGuardRowV1};
 pub(super) use relation_attribute::{
     decode_attribute_row_v1, decode_relation_row_v1, CatalogAttributeRowV1, CatalogRelationRowV1,
 };

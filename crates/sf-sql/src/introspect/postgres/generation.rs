@@ -12,15 +12,18 @@ use tokio_postgres::{error::SqlState, GenericClient};
 use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 
+use super::evidence::{
+    NoopPostgresObservationObserverV1, PostgresObservationObserverV1, PostgresObservationStreamV1,
+};
 use super::legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
 use super::legacy_inventory::LegacyCatalogueQueryV1;
 use super::legacy_query::{
-    query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
-    MAX_LEGACY_RELATIONS_PG16_V1,
+    query_bounded_mapped_observed, BoundedQueryObservationV1, TypedQueryParameter,
+    LEGACY_RELATION_QUERY_LIMIT_PG16_V1, MAX_LEGACY_RELATIONS_PG16_V1,
 };
 use super::legacy_row::{LegacyRow, LEGACY_TEXT_QUERY_LIMIT_PG16_V1};
 use super::{
-    introspect_in_schema, observation, Postgres16PublicObservedSnapshotV1, RUNTIME_SCHEMA,
+    introspect_in_schema_observed, observation, Postgres16PublicObservedSnapshotV1, RUNTIME_SCHEMA,
 };
 
 const EXPLICIT_TRANSACTION_PROBE_SQL: &str =
@@ -114,29 +117,47 @@ pub async fn introspect_postgres_public_observed_snapshot_in_transaction_classif
 where
     C: GenericClient + Sync,
 {
+    let mut observer = NoopPostgresObservationObserverV1;
+    introspect_postgres_public_observed_snapshot_in_transaction_classified_observed(
+        client,
+        &mut observer,
+    )
+    .await
+}
+
+async fn introspect_postgres_public_observed_snapshot_in_transaction_classified_observed<C, O>(
+    client: &C,
+    observer: &mut O,
+) -> std::result::Result<Postgres16PublicObservedSnapshotV1, PostgresGenerationObservationFailure>
+where
+    C: GenericClient + Sync,
+    O: PostgresObservationObserverV1,
+{
     require_generation_transaction(client)
         .await
         .map_err(|_| PostgresGenerationObservationFailure::SourceUnavailable)?;
-    collect_observed_snapshot_classified(client).await
+    collect_observed_snapshot_classified(client, observer).await
 }
 
 /// Collect a complete legacy projection and either an available rich identity
 /// or one closed unavailable reason. Rich failures are downgraded only after a
 /// successful savepoint recovery; guard failures that make legacy decoding or
 /// runtime name resolution unsafe remain fatal.
-pub(super) async fn collect_postgres_public_observed_snapshot_allow_unavailable<C>(
+pub(super) async fn collect_postgres_public_observed_snapshot_allow_unavailable_observed<C, O>(
     client: &C,
+    observer: &mut O,
 ) -> Result<Postgres16PublicObservedSnapshotV1>
 where
     C: GenericClient + Sync,
+    O: PostgresObservationObserverV1,
 {
     require_generation_transaction(client).await?;
-    let pending_unavailability = match observation::qualify_profile_guard(client).await {
+    let pending_unavailability = match observation::qualify_profile_guard(client, observer).await {
         Ok(()) => None,
         Err(reason) if guard_failure_may_downgrade(reason) => Some(reason),
         Err(reason) => return Err(closed_observation_error(reason)),
     };
-    let legacy_tables = collect_legacy_public_tables(client).await?;
+    let legacy_tables = collect_legacy_public_tables(client, observer).await?;
     if let Some(reason) = pending_unavailability {
         return Ok(Postgres16PublicObservedSnapshotV1::unavailable(
             legacy_tables,
@@ -144,27 +165,42 @@ where
         ));
     }
 
-    client
+    if client
         .batch_execute(OBSERVATION_SAVEPOINT_SQL)
         .await
-        .map_err(|_| redacted("PostgreSQL observed snapshot savepoint failed"))?;
-    match observation::capture_registered_observation(client, RUNTIME_SCHEMA, &legacy_tables).await
+        .is_err()
+    {
+        observer.savepoint_failed();
+        return Err(redacted("PostgreSQL observed snapshot savepoint failed"));
+    }
+    observer.savepoint_active();
+    match observation::capture_registered_observation(
+        client,
+        RUNTIME_SCHEMA,
+        &legacy_tables,
+        observer,
+    )
+    .await
     {
         Ok(observation) => {
-            client
-                .batch_execute(OBSERVATION_RELEASE_SQL)
-                .await
-                .map_err(|_| redacted("PostgreSQL observed snapshot savepoint release failed"))?;
+            if client.batch_execute(OBSERVATION_RELEASE_SQL).await.is_err() {
+                observer.savepoint_failed();
+                return Err(redacted(
+                    "PostgreSQL observed snapshot savepoint release failed",
+                ));
+            }
+            observer.savepoint_released();
             Ok(Postgres16PublicObservedSnapshotV1::available(
                 legacy_tables,
                 observation,
             ))
         }
         Err(reason) => {
-            client
-                .batch_execute(OBSERVATION_RECOVER_SQL)
-                .await
-                .map_err(|_| redacted("PostgreSQL observed snapshot recovery failed"))?;
+            if client.batch_execute(OBSERVATION_RECOVER_SQL).await.is_err() {
+                observer.savepoint_failed();
+                return Err(redacted("PostgreSQL observed snapshot recovery failed"));
+            }
+            observer.savepoint_recovered();
             Ok(Postgres16PublicObservedSnapshotV1::unavailable(
                 legacy_tables,
                 reason,
@@ -272,21 +308,28 @@ fn classify_lock_sqlstate(code: Option<&SqlState>) -> PostgresPublicTableLockFai
     }
 }
 
-async fn collect_observed_snapshot_classified<C>(
+async fn collect_observed_snapshot_classified<C, O>(
     client: &C,
+    observer: &mut O,
 ) -> std::result::Result<Postgres16PublicObservedSnapshotV1, PostgresGenerationObservationFailure>
 where
     C: GenericClient + Sync,
+    O: PostgresObservationObserverV1,
 {
-    observation::qualify_profile_guard(client)
+    observation::qualify_profile_guard(client, observer)
         .await
         .map_err(classify_observation_failure)?;
-    let legacy_tables = collect_legacy_public_tables(client)
+    let legacy_tables = collect_legacy_public_tables(client, observer)
         .await
         .map_err(|_| PostgresGenerationObservationFailure::SourceUnavailable)?;
-    let rich = observation::capture_registered_observation(client, RUNTIME_SCHEMA, &legacy_tables)
-        .await
-        .map_err(classify_observation_failure)?;
+    let rich = observation::capture_registered_observation(
+        client,
+        RUNTIME_SCHEMA,
+        &legacy_tables,
+        observer,
+    )
+    .await
+    .map_err(classify_observation_failure)?;
     Ok(Postgres16PublicObservedSnapshotV1::available(
         legacy_tables,
         rich,
@@ -303,11 +346,15 @@ fn classify_observation_failure(
     }
 }
 
-async fn collect_legacy_public_tables<C>(client: &C) -> Result<Vec<crate::schema::TableSchema>>
+async fn collect_legacy_public_tables<C, O>(
+    client: &C,
+    observer: &mut O,
+) -> Result<Vec<crate::schema::TableSchema>>
 where
     C: GenericClient + Sync,
+    O: PostgresObservationObserverV1,
 {
-    let rows = query_bounded(
+    let tables = query_bounded_mapped_observed(
         client,
         LegacyCatalogueQueryV1::Tables.sql(),
         &[
@@ -315,15 +362,21 @@ where
             TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
             TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
         ],
-        MAX_LEGACY_RELATIONS_PG16_V1,
-        "table rows",
+        Error::Postgres,
+        || {
+            Error::Introspection(
+                "PostgreSQL introspection table rows exceeds the configured limit".into(),
+            )
+        },
+        |row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"),
+        BoundedQueryObservationV1::new(
+            MAX_LEGACY_RELATIONS_PG16_V1,
+            PostgresObservationStreamV1::LegacyTables,
+            observer,
+        ),
     )
     .await?;
-    let tables: Vec<String> = rows
-        .into_iter()
-        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
-        .collect::<Result<_>>()?;
-    introspect_in_schema(client, RUNTIME_SCHEMA, &tables).await
+    introspect_in_schema_observed(client, RUNTIME_SCHEMA, &tables, observer).await
 }
 
 async fn require_generation_transaction<C>(client: &C) -> Result<()>

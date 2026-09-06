@@ -9,7 +9,11 @@ description = "semantic-fabric W3C RDB2RDF conformance harness + EARL + M⋈T SH
 [features]
 default = ["sqlserver-backend"]
 sqlserver-backend = ["sf-sql/sqlserver-backend"]
-evidence-receipts = ["dep:cargo-platform", "dep:libc"]
+evidence-receipts = [
+    "dep:cargo-platform",
+    "dep:libc",
+    "sf-sql/postgres-observation-evidence",
+]
 
 [dependencies]
 sf-core.workspace = true
@@ -73,6 +77,11 @@ required-features = ["evidence-receipts"]
 [[bin]]
 name = "current-sf-cli-artifact-observation"
 path = "src/bin/current-sf-cli-artifact-observation.rs"
+required-features = ["evidence-receipts"]
+
+[[bin]]
+name = "postgres-observation-qualification"
+path = "src/bin/postgres-observation-qualification.rs"
 required-features = ["evidence-receipts"]
 
 [[test]]

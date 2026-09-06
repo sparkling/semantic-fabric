@@ -45,6 +45,21 @@ pub(super) fn checked_total_name_bytes(
         .ok_or_else(|| input_limit("table-name bytes"))
 }
 
+pub(super) fn require_same_schema(
+    expected: &str,
+    parent: &str,
+    child_table: &str,
+    constraint: &str,
+) -> Result<()> {
+    if parent == expected {
+        return Ok(());
+    }
+    Err(Error::Introspection(format!(
+        "PostgreSQL foreign key {constraint:?} on {child_table:?} crosses from schema \
+         {expected:?} to {parent:?}; schema-qualified foreign keys are not supported"
+    )))
+}
+
 fn input_limit(resource: &'static str) -> Error {
     Error::Introspection(format!(
         "PostgreSQL introspection {resource} exceeds the configured limit"

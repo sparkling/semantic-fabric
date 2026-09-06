@@ -228,6 +228,13 @@ pub use postgres::{
     POSTGRES_LEGACY_CATALOGUE_QUERY_COUNT_V1, POSTGRES_PROFILE_PREQUALIFICATION_QUERY_COUNT_V1,
     POSTGRES_RICH_CAPTURE_CATALOGUE_QUERY_COUNT_V1,
 };
+#[cfg(feature = "postgres-observation-evidence")]
+pub use postgres::{
+    introspect_postgres_public_observed_snapshot_with_evidence, PostgresObservationCommitV1,
+    PostgresObservationEvidenceV1, PostgresObservationPhaseV1, PostgresObservationSavepointV1,
+    PostgresObservationStreamEvidenceV1, PostgresObservationStreamTerminalV1,
+    PostgresObservationStreamV1,
+};
 
 // --- MySQL (integration-tested, ADR-0012) -------------------------------------
 

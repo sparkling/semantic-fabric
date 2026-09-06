@@ -20,6 +20,8 @@ odbc-backend = ["dep:odbc-api"]
 oracle-backend = ["dep:oracle"]
 ## Enable REST backends (Snowflake/BigQuery/Athena/Databricks via reqwest).
 rest-backends = ["dep:reqwest", "dep:serde_json"]
+## Record bounded PostgreSQL observation qualification evidence. Development only.
+postgres-observation-evidence = []
 
 [dependencies]
 sf-core.workspace = true
