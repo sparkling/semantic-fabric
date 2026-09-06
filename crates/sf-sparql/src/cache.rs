@@ -30,6 +30,10 @@ use crate::{federation::SourceAffineUnionArm, Plan, Result, Tbox};
 mod profile;
 use profile::ProfiledPlanCaches;
 
+#[allow(dead_code)] // Private ADR-0018 seam; request enforcement is a later slice.
+#[path = "cache_security.rs"]
+mod security;
+
 /// Closed compiler-governance profile used to partition cache authority.
 ///
 /// The governed variant is intentionally dormant until every owned compiler

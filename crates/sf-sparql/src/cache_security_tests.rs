@@ -1,0 +1,236 @@
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+
+use sf_core::security_context::{
+    PolicySnapshotId, RequestAttributesIdentity, SecurityContext, SubjectIdentity,
+};
+use sf_core::{SourceId, SourceMapping};
+use sf_sql::Dialect;
+
+use super::{SecurityCachedPlan, SecurityCompileError, SecurityPlanCache, SecurityPlanKey};
+use crate::cache::CompileProfileId;
+use crate::{CompilerBinding, CompilerSchema, Tbox};
+
+const QUERY: &str = "SELECT * WHERE { ?s ?p ?o }";
+
+fn digest(value: u8) -> [u8; 32] {
+    [value; 32]
+}
+
+fn policy(value: u8) -> PolicySnapshotId {
+    PolicySnapshotId::from_digest(digest(value)).unwrap()
+}
+
+fn context(policy_value: u8, subject: u8, attributes: u8) -> SecurityContext {
+    SecurityContext::new(
+        policy(policy_value),
+        SubjectIdentity::from_digest(digest(subject)).unwrap(),
+        RequestAttributesIdentity::from_digest(digest(attributes)).unwrap(),
+    )
+}
+
+fn binding() -> CompilerBinding {
+    CompilerBinding::new(
+        SourceMapping::new(SourceId::new(0).unwrap(), Vec::new()),
+        Dialect::Sqlite,
+        Tbox::default(),
+        CompilerSchema::from_unverified_observation(Vec::new()),
+        8,
+    )
+}
+
+fn security_cache() -> SecurityPlanCache {
+    SecurityPlanCache::new(NonZeroUsize::new(8).unwrap())
+}
+
+#[test]
+fn identical_security_context_reuses_only_its_own_plan() {
+    let binding = binding();
+    let cache = security_cache();
+    let compiler = binding.for_security_policy(policy(1), &cache);
+    let context = context(1, 2, 3);
+
+    let first = compiler.compile_shared(&context, QUERY).unwrap();
+    let second = compiler.compile_shared(&context, QUERY).unwrap();
+
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(cache.len(), 1);
+    assert_eq!(binding.cache_len(), 0);
+}
+
+#[test]
+fn policy_subject_and_attributes_each_partition_plan_reuse() {
+    let binding = binding();
+    let cache = security_cache();
+    let policy_one = binding.for_security_policy(policy(1), &cache);
+    let policy_four = binding.for_security_policy(policy(4), &cache);
+
+    let baseline = policy_one.compile_shared(&context(1, 2, 3), QUERY).unwrap();
+    let changed_policy = policy_four
+        .compile_shared(&context(4, 2, 3), QUERY)
+        .unwrap();
+    let changed_subject = policy_one.compile_shared(&context(1, 4, 3), QUERY).unwrap();
+    let changed_attributes = policy_one.compile_shared(&context(1, 2, 4), QUERY).unwrap();
+
+    for candidate in [&changed_policy, &changed_subject, &changed_attributes] {
+        assert!(!Arc::ptr_eq(&baseline, candidate));
+    }
+    assert_eq!(cache.len(), 4);
+    assert_eq!(binding.cache_len(), 0);
+}
+
+#[test]
+fn security_scoped_compile_never_reuses_an_unscoped_entry_or_changes_plan() {
+    let binding = binding();
+    let cache = security_cache();
+    let unscoped = binding.compile_shared(QUERY).unwrap();
+    let secured = binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&context(1, 2, 3), QUERY)
+        .unwrap();
+
+    assert!(!Arc::ptr_eq(&unscoped, &secured));
+    assert_eq!(format!("{unscoped:?}"), format!("{secured:?}"));
+    assert_eq!(binding.cache_len(), 1);
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn policy_mismatch_rejects_before_parse_or_cache_read_or_write() {
+    let binding = binding();
+    let cache = security_cache();
+    binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&context(1, 2, 3), QUERY)
+        .unwrap();
+    cache.reset_access_counts();
+
+    let error = binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&context(4, 2, 3), "not valid SPARQL")
+        .unwrap_err();
+
+    assert!(matches!(error, SecurityCompileError::PolicyMismatch));
+    assert_eq!(cache.access_counts(), (0, 0));
+    assert_eq!(cache.len(), 1);
+}
+
+#[derive(Default)]
+struct ConstantHasher;
+
+impl Hasher for ConstantHasher {
+    fn finish(&self) -> u64 {
+        0
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {}
+}
+
+fn forced_hash(key: &SecurityPlanKey) -> u64 {
+    let mut hasher = ConstantHasher;
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[test]
+fn forced_hash_collision_cannot_cross_security_partitions() {
+    let binding = binding();
+    let cache = security_cache();
+    let query = spargebra::SparqlParser::new().parse_query(QUERY).unwrap();
+    let first_context = context(1, 2, 3);
+    let second_context = context(1, 4, 3);
+    let first_key = SecurityPlanKey::from_canonical_with_hash(
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        first_context.cache_identity(),
+        7,
+        query.to_string(),
+    );
+    let second_key = SecurityPlanKey::from_canonical_with_hash(
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        second_context.cache_identity(),
+        7,
+        query.to_string(),
+    );
+
+    assert_eq!(forced_hash(&first_key), forced_hash(&second_key));
+    assert_ne!(first_key, second_key);
+    let mut collision_map: HashMap<SecurityPlanKey, (), BuildHasherDefault<ConstantHasher>> =
+        HashMap::default();
+    collision_map.insert(first_key.clone(), ());
+    assert!(!collision_map.contains_key(&second_key));
+
+    let plan = binding.compile_uncached_shared(QUERY).unwrap();
+    cache.put(
+        first_key,
+        SecurityCachedPlan::from_shared(
+            binding.scope(),
+            CompileProfileId::Uncontrolled,
+            first_context.cache_identity(),
+            plan,
+        ),
+    );
+    assert!(cache.get(&second_key).is_none());
+}
+
+#[test]
+fn corrupted_cached_identity_fails_closed() {
+    let binding = binding();
+    let cache = security_cache();
+    let request_context = context(1, 2, 3);
+    let wrong_context = context(1, 4, 3);
+    let query = spargebra::SparqlParser::new().parse_query(QUERY).unwrap();
+    let key = SecurityPlanKey::from_query(
+        &query,
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        request_context.cache_identity(),
+    );
+    let plan = binding.compile_uncached_shared(QUERY).unwrap();
+    cache.put(
+        key,
+        SecurityCachedPlan::from_shared(
+            binding.scope(),
+            CompileProfileId::Uncontrolled,
+            wrong_context.cache_identity(),
+            plan,
+        ),
+    );
+
+    let error = binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&request_context, QUERY)
+        .unwrap_err();
+    assert!(matches!(error, SecurityCompileError::CacheIdentityMismatch));
+}
+
+#[test]
+fn cache_and_error_diagnostics_do_not_render_identity_material() {
+    let binding = binding();
+    let cache = security_cache();
+    let context = context(0xa1, 0xb2, 0xc3);
+    let compiler = binding.for_security_policy(policy(0xa1), &cache);
+    let key = SecurityPlanKey::from_query(
+        &spargebra::SparqlParser::new().parse_query(QUERY).unwrap(),
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        context.cache_identity(),
+    );
+    let key_output = format!("{key:?} {cache:?}");
+    let mismatch = binding
+        .for_security_policy(policy(0xd4), &cache)
+        .compile_shared(&context, QUERY)
+        .unwrap_err();
+    let error_output = format!("{mismatch:?} {mismatch}");
+
+    for secret in ["a1".repeat(32), "b2".repeat(32), "c3".repeat(32)] {
+        assert!(!key_output.contains(&secret), "output={key_output}");
+        assert!(!error_output.contains(&secret), "output={error_output}");
+    }
+    assert!(key_output.contains("redacted"));
+    assert!(matches!(mismatch, SecurityCompileError::PolicyMismatch));
+    assert_eq!(compiler.expected_policy(), context.policy_snapshot());
+}
