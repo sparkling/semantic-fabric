@@ -144,7 +144,8 @@ pub use parser_isolation::QueryV1TransportMutant;
 ))]
 #[doc(hidden)]
 pub use parser_isolation::{
-    exercise_private_parser_observation_corpus_for_evidence, ParserObservationSummaryV1,
+    exercise_private_parser_observation_corpus_for_evidence,
+    exercise_private_parser_query_v1_corpus_for_evidence, ParserObservationSummaryV1,
 };
 #[cfg(all(
     feature = "query-v1-transport-mutant-evidence",

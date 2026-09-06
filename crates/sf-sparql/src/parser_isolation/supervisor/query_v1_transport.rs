@@ -1,21 +1,34 @@
-//! Parent sequencing for the parser-free synthetic QueryV1 transport.
+//! Parent sequencing for synthetic and sealed-corpus parser QueryV1 transports.
 
 use std::process::ExitStatus;
 
+#[cfg(feature = "parser-worker-evidence")]
+use super::executable::PreparedParserExecutable;
 use super::handshake::ControlReadyWorker;
 use super::lifecycle::ParserWorkerProcess;
 use super::SupervisorError;
+#[cfg(feature = "query-v1-transport-evidence")]
+use crate::parser_isolation::parse_protocol::ParseFrameError;
+#[cfg(feature = "query-v1-transport-evidence")]
+use crate::parser_isolation::parse_protocol::SYNTHETIC_EMPTY_ASK_QUERY_V1;
 use crate::parser_isolation::parse_protocol::{
     allocate_frame_exact, FrameAllocation, PreparedParseRequestV1, ResultHeaderV1,
     RESULT_HEADER_LEN,
 };
-#[cfg(feature = "query-v1-transport-evidence")]
-use crate::parser_isolation::parse_protocol::{
-    ParseFrameError, ParseRequestV1, ParseResultV1, SYNTHETIC_EMPTY_ASK_QUERY_V1,
-};
-#[cfg(feature = "query-v1-transport-evidence")]
+#[cfg(any(
+    feature = "parser-worker-evidence",
+    feature = "query-v1-transport-evidence"
+))]
+use crate::parser_isolation::parse_protocol::{ParseRequestV1, ParseResultV1};
+#[cfg(any(
+    feature = "parser-worker-evidence",
+    feature = "query-v1-transport-evidence"
+))]
 use crate::parser_isolation::protocol::FRAME_LEN;
-#[cfg(feature = "query-v1-transport-evidence")]
+#[cfg(any(
+    feature = "parser-worker-evidence",
+    feature = "query-v1-transport-evidence"
+))]
 use crate::parser_isolation::query_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +84,163 @@ pub(super) fn finish(worker: ControlReadyWorker) -> Result<(), SupervisorError> 
 
     verify_reaped_accounting(&reaped)?;
     verify_reaped_result(&reaped.prepared_request, &reaped.encoded_result)
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn exercise_parser_corpus(
+    executable: &PreparedParserExecutable,
+) -> Result<crate::parser_isolation::ParserObservationSummaryV1, SupervisorError> {
+    use crate::parser_isolation::parser_observation::{
+        ParserObservationOutcomeV1, PARSER_OBSERVATION_CORPUS_V1,
+    };
+
+    let mut parsed = 0_u16;
+    let mut syntax_rejected = 0_u16;
+    for case in PARSER_OBSERVATION_CORPUS_V1 {
+        // This remains diagnostic evidence, not parser admission authority.
+        crate::compile_envelope::CompileEnvelopeV1::scan(case.source).map_err(|_| {
+            SupervisorError::InvalidState("sealed parser QueryV1 lexical envelope drifted")
+        })?;
+        let worker = executable.launch_parser_query_v1(case.source)?;
+        finish_parser_case(worker, case.source, case.expected)?;
+        match case.expected {
+            ParserObservationOutcomeV1::Parsed => {
+                parsed = parsed.checked_add(1).ok_or(SupervisorError::InvalidState(
+                    "parser QueryV1 parsed count overflowed",
+                ))?;
+            }
+            ParserObservationOutcomeV1::SyntaxRejected => {
+                syntax_rejected =
+                    syntax_rejected
+                        .checked_add(1)
+                        .ok_or(SupervisorError::InvalidState(
+                            "parser QueryV1 syntax-rejection count overflowed",
+                        ))?;
+            }
+        }
+    }
+    crate::parser_isolation::ParserObservationSummaryV1::from_verified_counts(
+        parsed,
+        syntax_rejected,
+    )
+    .map_err(SupervisorError::InvalidState)
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+fn finish_parser_case(
+    worker: ControlReadyWorker,
+    source: &str,
+    expected: crate::parser_isolation::parser_observation::ParserObservationOutcomeV1,
+) -> Result<(), SupervisorError> {
+    let reaped = capture_reaped(worker).map_err(TransportFailure::into_error)?;
+    if !reaped.status.success() {
+        return Err(SupervisorError::InvalidState(
+            "parser QueryV1 peer did not exit successfully",
+        ));
+    }
+    verify_dynamic_accounting(&reaped)?;
+    verify_parser_result(
+        &reaped.prepared_request,
+        &reaped.encoded_result,
+        source,
+        expected,
+    )
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+fn verify_dynamic_accounting(reaped: &ReapedTransport) -> Result<(), SupervisorError> {
+    let expected_input = FRAME_LEN
+        .checked_add(reaped.prepared_request.encoded().len())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or(SupervisorError::InvalidState(
+            "parser QueryV1 input accounting overflowed",
+        ))?;
+    let expected_output = FRAME_LEN
+        .checked_add(reaped.encoded_result.len())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or(SupervisorError::InvalidState(
+            "parser QueryV1 output accounting overflowed",
+        ))?;
+    if reaped.sent_bytes != expected_input || reaped.received_bytes != expected_output {
+        return Err(SupervisorError::InvalidState(
+            "parser QueryV1 lifetime byte accounting drifted",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+fn verify_parser_result(
+    prepared_request: &PreparedParseRequestV1,
+    encoded_result: &[u8],
+    source: &str,
+    expected: crate::parser_isolation::parser_observation::ParserObservationOutcomeV1,
+) -> Result<(), SupervisorError> {
+    use crate::parser_isolation::alpha_equivalence::{
+        compare, AlphaVerdictV1, ParseObservationV1, ParseOutcomeV1, SourceDigestV1,
+    };
+    use crate::parser_isolation::parser_observation::ParserObservationOutcomeV1;
+    use crate::parser_isolation::profile::parser_worker_evidence_profile_v1;
+
+    prepared_request.verify_exact()?;
+    let request = ParseRequestV1::decode_exact_for_nonce(
+        prepared_request.encoded(),
+        prepared_request.nonce(),
+    )?;
+    if request.source() != source {
+        return Err(SupervisorError::InvalidState(
+            "parser QueryV1 request source replay drifted",
+        ));
+    }
+    let result = ParseResultV1::decode_exact_for(encoded_result, &request)?;
+    let direct = spargebra::SparqlParser::new().parse_query(source);
+
+    match (expected, result.query(), result.rejection(), direct) {
+        (ParserObservationOutcomeV1::Parsed, Some(worker_query), None, Ok(direct_query)) => {
+            let payload = &encoded_result[RESULT_HEADER_LEN..];
+            let worker_replay = query_v1::encode(worker_query)
+                .map_err(|_| SupervisorError::InvalidState("worker QueryV1 replay failed"))?;
+            if worker_replay.as_slice() != payload {
+                return Err(SupervisorError::InvalidState(
+                    "worker QueryV1 bytes did not replay exactly",
+                ));
+            }
+
+            let direct_wire = query_v1::encode(&direct_query)
+                .map_err(|_| SupervisorError::InvalidState("direct QueryV1 encoding failed"))?;
+            let direct_decoded = query_v1::decode_exact(&direct_wire)
+                .map_err(|_| SupervisorError::InvalidState("direct QueryV1 decoding failed"))?;
+            let direct_replay = query_v1::encode(&direct_decoded)
+                .map_err(|_| SupervisorError::InvalidState("direct QueryV1 replay failed"))?;
+            if direct_replay != direct_wire {
+                return Err(SupervisorError::InvalidState(
+                    "direct QueryV1 bytes did not replay exactly",
+                ));
+            }
+
+            let digest = SourceDigestV1::of(source);
+            let profile = parser_worker_evidence_profile_v1();
+            let verdict = compare(
+                ParseObservationV1::new(digest, profile, ParseOutcomeV1::Parsed(worker_query)),
+                ParseObservationV1::new(digest, profile, ParseOutcomeV1::Parsed(&direct_query)),
+            );
+            if verdict != AlphaVerdictV1::Equivalent {
+                return Err(SupervisorError::InvalidState(
+                    "worker and direct parser QueryV1 semantics diverged",
+                ));
+            }
+            Ok(())
+        }
+        (
+            ParserObservationOutcomeV1::SyntaxRejected,
+            None,
+            Some(crate::parser_isolation::parse_protocol::ParseRejectionV1::Syntax),
+            Err(_),
+        ) => Ok(()),
+        _ => Err(SupervisorError::InvalidState(
+            "worker and direct parser QueryV1 outcomes diverged",
+        )),
+    }
 }
 
 /// Capture one complete QueryV1 frame without touching its semantic fields.

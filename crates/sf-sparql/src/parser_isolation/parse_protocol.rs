@@ -1,9 +1,10 @@
 //! Canonical one-shot parse request/result frames for the dormant V1 worker.
 //!
-//! The codecs are deliberately private. Only the parser-free synthetic
-//! transport evidence peer is connected to worker I/O; the parser peer remains
-//! control-only. Decoding validates fixed headers, bounded lengths, correlation
-//! fields and payload digests before any input-sized QueryV1 allocation.
+//! The codecs are deliberately private. The parser-free synthetic peer and the
+//! sealed-corpus parser evidence peer connect them to worker I/O; the ordinary
+//! parser peer remains control-only. Decoding validates fixed headers, bounded
+//! lengths, correlation fields and payload digests before any input-sized
+//! QueryV1 allocation.
 
 use std::fmt;
 
@@ -268,6 +269,42 @@ impl ParseResultV1 {
         output
     }
 
+    /// Frame bytes emitted by the real parser peer after the private canonical
+    /// QueryV1 encoder has already validated and bounded `payload`.
+    pub(crate) fn encode_canonical_success_payload_for(
+        request: &ParseRequestV1<'_>,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, ParseFrameError> {
+        if payload.is_empty() {
+            return Err(ParseFrameError::InvalidResultShape);
+        }
+        if payload.len() > query_v1::MAX_QUERY_WIRE_BYTES {
+            return Err(ParseFrameError::PayloadLimitExceeded);
+        }
+        let total = RESULT_HEADER_LEN
+            .checked_add(payload.len())
+            .ok_or(ParseFrameError::LengthOverflow)?;
+        let mut output = allocate_frame_exact(total, FrameAllocation::Attempt)?;
+        encode_common_header(
+            &mut output,
+            &RESULT_MAGIC,
+            RESULT_SUCCESS_KIND,
+            RESULT_HEADER_LEN,
+            payload.len(),
+            request.nonce,
+            request.source_digest,
+        )?;
+        output[PAYLOAD_DIGEST_OFFSET..RESULT_QUERY_VERSION_OFFSET]
+            .copy_from_slice(ContentDigest::of(payload).as_bytes());
+        write_u16(
+            &mut output,
+            RESULT_QUERY_VERSION_OFFSET,
+            query_v1::WIRE_VERSION,
+        );
+        output[RESULT_HEADER_LEN..].copy_from_slice(payload);
+        Ok(output)
+    }
+
     pub(crate) fn decode_exact_for(
         input: &[u8],
         request: &ParseRequestV1<'_>,
@@ -326,47 +363,27 @@ impl ParseResultV1 {
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>, ParseFrameError> {
-        let (kind, rejection_code, payload) = match (&self.query, self.rejection) {
-            (Some(query), None) => (
-                RESULT_SUCCESS_KIND,
-                0,
-                Some(query_v1::encode(query).map_err(|_| ParseFrameError::InvalidQueryPayload)?),
-            ),
-            (None, Some(rejection)) => (RESULT_REJECTED_KIND, rejection as u16, None),
-            _ => return Err(ParseFrameError::InvalidResultShape),
-        };
-        let payload = payload.as_deref().unwrap_or_default();
-        if payload.len() > query_v1::MAX_QUERY_WIRE_BYTES {
-            return Err(ParseFrameError::PayloadLimitExceeded);
-        }
-        let total = RESULT_HEADER_LEN
-            .checked_add(payload.len())
-            .ok_or(ParseFrameError::LengthOverflow)?;
-        let mut output = allocate_frame_exact(total, FrameAllocation::Attempt)?;
-        encode_common_header(
-            &mut output,
-            &RESULT_MAGIC,
-            kind,
-            RESULT_HEADER_LEN,
-            payload.len(),
-            self.nonce,
-            self.source_digest,
-        )?;
-        output[PAYLOAD_DIGEST_OFFSET..RESULT_QUERY_VERSION_OFFSET]
-            .copy_from_slice(ContentDigest::of(payload).as_bytes());
-        match kind {
-            RESULT_SUCCESS_KIND => write_u16(
-                &mut output,
-                RESULT_QUERY_VERSION_OFFSET,
-                query_v1::WIRE_VERSION,
-            ),
-            RESULT_REJECTED_KIND => {
-                write_u16(&mut output, RESULT_REJECTION_OFFSET, rejection_code);
+        match (&self.query, self.rejection) {
+            (Some(query), None) => {
+                let payload =
+                    query_v1::encode(query).map_err(|_| ParseFrameError::InvalidQueryPayload)?;
+                let request = ParseRequestV1 {
+                    nonce: self.nonce,
+                    source: "",
+                    source_digest: self.source_digest,
+                };
+                Self::encode_canonical_success_payload_for(&request, &payload)
             }
-            _ => unreachable!(),
+            (None, Some(rejection)) => {
+                let request = ParseRequestV1 {
+                    nonce: self.nonce,
+                    source: "",
+                    source_digest: self.source_digest,
+                };
+                Ok(Self::encode_fixed_rejection_for(&request, rejection).to_vec())
+            }
+            _ => Err(ParseFrameError::InvalidResultShape),
         }
-        output[RESULT_HEADER_LEN..].copy_from_slice(payload);
-        Ok(output)
     }
 
     pub(crate) fn query(&self) -> Option<&Query> {

@@ -71,6 +71,18 @@ pub(super) fn run_parser_observation() -> ! {
     }
 }
 
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn run_parser_query_v1() -> ! {
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let result = read_hello_and_emit_ready(&prepared)
+                .and_then(query_v1_transport::run_parser_query_v1);
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
+}
+
 struct PreparedForHello {
     build_identity: BuildIdentityDigest,
     parser_profile_candidate: ParserProfileDigest,

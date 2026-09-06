@@ -4,17 +4,21 @@ use crate::parser_isolation::parse_protocol::{
     allocate_frame_exact, decode_streamed_request_exact_for_nonce, FrameAllocation, ParseRequestV1,
     RequestHeaderV1, MAX_SOURCE_BYTES_V1, REQUEST_HEADER_LEN,
 };
-#[cfg(any(
-    feature = "query-v1-transport-evidence",
-    feature = "query-v1-transport-mutant-evidence"
-))]
+#[cfg(feature = "query-v1-transport-evidence")]
 use crate::parser_isolation::parse_protocol::{
     synthetic_empty_ask_result_header_for, SYNTHETIC_EMPTY_ASK_QUERY_V1,
 };
+#[cfg(feature = "parser-worker-evidence")]
+use crate::parser_isolation::parse_protocol::{ParseRejectionV1, ParseResultV1};
 use crate::parser_isolation::profile::V1_CANDIDATE_MAX_INPUT_BYTES;
 use crate::parser_isolation::protocol::{HandshakeNonce, FRAME_LEN};
+#[cfg(feature = "parser-worker-evidence")]
+use crate::parser_isolation::query_v1::{self, QueryWireError};
 
-#[cfg(feature = "query-v1-transport-evidence")]
+#[cfg(any(
+    feature = "parser-worker-evidence",
+    feature = "query-v1-transport-evidence"
+))]
 use super::write_all;
 use super::{read_exact, require_parent_eof, WorkerFailure};
 
@@ -49,6 +53,15 @@ pub(super) fn run(expected_nonce: HandshakeNonce) -> Result<(), WorkerFailure> {
         expected_nonce,
         RequestConstraints::normal(),
         emit_normal_result,
+    )
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn run_parser_query_v1(expected_nonce: HandshakeNonce) -> Result<(), WorkerFailure> {
+    run_with_validated_request(
+        expected_nonce,
+        RequestConstraints::normal(),
+        emit_parser_result,
     )
 }
 
@@ -99,6 +112,38 @@ fn emit_normal_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure>
         synthetic_empty_ask_result_header_for(request).map_err(|_| WorkerFailure)?;
     write_all(libc::STDOUT_FILENO, &result_header)?;
     write_all(libc::STDOUT_FILENO, &SYNTHETIC_EMPTY_ASK_QUERY_V1)
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+fn emit_parser_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure> {
+    let query = match spargebra::SparqlParser::new().parse_query(request.source()) {
+        Ok(query) => query,
+        Err(_) => {
+            let rejection =
+                ParseResultV1::encode_fixed_rejection_for(request, ParseRejectionV1::Syntax);
+            return write_all(libc::STDOUT_FILENO, &rejection);
+        }
+    };
+
+    let payload = match query_v1::encode(&query) {
+        Ok(payload) => payload,
+        Err(QueryWireError::AllocationFailed) => {
+            let rejection = ParseResultV1::encode_fixed_rejection_for(
+                request,
+                ParseRejectionV1::ResourceExhausted,
+            );
+            return write_all(libc::STDOUT_FILENO, &rejection);
+        }
+        Err(QueryWireError::AccountingOverflow | QueryWireError::LimitExceeded(_)) => {
+            let rejection =
+                ParseResultV1::encode_fixed_rejection_for(request, ParseRejectionV1::QueryEnvelope);
+            return write_all(libc::STDOUT_FILENO, &rejection);
+        }
+        Err(_) => return Err(WorkerFailure),
+    };
+    let result = ParseResultV1::encode_canonical_success_payload_for(request, &payload)
+        .map_err(|_| WorkerFailure)?;
+    write_all(libc::STDOUT_FILENO, &result)
 }
 
 fn request_fits_input_budget(frame_len: usize, input_prefix_bytes: usize) -> bool {

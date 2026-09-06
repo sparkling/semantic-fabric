@@ -6,10 +6,9 @@
 //! Nothing outside `parser_isolation` can launch this worker. The public binary
 //! has a fail-closed private entry discriminator, and only a non-default Rust
 //! evidence seam can reach the Hello/Ready/EOF exchange. The parser peer remains
-//! control-only; an independently gated parser-free peer exercises one fixed
-//! synthetic QueryV1 request/result transport, while a separately gated closed
-//! mutant peer supplies transport-failure evidence. Neither has parser or
-//! admission authority.
+//! control-only. Independently gated peers exercise a fixed parser-free QueryV1
+//! transport, a sealed-corpus real-parser QueryV1 differential, and closed
+//! transport mutants. None has admission authority.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -59,6 +58,7 @@ mod parser_observation;
 mod query_v1_mutant;
 #[cfg(all(
     any(
+        feature = "parser-worker-evidence",
         feature = "query-v1-transport-evidence",
         feature = "query-v1-transport-mutant-evidence"
     ),
@@ -171,6 +171,15 @@ impl PreparedParserExecutable {
         handshake::launch_parser_observation(self, prepared)
     }
 
+    #[cfg(feature = "parser-worker-evidence")]
+    fn launch_parser_query_v1(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_parser_query_v1(self, prepared)
+    }
+
     #[cfg(feature = "query-v1-transport-evidence")]
     fn launch_query_v1_transport(
         &self,
@@ -218,6 +227,19 @@ pub(super) fn exercise_parser_observation_corpus_for_evidence(
 ) -> Result<super::parser_observation::ParserObservationSummaryV1, SupervisorError> {
     let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
     parser_observation::exercise_corpus(&prepared)
+}
+
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_parser_query_v1_corpus_for_evidence(
+    file: std::fs::File,
+) -> Result<super::parser_observation::ParserObservationSummaryV1, SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_transport::exercise_parser_corpus(&prepared)
 }
 
 #[cfg(all(

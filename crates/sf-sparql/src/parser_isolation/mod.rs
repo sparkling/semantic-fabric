@@ -4,10 +4,10 @@
 //! exact Hello/Ready/EOF exchange through a non-default evidence feature. A raw
 //! or malformed reserved invocation fails closed. The policy and profile are
 //! control-ready candidates only. Private canonical request/result and QueryV1
-//! codecs connect only to a parser-free fixed-fixture transport peer. A separate
-//! qualification-only peer observes the real parser on an internally sealed
-//! starter corpus and returns fixed terminal outcomes; it grants no qualified
-//! policy, admission witness, permit, cache, or serving authority.
+//! codecs connect to both a parser-free fixed-fixture peer and a sealed-corpus
+//! real-parser evidence peer. A separate aggregate-only peer observes terminal
+//! parser outcomes. Neither grants a qualified policy, admission witness,
+//! permit, cache, or serving authority.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod build_identity;
@@ -69,6 +69,26 @@ pub fn exercise_private_parser_observation_corpus_for_evidence(
 ) -> Result<ParserObservationSummaryV1, String> {
     let file = open_evidence_executable(executable)?;
     supervisor::exercise_parser_observation_corpus_for_evidence(file)
+        .map_err(|error| error.to_string())
+}
+
+/// Parse the sealed corpus in fresh contained children and verify QueryV1.
+///
+/// Every successful worker result is accepted only after exact reap,
+/// correlation, bounded decode/re-encode replay, and semantic comparison with
+/// an independent direct parse. This remains qualification evidence: it mints
+/// no admission witness and grants no cache, serving, or release authority.
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_private_parser_query_v1_corpus_for_evidence(
+    executable: &std::path::Path,
+) -> Result<ParserObservationSummaryV1, String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_parser_query_v1_corpus_for_evidence(file)
         .map_err(|error| error.to_string())
 }
 

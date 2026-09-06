@@ -72,6 +72,14 @@ pub(super) fn launch_parser_observation(
     launch_with(executable, prepared, linux::spawn_parser_observation, None)
 }
 
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn launch_parser_query_v1(
+    executable: &PreparedParserExecutable,
+    prepared: PreparedControlExchange,
+) -> Result<ControlReadyWorker, SupervisorError> {
+    launch_with(executable, prepared, linux::spawn_parser_query_v1, None)
+}
+
 #[cfg(feature = "query-v1-transport-evidence")]
 pub(super) fn launch_query_v1_transport(
     executable: &PreparedParserExecutable,

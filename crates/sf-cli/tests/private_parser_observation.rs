@@ -33,6 +33,20 @@ fn held_binary_observes_only_the_sealed_real_parser_corpus() {
 }
 
 #[test]
+fn held_binary_returns_real_query_v1_with_direct_parse_equivalence() {
+    let first = sf_sparql::exercise_private_parser_query_v1_corpus_for_evidence(Path::new(BINARY))
+        .expect("verify parser-produced QueryV1 corpus");
+
+    assert_eq!(first.case_count(), 7);
+    assert_eq!(first.parsed_count(), 6);
+    assert_eq!(first.syntax_rejection_count(), 1);
+
+    let second = sf_sparql::exercise_private_parser_query_v1_corpus_for_evidence(Path::new(BINARY))
+        .expect("every parser-produced QueryV1 case must use a clean fresh child");
+    assert_eq!(second, first);
+}
+
+#[test]
 fn parser_observation_rejects_unheld_paths_before_any_child_launch() {
     for path in [Path::new("semantic-fabric"), Path::new("/tmp/../bin/false")] {
         let error = sf_sparql::exercise_private_parser_observation_corpus_for_evidence(path)

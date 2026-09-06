@@ -6,9 +6,9 @@
 //! envelope, stacks a default-kill control-ready policy candidate, and only then
 //! reads Hello. Unprepared or malformed reserved invocations terminate silently
 //! and cannot fall through to the public CLI. The parser peer accepts no parse
-//! request; the independently gated transport peer returns only a fixed,
-//! parser-free QueryV1 fixture. A separate qualification-only tuple may run the
-//! real parser over an internally sealed corpus and returns only fixed outcomes.
+//! request. Independently gated peers return a fixed parser-free QueryV1 fixture,
+//! a real parser-produced QueryV1 for the internally sealed corpus, or an
+//! aggregate-only parser observation. All remain qualification evidence.
 
 use std::ffi::{OsStr, OsString};
 
@@ -27,6 +27,8 @@ pub(super) const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE: &str =
     "--sf-private-query-v1-transport-mutant-peer-v1";
 pub(super) const PRIVATE_PARSER_OBSERVATION_NAME: &str = "sf-parser-observation-peer-v1";
 pub(super) const PRIVATE_PARSER_OBSERVATION_MODE: &str = "--sf-private-parser-observation-peer-v1";
+pub(super) const PRIVATE_PARSER_QUERY_V1_NAME: &str = "sf-parser-query-v1-peer-v1";
+pub(super) const PRIVATE_PARSER_QUERY_V1_MODE: &str = "--sf-private-parser-query-v1-peer-v1";
 
 const PRIVATE_WORKER_REJECTED_EXIT_CODE: i32 = 78;
 
@@ -43,6 +45,7 @@ enum PrivatePeer {
     QueryV1Transport,
     QueryV1TransportMutant,
     ParserObservation,
+    ParserQueryV1,
 }
 
 fn classify_private_invocation(arguments: impl IntoIterator<Item = OsString>) -> PrivateInvocation {
@@ -85,6 +88,11 @@ fn private_peer_for_tuple(name: Option<&OsStr>, mode: Option<&OsStr>) -> Option<
             PRIVATE_PARSER_OBSERVATION_MODE,
             PrivatePeer::ParserObservation,
         ),
+        (
+            PRIVATE_PARSER_QUERY_V1_NAME,
+            PRIVATE_PARSER_QUERY_V1_MODE,
+            PrivatePeer::ParserQueryV1,
+        ),
     ]
     .into_iter()
     .find_map(|(expected_name, expected_mode, peer)| {
@@ -103,6 +111,8 @@ fn is_reserved_token(argument: Option<&OsStr>) -> bool {
         PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
         PRIVATE_PARSER_OBSERVATION_NAME,
         PRIVATE_PARSER_OBSERVATION_MODE,
+        PRIVATE_PARSER_QUERY_V1_NAME,
+        PRIVATE_PARSER_QUERY_V1_MODE,
     ]
     .into_iter()
     .any(|reserved| argument == Some(OsStr::new(reserved)))
@@ -171,6 +181,7 @@ fn run_private_peer_v1(peer: PrivatePeer) -> ! {
         PrivatePeer::QueryV1Transport => run_query_v1_transport_worker_v1(),
         PrivatePeer::QueryV1TransportMutant => run_query_v1_transport_mutant_worker_v1(),
         PrivatePeer::ParserObservation => run_parser_observation_worker_v1(),
+        PrivatePeer::ParserQueryV1 => run_parser_query_v1_worker_v1(),
     }
 }
 
@@ -250,6 +261,25 @@ fn run_parser_observation_worker_v1() -> ! {
     reject_private_invocation()
 }
 
+fn run_parser_query_v1_worker_v1() -> ! {
+    #[cfg(all(
+        feature = "parser-worker-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    ))]
+    {
+        linux::run_parser_query_v1()
+    }
+    #[cfg(not(all(
+        feature = "parser-worker-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )))]
+    reject_private_invocation()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +311,11 @@ mod tests {
                 PRIVATE_PARSER_OBSERVATION_MODE,
                 PrivatePeer::ParserObservation,
             ),
+            (
+                PRIVATE_PARSER_QUERY_V1_NAME,
+                PRIVATE_PARSER_QUERY_V1_MODE,
+                PrivatePeer::ParserQueryV1,
+            ),
         ] {
             assert_eq!(
                 classify(&[name, mode]),
@@ -307,6 +342,7 @@ mod tests {
                 PRIVATE_PARSER_OBSERVATION_NAME,
                 PRIVATE_PARSER_OBSERVATION_MODE,
             ),
+            (PRIVATE_PARSER_QUERY_V1_NAME, PRIVATE_PARSER_QUERY_V1_MODE),
         ];
         for (name, mode) in pairs {
             assert_eq!(classify(&[name]), PrivateInvocation::MalformedReserved);
