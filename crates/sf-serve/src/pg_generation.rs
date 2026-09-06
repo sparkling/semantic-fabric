@@ -7,34 +7,32 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 
-use deadpool_postgres::PoolError;
-use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_core::schema_identity::ObservedSchemaIdentityV1;
 use sf_core::{SourceId, SourceMapping, TableSchema};
+use sf_sparql::MappingDigest;
 
-use crate::backend::PgConn;
 use crate::binding_identity::RuntimeBindingIdentity;
 use crate::budget::RequestBudget;
+use crate::schema_observation::SourceSchemaObservationV1;
+use crate::semantic_admission::{MappingOrigin, SemanticAdmissionError, ValidatedMapping};
 
 mod context;
 mod error;
 mod execution;
+mod lease;
 
 pub(crate) use error::PgGenerationError;
+pub(crate) use lease::VerifiedPostgresGenerationLease;
 
 #[cfg(test)]
 use context::validate_session_context;
 use context::{capture_session_context, PgSessionContext};
-
-const BEGIN_GENERATION_SQL: &str = "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY";
-const ROLLBACK_SQL: &str = "ROLLBACK";
-const DEFAULT_UNBOUNDED_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_POSTGRES_TIMEOUT_MILLIS: u128 = i32::MAX as u128;
-/// Conservative reservation covering lock, transaction checks, both bounded
-/// catalogue projections, session context, and their fixed subqueries.
-const GENERATION_METADATA_PROBE_RESERVATION: u64 = 16;
+use lease::open_observed_generation;
+#[cfg(test)]
+use lease::{open_generation_before_lock_for_test, transaction_setup_sql, BEGIN_GENERATION_SQL};
 
 #[derive(Clone, Default)]
 pub(crate) enum SourceGeneration {
@@ -44,8 +42,8 @@ pub(crate) enum SourceGeneration {
 }
 
 impl SourceGeneration {
-    pub(crate) fn direct_postgres(generation: PostgresDirectGeneration) -> Self {
-        Self::DirectPostgres(Arc::new(generation))
+    fn direct_postgres(generation: Arc<PostgresDirectGeneration>) -> Self {
+        Self::DirectPostgres(generation)
     }
 
     pub(crate) fn requirement(
@@ -71,6 +69,23 @@ impl SourceGeneration {
     pub(crate) const fn is_verified(&self) -> bool {
         matches!(self, Self::DirectPostgres(_))
     }
+
+    pub(crate) fn ensure_mapping(
+        &self,
+        mapping: &ValidatedMapping,
+    ) -> Result<(), SemanticAdmissionError> {
+        match self {
+            Self::Unverified => Ok(()),
+            Self::DirectPostgres(expected)
+                if mapping.origin() == MappingOrigin::Direct
+                    && mapping.source_id() == expected.source_id
+                    && mapping.mapping_digest() == expected.mapping_digest =>
+            {
+                Ok(())
+            }
+            Self::DirectPostgres(_) => Err(SemanticAdmissionError::ReceiptGenerationMismatch),
+        }
+    }
 }
 
 /// Immutable expectation produced by one successfully closed candidate lease.
@@ -78,9 +93,10 @@ pub(crate) struct PostgresDirectGeneration {
     source_id: SourceId,
     base_iri: Arc<str>,
     row_identity: sf_mapping::DirectMappingRowIdentity,
+    mapping_digest: MappingDigest,
     identity: ObservedSchemaIdentityV1,
     session: PgSessionContext,
-    table_names: Arc<[String]>,
+    tables: Arc<[TableSchema]>,
 }
 
 impl std::fmt::Debug for PostgresDirectGeneration {
@@ -90,8 +106,9 @@ impl std::fmt::Debug for PostgresDirectGeneration {
             .field("source_id", &self.source_id)
             .field("base_iri_bytes", &self.base_iri.len())
             .field("row_identity", &self.row_identity)
+            .field("mapping_digest", &self.mapping_digest)
             .field("identity", &self.identity)
-            .field("table_count", &self.table_names.len())
+            .field("table_count", &self.tables.len())
             .finish()
     }
 }
@@ -181,15 +198,61 @@ impl VerifiedGenerationLeases {
     }
 }
 
-/// Candidate output created while the exact rich observation transaction is
-/// open, then returned only after its clean rollback succeeds.
-pub(crate) struct PostgresDirectCandidate {
-    pub(crate) tables: Vec<TableSchema>,
-    pub(crate) mapping: SourceMapping,
-    pub(crate) generation: PostgresDirectGeneration,
+/// Source-side candidate whose schema, committed observation, and generation
+/// expectation can only be assembled together by this module.
+pub(crate) struct PostgresDirectSourceCandidate {
+    tables: Vec<TableSchema>,
+    observation: SourceSchemaObservationV1,
+    generation: SourceGeneration,
 }
 
-pub(crate) async fn build_direct_candidate(
+impl PostgresDirectSourceCandidate {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<TableSchema>,
+        SourceSchemaObservationV1,
+        SourceGeneration,
+    ) {
+        (self.tables, self.observation, self.generation)
+    }
+}
+
+/// Candidate output created while the exact rich observation transaction is
+/// open, then returned only after its final exact recheck and clean rollback.
+pub(crate) struct PostgresDirectCandidate {
+    mapping: SourceMapping,
+    source: PostgresDirectSourceCandidate,
+}
+
+impl PostgresDirectCandidate {
+    pub(crate) fn into_parts(self) -> (SourceMapping, PostgresDirectSourceCandidate) {
+        (self.mapping, self.source)
+    }
+}
+
+/// Consume one observed source, derive candidate inputs from its exact pool,
+/// and return that same source with the inseparable verified facts installed.
+pub(crate) async fn build_and_bind_direct_candidate(
+    source: crate::IntrospectedSource,
+    base_iri: &str,
+    source_id: SourceId,
+    budget: &RequestBudget,
+) -> Result<(crate::IntrospectedSource, SourceMapping), PgGenerationError> {
+    let pool = match source.backend() {
+        crate::Backend::Pg(pool) => pool.clone(),
+        crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
+            return Err(PgGenerationError::Internal)
+        }
+    };
+    let discovery = source.observed_schema().to_vec();
+    let candidate = build_direct_candidate(&pool, &discovery, base_iri, source_id, budget).await?;
+    let (mapping, source_candidate) = candidate.into_parts();
+    let source = source.bind_postgres_direct(source_candidate)?;
+    Ok((source, mapping))
+}
+
+async fn build_direct_candidate(
     pool: &deadpool_postgres::Pool,
     discovery: &[TableSchema],
     base_iri: &str,
@@ -197,26 +260,23 @@ pub(crate) async fn build_direct_candidate(
     budget: &RequestBudget,
 ) -> Result<PostgresDirectCandidate, PgGenerationError> {
     let discovered_names = normalized_table_names(discovery)?;
-    let (lease, snapshot, session) =
-        open_generation(pool, source_id, &discovered_names, budget).await?;
-    let Some(direct_tables) = snapshot.direct_mapping_tables() else {
-        return fail_lease(lease, PgGenerationError::CapabilityDrift).await;
-    };
-    let tables = direct_tables.to_vec();
+    let observed = open_observed_generation(pool, source_id, &discovered_names, budget).await?;
+    let tables = observed.tables().to_vec();
     if !postgres_direct_table_profile_is_unambiguous(&tables) {
-        return fail_lease(lease, PgGenerationError::CapabilityDrift).await;
+        return observed.reject(PgGenerationError::CapabilityDrift).await;
     }
-    if normalized_table_names(&tables)? != discovered_names {
-        return fail_lease(lease, PgGenerationError::SchemaDrift).await;
+    let current_names = match normalized_table_names(&tables) {
+        Ok(names) => names,
+        Err(error) => return observed.reject(error).await,
+    };
+    if current_names != discovered_names {
+        return observed.reject(PgGenerationError::SchemaDrift).await;
     }
-    let identity = snapshot
-        .availability()
-        .identity()
-        .copied()
-        .ok_or(PgGenerationError::CapabilityDrift)?;
+    let identity = observed.identity();
+    let session = observed.session().clone();
     let row_identity = sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey;
     let base_iri_owned = base_iri.to_owned();
-    let generated = budget
+    let generated = match budget
         .run(tokio::task::spawn_blocking(move || {
             let mapping = sf_mapping::direct_mapping_for_source_with_row_identity(
                 &tables,
@@ -226,26 +286,36 @@ pub(crate) async fn build_direct_candidate(
             );
             (tables, mapping)
         }))
-        .await?
-        .map_err(|_| PgGenerationError::Internal)?;
+        .await
+    {
+        Err(error) => return Err(error.into()),
+        Ok(Err(_)) => return observed.reject(PgGenerationError::Internal).await,
+        Ok(Ok(generated)) => generated,
+    };
     let (tables, mapping) = generated;
     let mapping = match mapping {
         Ok(mapping) => mapping,
-        Err(error) => return fail_lease(lease, PgGenerationError::Mapping(error)).await,
+        Err(error) => return observed.reject(PgGenerationError::Mapping(error)).await,
     };
-    let generation = PostgresDirectGeneration {
+    let mapping_digest = MappingDigest::from_mapping(&mapping);
+    let generation = Arc::new(PostgresDirectGeneration {
         source_id,
         base_iri: Arc::from(base_iri),
         row_identity,
+        mapping_digest,
         identity,
         session,
-        table_names: discovered_names.into(),
-    };
-    lease.finish_with_budget(budget).await?;
+        tables: tables.clone().into(),
+    });
+    let (lease, observation) = observed.promote_candidate(Arc::clone(&generation)).await?;
+    lease.finish_bounded(budget).await?;
     Ok(PostgresDirectCandidate {
-        tables,
         mapping,
-        generation,
+        source: PostgresDirectSourceCandidate {
+            tables,
+            observation: SourceSchemaObservationV1::postgres16_public(observation),
+            generation: SourceGeneration::direct_postgres(generation),
+        },
     })
 }
 
@@ -254,114 +324,11 @@ async fn acquire_expected(
     budget: &RequestBudget,
 ) -> Result<VerifiedPostgresGenerationLease, PgGenerationError> {
     let expected = requirement.expected;
-    let (lease, snapshot, session) = open_generation(
-        &requirement.pool,
-        expected.source_id,
-        &expected.table_names,
-        budget,
-    )
-    .await?;
-    let Some(identity) = snapshot.availability().identity() else {
-        return fail_lease(lease, PgGenerationError::CapabilityDrift).await;
-    };
-    let Some(tables) = snapshot.direct_mapping_tables() else {
-        return fail_lease(lease, PgGenerationError::CapabilityDrift).await;
-    };
-    if identity != &expected.identity
-        || session != expected.session
-        || normalized_table_names(tables)? != expected.table_names.as_ref()
-    {
-        return fail_lease(lease, PgGenerationError::SchemaDrift).await;
-    }
-    Ok(lease)
-}
-
-async fn open_generation(
-    pool: &deadpool_postgres::Pool,
-    source_id: SourceId,
-    table_names: &[String],
-    budget: &RequestBudget,
-) -> Result<
-    (
-        VerifiedPostgresGenerationLease,
-        sf_sql::introspect::Postgres16PublicObservedSnapshotV1,
-        PgSessionContext,
-    ),
-    PgGenerationError,
-> {
-    budget.consume(
-        QueryCharge::SourceWork,
-        GENERATION_METADATA_PROBE_RESERVATION,
-    )?;
-    let object = budget.run(pool.get()).await?.map_err(map_pool_error)?;
-    let conn = budget
-        .run(PgConn::checked(object))
+    let table_names = normalized_table_names(&expected.tables)?;
+    open_observed_generation(&requirement.pool, expected.source_id, &table_names, budget)
         .await?
-        .map_err(|_| PgGenerationError::SourceUnavailable)?;
-    conn.mark_generation_dirty();
-    let lease = VerifiedPostgresGenerationLease {
-        source_id,
-        conn: Some(Arc::new(conn)),
-    };
-    let setup = transaction_setup_sql(budget)?;
-    budget
-        .run(lease.client().batch_execute(&setup))
-        .await?
-        .map_err(|_| PgGenerationError::SourceUnavailable)?;
-    budget
-        .run(
-            sf_sql::introspect::lock_postgres_public_base_tables_classified(
-                lease.client(),
-                table_names,
-            ),
-        )
-        .await?
-        .map_err(|error| match error {
-            sf_sql::introspect::PostgresPublicTableLockFailure::InvalidRelationSet => {
-                PgGenerationError::Internal
-            }
-            sf_sql::introspect::PostgresPublicTableLockFailure::RelationSetChanged => {
-                PgGenerationError::SchemaDrift
-            }
-            sf_sql::introspect::PostgresPublicTableLockFailure::InsufficientPrivilege => {
-                PgGenerationError::CapabilityDrift
-            }
-            sf_sql::introspect::PostgresPublicTableLockFailure::Unavailable => {
-                PgGenerationError::SourceUnavailable
-            }
-        })?;
-    let snapshot = budget
-        .run(
-            sf_sql::introspect::introspect_postgres_public_observed_snapshot_in_transaction_classified(
-                lease.client(),
-            ),
-        )
-        .await?
-        .map_err(|error| match error {
-            sf_sql::introspect::PostgresGenerationObservationFailure::SourceUnavailable => {
-                PgGenerationError::SourceUnavailable
-            }
-            sf_sql::introspect::PostgresGenerationObservationFailure::ProfileUnavailable(_) => {
-                PgGenerationError::CapabilityDrift
-            }
-        })?;
-    let session = budget
-        .run(capture_session_context(lease.client()))
-        .await??;
-    Ok((lease, snapshot, session))
-}
-
-fn transaction_setup_sql(budget: &RequestBudget) -> Result<String, PgGenerationError> {
-    let remaining = budget
-        .remaining_duration()?
-        .unwrap_or(DEFAULT_UNBOUNDED_TIMEOUT);
-    let millis = remaining.as_millis().clamp(1, MAX_POSTGRES_TIMEOUT_MILLIS);
-    let lock_millis = millis.min(1_000);
-    Ok(format!(
-        "{BEGIN_GENERATION_SQL}; SET LOCAL statement_timeout = {millis}; \
-         SET LOCAL lock_timeout = {lock_millis}; \
-         SET LOCAL idle_in_transaction_session_timeout = {millis};"
-    ))
+        .promote_expected(expected)
+        .await
 }
 
 fn normalized_table_names(tables: &[TableSchema]) -> Result<Vec<String>, PgGenerationError> {
@@ -388,23 +355,6 @@ fn postgres_direct_table_profile_is_unambiguous(tables: &[TableSchema]) -> bool 
     })
 }
 
-fn map_pool_error(error: PoolError) -> PgGenerationError {
-    match error {
-        PoolError::Timeout(_) | PoolError::Backend(_) | PoolError::Closed => {
-            PgGenerationError::SourceUnavailable
-        }
-        _ => PgGenerationError::Internal,
-    }
-}
-
-async fn fail_lease<T>(
-    lease: VerifiedPostgresGenerationLease,
-    error: PgGenerationError,
-) -> Result<T, PgGenerationError> {
-    let _ = tokio::time::timeout(Duration::from_secs(1), lease.finish()).await;
-    Err(error)
-}
-
 async fn close_leases(leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>) {
     let _ = finish_leases(leases).await;
 }
@@ -414,85 +364,18 @@ async fn finish_leases(
 ) -> Result<(), PgGenerationError> {
     let mut first_error = None;
     for (_, (_, lease)) in leases {
-        let result = tokio::time::timeout(Duration::from_secs(1), lease.finish()).await;
+        let result = lease.rollback_bounded().await;
         if first_error.is_none() {
-            first_error = match result {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(error),
-                Err(_) => Some(PgGenerationError::SourceUnavailable),
-            };
+            first_error = result.err();
         }
     }
     first_error.map_or(Ok(()), Err)
 }
 
-pub(crate) struct VerifiedPostgresGenerationLease {
-    source_id: SourceId,
-    conn: Option<Arc<PgConn>>,
-}
-
-impl VerifiedPostgresGenerationLease {
-    pub(crate) const fn source_id(&self) -> SourceId {
-        self.source_id
-    }
-
-    pub(crate) fn client(&self) -> &tokio_postgres::Client {
-        self.conn.as_deref().expect("active generation lease")
-    }
-
-    /// Clone the transaction-bound handle into an owned executor capability.
-    /// The connection itself remains dirty until [`Self::finish`] acknowledges
-    /// rollback, so cancellation of either owner can never recycle it.
-    pub(crate) fn execution_client(&self) -> PgGenerationClient {
-        PgGenerationClient(Arc::clone(
-            self.conn.as_ref().expect("active generation lease"),
-        ))
-    }
-
-    /// Return the connection to its pool only after an acknowledged rollback.
-    pub(crate) async fn finish(mut self) -> Result<(), PgGenerationError> {
-        self.client()
-            .batch_execute(ROLLBACK_SQL)
-            .await
-            .map_err(|_| PgGenerationError::SourceUnavailable)?;
-        self.conn
-            .as_ref()
-            .expect("active generation lease")
-            .mark_recyclable();
-        drop(self.conn.take());
-        Ok(())
-    }
-
-    /// Budgeted successful close. If the absolute request/startup budget wins,
-    /// dropping `self` leaves the connection dirty and final drop detaches it.
-    pub(crate) async fn finish_with_budget(
-        mut self,
-        budget: &RequestBudget,
-    ) -> Result<(), PgGenerationError> {
-        budget
-            .run(self.client().batch_execute(ROLLBACK_SQL))
-            .await?
-            .map_err(|_| PgGenerationError::SourceUnavailable)?;
-        self.conn
-            .as_ref()
-            .expect("active generation lease")
-            .mark_recyclable();
-        drop(self.conn.take());
-        Ok(())
-    }
-}
-
-/// Owned executor view of the exact connection held by a verified lease.
-pub(crate) struct PgGenerationClient(Arc<PgConn>);
-
-impl std::ops::Deref for PgGenerationClient {
-    type Target = tokio_postgres::Client;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 #[cfg(test)]
 #[path = "pg_generation/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pg_generation/live_tests.rs"]
+mod live_tests;

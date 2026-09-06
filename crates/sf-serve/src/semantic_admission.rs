@@ -3,7 +3,7 @@
 use oxrdf::{Graph, NamedNode, NamedOrBlankNodeRef, TermRef};
 use sf_core::ir::LogicalSource;
 use sf_core::{datatype, SourceMapping};
-use sf_sparql::{OntologyDigest, SemanticAdmissionDigest};
+use sf_sparql::{MappingDigest, OntologyDigest, SemanticAdmissionDigest};
 use sha2::{Digest, Sha256};
 
 use crate::{BackendKind, IntrospectedSource, SemanticOntology};
@@ -43,6 +43,8 @@ pub(crate) enum MappingOrigin {
 /// Mapping plus the receipt produced only by the sealed product gate.
 pub(crate) struct ValidatedMapping {
     mapping: SourceMapping,
+    origin: MappingOrigin,
+    mapping_digest: MappingDigest,
     ontology_digest: OntologyDigest,
     admission_digest: SemanticAdmissionDigest,
     projection_digest: [u8; 32],
@@ -75,8 +77,11 @@ impl ValidatedMapping {
             origin,
             outcome,
         ));
+        let mapping_digest = MappingDigest::from_mapping(&mapping);
         Ok(Self {
             mapping,
+            origin,
+            mapping_digest,
             ontology_digest,
             admission_digest,
             projection_digest,
@@ -106,6 +111,14 @@ impl ValidatedMapping {
 
     pub(crate) const fn source_id(&self) -> sf_core::SourceId {
         self.mapping.source_id()
+    }
+
+    pub(crate) const fn origin(&self) -> MappingOrigin {
+        self.origin
+    }
+
+    pub(crate) const fn mapping_digest(&self) -> MappingDigest {
+        self.mapping_digest
     }
 
     pub(crate) fn ensure_context(
@@ -144,6 +157,8 @@ impl std::fmt::Debug for ValidatedMapping {
         formatter
             .debug_struct("ValidatedMapping")
             .field("source_id", &self.source_id())
+            .field("origin", &self.origin)
+            .field("mapping_digest", &self.mapping_digest)
             .field("ontology_digest", &self.ontology_digest)
             .field("admission_digest", &self.admission_digest)
             .field("projection_digest", &self.projection_digest)
@@ -170,6 +185,8 @@ pub enum SemanticAdmissionError {
     ReceiptOntologyMismatch,
     #[error("semantic admission receipt does not match this source-derived mapping projection")]
     ReceiptSourceMismatch,
+    #[error("semantic admission receipt does not match this verified source generation")]
+    ReceiptGenerationMismatch,
     #[error("mapping and ontology are incompatible ({count} violations)")]
     Violations { count: usize },
 }

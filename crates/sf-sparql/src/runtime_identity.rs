@@ -42,6 +42,13 @@ digest_type!(SchemaDigest);
 digest_type!(ConstraintPolicyDigest);
 digest_type!(CapabilityDigest);
 
+impl MappingDigest {
+    /// Exact canonical identity of one source-affine mapping bundle.
+    pub fn from_mapping(mapping: &SourceMapping) -> Self {
+        mapping_digest(mapping)
+    }
+}
+
 /// Exact semantic document and admission identities supplied by a caller that
 /// owns the validation authority. This value partitions compiler/cache scope;
 /// it is deliberately not an admission token by itself.
@@ -134,7 +141,7 @@ impl CompileDigests {
         column_type_authority: ColumnTypeAuthority,
         semantic: SemanticIdentity,
     ) -> Self {
-        let mapping = mapping_digest(mapping);
+        let mapping = MappingDigest::from_mapping(mapping);
         let structural_schema = structural_schema_digest(schema);
         let type_schema = type_schema_digest(schema);
         let schema = schema_digest(structural_schema, type_schema);

@@ -40,6 +40,12 @@ impl SourceSchemaObservationV1 {
         (tables, observation)
     }
 
+    /// Carry the exact opaque rich observation used to assemble a verified
+    /// Direct-Mapping source candidate. This remains non-authorizing.
+    pub(crate) const fn postgres16_public(observation: Postgres16PublicObservedSchemaV1) -> Self {
+        Self::Postgres16Public(observation)
+    }
+
     #[cfg(test)]
     pub(crate) const fn postgres_unavailable(reason: PostgresSchemaIdentityUnavailableV1) -> Self {
         Self::Unavailable(Some(reason))

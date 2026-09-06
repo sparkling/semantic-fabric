@@ -106,21 +106,27 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let mut generations =
+    let generation_admission =
         match crate::request_generation::acquire(cfg.clone(), &snapshot, &query, &budget).await {
-            Ok(generations) => generations,
+            Ok(admission) => admission,
             Err(response) => return response,
         };
-    let bound =
-        match crate::request_compile::compile(cfg.clone(), snapshot.clone(), query, budget.clone())
-            .await
-        {
-            Ok(p) => p,
-            Err(response) => {
-                let _ = generations.finish().await;
-                return response;
-            }
-        };
+    let (mut generations, compiler) = generation_admission.into_parts();
+    let bound = match crate::request_compile::compile(
+        cfg.clone(),
+        snapshot.clone(),
+        query,
+        budget.clone(),
+        compiler,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(response) => {
+            let _ = generations.finish().await;
+            return response;
+        }
+    };
     let accept = accept.as_deref();
 
     match bound {

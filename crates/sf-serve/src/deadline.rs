@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use sf_core::query_control::QueryControlError;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::budget::RequestBudget;
@@ -19,6 +19,15 @@ pub(crate) enum CompilerRunError {
     Join(JoinError),
 }
 
+/// One server-wide compiler slot reserved before verified source acquisition.
+///
+/// The value is intentionally opaque and non-cloneable. Moving it into a
+/// blocking worker keeps the slot occupied if its async waiter is cancelled or
+/// reaches the request deadline.
+pub(crate) struct CompilerReservation {
+    _permit: OwnedSemaphorePermit,
+}
+
 /// Bound blocking compiler concurrency and its queue wait with the request's
 /// deadline. The owned permit moves into the blocking closure, so timing out the
 /// async waiter cannot release capacity while detached work is still queued or
@@ -32,7 +41,42 @@ where
     T: Send + 'static,
     F: FnOnce(RequestBudget) -> T + Send + 'static,
 {
-    run_compiler_inner(budget, permits, work, || {}).await
+    let reservation = reserve_compiler(&budget, permits).await?;
+    run_compiler_reserved_inner(budget, reservation, work, || {})
+        .await
+        .map(|(value, _reservation)| value)
+}
+
+/// Run bounded preflight work and retain the same compiler slot for a later
+/// authoritative compile. Callers must obtain this before opening a verified
+/// database transaction, so the authoritative compiler never queues while
+/// relation locks are held.
+pub(crate) async fn run_compiler_retaining<T, F>(
+    budget: RequestBudget,
+    permits: Arc<Semaphore>,
+    work: F,
+) -> Result<(T, CompilerReservation), CompilerRunError>
+where
+    T: Send + 'static,
+    F: FnOnce(RequestBudget) -> T + Send + 'static,
+{
+    let reservation = reserve_compiler(&budget, permits).await?;
+    run_compiler_reserved_inner(budget, reservation, work, || {}).await
+}
+
+/// Run authoritative work through a slot already reserved before source I/O.
+pub(crate) async fn run_reserved_compiler<T, F>(
+    budget: RequestBudget,
+    reservation: CompilerReservation,
+    work: F,
+) -> Result<T, CompilerRunError>
+where
+    T: Send + 'static,
+    F: FnOnce(RequestBudget) -> T + Send + 'static,
+{
+    run_compiler_reserved_inner(budget, reservation, work, || {})
+        .await
+        .map(|(value, _reservation)| value)
 }
 
 #[cfg(test)]
@@ -47,37 +91,48 @@ where
     F: FnOnce(RequestBudget) -> T + Send + 'static,
     O: FnOnce() + Send,
 {
-    run_compiler_inner(budget, permits, work, on_submitted).await
+    let reservation = reserve_compiler(&budget, permits).await?;
+    run_compiler_reserved_inner(budget, reservation, work, on_submitted)
+        .await
+        .map(|(value, _reservation)| value)
 }
 
-async fn run_compiler_inner<T, F, O>(
-    budget: RequestBudget,
+async fn reserve_compiler(
+    budget: &RequestBudget,
     permits: Arc<Semaphore>,
+) -> Result<CompilerReservation, CompilerRunError> {
+    budget
+        .run(permits.acquire_owned())
+        .await?
+        .map(|permit| CompilerReservation { _permit: permit })
+        .map_err(|_| CompilerRunError::AdmissionClosed)
+}
+
+async fn run_compiler_reserved_inner<T, F, O>(
+    budget: RequestBudget,
+    reservation: CompilerReservation,
     work: F,
     on_submitted: O,
-) -> Result<T, CompilerRunError>
+) -> Result<(T, CompilerReservation), CompilerRunError>
 where
     T: Send + 'static,
     F: FnOnce(RequestBudget) -> T + Send + 'static,
     O: FnOnce() + Send,
 {
-    let permit = budget
-        .run(permits.acquire_owned())
-        .await?
-        .map_err(|_| CompilerRunError::AdmissionClosed)?;
     let worker_budget = budget.clone();
     let task = tokio::task::spawn_blocking(move || {
         // A timed-out async waiter must not return aggregate request capacity
         // while its detached compiler is still queued or running.
-        let _permit = permit;
-        work(worker_budget)
+        let worker_lifetime = worker_budget.clone();
+        let value = work(worker_budget);
+        (value, reservation, worker_lifetime)
     });
     on_submitted();
 
     match budget.run(task).await {
         Err(error) => Err(error.into()),
         Ok(Err(error)) => Err(CompilerRunError::Join(error)),
-        Ok(Ok(value)) => Ok(value),
+        Ok(Ok((value, reservation, _worker_lifetime))) => Ok((value, reservation)),
     }
 }
 

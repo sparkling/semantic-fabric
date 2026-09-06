@@ -180,13 +180,16 @@ impl ServeConfig {
                         error: error.to_string(),
                     })
                 })?;
-        Self::from_runtime_source(RuntimeSource::admitted(source, mapping), ontology).map_err(
-            |error| {
-                ServeError::new(StartupCause::Configuration {
-                    error: error.to_string(),
-                })
-            },
-        )
+        let source = RuntimeSource::admitted(source, mapping).map_err(|error| {
+            ServeError::new(StartupCause::Configuration {
+                error: error.to_string(),
+            })
+        })?;
+        Self::from_runtime_source(source, ontology).map_err(|error| {
+            ServeError::new(StartupCause::Configuration {
+                error: error.to_string(),
+            })
+        })
     }
 
     /// Unit-test construction over an explicitly fabricated observation.

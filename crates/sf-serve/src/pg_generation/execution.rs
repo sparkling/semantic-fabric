@@ -21,7 +21,7 @@ impl VerifiedPostgresGenerationLease {
     {
         let result =
             exec_pg::select_each_pg_controlled(plan, self.execution_client(), control, sink).await;
-        self.finish_with_budget(control).await?;
+        self.finish_bounded(control).await?;
         Ok(result)
     }
 
@@ -38,7 +38,7 @@ impl VerifiedPostgresGenerationLease {
         let result =
             exec_pg::construct_each_pg_controlled(plan, self.execution_client(), control, sink)
                 .await;
-        self.finish_with_budget(control).await?;
+        self.finish_bounded(control).await?;
         Ok(result)
     }
 
@@ -48,7 +48,7 @@ impl VerifiedPostgresGenerationLease {
         control: &RequestBudget,
     ) -> Result<sf_sparql::Result<bool>, PgGenerationError> {
         let result = exec_pg::ask_pg_controlled(plan, self.execution_client(), control).await;
-        self.finish_with_budget(control).await?;
+        self.finish_bounded(control).await?;
         Ok(result)
     }
 }

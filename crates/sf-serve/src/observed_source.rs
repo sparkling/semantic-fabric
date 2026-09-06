@@ -5,7 +5,7 @@ use std::fmt;
 use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
-use crate::pg_generation::{PgGenerationError, PostgresDirectGeneration, SourceGeneration};
+use crate::pg_generation::{PgGenerationError, PostgresDirectSourceCandidate, SourceGeneration};
 use crate::schema_observation::SourceSchemaObservationV1;
 
 /// A backend paired with the schema observation made through that backend.
@@ -124,14 +124,15 @@ impl IntrospectedSource {
 
     pub(crate) fn bind_postgres_direct(
         mut self,
-        schema: Vec<TableSchema>,
-        generation: PostgresDirectGeneration,
+        candidate: PostgresDirectSourceCandidate,
     ) -> Result<Self, PgGenerationError> {
         if self.kind() != BackendKind::Postgres {
             return Err(PgGenerationError::Internal);
         }
+        let (schema, observation, generation) = candidate.into_parts();
         self.schema = schema;
-        self.generation = SourceGeneration::direct_postgres(generation);
+        self.observation = observation;
+        self.generation = generation;
         Ok(self)
     }
 
@@ -145,6 +146,13 @@ impl IntrospectedSource {
 
     pub(crate) fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    pub(crate) fn ensure_generation_mapping(
+        &self,
+        mapping: &crate::semantic_admission::ValidatedMapping,
+    ) -> Result<(), crate::SemanticAdmissionError> {
+        self.generation.ensure_mapping(mapping)
     }
 
     pub(crate) fn into_parts(

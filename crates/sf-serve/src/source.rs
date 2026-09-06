@@ -21,6 +21,10 @@ pub(crate) const POSTGRES_RELATION_SCOPE_OPTIONS: &str = "-csearch_path=pg_catal
 /// [`POSTGRES_RELATION_SCOPE_OPTIONS`].
 pub(crate) const POSTGRES_RELATION_SCOPE_SETTING: &str = "pg_catalog,public,pg_temp";
 
+/// Canonical server rendering after the same scope is pinned with non-query
+/// `SET LOCAL` inside a verified-generation transaction.
+pub(crate) const POSTGRES_GENERATION_SCOPE_SETTING: &str = "pg_catalog, public, pg_temp";
+
 /// Reapply the invariant whenever a pooled session is recycled.
 pub(crate) const POSTGRES_RELATION_SCOPE_RECYCLE_SQL: &str =
     "SELECT pg_catalog.set_config('search_path', 'pg_catalog,public,pg_temp', false)";

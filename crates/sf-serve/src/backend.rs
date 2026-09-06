@@ -59,6 +59,22 @@ impl std::ops::Deref for PgConn {
 impl Drop for PgConn {
     fn drop(&mut self) {
         if !self.recyclable.load(Ordering::Acquire) {
+            // Dropping a query future does not send PostgreSQL a cancel request.
+            // Fire a bounded best-effort request from a separate connection
+            // before detaching this pool member so abandoned generation work
+            // stops server-side promptly without accumulating cancel tasks.
+            if let (Some(object), Ok(runtime)) =
+                (self.object.as_ref(), tokio::runtime::Handle::try_current())
+            {
+                let cancellation = object.cancel_token();
+                runtime.spawn(async move {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        cancellation.cancel_query(tokio_postgres::NoTls),
+                    )
+                    .await;
+                });
+            }
             if let Some(object) = self.object.take() {
                 drop(deadpool_postgres::Object::take(object));
             }

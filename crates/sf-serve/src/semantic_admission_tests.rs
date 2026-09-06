@@ -216,7 +216,7 @@ fn receipts_cannot_be_detached_from_ontology_or_effective_source_types() {
             RuntimeSnapshot::single(
                 Epoch(0),
                 ontology("ex:value a rdf:Property . ex:Other a owl:Class ."),
-                RuntimeSource::admitted(first_source, receipt),
+                RuntimeSource::admitted(first_source, receipt).unwrap(),
             )
             .unwrap_err()
         ),
@@ -237,7 +237,7 @@ fn receipts_cannot_be_detached_from_ontology_or_effective_source_types() {
             RuntimeSnapshot::single(
                 Epoch(0),
                 first_t,
-                RuntimeSource::admitted(observed("text"), receipt),
+                RuntimeSource::admitted(observed("text"), receipt).unwrap(),
             )
             .unwrap_err()
         ),

@@ -30,6 +30,8 @@ fn valid_guard() -> CatalogGuardRowV1 {
 fn guard_validator_classifies_each_profile_gate() {
     let mut guard = valid_guard();
     assert!(guard.validate().is_ok());
+    guard.search_path = "pg_catalog, public, pg_temp".into();
+    assert!(guard.validate().is_ok());
     guard.server_version_num = 160_014;
     assert_eq!(
         guard.validate(),

@@ -228,6 +228,19 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
+      - name: test required-live PostgreSQL verified-generation lifecycle
+        timeout-minutes: 5
+        env:
+          # This administrator endpoint exists only inside the ephemeral CI
+          # service and provisions a unique database plus restricted reader.
+          SF_PG_GENERATION_TEST_URL: "host=127.0.0.1 port=5432 user=sftest password=sftest dbname=sftest"
+        run: |
+          set -euo pipefail
+          test_name='pg_generation::live_tests::verified_generation_lifecycle_is_coherent_and_fail_closed'
+          listed="$(cargo test --locked -p sf-serve --lib "$test_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-serve --lib "$test_name" -- \
+            --ignored --exact --test-threads=1 --nocapture
       # DuckDB backend (embedded, `bundled` feature — no external service needed).
       # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
       # crate in the dependency graph turns it on, so these tests never ran in CI

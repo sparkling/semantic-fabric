@@ -90,11 +90,15 @@ impl RuntimeSource {
         }
     }
 
-    pub(crate) fn admitted(source: IntrospectedSource, mapping: ValidatedMapping) -> Self {
-        Self {
+    pub(crate) fn admitted(
+        source: IntrospectedSource,
+        mapping: ValidatedMapping,
+    ) -> Result<Self, SemanticAdmissionError> {
+        source.ensure_generation_mapping(&mapping)?;
+        Ok(Self {
             source,
             mapping: RuntimeMapping::Validated(mapping),
-        }
+        })
     }
 
     pub(crate) const fn source_id(&self) -> SourceId {
@@ -109,6 +113,9 @@ impl RuntimeSource {
         let mapping = self
             .mapping
             .validate(ontology, &self.source)
+            .map_err(|cause| SnapshotError::SemanticAdmission { source_id, cause })?;
+        self.source
+            .ensure_generation_mapping(&mapping)
             .map_err(|cause| SnapshotError::SemanticAdmission { source_id, cause })?;
         Ok((source_id, self.source, mapping))
     }

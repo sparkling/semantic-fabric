@@ -1,10 +1,11 @@
 //! Closed PostgreSQL session context admitted for a verified generation.
 
-use crate::source::POSTGRES_RELATION_SCOPE_SETTING;
+use crate::source::POSTGRES_GENERATION_SCOPE_SETTING;
 
 use super::PgGenerationError;
 
 const SESSION_CONTEXT_SQL: &str = "SELECT \
+ pg_catalog.pg_backend_pid() AS backend_pid, \
  d.oid AS database_oid, d.datname::text AS database_name, \
  cr.oid AS current_role_oid, cr.rolname::text AS current_role_name, \
  sr.oid AS session_role_oid, sr.rolname::text AS session_role_name, \
@@ -32,9 +33,28 @@ pub(super) struct PgSessionContext {
     pub(super) session_replication_role: String,
 }
 
+/// One capture also binds the process serving this exact transaction. The PID
+/// is lease-local and therefore does not enter the cross-connection generation
+/// expectation.
+#[derive(Eq, PartialEq)]
+pub(super) struct PgSessionObservation {
+    context: PgSessionContext,
+    backend_pid: i32,
+}
+
+impl PgSessionObservation {
+    pub(super) const fn context(&self) -> &PgSessionContext {
+        &self.context
+    }
+
+    pub(super) fn into_context(self) -> PgSessionContext {
+        self.context
+    }
+}
+
 pub(super) async fn capture_session_context(
     client: &tokio_postgres::Client,
-) -> Result<PgSessionContext, PgGenerationError> {
+) -> Result<PgSessionObservation, PgGenerationError> {
     let row = client
         .query_one(SESSION_CONTEXT_SQL, &[])
         .await
@@ -51,10 +71,14 @@ pub(super) async fn capture_session_context(
         row_security: field(&row, "row_security")?,
         session_replication_role: field(&row, "session_replication_role")?,
     };
+    let backend_pid = field(&row, "backend_pid")?;
     let elevated = field(&row, "rolsuper")?;
     let bypass_rls = field(&row, "rolbypassrls")?;
-    validate_session_context(&context, elevated, bypass_rls)?;
-    Ok(context)
+    validate_session_context(&context, backend_pid, elevated, bypass_rls)?;
+    Ok(PgSessionObservation {
+        context,
+        backend_pid,
+    })
 }
 
 fn field<T>(row: &tokio_postgres::Row, name: &str) -> Result<T, PgGenerationError>
@@ -67,6 +91,7 @@ where
 
 pub(super) fn validate_session_context(
     context: &PgSessionContext,
+    backend_pid: i32,
     elevated: bool,
     bypass_rls: bool,
 ) -> Result<(), PgGenerationError> {
@@ -75,7 +100,8 @@ pub(super) fn validate_session_context(
         context.current_role_name.as_str(),
         context.session_role_name.as_str(),
     ];
-    if context.database_oid == 0
+    if backend_pid <= 0
+        || context.database_oid == 0
         || context.current_role_oid == 0
         || context.session_role_oid == 0
         || context.current_role_oid != context.session_role_oid
@@ -84,7 +110,7 @@ pub(super) fn validate_session_context(
             .into_iter()
             .any(|value| value.is_empty() || value.len() > 63 || value.contains('\0'))
         || !matches!(context.server_version_num, 160_009 | 160_015)
-        || context.search_path != POSTGRES_RELATION_SCOPE_SETTING
+        || context.search_path != POSTGRES_GENERATION_SCOPE_SETTING
         || context.row_security != "on"
         || context.session_replication_role != "origin"
         || elevated

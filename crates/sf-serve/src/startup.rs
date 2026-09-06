@@ -124,44 +124,33 @@ impl PreparedMapping {
                 let mapping =
                     ValidatedMapping::validate(mapping, MappingOrigin::Authored, ontology, &source)
                         .map_err(semantic_admission_error)?;
-                Ok(RuntimeSource::admitted(source, mapping))
+                RuntimeSource::admitted(source, mapping).map_err(semantic_admission_error)
             }
             Self::Direct {
                 base_iri,
                 source_id,
             } => {
-                let pool = match source.backend() {
-                    crate::Backend::Pg(pool) => pool.clone(),
+                match source.backend() {
+                    crate::Backend::Pg(_) => {}
                     crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
                         return Err(configuration_error(
                             "live Direct Mapping requires PostgreSQL",
                         ))
                     }
-                };
+                }
                 let deadline = std::time::Instant::now()
                     .checked_add(opts.timeout)
                     .ok_or_else(|| configuration_error("startup timeout is not representable"))?;
                 let budget = crate::budget::RequestBudget::uncontrolled(Some(deadline));
-                let candidate = crate::pg_generation::build_direct_candidate(
-                    &pool,
-                    source.observed_schema(),
-                    &base_iri,
-                    source_id,
-                    &budget,
+                let (source, mapping) = crate::pg_generation::build_and_bind_direct_candidate(
+                    source, &base_iri, source_id, &budget,
                 )
                 .await
                 .map_err(startup_generation_error)?;
-                let source = source
-                    .bind_postgres_direct(candidate.tables, candidate.generation)
-                    .map_err(startup_generation_error)?;
-                let mapping = ValidatedMapping::validate(
-                    candidate.mapping,
-                    MappingOrigin::Direct,
-                    ontology,
-                    &source,
-                )
-                .map_err(semantic_admission_error)?;
-                Ok(RuntimeSource::admitted(source, mapping))
+                let mapping =
+                    ValidatedMapping::validate(mapping, MappingOrigin::Direct, ontology, &source)
+                        .map_err(semantic_admission_error)?;
+                RuntimeSource::admitted(source, mapping).map_err(semantic_admission_error)
             }
         }
     }

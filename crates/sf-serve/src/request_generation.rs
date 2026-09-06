@@ -7,8 +7,20 @@ use axum::response::Response;
 use crate::activation::{ReadinessCause, RuntimeSnapshotLease};
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
+use crate::deadline::CompilerReservation;
 use crate::pg_generation::{PgGenerationError, VerifiedGenerationLeases};
 use crate::problem::{self, ProblemCode};
+
+pub(crate) struct RequestGenerationAdmission {
+    generations: VerifiedGenerationLeases,
+    compiler: Option<CompilerReservation>,
+}
+
+impl RequestGenerationAdmission {
+    pub(crate) fn into_parts(self) -> (VerifiedGenerationLeases, Option<CompilerReservation>) {
+        (self.generations, self.compiler)
+    }
+}
 
 /// Discover dependencies without cache authority, then acquire and revalidate
 /// every required backend-generation lease before authoritative compilation.
@@ -17,25 +29,32 @@ pub(crate) async fn acquire(
     snapshot: &RuntimeSnapshotLease,
     query: &str,
     budget: &RequestBudget,
-) -> Result<VerifiedGenerationLeases, Response> {
+) -> Result<RequestGenerationAdmission, Response> {
     let source_ids = cfg.query_mode().source_ids().into_iter().flatten();
     let requirements = snapshot
         .generation_requirements(source_ids)
         .map_err(|error| response_for_error(&cfg, snapshot, error))?;
     if requirements.is_empty() {
-        return Ok(VerifiedGenerationLeases::default());
+        return Ok(RequestGenerationAdmission {
+            generations: VerifiedGenerationLeases::default(),
+            compiler: None,
+        });
     }
 
-    crate::request_compile::preflight(
+    let compiler = crate::request_compile::preflight(
         cfg.clone(),
         snapshot.clone(),
         query.to_owned(),
         budget.clone(),
     )
     .await?;
-    VerifiedGenerationLeases::acquire(requirements, budget)
+    let generations = VerifiedGenerationLeases::acquire(requirements, budget)
         .await
-        .map_err(|error| response_for_error(&cfg, snapshot, error))
+        .map_err(|error| response_for_error(&cfg, snapshot, error))?;
+    Ok(RequestGenerationAdmission {
+        generations,
+        compiler: Some(compiler),
+    })
 }
 
 pub(crate) fn response_for_error(

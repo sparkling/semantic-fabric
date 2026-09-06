@@ -170,7 +170,7 @@ pub(crate) async fn select_union_body(
 async fn close_acquired(acquired: Vec<AcquiredFragment>) {
     for fragment in acquired {
         if let AcquiredFragment::VerifiedPostgres { lease, .. } = fragment {
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), lease.finish()).await;
+            let _ = lease.rollback_bounded().await;
         }
     }
 }
