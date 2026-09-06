@@ -6,6 +6,8 @@ use sf_serve::{
     DEFAULT_SHUTDOWN_TIMEOUT,
 };
 
+use crate::telemetry::TelemetryLevel;
+
 #[derive(clap::Args)]
 pub(super) struct ServeArgs {
     #[command(flatten)]
@@ -20,6 +22,9 @@ pub(super) struct ServeArgs {
     /// Address to bind.
     #[arg(long, default_value = "127.0.0.1:7878")]
     pub(super) bind: String,
+    /// Structured product telemetry ceiling; applies only to `serve`.
+    #[arg(long, value_enum, default_value_t = TelemetryLevel::Info)]
+    pub(super) log_level: TelemetryLevel,
     /// Request timeout in seconds (ADR-0010).
     #[arg(long, default_value_t = 30)]
     pub(super) timeout_secs: u64,

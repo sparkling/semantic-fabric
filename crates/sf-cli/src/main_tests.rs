@@ -4,7 +4,7 @@ use super::*;
 fn non_serve_commands_bypass_structured_subscriber_initialization() {
     for command in [Command::Conformance, Command::Bench] {
         let mut calls = 0;
-        initialize_telemetry_for(&command, || {
+        initialize_telemetry_for(&command, |_| {
             calls += 1;
             Ok(())
         })
@@ -248,6 +248,41 @@ fn serve_request_admission_limit_has_a_finite_default_and_accepts_an_override() 
 }
 
 #[test]
+fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
+    let base = [
+        "semantic-fabric",
+        "serve",
+        "--mapping",
+        "mapping.ttl",
+        "--source",
+        "sqlite::memory:",
+        "--ontology",
+        "ontology.ttl",
+    ];
+    let parsed = Cli::try_parse_from(base).unwrap();
+    let Command::Serve(args) = parsed.command else {
+        panic!("serve command")
+    };
+    assert_eq!(args.log_level, TelemetryLevel::Info);
+
+    for (value, expected) in [
+        ("off", TelemetryLevel::Off),
+        ("error", TelemetryLevel::Error),
+        ("warn", TelemetryLevel::Warn),
+        ("info", TelemetryLevel::Info),
+    ] {
+        let parsed = Cli::try_parse_from(base.into_iter().chain(["--log-level", value])).unwrap();
+        let Command::Serve(args) = parsed.command else {
+            panic!("serve command")
+        };
+        assert_eq!(args.log_level, expected);
+    }
+    for invalid in ["debug", "trace", "sf_sql=debug", "info,hyper=trace"] {
+        assert!(Cli::try_parse_from(base.into_iter().chain(["--log-level", invalid])).is_err());
+    }
+}
+
+#[test]
 fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
     let opts = ServeArgs {
         source_input: SourceArgs {
@@ -273,6 +308,7 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
             .to_string_lossy()
             .into_owned(),
         bind: "127.0.0.1:0".to_owned(),
+        log_level: TelemetryLevel::Info,
         timeout_secs: 1,
         max_query_len: 1024,
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,

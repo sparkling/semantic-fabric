@@ -43,6 +43,9 @@ pub mod term;
 pub use affinity::{SourceId, SourceIdError, SourceMapping};
 pub use schema::{Column, ForeignKey, FunctionalDep, SideStats, TableSchema};
 
+/// The sole tracing target accepted by the serving process subscriber.
+pub const TELEMETRY_TARGET: &str = "semantic_fabric::telemetry";
+
 /// Errors raised by the shared core.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

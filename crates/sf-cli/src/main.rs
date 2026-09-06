@@ -27,6 +27,7 @@ use serve_args::{
     AdditionalMappingSelector, AdditionalSourceArgs, AdditionalSourceSelector, MappingArgs,
     SourceArgs,
 };
+use telemetry::TelemetryLevel;
 
 #[derive(Parser)]
 #[command(
@@ -65,10 +66,10 @@ fn main() -> ExitCode {
 
 fn initialize_telemetry_for(
     command: &Command,
-    initialize: impl FnOnce() -> Result<(), telemetry::InitError>,
+    initialize: impl FnOnce(TelemetryLevel) -> Result<(), telemetry::InitError>,
 ) -> Result<(), telemetry::InitError> {
     match command {
-        Command::Serve(_) => initialize(),
+        Command::Serve(args) => initialize(args.log_level),
         Command::Conformance | Command::Bench => Ok(()),
     }
 }

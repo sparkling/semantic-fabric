@@ -1,43 +1,16 @@
 //! Closed, payload-free request telemetry vocabulary (ADR-0011, partial M3).
 
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{HeaderValue, Method, Request, Response, StatusCode};
-use serde::Serialize;
 use sf_core::query_control::QueryControlError;
+use sf_core::TELEMETRY_TARGET;
 use tracing::{Instrument, Span};
 
+pub(crate) use crate::correlation::CorrelationId;
+
 const SCHEMA: &str = "semantic-fabric.telemetry.v1";
-static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
-static PROCESS_CORRELATION_SALT: OnceLock<u64> = OnceLock::new();
-
-/// Generated support identifier. Construction is private so telemetry never
-/// accepts request-controlled correlation text.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub(crate) struct CorrelationId(String);
-
-impl CorrelationId {
-    pub(crate) fn generate() -> Self {
-        let salt = PROCESS_CORRELATION_SALT.get_or_init(|| {
-            let time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos() as u64);
-            time ^ u64::from(std::process::id()).rotate_left(32)
-        });
-        let sequence = NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed);
-        Self(format!("sf-{salt:016x}-{sequence:016x}"))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 #[derive(Clone, Copy)]
 enum RequestMethod {
     Get,
@@ -62,6 +35,17 @@ impl RequestMethod {
             Self::Head => "head",
             Self::Post => "post",
             Self::Other => "other",
+        }
+    }
+
+    fn body_disposition(self, status: StatusCode) -> crate::telemetry_body::BodyDisposition {
+        if matches!(self, Self::Head)
+            || status.is_informational()
+            || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
+        {
+            crate::telemetry_body::BodyDisposition::ProtocolNoBody
+        } else {
+            crate::telemetry_body::BodyDisposition::Expected
         }
     }
 }
@@ -309,6 +293,7 @@ impl RequestOutcome {
 pub(crate) struct RequestTrace {
     span: Span,
     correlation: CorrelationId,
+    method: RequestMethod,
 }
 
 impl RequestTrace {
@@ -316,7 +301,7 @@ impl RequestTrace {
         let method = RequestMethod::classify(request.method());
         let route = RequestRoute::classify(request.uri().path());
         let span = tracing::info_span!(
-            target: "semantic_fabric::telemetry",
+            target: TELEMETRY_TARGET,
             "sf.request",
             schema = SCHEMA,
             method = method.as_str(),
@@ -325,7 +310,11 @@ impl RequestTrace {
             outcome = tracing::field::Empty,
             correlation_id = correlation.as_str(),
         );
-        Self { span, correlation }
+        Self {
+            span,
+            correlation,
+            method,
+        }
     }
 
     pub(crate) fn span(&self) -> Span {
@@ -344,6 +333,7 @@ impl RequestTrace {
                 .expect("generated correlation is an ASCII header value"),
         );
         let status = response.status();
+        let body_disposition = self.method.body_disposition(status);
         let outcome = RequestOutcome::from_status(status);
         self.span.record("status", status.as_u16());
         self.span.record("outcome", outcome.as_str());
@@ -351,7 +341,7 @@ impl RequestTrace {
             record_problem(failure, &self.correlation, status, &self.span);
         }
         tracing::info!(
-            target: "semantic_fabric::telemetry",
+            target: TELEMETRY_TARGET,
             parent: &self.span,
             schema = SCHEMA,
             event = "request.handoff",
@@ -363,14 +353,14 @@ impl RequestTrace {
         let (parts, body) = response.into_parts();
         Response::from_parts(
             parts,
-            crate::telemetry_body::wrap(body, self.span, self.correlation),
+            crate::telemetry_body::wrap(body, self.span, self.correlation, body_disposition),
         )
     }
 }
 
 pub(crate) fn stage_span(stage: Stage) -> Span {
     tracing::info_span!(
-        target: "semantic_fabric::telemetry",
+        target: TELEMETRY_TARGET,
         "sf.request.stage",
         schema = SCHEMA,
         stage = stage.as_str(),
@@ -402,7 +392,7 @@ fn record_problem(
     parent: &Span,
 ) {
     tracing::warn!(
-        target: "semantic_fabric::telemetry",
+        target: TELEMETRY_TARGET,
         parent: parent,
         schema = SCHEMA,
         event = "request.rejected",
@@ -415,7 +405,7 @@ fn record_problem(
 pub(crate) fn record_governance_terminal(error: QueryControlError, correlation: &CorrelationId) {
     let outcome = GovernanceOutcome::from_error(error);
     tracing::warn!(
-        target: "semantic_fabric::telemetry",
+        target: TELEMETRY_TARGET,
         schema = SCHEMA,
         event = "governance.terminal",
         outcome = outcome.as_str(),
@@ -425,7 +415,7 @@ pub(crate) fn record_governance_terminal(error: QueryControlError, correlation: 
 
 pub(crate) fn record_startup_failure(failure: StartupFailure, correlation: &CorrelationId) {
     tracing::error!(
-        target: "semantic_fabric::telemetry",
+        target: TELEMETRY_TARGET,
         schema = SCHEMA,
         event = "startup.failed",
         failure = failure.as_str(),
@@ -433,29 +423,26 @@ pub(crate) fn record_startup_failure(failure: StartupFailure, correlation: &Corr
     );
 }
 
-pub(crate) fn record_stream_outcome(outcome: StreamOutcome) {
+pub(crate) fn record_stream_outcome(outcome: StreamOutcome, correlation: &CorrelationId) {
     match outcome {
-        StreamOutcome::Complete => tracing::info!(
-            target: "semantic_fabric::telemetry",
+        StreamOutcome::Complete | StreamOutcome::ClientGone => tracing::info!(
+            target: TELEMETRY_TARGET,
             schema = SCHEMA,
             event = "stream.finished",
             outcome = outcome.as_str(),
+            correlation_id = correlation.as_str(),
         ),
-        StreamOutcome::Failed | StreamOutcome::ClientGone => tracing::warn!(
-            target: "semantic_fabric::telemetry",
+        StreamOutcome::Failed => tracing::warn!(
+            target: TELEMETRY_TARGET,
             schema = SCHEMA,
             event = "stream.finished",
             outcome = outcome.as_str(),
+            correlation_id = correlation.as_str(),
         ),
     }
 }
 
 #[cfg(test)]
 pub(crate) fn is_generated_correlation(value: &str) -> bool {
-    value.len() == 36
-        && value.as_bytes().get(..3) == Some(b"sf-")
-        && value.as_bytes().get(19) == Some(&b'-')
-        && value.bytes().enumerate().all(|(index, byte)| {
-            index < 3 || index == 19 || byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-        })
+    crate::correlation::is_generated(value)
 }

@@ -9,6 +9,7 @@ use axum::body::{Body, Bytes};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_stream::Stream;
+use tracing::instrument::WithSubscriber;
 use tracing::Instrument;
 
 use crate::budget::RequestBudget;
@@ -117,7 +118,10 @@ where
                     biased;
                     _ = closed_tx.closed() => {
                         budget.cancel();
-                        telemetry::record_stream_outcome(StreamOutcome::ClientGone);
+                        telemetry::record_stream_outcome(
+                            StreamOutcome::ClientGone,
+                            budget.correlation_id(),
+                        );
                         return;
                     }
                     result = guarded => result
@@ -130,14 +134,18 @@ where
                         }),
                 }
             };
-            telemetry::record_stream_outcome(match result {
-                ProducerOutcome::Complete => StreamOutcome::Complete,
-                ProducerOutcome::Failed => StreamOutcome::Failed,
-            });
             terminal.finish(result);
+            telemetry::record_stream_outcome(
+                match result {
+                    ProducerOutcome::Complete => StreamOutcome::Complete,
+                    ProducerOutcome::Failed => StreamOutcome::Failed,
+                },
+                budget.correlation_id(),
+            );
             drop(closed_tx);
         }
-        .instrument(stage),
+        .instrument(stage)
+        .with_current_subscriber(),
     );
     (body, task)
 }

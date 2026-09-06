@@ -384,42 +384,50 @@ fn translate_inner_flat(
     let (saturated_maps, uf_tbox) = if tbox.is_empty() {
         (std::borrow::Cow::Borrowed(maps), tbox)
     } else {
-        let expanded = saturate::saturate_maps(maps, tbox);
+        let expanded =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Saturate, || {
+                saturate::saturate_maps(maps, tbox)
+            });
         (expanded, &empty_tbox)
     };
     let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect, schema);
-    let (trans, form, describe_form) = match query {
-        Query::Select { pattern, .. } => {
-            let t = uf.translate_pattern(pattern)?;
-            let vars = t
-                .project
-                .clone()
-                .unwrap_or_else(|| visible_vars(&t.branches));
-            (t, PlanForm::Select { vars }, false)
-        }
-        Query::Construct {
-            template, pattern, ..
-        } => {
-            // ADR-0032 D2: the old ADR-0031 rule-9 501 guard is superseded —
-            // real instantiation now happens (`exec_core::instantiate`'s
-            // recursive `TermPattern::Triple` arm) — but the template must
-            // first be pre-substituted so an env-composed variable becomes an
-            // explicit `TermPattern::Triple` over its component vars
-            // (`star::substitute_construct_template`'s doc comment).
-            let template = star::substitute_construct_template(template, &star_env);
-            let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Construct { template }, false)
-        }
-        Query::Ask { pattern, .. } => {
-            let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Ask, false)
-        }
-        Query::Describe { pattern, .. } => {
-            let (description_pattern, template) = describe::rewrite(pattern)?;
-            let t = uf.translate_pattern(&description_pattern)?;
-            (t, PlanForm::Construct { template }, true)
-        }
-    };
+    let (trans, form, describe_form) = compiler_telemetry::in_stage(
+        compiler_telemetry::CompilerStage::Unfold,
+        || -> Result<_> {
+            match query {
+                Query::Select { pattern, .. } => {
+                    let t = uf.translate_pattern(pattern)?;
+                    let vars = t
+                        .project
+                        .clone()
+                        .unwrap_or_else(|| visible_vars(&t.branches));
+                    Ok((t, PlanForm::Select { vars }, false))
+                }
+                Query::Construct {
+                    template, pattern, ..
+                } => {
+                    // ADR-0032 D2: the old ADR-0031 rule-9 501 guard is superseded —
+                    // real instantiation now happens (`exec_core::instantiate`'s
+                    // recursive `TermPattern::Triple` arm) — but the template must
+                    // first be pre-substituted so an env-composed variable becomes an
+                    // explicit `TermPattern::Triple` over its component vars
+                    // (`star::substitute_construct_template`'s doc comment).
+                    let template = star::substitute_construct_template(template, &star_env);
+                    let t = uf.translate_pattern(pattern)?;
+                    Ok((t, PlanForm::Construct { template }, false))
+                }
+                Query::Ask { pattern, .. } => {
+                    let t = uf.translate_pattern(pattern)?;
+                    Ok((t, PlanForm::Ask, false))
+                }
+                Query::Describe { pattern, .. } => {
+                    let (description_pattern, template) = describe::rewrite(pattern)?;
+                    let t = uf.translate_pattern(&description_pattern)?;
+                    Ok((t, PlanForm::Construct { template }, true))
+                }
+            }
+        },
+    )?;
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
     // a DISTINCT redundant; SELECT carries an explicit projection, CONSTRUCT/ASK
     // project every binding (`None`). ADR-0032 D3 item 2: expanded with any
@@ -436,7 +444,9 @@ fn translate_inner_flat(
             distinct: trans.distinct,
             project: project_vars.as_deref(),
         };
-        cascade::run(trans.branches, schema, &ctx)
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
+            cascade::run(trans.branches, schema, &ctx)
+        })
     } else {
         // `cascade::run` is skipped here by design — this is the NoREC unoptimized
         // baseline (ADR-0007: "none of the order-sensitive cascade rewrites"). D1
@@ -703,31 +713,31 @@ fn translate_tree_with_column_type_use(
         distinct: plan.distinct,
         project: project_vars.as_deref(),
     };
-    plan.branches =
-        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
-            cascade::run(plan.branches, schema, &ctx)
-        });
-    // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
-    // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
-    // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
-    // them (it only walks `plan.branches`), so self-join elimination and the rest of
-    // the cascade would silently never fire on a pooled/nested arm otherwise. Recurse
-    // into every SubPlan the SAME way: `project: None` (mirrors the `rust_group`
-    // guard above — a nested arm's raw columns feed its outer union/aggregation BY
-    // NAME, so they must never be shrunk away).
-    for b in &mut plan.branches {
-        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
-            cascade_subplans(b, schema, work_mode)
-        })?;
-    }
-    // ADR-0034: dedup below GROUP BY (see the identical note in
-    // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
-    // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
-    // applies it per pattern, before this tree's own aggregation lowering
-    // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
-    compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
-        cascade::dedup_before_aggregate(&mut plan.branches, dialect);
-    });
+    compiler_telemetry::in_stage(
+        compiler_telemetry::CompilerStage::Cascade,
+        || -> Result<()> {
+            let branches = std::mem::take(&mut plan.branches);
+            plan.branches = cascade::run(branches, schema, &ctx);
+            // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
+            // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
+            // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
+            // them (it only walks `plan.branches`), so self-join elimination and the rest of
+            // the cascade would silently never fire on a pooled/nested arm otherwise. Recurse
+            // into every SubPlan the SAME way: `project: None` (mirrors the `rust_group`
+            // guard above — a nested arm's raw columns feed its outer union/aggregation BY
+            // NAME, so they must never be shrunk away).
+            for b in &mut plan.branches {
+                cascade_subplans(b, schema, work_mode)?;
+            }
+            // ADR-0034: dedup below GROUP BY (see the identical note in
+            // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
+            // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
+            // applies it per pattern, before this tree's own aggregation lowering
+            // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
+            cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+            Ok(())
+        },
+    )?;
     // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
     // `translate_inner_flat`): MUST run before the `distinct` capture below.
     if describe_form {

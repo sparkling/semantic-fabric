@@ -100,6 +100,7 @@ async fn handle_post(
     process(cfg, snapshot, query, accepted, budget).await
 }
 
+/// The shared request pipeline: cap → compile → dispatch by query form → stream.
 async fn process(
     cfg: Arc<ServeConfig>,
     snapshot: RuntimeSnapshotLease,
@@ -340,10 +341,9 @@ async fn respond_ask(
             // `'static`), MySQL's branch cursor BORROWS the connection, so awaiting
             // `ask_mysql` inline in this handler future leaves the borrowing stream
             // held across an await — an HRTB `Send` obligation axum's handler future
-            // cannot discharge. `tokio::spawn` checks `Send` on the concrete
-            // owned-`Conn` task future directly (provable), and gives the dedicated
-            // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
-            // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` join handling.
+            // cannot discharge. `spawn_request_task` proves `Send` on the concrete
+            // owned-`Conn` task, dropped/disposed after the run (§4.2), mirroring
+            // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` handling.
             let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,

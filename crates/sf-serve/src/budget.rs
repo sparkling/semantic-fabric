@@ -218,6 +218,10 @@ impl RequestBudget {
         CancellationGuard(Some(self.clone()))
     }
 
+    pub(crate) fn correlation_id(&self) -> &CorrelationId {
+        &self.0.correlation
+    }
+
     /// Reject an ASK whose guaranteed boolean cannot fit before any backend is
     /// selected or acquired. A positive capacity is charged by the executor.
     pub(crate) fn preflight_ask_result(&self) -> Result<(), QueryControlError> {

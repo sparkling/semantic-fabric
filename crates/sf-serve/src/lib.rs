@@ -41,6 +41,7 @@ mod binding;
 mod binding_identity;
 mod budget;
 mod config;
+mod correlation;
 mod deadline;
 mod federation;
 mod health;
@@ -90,6 +91,8 @@ mod runtime_activation_http_tests;
 mod runtime_snapshot_tests;
 #[cfg(test)]
 mod semantic_admission_tests;
+#[cfg(test)]
+mod telemetry_acceptance_tests;
 #[cfg(test)]
 mod telemetry_tests;
 #[cfg(test)]

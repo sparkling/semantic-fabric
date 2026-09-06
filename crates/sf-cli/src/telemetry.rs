@@ -2,12 +2,45 @@
 
 use std::fmt;
 
+use clap::ValueEnum;
+use sf_core::TELEMETRY_TARGET;
 use tracing::{Level, Metadata};
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::{Context, Filter};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 
-const PRODUCT_TARGET: &str = "semantic_fabric::telemetry";
+/// Closed operator-controlled ceiling for product telemetry. Arbitrary filter
+/// directives are deliberately not accepted at the public CLI boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(super) enum TelemetryLevel {
+    Off,
+    Error,
+    Warn,
+    #[default]
+    Info,
+}
+
+impl TelemetryLevel {
+    const fn allows(self, level: &Level) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Error => matches!(*level, Level::ERROR),
+            Self::Warn => matches!(*level, Level::ERROR | Level::WARN),
+            Self::Info => matches!(*level, Level::ERROR | Level::WARN | Level::INFO),
+        }
+    }
+
+    const fn max_level(self) -> LevelFilter {
+        match self {
+            Self::Off => LevelFilter::OFF,
+            Self::Error => LevelFilter::ERROR,
+            Self::Warn => LevelFilter::WARN,
+            Self::Info => LevelFilter::INFO,
+        }
+    }
+}
 
 /// Deliberately opaque: subscriber-install errors may contain foreign text and
 /// are not part of the public startup vocabulary.
@@ -22,7 +55,7 @@ impl fmt::Display for InitError {
 
 impl std::error::Error for InitError {}
 
-pub(super) fn init() -> Result<(), InitError> {
+pub(super) fn init(level: TelemetryLevel) -> Result<(), InitError> {
     let formatter = tracing_subscriber::fmt::layer()
         .json()
         .flatten_event(true)
@@ -34,14 +67,40 @@ pub(super) fn init() -> Result<(), InitError> {
         .with_thread_ids(false)
         .with_span_events(FmtSpan::CLOSE);
     tracing_subscriber::registry()
-        .with(formatter.with_filter(tracing_subscriber::filter::filter_fn(is_product_metadata)))
+        .with(formatter.with_filter(product_filter(level)))
         .try_init()
         .map_err(redact_init_error)
 }
 
-fn is_product_metadata(metadata: &Metadata<'_>) -> bool {
-    metadata.target() == PRODUCT_TARGET
-        && matches!(*metadata.level(), Level::ERROR | Level::WARN | Level::INFO)
+#[derive(Clone, Copy)]
+struct ProductFilter {
+    level: TelemetryLevel,
+    max_level: LevelFilter,
+}
+
+impl<S> Filter<S> for ProductFilter
+where
+    S: tracing::Subscriber,
+{
+    fn enabled(&self, metadata: &Metadata<'_>, context: &Context<'_, S>) -> bool {
+        is_product_metadata(metadata, self.level)
+            && <LevelFilter as Filter<S>>::enabled(&self.max_level, metadata, context)
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(self.max_level)
+    }
+}
+
+fn product_filter(level: TelemetryLevel) -> ProductFilter {
+    ProductFilter {
+        level,
+        max_level: level.max_level(),
+    }
+}
+
+fn is_product_metadata(metadata: &Metadata<'_>, level: TelemetryLevel) -> bool {
+    metadata.target() == TELEMETRY_TARGET && level.allows(metadata.level())
 }
 
 fn redact_init_error<T>(_error: T) -> InitError {
@@ -53,7 +112,7 @@ mod tests {
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
-    use tracing::Dispatch;
+    use tracing::{Dispatch, Subscriber};
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
@@ -95,26 +154,90 @@ mod tests {
     }
 
     #[test]
-    fn subscriber_filter_rejects_foreign_targets_and_debug_events() {
+    fn subscriber_filter_applies_closed_levels_to_events_and_spans() {
         const SEEDED_CREDENTIAL: &str =
             "postgres://telemetry-user:seeded-password-NEVER-EXPOSE@db.invalid/product";
-        let capture = Capture::default();
-        let formatter = tracing_subscriber::fmt::layer()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(capture.clone());
-        let subscriber = tracing_subscriber::registry().with(
-            formatter.with_filter(tracing_subscriber::filter::filter_fn(is_product_metadata)),
-        );
-        let dispatch = Dispatch::new(subscriber);
-        tracing::dispatcher::with_default(&dispatch, || {
-            tracing::info!(target: PRODUCT_TARGET, event = "allowed");
-            tracing::debug!(target: PRODUCT_TARGET, secret = "debug-secret");
-            tracing::error!(target: "foreign_dependency", secret = SEEDED_CREDENTIAL);
-        });
-        let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
-        assert!(output.contains("allowed"), "output={output}");
-        assert!(!output.contains("debug-secret"), "output={output}");
-        assert!(!output.contains(SEEDED_CREDENTIAL), "output={output}");
+        for (level, expected) in [
+            (TelemetryLevel::Off, [false, false, false]),
+            (TelemetryLevel::Error, [true, false, false]),
+            (TelemetryLevel::Warn, [true, true, false]),
+            (TelemetryLevel::Info, [true, true, true]),
+        ] {
+            let capture = Capture::default();
+            let formatter = tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_span_events(FmtSpan::NEW)
+                .with_writer(capture.clone());
+            let subscriber =
+                tracing_subscriber::registry().with(formatter.with_filter(product_filter(level)));
+            assert_eq!(subscriber.max_level_hint(), Some(level.max_level()));
+            let dispatch = Dispatch::new(subscriber);
+            tracing::dispatcher::with_default(&dispatch, || {
+                tracing::error!(target: TELEMETRY_TARGET, event = "product.error.event");
+                let _error = tracing::error_span!(
+                    target: TELEMETRY_TARGET,
+                    "product.error.span"
+                )
+                .entered();
+                tracing::warn!(target: TELEMETRY_TARGET, event = "product.warn.event");
+                let _warn =
+                    tracing::warn_span!(target: TELEMETRY_TARGET, "product.warn.span").entered();
+                tracing::info!(target: TELEMETRY_TARGET, event = "product.info.event");
+                let _info =
+                    tracing::info_span!(target: TELEMETRY_TARGET, "product.info.span").entered();
+                tracing::debug!(target: TELEMETRY_TARGET, secret = "debug-secret");
+                tracing::error!(target: "foreign_dependency", secret = SEEDED_CREDENTIAL);
+                let _foreign = tracing::error_span!(
+                    target: "sf_sql",
+                    "foreign.span",
+                    secret = SEEDED_CREDENTIAL
+                )
+                .entered();
+            });
+            let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+            for (name, allowed) in [
+                ("product.error", expected[0]),
+                ("product.warn", expected[1]),
+                ("product.info", expected[2]),
+            ] {
+                assert_eq!(
+                    output.contains(name),
+                    allowed,
+                    "level={level:?}, output={output}"
+                );
+            }
+            assert!(!output.contains("debug-secret"), "output={output}");
+            assert!(!output.contains(SEEDED_CREDENTIAL), "output={output}");
+            assert!(!output.contains("foreign.span"), "output={output}");
+        }
+    }
+
+    #[test]
+    fn every_product_emitter_uses_the_single_shared_target() {
+        for (name, source, expected_sites) in [
+            (
+                "sf-serve events and spans",
+                include_str!("../../sf-serve/src/telemetry.rs"),
+                8,
+            ),
+            (
+                "sf-serve response body",
+                include_str!("../../sf-serve/src/telemetry_body.rs"),
+                1,
+            ),
+            (
+                "sf-sparql compiler",
+                include_str!("../../sf-sparql/src/compiler_telemetry.rs"),
+                1,
+            ),
+        ] {
+            assert_eq!(
+                source.matches("target: TELEMETRY_TARGET").count(),
+                expected_sites,
+                "{name}"
+            );
+            assert!(!source.contains("target: \"semantic_fabric::telemetry\""));
+        }
     }
 }

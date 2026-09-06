@@ -228,7 +228,10 @@ fn compile_source_affine_union_with(
             "federated compiler bindings must have distinct source identities".to_owned(),
         ));
     }
-    let parsed = SourceAffineUnion::parse(sparql)?;
+    let parsed = crate::compiler_telemetry::in_stage(
+        crate::compiler_telemetry::CompilerStage::Parse,
+        || SourceAffineUnion::parse(sparql),
+    )?;
     let mut selected = Vec::with_capacity(2);
     for arm in parsed.arms() {
         let candidates: Vec<_> = bindings
