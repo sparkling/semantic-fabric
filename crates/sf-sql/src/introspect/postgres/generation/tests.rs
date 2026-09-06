@@ -40,6 +40,7 @@ fn only_clean_pre_legacy_guard_mismatches_may_downgrade() {
         Unavailable::ProfileNotImplemented,
         Unavailable::UnqualifiedEnginePatch,
         Unavailable::IdentityRejected,
+        Unavailable::GuardUnsupported(Guard::ServerEncoding),
         Unavailable::GuardUnsupported(Guard::IndexKeyLimit),
         Unavailable::GuardUnsupported(Guard::IntegerDatetimes),
         Unavailable::GuardUnsupported(Guard::ReplicationRole),
@@ -49,7 +50,7 @@ fn only_clean_pre_legacy_guard_mismatches_may_downgrade() {
         assert!(guard_failure_may_downgrade(reason), "{reason:?}");
     }
     for reason in [
-        Unavailable::GuardUnsupported(Guard::ServerEncoding),
+        Unavailable::GuardUnsupported(Guard::ClientEncoding),
         Unavailable::GuardUnsupported(Guard::IdentifierLength),
         Unavailable::GuardUnsupported(Guard::SearchPath),
         Unavailable::LegacyCoordinateMismatch,

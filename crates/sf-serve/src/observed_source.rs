@@ -6,6 +6,7 @@ use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
 use crate::pg_generation::{PgGenerationError, PostgresDirectGeneration, SourceGeneration};
+use crate::schema_observation::SourceSchemaObservationV1;
 
 /// A backend paired with the schema observation made through that backend.
 ///
@@ -17,6 +18,7 @@ use crate::pg_generation::{PgGenerationError, PostgresDirectGeneration, SourceGe
 pub struct IntrospectedSource {
     backend: Backend,
     schema: Vec<TableSchema>,
+    observation: SourceSchemaObservationV1,
     generation: SourceGeneration,
 }
 
@@ -27,6 +29,7 @@ impl IntrospectedSource {
         Self {
             backend,
             schema,
+            observation: SourceSchemaObservationV1::unavailable(),
             generation: SourceGeneration::Unverified,
         }
     }
@@ -35,6 +38,34 @@ impl IntrospectedSource {
         Self {
             backend,
             schema,
+            observation: SourceSchemaObservationV1::unavailable(),
+            generation: SourceGeneration::Unverified,
+        }
+    }
+
+    pub(crate) fn observed_postgres(
+        pool: deadpool_postgres::Pool,
+        snapshot: sf_sql::introspect::Postgres16PublicObservedSnapshotV1,
+    ) -> Self {
+        let (schema, observation) = SourceSchemaObservationV1::from_postgres_snapshot(snapshot);
+        Self {
+            backend: Backend::Pg(pool),
+            schema,
+            observation,
+            generation: SourceGeneration::Unverified,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn postgres_unavailable(
+        pool: deadpool_postgres::Pool,
+        schema: Vec<TableSchema>,
+        reason: sf_sql::introspect::PostgresSchemaIdentityUnavailableV1,
+    ) -> Self {
+        Self {
+            backend: Backend::Pg(pool),
+            schema,
+            observation: SourceSchemaObservationV1::postgres_unavailable(reason),
             generation: SourceGeneration::Unverified,
         }
     }
@@ -62,9 +93,12 @@ impl IntrospectedSource {
             .await
             .map_err(|_| "PostgreSQL source observation is unavailable".to_owned())?;
         crate::backend::verify_pg_relation_scope(&connection).await?;
-        let schema = crate::introspect_pg_all(&mut connection).await?;
+        let snapshot =
+            sf_sql::introspect::introspect_postgres_public_observed_snapshot(&mut connection)
+                .await
+                .map_err(|_| "PostgreSQL source observation is unavailable".to_owned())?;
         drop(connection);
-        Ok(Self::observed(Backend::Pg(pool), schema))
+        Ok(Self::observed_postgres(pool, snapshot))
     }
 
     /// Observe MySQL through the exact configured pool and database that the
@@ -113,8 +147,15 @@ impl IntrospectedSource {
         &self.backend
     }
 
-    pub(crate) fn into_parts(self) -> (Backend, Vec<TableSchema>, SourceGeneration) {
-        (self.backend, self.schema, self.generation)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Backend,
+        Vec<TableSchema>,
+        SourceSchemaObservationV1,
+        SourceGeneration,
+    ) {
+        (self.backend, self.schema, self.observation, self.generation)
     }
 }
 

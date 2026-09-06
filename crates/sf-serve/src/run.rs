@@ -6,7 +6,7 @@ use tokio_postgres::NoTls;
 use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
 use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
-use crate::{introspect_pg_all, router, Backend, IntrospectedSource, ServeError, SourceRef};
+use crate::{router, Backend, IntrospectedSource, ServeError, SourceRef};
 
 pub struct ServeOptions {
     pub source: SourceRef,
@@ -176,14 +176,23 @@ pub(crate) async fn open_backend(
                         error,
                     })
                 })?;
-            let schema = introspect_pg_all(&mut conn).await.map_err(|error| {
-                ServeError::new(StartupCause::Schema {
-                    spec: label.to_owned(),
-                    error,
-                })
-            })?;
+            let snapshot =
+                sf_sql::introspect::introspect_postgres_public_observed_snapshot(&mut conn)
+                    .await
+                    .map_err(|_| {
+                        ServeError::new(StartupCause::Schema {
+                            spec: label.to_owned(),
+                            error: "PostgreSQL source observation failed".to_owned(),
+                        })
+                    })?;
+            eprintln!(
+                "{}",
+                crate::schema_observation::postgres_startup_observation_diagnostic(
+                    snapshot.availability()
+                )
+            );
             drop(conn);
-            Ok(IntrospectedSource::observed(Backend::Pg(pool), schema))
+            Ok(IntrospectedSource::observed_postgres(pool, snapshot))
         }
         PreparedSource::Mysql { options, label } => {
             let pool = mysql_async::Pool::new(options);
@@ -285,7 +294,7 @@ mod tests {
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
 
-        let (backend, schema, _) = result.expect("valid sqlite spec should open").into_parts();
+        let (backend, schema, _, _) = result.expect("valid sqlite spec should open").into_parts();
         assert!(matches!(backend, Backend::Sqlite(_)));
         assert!(
             !schema.is_empty(),
@@ -302,7 +311,7 @@ mod tests {
         let spec = format!("sqlite:{}", path.display());
 
         let source = prepare_inline(spec).expect("valid SQLite source");
-        let (_backend, schema, _) = open_backend(source, 16, Duration::from_secs(5), 4)
+        let (_backend, schema, _, _) = open_backend(source, 16, Duration::from_secs(5), 4)
             .await
             .expect("valid sqlite spec should open")
             .into_parts();
@@ -434,7 +443,7 @@ mod tests {
 
         let source = prepare_injected(format!("pg:{conn_str}"))
             .expect("environment-injected pg source should prepare");
-        let (backend, _schema, _) = open_backend(source, 3, Duration::from_secs(2), 4)
+        let (backend, _schema, _, _) = open_backend(source, 3, Duration::from_secs(2), 4)
             .await
             .expect("reachable pg spec should open")
             .into_parts();

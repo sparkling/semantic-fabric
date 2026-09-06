@@ -25,6 +25,7 @@ use sf_sql::TableSchema;
 use crate::backend::{Backend, BackendKind};
 use crate::binding_identity::RuntimeBindingIdentity;
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement, SourceGeneration};
+use crate::schema_observation::BoundSourceSchemaObservationV1;
 use crate::semantic_admission::ValidatedMapping;
 use crate::IntrospectedSource;
 
@@ -85,6 +86,7 @@ pub(crate) struct RuntimeBinding {
     profile: BackendProfile,
     #[cfg(test)]
     observed_schema: Arc<[TableSchema]>,
+    schema_observation: BoundSourceSchemaObservationV1,
     generation: SourceGeneration,
     semantic_warnings: usize,
     compiler: CompilerBinding,
@@ -99,10 +101,12 @@ impl RuntimeBinding {
     ) -> Self {
         #[cfg(test)]
         TEST_BINDING_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
-        let (backend, schema, generation) = source.into_parts();
+        let source_id = mapping.source_id();
+        let (backend, schema, observation, generation) = source.into_parts();
+        let profile = BackendProfile::from_kind(backend.kind());
+        let schema_observation = observation.bind(profile.kind(), source_id);
         let (mapping, ontology_digest, semantic_admission_digest, semantic_warnings) =
             mapping.into_parts();
-        let profile = BackendProfile::from_kind(backend.kind());
         #[cfg(test)]
         let observed_schema: Arc<[TableSchema]> = schema.clone().into();
         let compiler = CompilerBinding::from_observation_with_semantic_identity(
@@ -120,6 +124,7 @@ impl RuntimeBinding {
             profile,
             #[cfg(test)]
             observed_schema,
+            schema_observation,
             generation,
             semantic_warnings,
             compiler,
@@ -204,6 +209,11 @@ impl RuntimeBinding {
         &self.observed_schema
     }
 
+    #[cfg(test)]
+    pub(crate) const fn schema_observation(&self) -> &BoundSourceSchemaObservationV1 {
+        &self.schema_observation
+    }
+
     pub(crate) const fn digests(&self) -> CompileDigests {
         self.compiler.digests()
     }
@@ -232,6 +242,7 @@ impl fmt::Debug for RuntimeBinding {
             .field("epoch", &self.scope().epoch())
             .field("digests", &self.digests())
             .field("profile", &self.profile)
+            .field("schema_observation", &self.schema_observation)
             .field("semantic_warnings", &self.semantic_warnings)
             .field("compiler", &self.compiler)
             .finish()
@@ -370,128 +381,5 @@ impl ExecutableFederatedPlan {
 pub(crate) struct BindingMismatch;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SECRET: &str = "sf_secret_binding_debug_must_not_expose";
-    const MAPPING: &str = r#"
-        @prefix rr: <http://www.w3.org/ns/r2rml#> .
-        <#items> a rr:TriplesMap ;
-            rr:logicalTable [ rr:sqlQuery "SELECT sf_secret_binding_debug_must_not_expose FROM private_items" ] ;
-            rr:subjectMap [ rr:template "http://example.test/item/{id}" ] .
-    "#;
-
-    fn binding(source_index: usize) -> RuntimeBinding {
-        binding_at(source_index, Epoch::default())
-    }
-
-    fn binding_at(source_index: usize, epoch: Epoch) -> RuntimeBinding {
-        let source_id = SourceId::new(source_index).unwrap();
-        let mapping = sf_mapping::parse_r2rml_for_source(MAPPING, source_id).unwrap();
-        let ontology = crate::test_support::empty_ontology();
-        let source = IntrospectedSource::unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            vec![TableSchema::new(SECRET)],
-        );
-        let mapping = crate::semantic_admission::ValidatedMapping::validate(
-            mapping,
-            crate::semantic_admission::MappingOrigin::Authored,
-            &ontology,
-            &source,
-        )
-        .unwrap();
-        RuntimeBinding::new(source, mapping, ontology.tbox().clone(), epoch)
-    }
-
-    #[test]
-    fn backend_profiles_are_derived_and_never_admission_claims() {
-        for kind in [
-            BackendKind::Sqlite,
-            BackendKind::Postgres,
-            BackendKind::MySql,
-        ] {
-            let profile = BackendProfile::from_kind(kind);
-            assert_eq!(profile.kind(), kind);
-            assert_eq!(profile.dialect(), kind.dialect());
-            assert_eq!(
-                profile.supports_recursive_paths(),
-                kind.dialect().supports_recursive_paths()
-            );
-            assert_eq!(
-                profile.like_is_case_sensitive(),
-                kind.dialect().like_is_case_sensitive()
-            );
-        }
-    }
-
-    #[test]
-    fn a_plan_from_another_binding_is_rejected_before_execution() {
-        let first = binding(0);
-        let second = binding(0);
-        let control = sf_core::query_control::UncontrolledQueryControl;
-        let bound = first
-            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
-            .unwrap();
-
-        assert_eq!(first.scope(), second.scope(), "regression precondition");
-        let Err(error) = second.prepare_execution(bound) else {
-            panic!("content-equal bindings must not share plan authority");
-        };
-        assert_eq!(error, BindingMismatch);
-        assert_eq!(
-            error.to_string(),
-            "compiled plan does not belong to this runtime binding"
-        );
-    }
-
-    #[test]
-    fn a_plan_remains_valid_for_its_original_binding() {
-        let binding = binding(0);
-        let control = sf_core::query_control::UncontrolledQueryControl;
-        let bound = binding
-            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
-            .unwrap();
-
-        binding.prepare_execution(bound).unwrap();
-    }
-
-    #[test]
-    fn binding_debug_output_is_structural_and_secret_free() {
-        let binding = binding(7);
-        let debug = format!("{binding:?}");
-
-        assert!(debug.contains("digests"));
-        assert!(debug.contains("triples_map_count"));
-        assert!(debug.contains("Unverified"));
-        assert!(!debug.contains(SECRET));
-        assert!(!debug.contains("private_items"));
-        assert!(!debug.contains("SELECT"));
-    }
-
-    #[test]
-    fn runtime_binding_quarantines_catalogue_constraint_authority() {
-        let binding = binding(0);
-        assert_eq!(
-            binding.compiler.constraint_authority(),
-            sf_sparql::ConstraintAuthority::Unverified
-        );
-        assert_eq!(
-            binding.scope().constraint_authority(),
-            sf_sparql::ConstraintAuthority::Unverified
-        );
-    }
-
-    #[test]
-    fn runtime_binding_reuses_the_cached_plan_allocation() {
-        let binding = binding(0);
-        let control = sf_core::query_control::UncontrolledQueryControl;
-        let first = binding
-            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
-            .unwrap();
-        let second = binding
-            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
-            .unwrap();
-
-        assert!(Arc::ptr_eq(&first.plan, &second.plan));
-    }
-}
+#[path = "binding/tests.rs"]
+mod tests;

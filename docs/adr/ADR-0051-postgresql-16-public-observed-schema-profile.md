@@ -13,8 +13,7 @@ implements: [ADR-0050]
 ## Status boundary
 
 This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2.
-The private, explicitly opt-in Rust adapter now covers one PostgreSQL 16 semantic catalogue contract and can return its
-branded, non-authorizing identity from the same repeatable-read transaction as the legacy projection. PostgreSQL 16.9
+The private, explicitly opt-in Rust adapter now covers one PostgreSQL 16 semantic catalogue contract and can return its branded, non-authorizing identity from the same repeatable-read transaction as the legacy projection. PostgreSQL 16.9
 and 16.15 are the initial exact live qualification targets. The adapter implements the exact engine selector, profile
 finalizer, guards, bounded typed row decoding, relation/column/type/default-collation normalization, live NOT NULL
 emission, and raw PK/UNIQUE/FK adaptation. FK proof binds the ordered equality-operator arrays to the exact `conindid`
@@ -39,8 +38,9 @@ savepoint setup/release/recovery, legacy collection and commit failures remain f
 fault matrix and its two-replay qualification receipts remain open. The closed evidence contract already binds the
 future receipt fields and literal non-authority/runtime-gap status, but its executor still fails closed because the
 current Rust probe cannot supply the required counts and preflight evidence. Existing legacy entry points are
-unchanged; `sf-serve` still does not consume the identity and no `RuntimeBinding` carries it, so it cannot affect
-compilation, cache identity, readiness, reload or execution.
+unchanged. The `sf-serve` PostgreSQL opener now consumes the opaque snapshot, and `RuntimeBinding` binds its closed
+availability state to the exact backend kind and mapping `SourceId`. That state remains non-authorizing and cannot
+affect compilation, cache identity, readiness, reload or execution.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
@@ -393,37 +393,38 @@ failure. Error precedence among simultaneous defects is not normative.
 
 ### 9. Keep runtime availability closed and non-authorizing
 
-The completed Phase-2 adapter will return an opaque committed snapshot containing the complete legacy vector and either
-a branded registered whole identity or a closed unavailable reason. The closed algebra has no free-form payload: `Display` and `Debug`
-are at most 256 UTF-8 bytes, contain no identifiers, SQL, connection material,
-paths or values, and `Error::source()` is `None`.
+The Phase-2 adapter returns an opaque committed snapshot containing the complete legacy vector and either a branded
+registered whole identity or a closed unavailable reason. The closed algebra has no free-form payload: `Display` and
+`Debug` are at most 256 UTF-8 bytes, contain no identifiers, SQL, connection material, paths or values, and
+`Error::source()` is `None`.
 The top-level variants are `ProfileNotImplemented`, `UnqualifiedEnginePatch`,
 `GuardUnsupported(GuardCodeV1)`, `LegacyCoordinateMismatch`, `CatalogQuery`,
 `CatalogDecode`, `LimitExceeded(LimitCodeV1)`, `UnsupportedRelation`,
 `UnsupportedType`, `UnsupportedCollation`, `UnsupportedConstraint`, and
-`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, IdentifierLength, IndexKeyLimit,
-IntegerDatetimes, ReplicationRole, SearchPath, PublicNamespace, CurrentDatabase}`.
-`LimitCodeV1` is `{RichRelations,
-PhysicalAttributes, LiveColumns, RawConstraints, KeyMembers, Facets, TextBytes,
-CanonicalBody}`. Legacy-cap failure is fatal, outside this unavailable algebra.
+`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, ClientEncoding, IdentifierLength, IndexKeyLimit,
+IntegerDatetimes, ReplicationRole, SearchPath, PublicNamespace, CurrentDatabase}`. `LimitCodeV1` is `{RichRelations,
+PhysicalAttributes, LiveColumns, RawConstraints, KeyMembers, Facets, TextBytes, CanonicalBody}`. Legacy-cap failure is
+fatal, outside this unavailable algebra.
 Both nested code types are identifier-free enums.
 The target public snapshot API returns that opaque result. Existing legacy `sf-sql` functions `introspect_postgres`,
 `introspect_postgres_all` and `introspect_postgres_public_snapshot` preserve their signatures; public `sf-serve`
 `introspect_pg_all` preserves `Result<Vec<TableSchema>, String>`. They use the bounded legacy collector, and the first
-two retain caller-supplied transaction semantics. Current `introspect_postgres_public_observed_snapshot` invokes the
-branded adapter only as an opt-in diagnostic, returns only success, and propagates rich failure. In the completed design,
-startup calls the availability API and explicit callers may discard its observation through `into_legacy_tables`.
-The planned `sf-serve` crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
-`observation: SourceSchemaObservationV1` field. That closed private enum is either `Unavailable` or carries the whole
-`Postgres16PublicObservedSchemaV1`; unchecked, SQLite and MySQL constructors can create only `Unavailable`.
-`RuntimeBinding` gains a private `schema_observation: BoundSourceSchemaObservationV1` field holding backend kind,
+two retain caller-supplied transaction semantics. `introspect_postgres_public_observed_snapshot` now returns committed
+availability, startup calls it, and explicit callers may discard its observation through `into_legacy_tables`.
+The `sf-serve` crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
+`observation: SourceSchemaObservationV1` field. That closed private enum is either `Unavailable` (retaining an optional
+closed PostgreSQL reason) or carries the whole `Postgres16PublicObservedSchemaV1`; unchecked, compatibility, SQLite and
+MySQL constructors can create only reason-free `Unavailable`.
+`RuntimeBinding` has a private `schema_observation: BoundSourceSchemaObservationV1` field holding backend kind,
 `mapping.source_id()` and that state. `RuntimeBinding::new` binds it before consuming the mapping; no public or
-compatibility constructor accepts an identity, brand or availability argument, and `into_parts` cannot omit the state.
+compatibility constructor accepts an identity, brand or availability argument. The sole production `into_parts`
+consumer destructures and moves its fourth state; there is no identity-dropping production compatibility tuple.
 Both states continue through `CompilerSchema::from_unverified_observation`.
 Identity does not enter `CompileScope`, cache keys, admission, readiness, reload,
-Direct Mapping or execution. Equal identities in separate runtime bindings do
-not merge process-local compile scopes. Startup emits one bounded structural
-availability diagnostic; it never logs the unavailable cause's source error.
+Direct Mapping or execution. Equal identities in separate runtime bindings do not merge process-local binding
+authority. Startup emits one bounded structural availability diagnostic; unavailable output contains only its closed
+reason and never a source error. Server-encoding mismatch is non-authorizing unavailability; client encoding,
+identifier length and search path remain fatal because they can invalidate legacy decoding or name resolution.
 
 ## Required evidence
 
@@ -447,7 +448,7 @@ qualification or admission. Until all runtime gaps close, even a replay pass say
 - on both images, prove the comparison role is non-superuser/non-owner, cannot inherit, bypass, `SET ROLE` or DDL, and has only required CONNECT/USAGE/SELECT plus callable `pg_database_collation_actual_version(oid)`; then prove owner identity equality while role-visible legacy constraints differ;
 - statistics/data/ACL/owner/OID/name-only noninterference, explicit blind-spot tests, and isolated mutations for each digest domain;
 - unsupported relation/type/collation/constraint and malformed-catalogue cases produce closed unavailability, never partial identity;
-- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`; carrier state and exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`; `into_parts` cannot omit state; unchecked/compatibility/SQLite/MySQL paths cannot inject it; compiler authorities remain `Unverified`; and equal identities in distinct bindings do not merge scopes;
+- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`; carrier state and exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`; no production compatibility tuple drops state; unchecked/compatibility/SQLite/MySQL paths cannot inject it; compiler authorities remain `Unverified`; and equal identities in distinct bindings do not merge scopes;
 - deterministic old-or-new DDL barriers without sleeps; and
 - two fresh, ownership-labelled, `--network none` containers for each pinned PostgreSQL 16.9 and 16.15 digest, with a fixed database, Unix-socket execution, byte-equal replay summaries and verified cleanup.
 
@@ -495,5 +496,4 @@ learning/promotion disabled. Node remains outside the product closure.
 [ADR-0006](ADR-0006-crate-layout-and-performance-model.md),
 [ADR-0015](ADR-0015-datatype-dialect-correctness.md),
 [ADR-0038](ADR-0038-sota-application-completion-programme.md),
-[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md), and
-[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).
+[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md), and [ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).

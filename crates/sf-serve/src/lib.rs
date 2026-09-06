@@ -54,6 +54,7 @@ mod problem;
 mod request_compile;
 mod request_deadline;
 mod request_generation;
+mod schema_observation;
 mod semantic_admission;
 mod service_description;
 mod snapshot;

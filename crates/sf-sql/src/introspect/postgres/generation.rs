@@ -150,14 +150,15 @@ fn guard_failure_may_downgrade(reason: super::PostgresSchemaIdentityUnavailableV
         | Unavailable::UnqualifiedEnginePatch
         | Unavailable::IdentityRejected => true,
         Unavailable::GuardUnsupported(
-            Guard::IndexKeyLimit
+            Guard::ServerEncoding
+            | Guard::IndexKeyLimit
             | Guard::IntegerDatetimes
             | Guard::ReplicationRole
             | Guard::PublicNamespace
             | Guard::CurrentDatabase,
         ) => true,
         Unavailable::GuardUnsupported(
-            Guard::ServerEncoding | Guard::IdentifierLength | Guard::SearchPath,
+            Guard::ClientEncoding | Guard::IdentifierLength | Guard::SearchPath,
         )
         | Unavailable::LegacyCoordinateMismatch
         | Unavailable::CatalogQuery

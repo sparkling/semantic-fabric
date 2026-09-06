@@ -41,6 +41,22 @@ fn guard_validator_classifies_each_profile_gate() {
         Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented)
     );
     guard = valid_guard();
+    guard.server_encoding = "LATIN1".into();
+    assert_eq!(
+        guard.validate(),
+        Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+            PostgresSchemaIdentityGuardCodeV1::ServerEncoding
+        ))
+    );
+    guard = valid_guard();
+    guard.client_encoding = "LATIN1".into();
+    assert_eq!(
+        guard.validate(),
+        Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+            PostgresSchemaIdentityGuardCodeV1::ClientEncoding
+        ))
+    );
+    guard = valid_guard();
     guard.max_identifier_length = 62;
     assert_eq!(
         guard.validate(),

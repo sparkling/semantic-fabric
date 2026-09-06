@@ -46,7 +46,7 @@ impl CatalogGuardRowV1 {
             (
                 self.client_encoding.as_str(),
                 "UTF8",
-                PostgresSchemaIdentityGuardCodeV1::ServerEncoding,
+                PostgresSchemaIdentityGuardCodeV1::ClientEncoding,
             ),
             (
                 self.integer_datetimes.as_str(),

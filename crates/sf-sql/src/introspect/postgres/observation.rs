@@ -255,7 +255,7 @@ const fn map_schema_identity_limit_v1(
 ///
 /// ```compile_fail
 /// use sf_sql::introspect::Postgres16PublicObservedSchemaV1;
-/// let _forged = Postgres16PublicObservedSchemaV1 {};
+/// let _forged = Postgres16PublicObservedSchemaV1 { identity: panic!(), direct_mapping_tables: Vec::new() };
 /// ```
 #[derive(Eq, PartialEq)]
 pub struct Postgres16PublicObservedSchemaV1 {
@@ -285,6 +285,7 @@ impl fmt::Debug for Postgres16PublicObservedSchemaV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PostgresSchemaIdentityGuardCodeV1 {
     ServerEncoding,
+    ClientEncoding,
     IdentifierLength,
     IndexKeyLimit,
     IntegerDatetimes,
@@ -354,6 +355,7 @@ impl std::error::Error for PostgresSchemaIdentityUnavailableV1 {}
 const fn guard_message(code: PostgresSchemaIdentityGuardCodeV1) -> &'static str {
     match code {
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding => "server encoding unsupported",
+        PostgresSchemaIdentityGuardCodeV1::ClientEncoding => "client encoding unsupported",
         PostgresSchemaIdentityGuardCodeV1::IdentifierLength => "identifier length unsupported",
         PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit => "index key limit unsupported",
         PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes => "integer datetimes unsupported",
@@ -421,8 +423,8 @@ impl fmt::Debug for PostgresSchemaIdentityAvailabilityV1 {
 /// One committed legacy projection plus its inseparable identity availability.
 ///
 /// ```compile_fail
-/// use sf_sql::introspect::Postgres16PublicObservedSnapshotV1;
-/// let _forged = Postgres16PublicObservedSnapshotV1 {};
+/// use sf_sql::introspect::*;
+/// let _forged = Postgres16PublicObservedSnapshotV1 { legacy_tables: Vec::new(), availability: PostgresSchemaIdentityAvailabilityV1::Unavailable(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented) };
 /// ```
 pub struct Postgres16PublicObservedSnapshotV1 {
     legacy_tables: Vec<TableSchema>,
