@@ -32,7 +32,7 @@ non-owner-role, immutable-image and byte-identical protocol.
 
 The public Rust diagnostic collects a complete legacy projection and publishes either the branded rich identity or one closed, identifier-free `Unavailable` reason only after the outer transaction commits.
 Clean pre-legacy mismatches remain pending unavailability; rich failures may downgrade only after successful savepoint recovery, while transaction, legacy or commit failures remain fatal.
-The exact transaction/commit fault matrix and two-replay qualification receipts remain open; the evidence executor still fails closed because those replay receipts and public promotion evidence are absent.
+The exact two-replay qualification receipts remain open; the evidence executor still fails closed because those replay receipts and explicit observation-profile promotion evidence are absent.
 Existing legacy entry points are unchanged. For authored mappings, `sf-serve` carries the committed availability state bound to backend and `SourceId` only as a non-authorizing diagnostic.
 A distinct private Direct-Mapping foundation consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
 It marks a pool member dirty before `BEGIN`, locks the exact public-table set before the first repeatable-read snapshot, and binds the identity, complete rich tables, database, role, session and policy context.
@@ -71,8 +71,9 @@ Appendix-A profile IDs:
 
 The adapter selects this triple. A caller may invoke the pure `sf-core` builder
 with the same ID bytes, but cannot select an adapter profile or construct its
-runtime-accepted brand. The profile's initial closed qualified-engine set is
-`{160009,160015}` and is admitted only after both exact receipts pass. Another
+runtime-accepted brand. The profile's initial closed candidate-engine set is
+`{160009,160015}`. It becomes the qualified observation set only after both exact
+receipts pass and this ADR's promotion is accepted. Another
 16.x patch is `Unavailable(UnqualifiedEnginePatch)` until separately qualified;
 another major is `Unavailable(ProfileNotImplemented)`. Adding a patch proven to
 have the same law does not change profile IDs; any scope or normalization change
@@ -433,8 +434,11 @@ and configuration digests; exact server version and role preflight; separate rel
 combined-constraint counts; each stream's cap/polled/decoded/retained-peak/overflow/terminal state; the three identities; legacy
 comparison; closed error code plus failure phase, or both `null`; bounded output digests; distinct execution resources; cleanup; and
 `replayStatus`. It contains no credentials, SQL payloads, OIDs, names or raw rows. Replay runs each pinned image twice in
-fresh networkless containers and requires every stable candidate byte to agree. Both 16.9 and 16.15 must pass before
-qualification or admission. Until all runtime gaps close, even a replay pass says `qualificationStatus=withheld-runtime-gaps`.
+fresh networkless containers and requires every stable candidate byte to agree. Its two axes are deliberately separate:
+`observationProfileQualification=pass|fail` reports only this exact observation law, while
+`runtimeAdmissionStatus=withheld-independent-gates`, `productionAdmission=false`, `verifiedLease=false`, `reload=false`,
+and `directMapping=false` deny every wider runtime claim. Both patches must pass, bind the same qualification-critical
+source/input closure, and agree cross-patch before the observation profile may be promoted.
 
 - exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec compatibility, qualified/unqualified-patch tests, and a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
 - table-driven normalization/rejection for every type and exact typmod boundary: fixed `-1/other`, character 4/5/max/max+1, numeric minima/maxima/outside/noncanonical, temporal `-2/-1/0/6/7`, implicit/explicit precision-6 equality, overlong `daticurules`, each default-collation provider and each constraint state;
@@ -449,8 +453,8 @@ qualification or admission. Until all runtime gaps close, even a replay pass say
 - two fresh, ownership-labelled, `--network none` containers for each pinned PostgreSQL 16.9 and 16.15 digest, with a fixed database, Unix-socket execution, byte-equal replay summaries and verified cleanup.
 
 Any future tracked receipt also binds toolchain, fixture/runner bytes, image configuration, preflight/result, bounded stdout/
-stderr, container/volume distinctness and cleanup. It says `test-only-non-runtime`, `productionAdmission=false`,
-`verifiedLease=false`, `reload=false`, and `directMapping=false`.
+stderr, container/volume distinctness and cleanup. Its authority is observation-profile qualification only; it grants no
+Direct Mapping, generation lease, reload, backend admission, production-readiness or release authority.
 
 No test may connect to, mutate or use live product-mock. Its static source and semantic-builder gold may inform fixtures
 but grant no runtime authority. Existing sealed evidence covers eleven PostgreSQL-16.9 databases and a `public` table/
