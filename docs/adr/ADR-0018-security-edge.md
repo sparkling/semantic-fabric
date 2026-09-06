@@ -12,7 +12,7 @@ implements:
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-09-06): accepted, partially implemented.**
+> **Implementation status (2026-09-07): accepted, partially implemented.**
 > `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
 > identities with explicit construction, redacted diagnostics and no default or
 > anonymous context. `a2c25ff` adds a separate private plan-cache seam requiring

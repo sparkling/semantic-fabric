@@ -68,9 +68,10 @@ opaque_identity!(
 );
 
 opaque_identity!(
-    /// Canonical identity of an authenticated subject, scoped to one request.
+    /// Canonical identity assigned to a subject by an external request boundary.
     ///
-    /// This value is not authentication proof and contains no provider subject.
+    /// This value is not authentication proof, carries no provider subject, and
+    /// is scoped to one request.
     SubjectIdentity,
     SecurityIdentityError::EmptySubject,
     "security subject"
