@@ -42,8 +42,9 @@ generation-bound not-ready state rejects new requests as a redacted pre-I/O
 comparison rejects ready-to-not-ready and slow-candidate races, and stale
 watchers cannot mark a newer activation unavailable. An opaque checked state
 revision now advances on activation and every accepted not-ready observation,
-including same-cause repeats. Request-generation failures remain request-scoped
-until the recovery coordinator exists; shutdown atomically fences the current
+including same-cause repeats. Request-generation failures remain request-scoped;
+only the private lifecycle coordinator may fence after a completed control
+observation. Shutdown atomically fences the current
 state after closing transitions, so it cannot leave a racing activation ready, and a transition
 losing that race reports `ShuttingDown` rather than a misleading stale state. Deterministic tests
 cover these races, old/new HTTP results, failed construction, response lifetime,
@@ -54,8 +55,9 @@ The publication primitive is crate-private and deliberately non-authorizing.
 The construction path requires bounded sealed `M ⋈ T` validation before a
 binding, and its policy-v2 receipt partitions compile/cache identity. The
 all-or-nothing registry validates every source before constructing any binding.
-There is still no general off-path reload candidate builder, automatic watcher,
-public reload surface or admitted backend profile.
+The closed `PgDirectLifecycleV1` path now has an off-path candidate builder and
+one automatic coordinator, but there is still no general reload builder, public
+reload surface or admitted backend profile.
 
 A private PostgreSQL candidate/request foundation now implements the essential
 verified-generation ownership law. One pool member is marked dirty before
@@ -74,15 +76,15 @@ through the lease-owned connection before final recheck and acknowledged rollbac
 A fixed cleanup allowance is independent of the expired user deadline. If
 timeout, cancellation, error, drop or a retained execution view prevents
 acknowledged rollback, the member remains dirty, attempts one bounded native
-cancel and detaches the pool object instead of recycling uncertain state. An isolated disposable PostgreSQL 16.15
-live gate exercises lock-before-snapshot, clean close, incompatible DDL
+cancel and detaches the pool object instead of recycling uncertain state. Isolated disposable PostgreSQL 16.9 and 16.15
+live gates exercise lock-before-snapshot, clean close, incompatible DDL
 exclusion, compatible additive-FK old-generation coherence followed by
 next-acquisition drift, policy mutation, cancellation and dirty-member
 replacement. Public startup nevertheless rejects every Direct Mapping selection
 before connector I/O. Capability promotion, general reload/drift/source
 health, no-PK identity, other backend
-leases and production admission remain open. This is not full Phase 4, Phase 5
-or Phase 6 completion.
+leases and production admission remain open. Canonical commit `c701352` adds the dormant
+closed-profile lifecycle described below; this is not general Phase 5 or Phase 6 completion.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -322,9 +324,9 @@ persist across generations.
 
 #### Initial PostgreSQL lifecycle profile
 
-`PgDirectLifecycleV1` is the only initial live Direct-Mapping profile. It is
-defined here but remains disabled until its complete builder, coordinator and
-admission evidence exist. It admits exactly one PostgreSQL source using
+`PgDirectLifecycleV1` is the only initial live Direct-Mapping profile. Its
+complete private builder and coordinator passed independent code review, but it
+remains disabled pending explicit promotion and admission evidence. It admits exactly one PostgreSQL source using
 ADR-0051's qualified `Postgres16PublicBaseV1` observation profile, permanent
 `public` base tables, a primary key for every mapped table, one immutable
 ontology, one validated absolute base IRI and one immutable resolved source
@@ -376,11 +378,12 @@ reload and no hot reload of source credentials, files or configuration.
    one dirty, protected transaction through authoritative compilation and mapped
    SELECT/ASK/CONSTRUCT, final recheck and acknowledged rollback. Public profile
    qualification and version receipts remain open.
-5. **Atomic activation and drift (revision fence implemented 2026-09-06):** the
-   immutable registry, private whole-state publication primitive, readiness,
-   body-lifetime leases, full-state CAS, repeated-not-ready revision and
-   shutdown/activation fence are implemented. The general off-path reload
-   candidate builder, automatic watcher and public reload lifecycle remain.
+5. **Atomic activation and drift (closed profile implemented 2026-09-06):** the
+   immutable registry, opaque validated-candidate publication, body-lifetime
+   leases and full-state CAS are joined to one serialized `PgDirectLifecycleV1`
+   coordinator. It skips missed ticks, fences only completed control failures,
+   retries while not ready, heals only from a completely rebuilt candidate and
+   fails closed on abnormal worker exit. General/public reload remains open.
 6. **Typed row identity and Direct Mapping (private PK-backed foundation
    implemented 2026-09-06):** validate/generate the PostgreSQL candidate from
    its leased schema and reacquire the exact expectation for each request.

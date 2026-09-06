@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "baa2d282ac92d8c0ad5006b036d47e17eac095b378eaf040709f7e32dfef216e",
+  "harnessManifestDigest": "59ced999b2d78eccd30596b5a1372eff8bb7198f971b06d93ca821a3d9c4e8a9",
   "lockfileDigest": "e823a5f73776c46a33934574dbca8248755bf04924f80b49a9aa5445cb3a4f1b",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -116,7 +116,7 @@
     "coding-harness/dist/programme-capture-input-attestation-v1.js": "c5b540bb9f0bf24dcdc8ffc5425d3c338c8132eb4aaf747c293d36a91f518688",
     "coding-harness/dist/programme-capture-private-source-fs-v1.js": "d5827fc76829e8b01ee71c7cb38035cf76dec70adaa3ea22031952a5f16e1dfa",
     "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
-    "coding-harness/dist/programme-capture-protected-paths-v1.js": "66f3665a47924223299b359ffd1f32c473141bbb192c4d1147cd62949dc58652",
+    "coding-harness/dist/programme-capture-protected-paths-v1.js": "a98c95a7661718518efd14c6f6a4ddac960496c7e7c175b7194f8760599daca5",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
     "coding-harness/dist/programme-capture-source-paths-v1.js": "d20f51c5c7f79853fb2391a07dbda36406b6e36dcfffa35abc1b7eae978c14d4",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
@@ -317,5 +317,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "2486bf8dd3e1f985533c539a3ad671fae183452c12c0b8b65ef792e96980f47d"
+  "runtimeTreeDigest": "86fe22e9dee4090c0d9a9d17922a2e095b5ce35f970f9912c87a53a80355437e"
 }
