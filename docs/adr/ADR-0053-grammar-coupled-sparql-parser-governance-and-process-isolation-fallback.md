@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-04
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [sparql, parser, resource-governance, isolation, rust, dos]
 supersedes: []
 depends-on: [ADR-0004, ADR-0010, ADR-0012, ADR-0038, ADR-0048, ADR-0052]
@@ -12,7 +12,7 @@ implements: [ADR-0010, ADR-0052]
 
 ## Status boundary
 
-This **proposed** ADR selects bounded Linux Rust process isolation for V1 after a source audit; complete in-process hooks require a broad maintained fork. A private supervisor validates and holds one ELF before source preparation, records a bounded full-file SHA-256 diagnostic, descriptor-launches it under a stage-one `x86_64-unknown-linux-gnu` policy, owns pidfd/process-group termination and exact reap, and caps nonblocking pipes under one immutable deadline. First-statement `sf-cli::main` dispatch recognizes only exact raw-empty-environment private tuples: the normal control-only parser peer, a selector-free parser-free synthetic peer, and a separately feature-gated parser-free mutant peer.
+This **proposed** ADR selects bounded Linux Rust process isolation for V1 after a source audit; complete in-process hooks require a broad maintained fork. A private supervisor validates and holds one ELF before source preparation, records a bounded full-file SHA-256 diagnostic, descriptor-launches it under a stage-one `x86_64-unknown-linux-gnu` policy, owns pidfd/process-group termination and exact reap, and caps nonblocking pipes under one immutable deadline. First-statement `sf-cli::main` dispatch recognizes only exact raw-empty-environment private tuples: the normal control-only parser peer, a selector-free parser-free synthetic peer, and separately feature-gated parser-free mutant and real-parser `QueryV1` peers.
 
 The normal synthetic exchange sends a prepared 96-byte request header plus source after `Hello`/`Ready`, then closes stdin. The child stack-preflights structure/body limits before its sole complete request allocation, requires exact EOF, and only then validates nonce → source digest → UTF-8 and writes a correlated 128-byte result header plus an independent static 100-byte empty-ASK `QueryV1`. The parent stack-preflights the result and prospectively caps its body before one complete allocation, reads exact body and EOF, establishes pidfd waitability, sweeps the process group, exactly reaps and requires success, then replays/correlates the request, checks digests, decodes/directly re-encodes and compares static bytes. Only unit escapes from either hidden transport-evidence seam.
 
@@ -20,7 +20,7 @@ Commits `e55fccd` and `ce5487e` add the closed same-executable mutant child and 
 
 The remaining mutants bind boundaries precisely. Exact-cap output accepts `Ready` 184 + result header 128 + body 8,388,608 = 8,388,920 bytes and then fails invalid `QueryV1` post-reap. A cap-plus-one declaration is rejected prospectively after 312 accepted bytes and before body allocation. Injected request-frame allocation refusal means zero result bytes after the required 184-byte `Ready`; stdout EOF and exact reap then expose raw status 78. The provisional whole-life input cap is 1,048,856 bytes: normal source ceiling 1,048,576, mutant ceiling 1,048,574 because the directive consumes two bytes. `RLIMIT_FSIZE` remains independently 67,108,864 bytes.
 
-Live bad nonce, source-digest and UTF-8 requests remain alive and silent beyond `Ready` while stdin stays open; only after exact EOF do they close output and raw-exit 78. Every mutant and malformed-request probe permits a clean next launch. The private pure-Rust `QueryV1` codec retains allocation-free preflight, fallible iterative reconstruction and exact replay, and the typed alpha profile remains correlation-only. No parser is invoked, no parser policy/profile or dependency/syscall closure is qualified, and no parser-produced wire, paired-worker receipt, witness, cache, attestation, admission, permit, serving, release or `CompileProfileId::GovernedV1` authority exists. No credential, namespace, LSM or privilege-transition boundary is claimed. A bounded qualification-only parser observation and independent policy replay are next; production activation remains later.
+Live bad nonce, source-digest and UTF-8 requests remain alive and silent beyond `Ready` while stdin stays open; only after exact EOF do they close output and raw-exit 78. Every mutant and malformed-request probe permits a clean next launch. Commit `235084d` adds a separate real-parser peer over the sealed seven-case starter corpus: six fresh children return parser-produced `QueryV1`, one returns a fixed syntax rejection, and the parent accepts only after EOF, exact reap/correlation, exact per-side replay and fresh-direct alpha equivalence. Only aggregate counts escape. The parser policy/profile and dependency/syscall closure remain unqualified; no witness, cache authority, attestation, admission, permit, serving, release or `CompileProfileId::GovernedV1` authority exists. No credential, namespace, LSM or privilege-transition boundary is claimed; production activation remains later.
 
 Commit `38e9c7a` closes the raw directive proof gap with internally fixed zero-, one-, and three-byte and unknown-`u16` cases: each emits zero bytes, raw-exits 78, is exactly reaped and permits recovery on the same held descriptor. Commit `5a9919b` makes the ten-mutant matrix use one preparation/fingerprint and one held descriptor, preserving a fresh child and all controls per case while reducing the focused all-feature run from 192.31 to 24.24 seconds. The default-only dependency receipt refreshed at `949cf11` remains baseline evidence. Commit `1e320a2` adds a parser-free, `authority=none` qualification-input receipt for 368 packages, 382 target/host contexts and 1,042 edges, binding the lock, workspace manifests, reported tool versions, exact target cfg and root-specific feature tree. It excludes source/build/proc-macro/artifact bytes, ambient Cargo configuration, transient races, runtime linkage and syscalls, so it is not a governed parser profile.
 
@@ -370,8 +370,9 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    cap+1 behavior; request-allocation refusal after `Ready`; post-EOF nonce,
    digest and UTF-8 validation; and a clean next launch. `e55fccd`, `ce5487e`,
    `d103438` and `fa9d977` record that integrated evidence, not shipment. The
-   bounded GNU build-ID and full-file SHA remain diagnostic. This grants no
-   production parser worker, qualified profile, parser-produced wire or witness.
+   bounded GNU build-ID and full-file SHA remain diagnostic. A separate sealed
+   starter-corpus peer now returns real parser-produced `QueryV1` evidence, but
+   this grants no production parser worker, qualified profile or witness.
 3. **Partial; control-ready candidate evidenced:** the hidden private-entry discriminator is the first user-code
    statement before Clap/application thread-pool initialization. Exact two-token
    routing, malformed-reserved rejection, raw-empty-`environ` enforcement, ordinary
@@ -391,7 +392,7 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    nonzero/deadline/trailing precedence, exact cap/cap+1, request-allocation
    refusal, exact reap and clean normal recovery. Add cancellation, panic, abort,
    stack/address-space exhaustion and broader forced-death/leak evidence.
-5. **Partial; inner and outer codecs implemented:** the fixed flat index-based
+5. **Partial; real-parser starter-corpus wire evidenced:** the fixed flat index-based
    `QueryV1` tag/schema table, fallible iterative encoder/reconstructor,
    allocation-free structural/scalar preflight, canonical ownership proof and
    exact decode/re-encode replay are covered by focused tests over every
@@ -401,28 +402,23 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    correlation, redaction and raw-cap `0`/`N`/`N+1` tests. Parser-free normal and
    mutant peers exercise the exact transaction and stated boundary cases,
    including one request-frame allocation refusal. Persisted fuzz/property and
-   broader allocation-failure evidence remain. **5a — bounded observation:**
-   after Gate 3 and corpus completion, a separately named, feature-gated
-   qualification peer may parse only the sealed repository corpus inside the
-   Rust envelope, one fresh child per case. It emits bounded aggregate outcomes,
-   never `QueryV1`; its parent binds the held executable, target, static closure,
-   corpus and inputs and records only post-policy parser-workload syscall argument forms
-   and terminal outcomes as evidence. Loader/Rust-startup tracing and held
-   dynamic-runtime capture are a separate prerequisite for a whole-runtime claim.
-   **5b — policy replay:** fresh children must replay that corpus under the
-   resulting immutable default-deny policy; unexpected syscall, argument,
-   dependency, output, timeout, crash or cleanup behaviour rejects the profile
-   without fallback. This may establish parser-produced `QueryV1` and exact
-   replay for qualification only; it grants no worker, `AdmittedQuery`, cache,
-   permit, witness, readiness, release, serving or `GovernedV1` authority.
+   broader allocation-failure evidence remain. **5a — bounded observation:** a
+   separately named, feature-gated peer parses the sealed seven-case starter
+   corpus inside the Rust envelope, one fresh child per case, and returns only
+   bounded aggregate outcomes. **5b — parser wire evidence:** the same starter
+   inputs run in fresh children and return real parser-produced
+   `QueryV1` or a fixed rejection, then requires post-reap correlation, exact
+   per-side replay and source/profile-bound fresh-direct alpha equivalence.
+   Complete grammar coverage, persisted receipts, policy replay, loader/runtime
+   closure and cancellation evidence remain. This grants no `AdmittedQuery`,
+   cache, permit, witness, readiness, release, serving or `GovernedV1` authority.
 6. **Partial; typed comparator foundation implemented:** eight focused tests
    cover correlation/outcome classification, bounded fallible traversal, exact
    ordered top-level SELECT outputs, one global variable bijection, one global
    query-pattern blank-node bijection and a disjoint CONSTRUCT-template
-   bijection without generated-name heuristics. Differentially prove decoded
-   worker `Query` semantics and syntax outcomes only from successful Gate 5b
-   evidence against a fresh direct pinned parse with the same source/profile.
-   Use one global
+   bijection without generated-name heuristics. The starter Gate 5b corpus now
+   compares decoded worker semantics and syntax outcomes with a fresh direct
+   pinned parse bound to the same source/profile. Extend this proof using one global
    variable bijection with exact ordered top-level SELECT outputs, one global
    query-pattern blank-node bijection and a disjoint CONSTRUCT-template
    bijection; do not infer generated-variable provenance from names or AST
@@ -474,11 +470,11 @@ enumerated post-exec observations/repairs, candidate-policy probe, handshake and
 cleanup; the parser-free normal/mutant peers additionally prove transport and
 failure-order behavior only. None proves an accepted parser policy,
 parser-syscall completeness or a complete governed dependency profile;
-UID/GID/groups/capability/namespace/LSM confinement, parser request/result IPC,
-loader/Rust-startup syscall tracing, production parser execution, production parser-produced `QueryV1`, a paired-worker fresh-parse receipt,
+UID/GID/groups/capability/namespace/LSM confinement, complete parser corpus and
+policy replay, loader/Rust-startup syscall tracing, production parser execution,
 an admitted witness, independent release/runtime attestation, permit integration
-or serving activation. A Gate 5 qualification peer may execute only as bounded
-evidence after Gate 3; production activation remains later. The private codecs
+or serving activation. Gate 5 peers execute only as bounded evidence after Gate
+3; production activation remains later. The private codecs
 and mutant evidence grant none of those authorities. The
 full-file fingerprint and bounded GNU build-ID digest do not authenticate a release or its
 dynamic closure; and pidfd acquisition assumes integration excludes a
