@@ -1,6 +1,7 @@
-semantic-fabric-rdb2rdf-execution-receipt-v4
+semantic-fabric-rdb2rdf-execution-receipt-v5
 meta	backend	postgresql
 meta	runner	sf-conformance::pg::run_sealed_suite_required
+meta	execution-type-profile	postgresql-wire-v1
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
 meta	provider-version	unbound
 meta	provider-image-digest	unbound
@@ -13,7 +14,7 @@ meta	direct-mapping-count	24
 meta	passed-count	80
 meta	failed-count	1
 meta	skipped-count	6
-meta	outcomes-sha256	9ec4a308f27a858f86a96fdd627b3ba820acbae8fd67aab466d0ba78a08f4ca5
+meta	outcomes-sha256	254cd53c29831aff94dd17e0b72c9c031ecf695742985244a37bb23702b5e3bf
 case	DirectGraphTC0000	direct-mapping	passed	graph-matched
 case	DirectGraphTC0001	direct-mapping	passed	graph-matched
 case	DirectGraphTC0002	direct-mapping	passed	graph-matched

@@ -1,6 +1,7 @@
-semantic-fabric-rdb2rdf-execution-receipt-v4
+semantic-fabric-rdb2rdf-execution-receipt-v5
 meta	backend	sqlite
 meta	runner	sf-conformance::runner::run_sealed_suite
+meta	execution-type-profile	sqlite-declared-or-storage-v1
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
 meta	provider-version	unbound
 meta	provider-image-digest	unbound
@@ -13,7 +14,7 @@ meta	direct-mapping-count	24
 meta	passed-count	81
 meta	failed-count	1
 meta	skipped-count	5
-meta	outcomes-sha256	75ceab034c30af4f02f5e627b7122ec5dbc982a6569f747f9fc3bfe1809d3a41
+meta	outcomes-sha256	ef1809795b3eb4a45963843ba0db5d9a8643b3dec556d2ded4b82d1db7036606
 case	DirectGraphTC0000	direct-mapping	passed	graph-matched
 case	DirectGraphTC0001	direct-mapping	passed	graph-matched
 case	DirectGraphTC0002	direct-mapping	passed	graph-matched

@@ -124,7 +124,13 @@ fn make_metadata_self_consistent(path: &Path) {
         outcome_records.push_str(line);
         outcome_records.push('\n');
     }
-    let outcomes_sha256 = format!("{:x}", Sha256::digest(outcome_records.as_bytes()));
+    let backend = metadata_value(path, "backend");
+    let type_profile = metadata_value(path, "execution-type-profile");
+    let outcome_identity = format!(
+        "semantic-fabric-rdb2rdf-outcomes-v2\nbackend\t{backend}\n\
+         execution-type-profile\t{type_profile}\n{outcome_records}"
+    );
+    let outcomes_sha256 = format!("{:x}", Sha256::digest(outcome_identity.as_bytes()));
     let replacements = [
         ("case-count", case_count.to_string()),
         ("r2rml-count", r2rml_count.to_string()),
@@ -205,12 +211,12 @@ fn production_check_replays_exact_outcomes_and_is_whole_suite_neutral() {
 }
 
 #[test]
-fn legacy_v3_header_is_not_reinterpreted_as_current() {
+fn legacy_v4_header_is_not_reinterpreted_as_current() {
     let receipt = TempReceipt::copy();
     replace_once(
         &receipt.path,
+        "semantic-fabric-rdb2rdf-execution-receipt-v5",
         "semantic-fabric-rdb2rdf-execution-receipt-v4",
-        "semantic-fabric-rdb2rdf-execution-receipt-v3",
     );
 
     let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
@@ -218,6 +224,18 @@ fn legacy_v3_header_is_not_reinterpreted_as_current() {
         error.contains("invalid execution receipt header"),
         "{error}"
     );
+}
+
+#[test]
+fn execution_type_profile_mutation_is_rejected() {
+    let receipt = TempReceipt::copy();
+    replace_once(
+        &receipt.path,
+        "meta\texecution-type-profile\tsqlite-declared-or-storage-v1",
+        "meta\texecution-type-profile\tmysql-w3c-sql-2008-v1",
+    );
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
+    assert!(error.contains("execution-type-profile"), "{error}");
 }
 
 #[test]

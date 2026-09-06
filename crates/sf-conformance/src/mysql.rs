@@ -152,18 +152,26 @@ async fn configure_session(conn: &mut Conn) -> Result<(), String> {
     conn.query_drop("SET NAMES utf8mb4 COLLATE utf8mb4_bin")
         .await
         .map_err(|_| "configure MySQL conformance character set failed".to_owned())?;
-    let observed: Option<(String, String, String)> = conn
+    conn.query_drop("SET SESSION time_zone = '+00:00'")
+        .await
+        .map_err(|_| "configure MySQL conformance time zone failed".to_owned())?;
+    let observed: Option<(String, String, String, String)> = conn
         .query_first(
-            "SELECT @@SESSION.sql_mode, @@character_set_connection, @@collation_connection",
+            "SELECT @@SESSION.sql_mode, @@character_set_connection, \
+                    @@collation_connection, @@SESSION.time_zone",
         )
         .await
         .map_err(|_| "verify MySQL conformance session failed".to_owned())?;
-    let Some((modes, charset, collation)) = observed else {
+    let Some((modes, charset, collation, time_zone)) = observed else {
         return Err("verify MySQL conformance session returned no row".to_owned());
     };
     let actual: BTreeSet<_> = modes.split(',').collect();
     let expected: BTreeSet<_> = SQL_MODES.into_iter().collect();
-    if actual != expected || charset != "utf8mb4" || collation != "utf8mb4_bin" {
+    if actual != expected
+        || charset != "utf8mb4"
+        || collation != "utf8mb4_bin"
+        || time_zone != "+00:00"
+    {
         return Err("MySQL conformance session differs from the sealed profile".to_owned());
     }
     Ok(())

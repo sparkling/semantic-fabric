@@ -70,8 +70,8 @@ pub fn generate(suite_root: &Path) -> Result<String, String> {
     generate_for(suite_root, Backend::Sqlite)
 }
 
-/// Capture and render one explicit backend. PostgreSQL is always required-live;
-/// it cannot produce a receipt from typed untested evidence.
+/// Capture and render one explicit backend. PostgreSQL and MySQL are always
+/// required-live; neither can produce a receipt from typed untested evidence.
 pub fn generate_for(suite_root: &Path, backend: Backend) -> Result<String, String> {
     let sealed = SealedSuite::load(suite_root)?;
     let report = run_backend(&sealed, backend)?;
@@ -175,7 +175,7 @@ fn from_report(
     Ok(ExecutionReceipt {
         backend,
         inventory_sha256: sealed.inventory_sha256().to_owned(),
-        outcomes_sha256: format::outcomes_digest(&cases),
+        outcomes_sha256: format::outcomes_digest(backend, &cases),
         cases,
     })
 }

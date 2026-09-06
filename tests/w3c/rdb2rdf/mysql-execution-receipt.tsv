@@ -1,6 +1,7 @@
-semantic-fabric-rdb2rdf-execution-receipt-v4
+semantic-fabric-rdb2rdf-execution-receipt-v5
 meta	backend	mysql
 meta	runner	sf-conformance::mysql::run_sealed_suite_required
+meta	execution-type-profile	mysql-w3c-sql-2008-v1
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
 meta	provider-version	unbound
 meta	provider-image-digest	unbound
@@ -13,7 +14,7 @@ meta	direct-mapping-count	24
 meta	passed-count	74
 meta	failed-count	1
 meta	skipped-count	12
-meta	outcomes-sha256	e1e3677b1b51351fab2e9ae84167d48435c1a5a8818747ee96a7182fe58e95df
+meta	outcomes-sha256	4e1974cce5e7bf2585d1f4a64695196ac213a15778503cc1ecdf09bb5b04ba51
 case	DirectGraphTC0000	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0001	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0002	direct-mapping	skipped	direct-mapping-unsupported

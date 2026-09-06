@@ -12,7 +12,7 @@ use sf_core::ir::{
     LogicalSource, ObjectMap, PredicateObjectMap, SubjectMap, Template, TermMap, TermSpec,
     TriplesMap,
 };
-use sf_core::NamedNode;
+use sf_core::{NamedNode, Term};
 use sf_sparql::{exec_mysql, parse_and_translate};
 use sf_sql::Dialect;
 
@@ -190,4 +190,48 @@ async fn mysql_construct_triples() {
         2,
         "CONSTRUCT must produce 2 emp:name triples"
     );
+}
+
+#[tokio::test]
+async fn mysql_native_tinyint_one_value_two_is_an_integer_literal() {
+    use mysql_async::prelude::Queryable;
+
+    let Some(mut conn) = try_connect().await else {
+        eprintln!("SKIP native MySQL type-profile test: isolated provider is unavailable");
+        return;
+    };
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS sf_mysql_native_flag \
+         (id INT PRIMARY KEY, flag TINYINT(1) NOT NULL)",
+    )
+    .await
+    .unwrap();
+    conn.query_drop(
+        "INSERT INTO sf_mysql_native_flag VALUES (1, 2) \
+         ON DUPLICATE KEY UPDATE flag = 2",
+    )
+    .await
+    .unwrap();
+    let maps = vec![TriplesMap {
+        id: "FLAG".to_owned(),
+        source: LogicalSource::Table("sf_mysql_native_flag".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/flag/{id}"),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![pom("http://ex/flagValue", column_literal("flag"))],
+    }];
+    let plan = parse_and_translate(
+        "SELECT ?v WHERE { <http://ex/flag/1> <http://ex/flagValue> ?v }",
+        &maps,
+        Dialect::MySql,
+    )
+    .unwrap();
+    let result = exec_mysql::select_mysql(&plan, &mut conn).await.unwrap();
+    let Term::Literal(literal) = result.rows[0][0].as_ref().unwrap() else {
+        panic!("native MySQL flag value did not reconstruct as a literal");
+    };
+    assert_eq!(literal.value(), "2");
+    assert_eq!(literal.datatype(), sf_core::vocab::xsd::INTEGER);
 }

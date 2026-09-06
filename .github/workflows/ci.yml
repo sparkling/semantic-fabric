@@ -349,10 +349,10 @@ jobs:
         run: |
           set -euo pipefail
           test_name='mysql::tests::live_cancelled_run_removes_only_its_owned_scratch_database'
-          listed="$(cargo test --locked -p sf-conformance --lib "$test_name" -- --exact --list)"
+          listed="$(cargo test --locked -p sf-conformance --lib "$test_name" -- --ignored --exact --list)"
           test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
           cargo test --locked -p sf-conformance --lib "$test_name" -- \
-            --exact --test-threads=1 --nocapture
+            --ignored --exact --test-threads=1 --nocapture
       - name: clippy deterministic evidence receipt tooling
         run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
       # This mutable hosted runner validates parser-free receipt inputs and the

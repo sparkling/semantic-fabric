@@ -98,13 +98,14 @@ async fn introspect_all(conn: &mut Conn) -> Result<Vec<TableSchema>, String> {
         schemas.push(
             introspect_mysql(conn, &name)
                 .await
-                .map_err(|error| match error {
-                    SqlError::Introspection(detail) => detail,
-                    _ => "MySQL catalogue introspection failed".to_owned(),
-                })?,
+                .map_err(closed_introspection_reason)?,
         );
     }
     Ok(schemas)
+}
+
+fn closed_introspection_reason(_error: SqlError) -> String {
+    "MySQL catalogue introspection failed".to_owned()
 }
 
 async fn validate_query_sources(
@@ -392,4 +393,17 @@ async fn run_direct(entry: &SealedCase, conn: &mut Conn) -> Result<CaseOutcome, 
         OutcomeCode::GraphMatched,
         OutcomeCode::GraphMismatch,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn introspection_reason_does_not_reflect_typed_detail() {
+        let marker = "private-table-name-must-not-appear";
+        let reason = closed_introspection_reason(SqlError::Introspection(marker.to_owned()));
+        assert_eq!(reason, "MySQL catalogue introspection failed");
+        assert!(!reason.contains(marker));
+    }
 }

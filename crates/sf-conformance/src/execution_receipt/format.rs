@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use sf_sql::backend::mysql::MysqlTypeProfile;
 use sha2::{Digest, Sha256};
 
 use super::{ExecutionReceipt, ReceiptCase};
@@ -9,11 +10,12 @@ use crate::manifest::Kind;
 use crate::sealed_suite::{Backend, OutcomeCode};
 use crate::Status;
 
-const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v4";
+const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v5";
 const INVENTORY_PATH: &str = "inventory.tsv";
 const HASH_ALGORITHM: &str = "sha256";
-const METADATA_COUNT: usize = 15;
+const METADATA_COUNT: usize = 16;
 const MAX_LINE_BYTES: usize = 512;
+const OUTCOME_IDENTITY_DOMAIN: &str = "semantic-fabric-rdb2rdf-outcomes-v2";
 
 pub(super) const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 
@@ -86,6 +88,11 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
     expect(&mut metadata, "runner", runner_name(backend))?;
     expect(
         &mut metadata,
+        "execution-type-profile",
+        execution_type_profile(backend),
+    )?;
+    expect(
+        &mut metadata,
         "attestation-scope",
         "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance",
     )?;
@@ -126,7 +133,7 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
     validate_sha256("outcomes-sha256", &recorded_outcomes_sha256)?;
     validate_case_shape(&cases)?;
 
-    let actual_outcomes_sha256 = outcomes_digest(&cases);
+    let actual_outcomes_sha256 = outcomes_digest(backend, &cases);
     if recorded_outcomes_sha256 != actual_outcomes_sha256 {
         return Err(format!(
             "execution receipt outcomes digest mismatch: recorded={recorded_outcomes_sha256}, actual={actual_outcomes_sha256}"
@@ -140,8 +147,22 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
     })
 }
 
-pub(super) fn outcomes_digest(cases: &[ReceiptCase]) -> String {
-    sha256(outcome_records(cases).as_bytes())
+pub(super) fn outcomes_digest(backend: Backend, cases: &[ReceiptCase]) -> String {
+    outcomes_digest_for_identity(backend.name(), execution_type_profile(backend), cases)
+}
+
+fn outcomes_digest_for_identity(
+    backend: &str,
+    execution_type_profile: &str,
+    cases: &[ReceiptCase],
+) -> String {
+    let identity = format!(
+        "{OUTCOME_IDENTITY_DOMAIN}\nbackend\t{}\nexecution-type-profile\t{}\n{}",
+        backend,
+        execution_type_profile,
+        outcome_records(cases)
+    );
+    sha256(identity.as_bytes())
 }
 
 pub(super) fn kind_name(kind: Kind) -> &'static str {
@@ -163,6 +184,10 @@ fn metadata(receipt: &ExecutionReceipt) -> Vec<(&'static str, String)> {
     vec![
         ("backend", receipt.backend.name().to_owned()),
         ("runner", runner_name(receipt.backend).to_owned()),
+        (
+            "execution-type-profile",
+            execution_type_profile(receipt.backend).to_owned(),
+        ),
         (
             "attestation-scope",
             "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance"
@@ -198,6 +223,14 @@ fn runner_name(backend: Backend) -> &'static str {
         Backend::Sqlite => "sf-conformance::runner::run_sealed_suite",
         Backend::Postgres => "sf-conformance::pg::run_sealed_suite_required",
         Backend::MySql => "sf-conformance::mysql::run_sealed_suite_required",
+    }
+}
+
+fn execution_type_profile(backend: Backend) -> &'static str {
+    match backend {
+        Backend::Sqlite => "sqlite-declared-or-storage-v1",
+        Backend::Postgres => "postgresql-wire-v1",
+        Backend::MySql => MysqlTypeProfile::W3cSql2008.evidence_name(),
     }
 }
 
@@ -317,4 +350,22 @@ fn validate_sha256(label: &str, value: &str) -> Result<(), String> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_profile_is_part_of_outcome_identity() {
+        let cases = [ReceiptCase {
+            identifier: "R2RMLTC0000".to_owned(),
+            kind: Kind::R2rml,
+            status: Status::Passed,
+            outcome_code: OutcomeCode::GraphMatched,
+        }];
+        let native = outcomes_digest_for_identity("mysql", "mysql-native-v1", &cases);
+        let compatibility = outcomes_digest_for_identity("mysql", "mysql-w3c-sql-2008-v1", &cases);
+        assert_ne!(native, compatibility);
+    }
 }

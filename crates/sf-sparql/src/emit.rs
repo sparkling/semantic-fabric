@@ -1879,15 +1879,19 @@ END, '' ORDER BY n\
 /// a CTE using one outer row's length when the expression is projected for
 /// several rows, which silently truncates/pads other values. `JSON_TABLE` is
 /// implicitly lateral in MySQL and evaluates its document per outer row.
-/// The `SET_VAR` optimizer hint raises `group_concat_max_len` to 1,000,000
-/// bytes for this query only; MySQL's 1024-byte default otherwise silently
-/// truncates the result. Since one source byte can expand to three output
-/// bytes, the JSON document deliberately becomes invalid above 333,333 input
-/// bytes so execution fails instead of returning a truncated IRI. A server
-/// whose `max_allowed_packet` is lower may fail earlier, which is also a hard
-/// error rather than an incorrect result.
+/// The `SET_VAR` optimizer hint requests `group_concat_max_len = 1,000,000`
+/// for this query only; MySQL's 1024-byte default otherwise silently truncates
+/// the result. The input guard does not trust the hint: it takes the minimum of
+/// the hard 333,333-byte profile bound, the statement-observed
+/// `@@SESSION.group_concat_max_len / 3`, and the statement-observed
+/// `(@@SESSION.max_allowed_packet - 4096) / 3`. One source byte can expand to
+/// three output bytes, and the 4-KiB packet reserve covers protocol/query
+/// framing. Above that conservative dynamic bound the JSON document is
+/// deliberately invalid, so execution fails before `GROUP_CONCAT` can return a
+/// truncated IRI.
 const MYSQL_GROUP_CONCAT_MAX_LEN: usize = 1_000_000;
 const MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES: usize = MYSQL_GROUP_CONCAT_MAX_LEN / 3;
+const MYSQL_PACKET_RESERVE_BYTES: usize = 4_096;
 
 fn percent_encode_col_mysql(col: &str) -> String {
     format!(
@@ -1906,7 +1910,11 @@ END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
 FROM JSON_TABLE(\
 CASE WHEN LENGTH(CAST({col} AS BINARY)) = 0 THEN '[]' \
-WHEN LENGTH(CAST({col} AS BINARY)) > {max_input} \
+WHEN LENGTH(CAST({col} AS BINARY)) > LEAST(\
+{max_input}, \
+GREATEST(CAST(@@SESSION.group_concat_max_len AS SIGNED), 0) DIV 3, \
+GREATEST(CAST(@@SESSION.max_allowed_packet AS SIGNED) - {packet_reserve}, 0) DIV 3\
+) \
 THEN 'semantic-fabric-percent-encoding-input-limit' \
 ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
 '$[*]' COLUMNS (n FOR ORDINALITY)\
@@ -1914,6 +1922,7 @@ ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
 ), '') END)",
         group_limit = MYSQL_GROUP_CONCAT_MAX_LEN,
         max_input = MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
+        packet_reserve = MYSQL_PACKET_RESERVE_BYTES,
     )
 }
 
@@ -2272,10 +2281,100 @@ mod tests {
             emitted.contains("group_concat_max_len = 1000000"),
             "{emitted}"
         );
-        assert!(emitted.contains("> 333333"), "{emitted}");
+        assert!(emitted.contains("LEAST(333333"), "{emitted}");
+        assert!(
+            emitted.contains("@@SESSION.group_concat_max_len"),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains("@@SESSION.max_allowed_packet"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("- 4096"), "{emitted}");
         assert!(
             emitted.contains("semantic-fabric-percent-encoding-input-limit"),
             "{emitted}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a purpose-created isolated MySQL provider"]
+    async fn mysql_percent_encoder_limit_fails_instead_of_truncating() {
+        use mysql_async::prelude::Queryable;
+
+        let socket = std::env::var("SF_MYSQL_SOCKET")
+            .expect("required-live MySQL socket must be configured");
+        let opts: mysql_async::Opts = mysql_async::OptsBuilder::default()
+            .user(Some("root"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into();
+        let mut conn = mysql_async::Conn::new(opts.clone())
+            .await
+            .unwrap_or_else(|_| panic!("connect to isolated MySQL provider failed"));
+        let expression = percent_encode_col_mysql("source_value.value");
+        let oversized_query = format!(
+            "SELECT {expression} FROM \
+             (SELECT REPEAT(' ', {}) AS value) AS source_value",
+            MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES + 1
+        );
+        let result: mysql_async::Result<Option<String>> = conn.query_first(oversized_query).await;
+        assert!(result.is_err(), "oversized encoding must fail closed");
+        let constrained = expression.replacen(
+            "SET_VAR(group_concat_max_len = 1000000)",
+            "SET_VAR(group_concat_max_len = 9)",
+            1,
+        );
+        let constrained_query = format!(
+            "SELECT {constrained} FROM \
+             (SELECT REPEAT(' ', 4) AS value) AS source_value"
+        );
+        let result: mysql_async::Result<Option<String>> = conn.query_first(constrained_query).await;
+        assert!(
+            result.is_err(),
+            "statement-observed aggregate ceiling must fail closed"
+        );
+        let original_packet: u64 = conn
+            .query_first("SELECT @@GLOBAL.max_allowed_packet")
+            .await
+            .unwrap_or_else(|_| panic!("read isolated MySQL packet ceiling failed"))
+            .unwrap_or_else(|| panic!("isolated MySQL packet ceiling is absent"));
+        conn.query_drop("SET GLOBAL max_allowed_packet = 8192")
+            .await
+            .unwrap_or_else(|_| panic!("constrain isolated MySQL packet ceiling failed"));
+        conn.disconnect()
+            .await
+            .unwrap_or_else(|_| panic!("close isolated MySQL connection failed"));
+
+        let mut limited = mysql_async::Conn::new(opts.clone())
+            .await
+            .unwrap_or_else(|_| panic!("reconnect to isolated MySQL provider failed"));
+        let observed_packet: u64 = limited
+            .query_first("SELECT @@SESSION.max_allowed_packet")
+            .await
+            .unwrap_or_else(|_| panic!("read constrained MySQL packet ceiling failed"))
+            .unwrap_or_else(|| panic!("constrained MySQL packet ceiling is absent"));
+        let packet_bound = (observed_packet.saturating_sub(MYSQL_PACKET_RESERVE_BYTES as u64)) / 3;
+        let packet_query = format!(
+            "SELECT {expression} FROM \
+             (SELECT REPEAT(' ', {}) AS value) AS source_value",
+            packet_bound + 1
+        );
+        let packet_result: mysql_async::Result<Option<String>> =
+            limited.query_first(packet_query).await;
+        limited
+            .query_drop(format!("SET GLOBAL max_allowed_packet = {original_packet}"))
+            .await
+            .unwrap_or_else(|_| panic!("restore isolated MySQL packet ceiling failed"));
+        limited
+            .disconnect()
+            .await
+            .unwrap_or_else(|_| panic!("close constrained MySQL connection failed"));
+        assert_eq!(observed_packet, 8192);
+        assert!(
+            packet_result.is_err(),
+            "statement-observed packet ceiling must fail closed"
         );
     }
 

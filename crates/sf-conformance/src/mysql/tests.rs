@@ -90,11 +90,11 @@ fn cleanup_failure_takes_precedence_over_case_failure() {
 }
 
 #[test]
+#[ignore = "requires a purpose-created isolated MySQL provider"]
 fn live_cancelled_run_removes_only_its_owned_scratch_database() {
-    let Some(opts) = base_opts().expect("valid optional MySQL configuration") else {
-        eprintln!("UNTESTED: configure an isolated MySQL provider for Drop cleanup evidence");
-        return;
-    };
+    let opts = base_opts()
+        .expect("valid required-live MySQL configuration")
+        .expect("required-live MySQL provider must be configured");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
