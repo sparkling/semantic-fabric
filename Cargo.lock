@@ -4705,6 +4705,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sf-capture-supervisor"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "deadpool-postgres",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "sf-cli"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,21 @@
+[package]
+name = "sf-capture-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Independent Rust authority kernel for single-use controlled capture evidence"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+deadpool-postgres = "0.14"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres = "0.7"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
