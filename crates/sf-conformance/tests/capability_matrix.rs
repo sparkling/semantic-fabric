@@ -398,6 +398,7 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
             "e-postgresql-verified-generation-lease",
             "e-postgresql-verified-generation-live",
             "e-postgresql-verified-generation-request-route",
+            "e-postgresql-verified-generation-runtime-role",
         ]
     );
     let command = loaded
