@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 93);
+    assert_eq!(loaded.catalog.cells.len(), 94);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&60));
+    assert_eq!(counts.get(&Status::Implemented), Some(&61));
     assert_eq!(counts.get(&Status::Planned), Some(&31));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
@@ -81,6 +81,37 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
             .unwrap_or_else(|| panic!("missing {id}"));
         assert_eq!(cell.status, Status::Planned);
         assert!(!cell.advertisable);
+    }
+}
+
+#[test]
+fn capture_supervisor_kernel_does_not_promote_operational_authority() {
+    let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
+    let cell = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "capture-supervisor-authority-kernel-generic")
+        .expect("capture supervisor kernel cell");
+    assert_eq!(cell.status, Status::Implemented);
+    assert_eq!(cell.verification, Verification::CiRequired);
+    assert!(cell.semantic_exact && cell.bounded && !cell.advertisable);
+    assert_eq!(
+        cell.limitation_ids,
+        ["l-capture-supervisor-operational-authority"]
+    );
+    for id in [
+        "e-capture-supervisor-postgresql-contention",
+        "e-capture-supervisor-postgresql-differential",
+    ] {
+        let evidence = loaded
+            .catalog
+            .evidence
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(evidence.verification, Verification::LiveOptional);
+        assert!(!evidence.required);
     }
 }
 

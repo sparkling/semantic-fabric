@@ -174,7 +174,7 @@ claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
 
-### 7. Implementation status (through 2026-09-05)
+### 7. Implementation status (through 2026-09-06)
 
 Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
 metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
@@ -193,6 +193,19 @@ image, build, deployment, TLS, authentication, data-provenance or release
 authority. ADR-0042 through ADR-0047 were reviewed against this boundary: their
 committed Node code remains explicitly non-deployable oracle evidence, and each
 future production implementation is assigned to a separate Rust service.
+
+Commit `a050db3` begins that separate Rust service as the independent
+`sf-capture-supervisor` crate. Its bounded transactional kernel and PostgreSQL
+store implement immutable exact replay, one lease and attempt, stable overlap
+locking with monotonic fences, the closed terminal matrix, atomic pending-outbox
+state, post-lock database time, same-primary writer/recovery binding, and
+redacted adapter errors. Deterministic in-memory crash-boundary tests and
+developer-local isolated PostgreSQL 16.15 differential/contention tests exercise
+that slice. It has no product data-plane dependency and does not make Node a
+runtime. HTTP/mTLS, principal authentication, signer/materializer, controlled
+runner, database role/RLS/operational hardening and restart recovery,
+transparency/witness publication, controlled performance, production admission,
+and release authority remain absent; ADR-0042 stays proposed.
 
 The native Ruflo reader also remains development-only. Its optional
 `SF_HARNESS_RUFLO_PACKAGE_ROOT` is a source locator, not trust: the path must be

@@ -242,6 +242,20 @@ export const PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/__tests__/programme-capture-supervisor-run-event-v2-fixtures.ts',
 ] as const);
 
+export const PROGRAMME_CAPTURE_RUST_SUPERVISOR_PROTECTED_PATHS_V1 = Object.freeze([
+  'crates/sf-capture-supervisor/Cargo.toml', 'crates/sf-capture-supervisor/migrations/0001_authority_v1.sql',
+  'crates/sf-capture-supervisor/src/command.rs', 'crates/sf-capture-supervisor/src/decimal.rs',
+  'crates/sf-capture-supervisor/src/lib.rs', 'crates/sf-capture-supervisor/src/memory.rs',
+  'crates/sf-capture-supervisor/src/model.rs', 'crates/sf-capture-supervisor/src/planner.rs',
+  'crates/sf-capture-supervisor/src/postgres.rs', 'crates/sf-capture-supervisor/src/postgres_binding.rs',
+  'crates/sf-capture-supervisor/src/postgres_state.rs', 'crates/sf-capture-supervisor/src/protocol.rs',
+  'crates/sf-capture-supervisor/src/request_json.rs', 'crates/sf-capture-supervisor/src/resource_plan.rs',
+  'crates/sf-capture-supervisor/src/store.rs', 'crates/sf-capture-supervisor/tests/authority_concurrency.rs',
+  'crates/sf-capture-supervisor/tests/authority_lifecycle.rs', 'crates/sf-capture-supervisor/tests/common/mod.rs',
+  'crates/sf-capture-supervisor/tests/crash_recovery.rs', 'crates/sf-capture-supervisor/tests/outcome_validation.rs',
+  'crates/sf-capture-supervisor/tests/postgres_contention.rs', 'crates/sf-capture-supervisor/tests/postgres_differential.rs',
+] as const);
+
 export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-claim-io-v1.ts',
   'coding-harness/src/programme-capture-claim-key-v1.ts',

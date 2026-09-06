@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -321,6 +320,7 @@ describe('M0 protected authority and CI contract', () => {
   it('automatically protects every tracked capability and receipt authority', () => {
     for (const directory of [
       'crates/sf-bench/src/performance/',
+      'crates/sf-capture-supervisor/',
       'crates/sf-conformance/src/execution_receipt/',
       'crates/sf-conformance/src/regression_receipt/',
       'crates/sf-conformance/src/rust_closure_receipt/',
