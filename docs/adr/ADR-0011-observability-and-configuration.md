@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -14,7 +14,32 @@ implements:
 
 # Observability & configuration
 
-> **Implementation status (2026-09-05): partially implemented.** Commits
+> **Implementation status (2026-09-06): partially implemented.** Commits
+> `413ea76` and `7557b29` implement the current trace/JSON slice. After private
+> parser-worker dispatch and public argument parsing, only `serve` installs the
+> JSON subscriber. Its only operator control is the closed
+> `--log-level off|error|warn|info` value (default `info`); an exact product-target
+> allowlist and real maximum-level hint reject every foreign target and all
+> higher levels. `RequestDeadlineService::call` mints the sole opaque bounded
+> correlation ID before any early return, ignores inbound correlation text, and
+> carries that identity through the request root, RFC 9457 header/body,
+> governance winner, response-body terminal, and producer terminal events.
+> Request, body-lifetime, and actual compiler stages are spans with a closed
+> payload-free vocabulary; the flat compiler reports rewrite/saturate/unfold/
+> cascade operations, the tree compiler reports build/resolve/normalize/lower/
+> cascade operations, and source-affine UNION parsing reports parse. Cascade
+> recursion remains inside one stage span so trace volume does not scale with
+> plan branches. Protocol no-body responses are not reported as dropped bodies.
+>
+> **R1 is partial:** the root and current request/compiler boundaries are traced,
+> but there is no distinct `emit_sql` span and no adapter-internal span propagation
+> into blocking `sf-sql` bridges. **R4 is trace-only:** the exactly-once sticky
+> governance winner emits a bounded trace event, but no metrics counter. Metrics,
+> Prometheus export, OTLP, the layered configuration model, and measured
+> instrumentation-overhead evidence remain pending; this slice claims none of
+> them.
+>
+> Earlier boundary work: commits
 > `3e0f920`/`c9e6c53` add the closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
@@ -49,16 +74,14 @@ implements:
 > the response into RFC 9457 or prove an atomic no-prefix contract. Environment
 > injection is not the layered
 > TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
-> Correlation IDs currently reach the response
-> only, not a log sink. The production crates still contain no tracing/metrics/OTLP
-> stack or layered validated configuration model, and expose no metrics. The
-> 2026-09-05 Rust runtime-snapshot foundation does expose a
+> The 2026-09-05 Rust runtime-snapshot foundation exposes a
 > closed redacted readiness state: new requests acquire one immutable snapshot
 > before request-body polling, not-ready state returns `503` with `Retry-After`,
 > and in-flight response bodies retain their original snapshot through
 > termination. Activation remains a crate-private, non-authorizing primitive;
 > automatic drift observation, validated candidate construction, public reload,
-> and telemetry remain M3/M5 work under ADR-0038 and ADR-0050. Commits `5694489`
+> and automated drift telemetry remain M3/M5 work under ADR-0038 and ADR-0050.
+> Commits `5694489`
 > and `3abbdb4` add fixed `/livez` and `/readyz` endpoints plus bounded
 > three-phase SIGTERM/Ctrl-C shutdown. `/livez` reports event-loop liveness only;
 > `/readyz` reads the
@@ -75,9 +98,9 @@ implements:
 > listener is closed. Commit `bec1cf7` adds fixed, redacted query-less
 > `GET`/`HEAD /sparql` Service Description discovery as control metadata: it
 > consumes no request body, runtime lease, deadline, or application-work permit,
-> including while saturated, not ready, or draining. These slices do not implement telemetry, layered
-> configuration, verified TLS, source polling/failure
-> policy, SLOs, or the complete ADR-0011 control plane.
+> including while saturated, not ready, or draining. The complete ADR-0011
+> control plane still requires the pending metrics, OTLP, layered configuration,
+> verified TLS, source polling/failure policy, and SLO qualification named above.
 
 ## Context and Problem Statement
 
@@ -99,7 +122,7 @@ A production fabric needs structured **logging**, **metrics**, **tracing**, and 
 ## Decision Outcome
 
 ### Logging + tracing — one tool: `tracing`
-Structured events **and** spans. The query pipeline is instrumented as a span tree — `serve_request → parse_sparql → unfold → optimize_cascade` (a child span per cascade pass, ADR-0007) `→ emit_sql → execute → serialize`. `tracing-subscriber` (env-filter; JSON in prod, pretty in dev) + `tracing-opentelemetry` for OTLP export to a collector.
+Structured events **and** spans. The query pipeline is instrumented as a span tree — `serve_request → parse_sparql → unfold → optimize_cascade` (one bounded stage span around the whole cascade, not a child per branch/pass) `→ emit_sql → execute → serialize`. `tracing-subscriber` uses a closed typed level ceiling and an exact product-target allowlist (JSON in production, pretty output may be added for development); `tracing-opentelemetry` remains the accepted route for future OTLP export to a collector.
 
 ### Metrics — `metrics` facade → `metrics-exporter-prometheus` (OTel-compatible)
 Concrete catalogue:
@@ -125,7 +148,7 @@ budgets, and stop new ingress while already-admitted requests retain their
 identities and may complete. At the configured positive monotonic-clock bound,
 `Forced` broadcasts cancellation to remaining identities before the server and
 connections are dropped. This is the implemented M3 probe/shutdown slice, not
-source-health polling, reload, telemetry, SLOs, or a cross-backend cleanup
+source-health polling, reload, metrics/OTLP, SLOs, or a cross-backend cleanup
 qualification.
 
 ### Redaction discipline
