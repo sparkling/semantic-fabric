@@ -279,7 +279,13 @@ fn cache_and_error_diagnostics_do_not_render_identity_material() {
         CompileProfileId::Uncontrolled,
         context.cache_identity(),
     );
-    let key_output = format!("{key:?} {cache:?}");
+    let cached_plan = SecurityCachedPlan::from_shared(
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        context.cache_identity(),
+        binding.compile_uncached_shared(QUERY).unwrap(),
+    );
+    let key_output = format!("{key:?} {cache:?} {cached_plan:?}");
     let mismatch = binding
         .for_security_policy(policy(0xd4), &cache)
         .compile_shared(&context, QUERY)
