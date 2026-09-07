@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-09-04
+updated: 2026-09-07
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -13,12 +13,12 @@ implements: []
 
 # Dual-host Ruflo engineering MetaHarness
 
+> **V1 execution amendment (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) retains this control plane but replaces blanket per-commit transactions with focused commit gates and full integrated/release gates; harness evolution moves to post-1.0.
+
 ## Context and problem statement
 
-Open-issue remediation crosses query semantics, mappings, dependencies,
-connectors, conformance, and live sources. It benefits from parallel analysis
-and independent model review, but product correctness must remain a direct,
-deterministic property of the patched repository.
+Open-issue remediation crosses query semantics, mappings, dependencies, connectors, conformance, and live sources.
+Parallel analysis and independent review help, but product correctness remains a direct property of the patched repository.
 
 At decision time, the tracked `coding-harness/` was a legacy single-host smoke
 scaffold:

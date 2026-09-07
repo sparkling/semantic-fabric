@@ -1,13 +1,16 @@
 ---
-status: accepted
+status: superseded
 date: 2026-08-27
-updated: 2026-09-06
+updated: 2026-09-07
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
+superseded-by: [ADR-0055]
 supersedes: []
 depends-on: [ADR-0002, ADR-0006, ADR-0010, ADR-0011, ADR-0012, ADR-0014, ADR-0017, ADR-0018, ADR-0024, ADR-0037]
 implements: []
 ---
 # SOTA application-completion programme
+
+> **Status (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) supersedes this record as v1 completion authority. Its implementation facts remain evidence; work moved to post-1.0 remains open, not complete.
 
 ## Context and problem statement
 
@@ -18,10 +21,8 @@ zero backends are yet production-admitted: a reachable runtime path is not an
 admission decision. It is not yet a complete application.
 At the 2026-08-26 source audit, five release-level contradictions remained:
 
-1. recursive property paths returned a normal result after a hard-coded 256-hop
-   truncation;
-2. supported global ordering, grouping, DISTINCT, and CONSTRUCT dedup paths could
-   retain source-sized Rust collections despite the bounded-memory invariant;
+1. recursive property paths returned a normal result after a hard-coded 256-hop truncation;
+2. supported global ordering, grouping, DISTINCT, and CONSTRUCT dedup paths could retain source-sized Rust collections despite the bounded-memory invariant;
 3. the public runtime owned one source, while the accepted charter included
    cross-RDBMS federation;
 4. resource governance, observability, configuration, identity, provenance,
@@ -37,9 +38,8 @@ are the right foundation. Completion requires two substantial extensions—a
 bounded global physical-plan path and cross-source coordination—plus the
 production and evidence layers already anticipated by accepted ADRs.
 
-SPARQL 1.2 Query and Protocol are Working Drafts as of this decision date.
-Therefore a timeless claim of “full SPARQL 1.2” is not a stable release contract.
-R2RML remains the stable normative mapping baseline.
+SPARQL 1.2 Query and Protocol were Working Drafts at this decision date, so a
+timeless “full SPARQL 1.2” claim is unstable; R2RML is the stable baseline.
 
 ## Decision
 
