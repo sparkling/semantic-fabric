@@ -3,7 +3,7 @@ use crate::{problem::StartupCause, ServeError};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-/// Transaction-local PostgreSQL custom settings bound to one service principal.
+/// Transaction-local PostgreSQL custom settings bound to one trusted principal.
 /// Database policies and this trusted configuration are operator-owned. Never
 /// construct these from unverified request headers. Values are not logged.
 #[derive(Clone, PartialEq, Eq)]
@@ -42,10 +42,16 @@ impl PostgresRlsClaims {
             return Err(configuration_error());
         }
         let value = std::env::var(name).map_err(|_| configuration_error())?;
+        Self::from_json(&value)
+    }
+
+    pub(crate) fn from_json(value: &str) -> Result<Self, ServeError> {
         if value.len() > 32768 {
             return Err(configuration_error());
         }
-        Self::new(serde_json::from_str(&value).map_err(|_| configuration_error())?)
+        let settings: UniqueSettings =
+            serde_json::from_str(value).map_err(|_| configuration_error())?;
+        Self::new(settings.0)
     }
 
     pub(crate) fn identity(&self, credential: &[u8; 32], domain: &[u8]) -> [u8; 32] {
@@ -59,6 +65,33 @@ impl PostgresRlsClaims {
             }
         }
         hash.finalize().into()
+    }
+}
+
+// Duplicate settings are configuration errors, never last-key-wins policy.
+struct UniqueSettings(BTreeMap<String, String>);
+impl<'de> serde::Deserialize<'de> for UniqueSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueSettings;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a bounded object of unique string settings")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut access: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut settings = BTreeMap::new();
+                while let Some((key, value)) = access.next_entry::<String, String>()? {
+                    if settings.len() == 16 || settings.insert(key, value).is_some() {
+                        return Err(serde::de::Error::custom("invalid settings"));
+                    }
+                }
+                Ok(UniqueSettings(settings))
+            }
+        }
+        deserializer.deserialize_map(Visitor)
     }
 }
 

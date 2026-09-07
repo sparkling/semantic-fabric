@@ -78,23 +78,36 @@ fn initialize_telemetry_for(
 /// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
-    let query_admission = match args.auth_token_env.as_deref() {
-        Some(name) => match sf_serve::BearerQueryAdmission::from_env(name).and_then(|profile| {
-            match args.pg_rls_context_env.as_deref() {
-                Some(name) => {
-                    profile.with_postgres_rls(sf_serve::PostgresRlsClaims::from_env(name)?)
-                }
-                None => Ok(profile),
-            }
-        }) {
-            Ok(profile) => sf_serve::QueryAdmission::Bearer(profile),
+    let query_admission = if let Some(name) = args.auth_subjects_env.as_deref() {
+        match sf_serve::ProvisionedBearerAdmission::from_env(name) {
+            Ok(profile) => sf_serve::QueryAdmission::ProvisionedBearers(profile),
             Err(error) => {
                 error.record_telemetry();
                 return ExitCode::FAILURE;
             }
-        },
-        None if args.allow_unauthenticated => sf_serve::QueryAdmission::UnrestrictedDevelopment,
-        None => sf_serve::QueryAdmission::Deny,
+        }
+    } else {
+        match args.auth_token_env.as_deref() {
+            Some(name) => {
+                match sf_serve::BearerQueryAdmission::from_env(name).and_then(|profile| match args
+                    .pg_rls_context_env
+                    .as_deref()
+                {
+                    Some(name) => {
+                        profile.with_postgres_rls(sf_serve::PostgresRlsClaims::from_env(name)?)
+                    }
+                    None => Ok(profile),
+                }) {
+                    Ok(profile) => sf_serve::QueryAdmission::Bearer(profile),
+                    Err(error) => {
+                        error.record_telemetry();
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            None if args.allow_unauthenticated => sf_serve::QueryAdmission::UnrestrictedDevelopment,
+            None => sf_serve::QueryAdmission::Deny,
+        }
     };
     let metrics = match metrics::init(args.metrics) {
         Ok(metrics) => metrics,

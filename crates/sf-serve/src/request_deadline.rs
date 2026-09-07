@@ -124,18 +124,13 @@ impl Service<Request<Body>> for RequestDeadlineService {
             telemetry::in_stage_sync(Stage::RequestAdmission, || {
                 let mut budget = self.cfg.request_budget_for(correlation);
                 if request.uri().path() == "/sparql" {
-                    let admitted = self.cfg.query_admission.authenticate(request.headers());
+                    let admitted = self.cfg.query_admission.admit(request.headers());
                     request
                         .headers_mut()
                         .remove(axum::http::header::AUTHORIZATION);
                     match admitted {
-                        Ok(context) => {
-                            if context
-                                .is_some_and(|context| budget.retain_security(context).is_err())
-                                || budget
-                                    .retain_postgres_rls(self.cfg.query_admission.postgres_rls())
-                                    .is_err()
-                            {
+                        Ok(admitted) => {
+                            if budget.retain_authenticated(admitted).is_err() {
                                 return Admission::Rejected {
                                     budget,
                                     response: problem::response(problem::ProblemCode::Internal),

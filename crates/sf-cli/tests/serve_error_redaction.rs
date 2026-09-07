@@ -103,6 +103,77 @@ fn query_authentication_options_are_mutually_exclusive() {
         "--allow-unauthenticated",
     ]);
     assert_eq!(run(command).status.code(), Some(2));
+    for conflict in [
+        vec!["--auth-token-env", "SF_TEST_QUERY_AUTH"],
+        vec!["--pg-rls-context-env", "SF_TEST_RLS"],
+        vec!["--allow-unauthenticated"],
+    ] {
+        let mut command = serve_command(&missing_mapping());
+        command
+            .args([
+                "--source",
+                "sqlite::memory:",
+                "--auth-subjects-env",
+                "SF_TEST_REGISTRY",
+            ])
+            .args(conflict);
+        assert_eq!(run(command).status.code(), Some(2));
+    }
+}
+
+#[test]
+fn registry_configuration_rejects_before_source_io_and_redacts_all_values() {
+    let document = r#"{"schemaVersion":1,"subjects":[{"subjectRef":"private-opaque-subject","credentialEnv":"SF_TEST_CREDENTIAL","postgresRlsContextEnv":"SF_TEST_CLAIMS"}]}"#;
+    for registry in [None, Some("{}"), Some(document)] {
+        let mut command = serve_command(&missing_mapping());
+        command
+            .args([
+                "--source-env",
+                "SF_SOURCE_MUST_NOT_BE_READ",
+                "--auth-subjects-env",
+                "SF_TEST_REGISTRY",
+            ])
+            .env_remove("SF_TEST_REGISTRY")
+            .env_remove("SF_SOURCE_MUST_NOT_BE_READ")
+            .env("SF_TEST_CREDENTIAL", "test-only-env-credential-0123456789")
+            .env(
+                "SF_TEST_CLAIMS",
+                r#"{"app.tenant_id":"secret-a","app.tenant_id":"secret-b"}"#,
+            );
+        if let Some(registry) = registry {
+            command.env("SF_TEST_REGISTRY", registry);
+        }
+        let output = run(command);
+        assert_eq!(output.status.code(), Some(1));
+        for value in [
+            "private-opaque-subject",
+            "test-only-env-credential-0123456789",
+            "secret-a",
+            "secret-b",
+            "SF_TEST_REGISTRY",
+            "SF_SOURCE_MUST_NOT_BE_READ",
+        ] {
+            assert_absent(&output, value);
+        }
+        assert_structured_startup_failure(
+            &String::from_utf8(output.stderr).unwrap(),
+            "startup-configuration",
+        );
+    }
+    // A valid document passes configuration and reaches the independent source boundary.
+    let mut command = serve_command(&missing_mapping());
+    command
+        .args([
+            "--source-env",
+            "SF_SOURCE_MUST_NOT_BE_READ",
+            "--auth-subjects-env",
+            "SF_TEST_REGISTRY",
+        ])
+        .env("SF_TEST_REGISTRY", document)
+        .env_remove("SF_SOURCE_MUST_NOT_BE_READ")
+        .env("SF_TEST_CREDENTIAL", "test-only-env-credential-0123456789")
+        .env("SF_TEST_CLAIMS", r#"{"app.tenant_id":"a"}"#);
+    assert_opaque_source_failure(run(command), Some("test-only-env-credential-0123456789"));
 }
 
 #[test]

@@ -10,6 +10,10 @@ use crate::budget::RequestBudget;
 use crate::problem::{ProblemCode, StartupCause};
 use crate::ServeError;
 
+#[path = "provisioned_security.rs"]
+mod provisioned;
+pub use provisioned::{ProvisionedBearerAdmission, ProvisionedBearerSubject};
+
 /// Explicit immutable service-lifetime policy. Rotation requires a new server;
 /// a live request never consults a mutable credential or a newer policy.
 #[derive(Clone, Debug, Default)]
@@ -22,6 +26,15 @@ pub enum QueryAdmission {
     /// Service principal, optionally restricted by explicit PostgreSQL RLS claims.
     /// Without source RLS it may read all mapped data. Not end-user identity.
     Bearer(BearerQueryAdmission),
+    /// Explicit subjects with their own trusted PostgreSQL RLS settings.
+    /// One immutable registry is shared by all requests; headers cannot supply claims.
+    ProvisionedBearers(ProvisionedBearerAdmission),
+}
+
+/// Produced only by successful credential verification, retained atomically.
+pub(crate) struct AuthenticatedQuery {
+    pub(crate) context: SecurityContext,
+    pub(crate) rls: Option<std::sync::Arc<crate::PostgresRlsClaims>>,
 }
 
 /// A bounded credential digest and provider-neutral, redacted request identity.
@@ -118,14 +131,23 @@ fn configuration_error() -> ServeError {
 }
 
 impl QueryAdmission {
+    #[cfg(test)]
     pub(crate) fn authenticate(
         &self,
         headers: &HeaderMap,
     ) -> Result<Option<SecurityContext>, ProblemCode> {
+        self.admit(headers)
+            .map(|admitted| admitted.map(|a| a.context))
+    }
+
+    pub(crate) fn admit(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<AuthenticatedQuery>, ProblemCode> {
         match self {
             Self::Deny => Err(ProblemCode::AccessDenied),
             Self::UnrestrictedDevelopment => Ok(None),
-            Self::Bearer(profile) => {
+            Self::Bearer(_) | Self::ProvisionedBearers(_) => {
                 let mut values = headers.get_all(header::AUTHORIZATION).iter();
                 let value = values.next().ok_or(ProblemCode::Unauthenticated)?;
                 if values.next().is_some() || value.as_bytes().len() > 1031 {
@@ -137,10 +159,18 @@ impl QueryAdmission {
                     return Err(ProblemCode::Unauthenticated);
                 }
                 let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-                if !bool::from(profile.digest.ct_eq(&digest)) {
-                    return Err(ProblemCode::Unauthenticated);
+                let profile = match self {
+                    Self::Bearer(profile) if bool::from(profile.digest.ct_eq(&digest)) => {
+                        Some(profile)
+                    }
+                    Self::ProvisionedBearers(registry) => registry.match_credential(&digest),
+                    _ => None,
                 }
-                Ok(Some(profile.context))
+                .ok_or(ProblemCode::Unauthenticated)?;
+                Ok(Some(AuthenticatedQuery {
+                    context: profile.context,
+                    rls: profile.rls.clone(),
+                }))
             }
         }
     }
@@ -155,6 +185,7 @@ impl QueryAdmission {
             {
                 Ok(())
             }
+            (Self::ProvisionedBearers(registry), Some(_)) if registry.matches(budget) => Ok(()),
             _ => Err(ProblemCode::AccessDenied),
         }
     }
@@ -162,10 +193,12 @@ impl QueryAdmission {
     pub(crate) fn policy(&self) -> Option<PolicySnapshotId> {
         match self {
             Self::Bearer(profile) => Some(profile.context.policy_snapshot()),
+            Self::ProvisionedBearers(registry) => Some(registry.policy()),
             _ => None,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn postgres_rls(&self) -> Option<std::sync::Arc<crate::PostgresRlsClaims>> {
         match self {
             Self::Bearer(profile) => profile.rls.clone(),
@@ -177,3 +210,7 @@ impl QueryAdmission {
 #[cfg(test)]
 #[path = "query_security_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "provisioned_security_tests.rs"]
+mod provisioned_tests;

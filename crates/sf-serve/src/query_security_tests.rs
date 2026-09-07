@@ -29,7 +29,7 @@ fn budget(context: Option<SecurityContext>) -> RequestBudget {
     budget
 }
 
-fn config() -> ServeConfig {
+pub(super) fn config() -> ServeConfig {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE people(id INTEGER, name TEXT); INSERT INTO people VALUES (1,'Alice');",

@@ -10,6 +10,10 @@ use crate::telemetry::TelemetryLevel;
 
 #[derive(clap::Args)]
 pub(super) struct ServeArgs {
+    /// Environment variable with a versioned registry of opaque subjects and
+    /// credential/RLS environment references. Every member requires PostgreSQL RLS.
+    #[arg(long, conflicts_with_all = ["auth_token_env", "pg_rls_context_env", "allow_unauthenticated"])]
+    pub(super) auth_subjects_env: Option<String>,
     /// Environment variable containing a random query bearer token (32–1024 bytes).
     /// Its holder may read all mapped data unless RLS is configured; use TLS at the edge.
     #[arg(long, conflicts_with = "allow_unauthenticated")]
@@ -19,7 +23,7 @@ pub(super) struct ServeArgs {
     #[arg(long, requires = "auth_token_env")]
     pub(super) pg_rls_context_env: Option<String>,
     /// Explicitly allow anyone to query all mapped data (development only).
-    /// Without this or --auth-token-env, all query requests are denied.
+    /// Without this, --auth-token-env, or --auth-subjects-env, all queries are denied.
     #[arg(long, default_value_t = false)]
     pub(super) allow_unauthenticated: bool,
     #[command(flatten)]

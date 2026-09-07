@@ -125,7 +125,9 @@ pub use observed_source::IntrospectedSource;
 pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use pg_rls_claims::PostgresRlsClaims;
 pub use problem::ServeError;
-pub use query_security::{BearerQueryAdmission, QueryAdmission};
+pub use query_security::{
+    BearerQueryAdmission, ProvisionedBearerAdmission, ProvisionedBearerSubject, QueryAdmission,
+};
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
 pub use run::{serve_blocking, AdditionalSourceOptions, MappingRef, ServeOptions};
 pub use semantic_admission::SemanticAdmissionError;

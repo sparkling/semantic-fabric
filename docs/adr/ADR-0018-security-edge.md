@@ -28,7 +28,9 @@ implements:
 > The default bearer profile permits its principal to read **all mapped data**.
 > An explicit PostgreSQL source-RLS profile now binds trusted custom settings
 > inside the same transaction as each public query/UNION fragment, with live
-> isolation and cleanup tests. General end-user identity, portable ABAC,
+> isolation and cleanup tests. A bounded provisioned-subject registry now selects
+> each caller's identity and RLS settings atomically on one server/pool. External
+> identity issuers, portable ABAC,
 > sensitivity enforcement, policy-aware hot reload and paired access-decision
 > metrics remain open; this ADR remains incomplete.
 
@@ -46,7 +48,7 @@ The policy is immutable for a server's lifetime and applies to all its mapped
 sources. Rotation requires a new server. The existing `RequestBudget` retains
 the context across workers, generation leases and streams; execution checks
 that the compiled plan has the same identity. Source snapshots can change only
-under that fixed read-all policy, not independently rotate it. General atomic
+under the selected fixed admission policy, not independently rotate it. General atomic
 policy/snapshot reload remains required work, not a capability of this profile.
 Fixed health, service description and explicitly enabled bounded metrics remain
 public control metadata. Use loopback behind a trusted TLS edge; never expose
@@ -69,7 +71,8 @@ object of trusted custom-setting names to string values. Embeddings use
 Names have exactly two lowercase ASCII identifier segments, at most 128 bytes,
 and no reserved `pg_` namespace; there are 1–16 settings, each value is nonempty,
 at most 1024 bytes and contains no NUL. The environment JSON is at most 32768
-bytes. Framed, sorted claims join the credential digest in policy/attribute
+bytes; duplicate setting keys reject rather than silently taking the last value.
+Framed, sorted claims join the credential digest in policy/attribute
 identity, so changing a claim changes the cache partition. Diagnostics redact
 names and values. Settings are never taken from unverified headers.
 
@@ -106,6 +109,42 @@ and concurrent identities, both UNION fragments, errors/deadlines/body drop,
 normal reuse, abandoned/timeout discard, owner/BYPASSRLS/disabled-RLS rejection
 and catalog-shadow name rejection. CI runs it explicitly; ordinary tests do not
 silently connect to Product Mock or substitute an unavailable database.
+
+### Implemented provisioned-subject registry (2026-09-07)
+
+`--auth-subjects-env SF_QUERY_SUBJECTS` selects one immutable registry instead of
+`--auth-token-env`, `--pg-rls-context-env` or `--allow-unauthenticated`. Its JSON
+has `schemaVersion: 1` and 1–256 `subjects`, each with `subjectRef`,
+`credentialEnv` and `postgresRlsContextEnv`. The whole document is at most 128 KiB;
+environment references are 1–128 ASCII identifier bytes. Subject references are
+opaque operator identifiers of 1–128 ASCII alphanumeric/`_.:-` bytes, not a
+new tenant or sensitivity taxonomy. Unknown/duplicate fields, duplicate subjects,
+shared credentials, bad references and malformed claims fail at startup, before
+source/file I/O. Only digests and validated claims survive construction;
+diagnostics expose none of the raw values. Rust embeddings construct
+`ProvisionedBearerSubject::postgres_rls` and `ProvisionedBearerAdmission::new`.
+
+Subjects are canonically ordered by their stable reference digest. One
+domain-separated policy digest binds the full registry's count, subject digests,
+credential digests and canonical RLS-attribute digests. Every caller shares that
+policy identity, with separate subject/attribute identities. Credential rotation
+preserves the stable subject identity but changes the registry policy; all old
+contexts/cache partitions invalidate. Claim changes also change the policy and
+attributes. The server scans every registry entry with constant-time credential
+digest comparisons, then retains the selected context **and** settings in one
+one-shot request-budget operation before cloning. No caller header supplies or
+overwrites a subject or claim. Compilation and execution require that exact
+registered context/settings pair. Protected UNION remains uncached and both
+source transactions receive the same selected settings.
+
+The required-live RLS test additionally exercises alternating and concurrent
+credentials on the **same server**, clean reuse on a one-member pool,
+SELECT/ASK/CONSTRUCT, spoofed identity headers and both UNION sources. Unit tests
+prove canonical order, duplicate rejection, rotation, atomic handoff, mixed-bundle
+rejection and cache/execution isolation between actual registered subjects. CLI
+child tests prove mutual exclusions, startup ordering and redaction. This delivers
+explicitly provisioned per-caller source authorization, not token issuance,
+OIDC/introspection, portable ABAC, sensitivity enforcement or policy hot reload.
 
 ### External policy authority and remaining integration
 

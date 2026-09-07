@@ -13,6 +13,9 @@ use tower::ServiceExt;
 const TOKEN: &str = "test-only-rls-credential-0123456789";
 const SELECT: &str = "SELECT ?name WHERE { ?s <http://ex/name> ?name }";
 
+#[path = "rls_subjects.rs"]
+mod subjects;
+
 fn mapping(table: &str, predicate: &str) -> String {
     format!(
         r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -155,6 +158,7 @@ async fn exercise(f: Arc<Fixture>) {
     drop(concurrent_pool);
 
     exercise_union(&f).await;
+    subjects::exercise(&f).await;
     exercise_cleanup(&f, &alice, &bob).await;
     exercise_deadline(&f, &bob).await;
 

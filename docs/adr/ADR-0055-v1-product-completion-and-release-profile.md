@@ -291,8 +291,11 @@ through execution, and isolates single-source caches; protected UNION is uncache
 The optional PostgreSQL source-RLS profile now adds same-transaction trusted
 identity, role/table checks and acknowledged rollback or session discard, with
 required-live public-query and two-fragment UNION isolation/cleanup evidence.
-This does not install business policies or provide general end-user identity.
-Portable ABAC/sensitivity and policy-aware reload, general reload/drift,
+The public provisioned-subject registry now authenticates distinct callers on one
+server/pool, retains each identity/settings bundle atomically, and proves cache,
+execution and live SELECT/ASK/CONSTRUCT/UNION isolation. It does not install
+business policies, issue credentials or validate external identity issuers.
+Portable ABAC/sensitivity, external issuer integration and policy-aware reload, general reload/drift,
 complete total governance, verified TLS/layered configuration/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.

@@ -16,6 +16,7 @@ use crate::lifecycle::ShutdownPhase;
 use crate::telemetry::{self, CorrelationId};
 
 struct RequestBudgetState {
+    authentication_retained: bool,
     postgres_rls: Option<Arc<crate::PostgresRlsClaims>>,
     security: Option<sf_core::security_context::SecurityContext>,
     accounting: QueryBudget,
@@ -68,6 +69,7 @@ impl RequestBudget {
         let (terminal, _) = watch::channel(None);
         let deadline = now.checked_add(timeout);
         let request = Self(Arc::new(RequestBudgetState {
+            authentication_retained: false,
             security: None,
             postgres_rls: None,
             accounting: QueryBudget::new(limits),
@@ -95,6 +97,7 @@ impl RequestBudget {
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {
         let (terminal, _) = watch::channel(None);
         Self(Arc::new(RequestBudgetState {
+            authentication_retained: false,
             security: None,
             postgres_rls: None,
             accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
@@ -126,6 +129,26 @@ impl RequestBudget {
         Ok(())
     }
 
+    /// Attach exactly the bundle selected by credential verification, before
+    /// cloning. Never read a service-global claim set after selecting a subject.
+    pub(crate) fn retain_authenticated(
+        &mut self,
+        admitted: Option<crate::query_security::AuthenticatedQuery>,
+    ) -> Result<(), ()> {
+        let state = Arc::get_mut(&mut self.0).ok_or(())?;
+        if state.authentication_retained || state.security.is_some() || state.postgres_rls.is_some()
+        {
+            return Err(());
+        }
+        if let Some(admitted) = admitted {
+            state.security = Some(admitted.context);
+            state.postgres_rls = admitted.rls;
+        }
+        state.authentication_retained = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn retain_security(
         &mut self,
         context: sf_core::security_context::SecurityContext,
@@ -142,6 +165,7 @@ impl RequestBudget {
         self.0.security
     }
 
+    #[cfg(test)]
     pub(crate) fn retain_postgres_rls(
         &mut self,
         claims: Option<Arc<crate::PostgresRlsClaims>>,
