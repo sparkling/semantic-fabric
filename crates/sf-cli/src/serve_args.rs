@@ -14,6 +14,12 @@ pub(super) struct ServeArgs {
     /// Validated TOML configuration. CLI arguments override environment, then file values.
     #[arg(long)]
     pub(super) config: Option<String>,
+    /// Environment variable containing exclusive PEM CA certificates for the first source.
+    #[arg(long)]
+    pub(super) source_tls_roots_env: Option<String>,
+    /// Environment variable containing exclusive PEM CA certificates for the second source.
+    #[arg(long, requires = "additional_source_selector")]
+    pub(super) source_tls_roots_env_2: Option<String>,
     /// Environment variable with a versioned registry of opaque subjects and
     /// credential and PostgreSQL-RLS or portable-row-policy environment references.
     #[arg(long, conflicts_with_all = ["auth_token_env", "pg_rls_context_env", "allow_unauthenticated"])]

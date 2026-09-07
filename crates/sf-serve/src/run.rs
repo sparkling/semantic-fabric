@@ -130,6 +130,31 @@ pub(crate) async fn open_backend(
     pg_pool_wait: Duration,
     sqlite_pool_size: usize,
 ) -> Result<IntrospectedSource, ServeError> {
+    // Bound DNS, TCP, TLS, authentication and schema observation together.
+    let label = match &source {
+        PreparedSource::Sqlite { label, .. }
+        | PreparedSource::Postgres { label, .. }
+        | PreparedSource::Mysql { label, .. } => *label,
+    };
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        open_backend_inner(source, pg_pool_size, pg_pool_wait, sqlite_pool_size),
+    )
+    .await
+    .map_err(|_| {
+        ServeError::new(StartupCause::SourceConnect {
+            spec: label.to_owned(),
+            error: "source startup deadline exceeded".to_owned(),
+        })
+    })?
+}
+
+async fn open_backend_inner(
+    source: PreparedSource,
+    pg_pool_size: usize,
+    pg_pool_wait: Duration,
+    sqlite_pool_size: usize,
+) -> Result<IntrospectedSource, ServeError> {
     match source {
         PreparedSource::Sqlite { path, label } => {
             Backend::sqlite_pool_from_path(&path, sqlite_pool_size)
@@ -141,11 +166,11 @@ pub(crate) async fn open_backend(
                     })
                 })
         }
-        PreparedSource::Postgres { config, label } => {
+        PreparedSource::Postgres { config, tls, label } => {
             // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
             // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
-            let pool =
-                crate::pg_pool::build(*config, pg_pool_size, pg_pool_wait).map_err(|error| {
+            let pool = crate::pg_pool::build_with_tls(*config, pg_pool_size, pg_pool_wait, *tls)
+                .map_err(|error| {
                     ServeError::new(StartupCause::SourceConnect {
                         spec: label.to_owned(),
                         error: error.to_string(),

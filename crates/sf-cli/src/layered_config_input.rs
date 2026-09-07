@@ -8,6 +8,8 @@ use super::{ConfigError, MAX_CONFIG_BYTES};
 pub(super) type Layer = BTreeMap<String, OsString>;
 
 pub(super) const OPTIONS: &[&str] = &[
+    "source-tls-roots-env",
+    "source-tls-roots-env-2",
     "source",
     "source-env",
     "mapping",

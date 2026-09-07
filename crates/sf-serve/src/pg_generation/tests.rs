@@ -204,7 +204,7 @@ fn generation_requirement_preserves_the_binding_identity_without_io() {
     .unwrap();
     let binding_identity = RuntimeBindingIdentity::fresh();
     let requirement = generation
-        .requirement(&crate::Backend::Pg(pool), &binding_identity)
+        .requirement(&crate::Backend::Pg(pool.into()), &binding_identity)
         .unwrap()
         .unwrap();
 
@@ -227,6 +227,7 @@ async fn generation_metadata_reservation_rejects_one_short_before_pool_io() {
     .build()
     .unwrap();
     pool.close();
+    let pool: crate::PostgresPool = pool.into();
     let budget = RequestBudget::after(
         Duration::from_secs(1),
         QueryLimits::new(1, GENERATION_METADATA_PROBE_RESERVATION - 1, 1, 1),
@@ -341,7 +342,7 @@ fn verified_source(expected: Arc<PostgresDirectGeneration>) -> crate::Introspect
     .max_size(1)
     .build()
     .unwrap();
-    crate::IntrospectedSource::observed(crate::Backend::Pg(pool), expected.tables.to_vec())
+    crate::IntrospectedSource::observed(crate::Backend::Pg(pool.into()), expected.tables.to_vec())
         .bind_postgres_direct(PostgresDirectSourceCandidate {
             tables: expected.tables.to_vec(),
             observation: SourceSchemaObservationV1::unavailable(),

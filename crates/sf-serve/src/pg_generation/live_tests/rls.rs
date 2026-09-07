@@ -37,7 +37,7 @@ fn profile(tenant: &str) -> QueryAdmission {
     )
 }
 
-async fn config(pool: deadpool_postgres::Pool, tenant: &str, mapping: &str) -> ServeConfig {
+async fn config(pool: crate::PostgresPool, tenant: &str, mapping: &str) -> ServeConfig {
     let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
     let ontology = crate::test_support::ontology(&[], &["http://ex/name"]);
     let mut cfg = ServeConfig::from_authored_r2rml(source, mapping, ontology)
@@ -244,7 +244,7 @@ async fn exercise(f: Arc<Fixture>) {
     assert_eq!(request(alice, SELECT).await.status(), StatusCode::FORBIDDEN);
 }
 
-fn pool(config: Config, size: usize) -> deadpool_postgres::Pool {
+fn pool(config: Config, size: usize) -> crate::PostgresPool {
     let manager = deadpool_postgres::Manager::from_config(
         config,
         NoTls,
@@ -260,6 +260,7 @@ fn pool(config: Config, size: usize) -> deadpool_postgres::Pool {
         .runtime(deadpool_postgres::Runtime::Tokio1)
         .build()
         .unwrap()
+        .into()
 }
 
 async fn exercise_union(f: &Fixture) {

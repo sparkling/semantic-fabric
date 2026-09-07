@@ -9,7 +9,7 @@ pub(super) struct Fixture {
     root_config: Config,
     root: Client,
     pub(super) admin: Client,
-    pub(super) pool: deadpool_postgres::Pool,
+    pub(super) pool: crate::PostgresPool,
     pub(super) database: String,
     pub(super) role: String,
 }
@@ -116,7 +116,7 @@ impl Fixture {
             root_config,
             root,
             admin,
-            pool,
+            pool: pool.into(),
             database,
             role,
         }

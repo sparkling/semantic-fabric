@@ -12,8 +12,8 @@ pub(super) const CONTROL_POOL_SIZE: usize = 1;
 /// derives the control lane by cloning the request pool.
 #[derive(Clone)]
 pub(crate) struct PgDirectPools {
-    request: deadpool_postgres::Pool,
-    control: deadpool_postgres::Pool,
+    request: crate::PostgresPool,
+    control: crate::PostgresPool,
 }
 
 impl PgDirectPools {
@@ -35,11 +35,11 @@ impl PgDirectPools {
         Ok(Self { request, control })
     }
 
-    pub(crate) fn request(&self) -> deadpool_postgres::Pool {
+    pub(crate) fn request(&self) -> crate::PostgresPool {
         self.request.clone()
     }
 
-    pub(crate) fn control(&self) -> deadpool_postgres::Pool {
+    pub(crate) fn control(&self) -> crate::PostgresPool {
         self.control.clone()
     }
 

@@ -21,7 +21,7 @@ pub(crate) async fn acquire_mysql(
 /// Pool exhaustion is shed as an honest `503` with a fixed retry hint instead
 /// of queuing past the request's absolute deadline.
 pub(crate) async fn acquire_pg(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::PostgresPool,
     budget: RequestBudget,
 ) -> Result<PgConn, Response> {
     let acquired = match budget.run(pool.get()).await {
@@ -32,7 +32,7 @@ pub(crate) async fn acquire_pg(
         PoolError::Timeout(_) => problem::response_with_retry_after(ProblemCode::SourceUnavailable),
         _ => problem::response(ProblemCode::Internal),
     })?;
-    match budget.run(PgConn::checked(conn)).await {
+    match budget.run(PgConn::checked(conn, pool.tls.clone())).await {
         Err(error) => Err(problem::response_for_control(error)),
         Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
         Ok(Ok(conn)) => Ok(conn),

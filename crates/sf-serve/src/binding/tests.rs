@@ -133,7 +133,7 @@ fn postgres_unavailability_survives_binding_without_authorizing_compilation() {
     let source_id = SourceId::new(3).unwrap();
     let reason = sf_sql::introspect::PostgresSchemaIdentityUnavailableV1::UnqualifiedEnginePatch;
     let source = IntrospectedSource::postgres_unavailable(
-        offline_postgres_pool(),
+        offline_postgres_pool().into(),
         vec![TableSchema::new(SECRET)],
         reason,
     );

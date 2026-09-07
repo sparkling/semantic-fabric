@@ -293,6 +293,8 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
 fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
     let opts = ServeArgs {
         config: None,
+        source_tls_roots_env: None,
+        source_tls_roots_env_2: None,
         auth_subjects_env: None,
         auth_token_env: None,
         pg_rls_context_env: None,

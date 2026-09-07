@@ -18,6 +18,8 @@ pub(super) struct FileConfig {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct SourceConfig {
+    source_tls_roots_env: Option<String>,
+    source_tls_roots_env_2: Option<String>,
     source: Option<String>,
     source_env: Option<String>,
     source_2: Option<String>,
@@ -88,7 +90,15 @@ impl FileConfig {
                 }
             )+ };
         }
-        section!(source, source, source_env, source_2, source_env_2);
+        section!(
+            source,
+            source,
+            source_env,
+            source_2,
+            source_env_2,
+            source_tls_roots_env,
+            source_tls_roots_env_2
+        );
         section!(
             mappings,
             mapping,

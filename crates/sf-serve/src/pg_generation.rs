@@ -121,7 +121,7 @@ impl std::fmt::Debug for PostgresDirectGeneration {
 }
 
 pub(crate) struct PgGenerationRequirement {
-    pool: deadpool_postgres::Pool,
+    pool: crate::PostgresPool,
     expected: Arc<PostgresDirectGeneration>,
     binding_identity: RuntimeBindingIdentity,
 }
@@ -262,7 +262,7 @@ impl BoundPostgresDirectCandidate {
 /// the exact protected rich observation installed.
 pub(crate) async fn build_and_bind_direct_candidate_on_control(
     source: crate::IntrospectedSource,
-    control_pool: &deadpool_postgres::Pool,
+    control_pool: &crate::PostgresPool,
     base_iri: &str,
     source_id: SourceId,
     budget: &RequestBudget,
@@ -312,7 +312,7 @@ pub(crate) async fn build_and_bind_direct_candidate(
 }
 
 pub(crate) async fn probe_direct_expectation(
-    control_pool: &deadpool_postgres::Pool,
+    control_pool: &crate::PostgresPool,
     expectation: &PostgresDirectExpectation,
     budget: &RequestBudget,
 ) -> Result<(), PgGenerationError> {
@@ -326,7 +326,7 @@ pub(crate) async fn probe_direct_expectation(
 }
 
 async fn build_direct_candidate(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::PostgresPool,
     discovery: &[TableSchema],
     base_iri: &str,
     source_id: SourceId,

@@ -13,7 +13,7 @@ use crate::problem::{self, ProblemCode};
 use crate::stream::{self, RdfFormat};
 
 pub(crate) async fn select(
-    pool: deadpool_postgres::Pool,
+    pool: crate::PostgresPool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
@@ -70,7 +70,7 @@ pub(crate) async fn select(
 }
 
 pub(crate) async fn ask(
-    pool: deadpool_postgres::Pool,
+    pool: crate::PostgresPool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
@@ -104,7 +104,7 @@ pub(crate) async fn ask(
 }
 
 pub(crate) async fn construct(
-    pool: deadpool_postgres::Pool,
+    pool: crate::PostgresPool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,

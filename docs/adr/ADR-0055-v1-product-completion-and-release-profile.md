@@ -300,9 +300,15 @@ subset for exact source/table/column rules using bound parameters, with public
 SQLite query and two-source UNION isolation plus fail-before-I/O rejection.
 General ABAC/sensitivity, live cross-backend portable-policy qualification,
 external issuer integration and policy-aware reload, general reload/drift,
-complete total governance, verified TLS/OTLP, the full
+complete total governance, live encrypted-backend qualification/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.
+
+The Rust serving connectors now enforce certificate/hostname verification for
+remote PostgreSQL/MySQL, resolve bounded private trust references, prevent TLS
+downgrade/socket fallback and retain PostgreSQL trust for cancellation. Required
+loopback protocol peers and public startup rejection tests verify these boundaries;
+live encrypted backend and exact-release-artifact evidence are still required.
 
 ## Consequences
 

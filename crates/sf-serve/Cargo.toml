@@ -28,6 +28,9 @@ http-body = "1"
 # Source drivers (held in the server backend; ADR-0006).
 rusqlite = { workspace = true, features = ["bundled"] }
 tokio-postgres = "0.7"
+tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 deadpool-postgres = "0.14" # PG connection pool for the serve lane (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding 2) — was a single shared Client, serialising all PG HTTP requests
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] } # MySQL serve backend (ADR-0024 M4, §4.2 dedicated-conn lane)
 thiserror.workspace = true
@@ -47,3 +50,5 @@ spargebra.workspace = true
 spareval = { version = "0.2.6", features = ["sparql-12", "sep-0002", "sep-0006"] }
 tracing-subscriber.workspace = true
 metrics-exporter-prometheus.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

@@ -23,14 +23,19 @@ const POSTGRES_RELATION_SCOPE_QUERY: &str =
 pub(crate) struct PgConn {
     object: Option<deadpool_postgres::Object>,
     recyclable: AtomicBool,
+    tls: tokio_postgres_rustls::MakeRustlsConnect,
 }
 
 impl PgConn {
-    pub(crate) async fn checked(conn: deadpool_postgres::Object) -> Result<Self, String> {
+    pub(crate) async fn checked(
+        conn: deadpool_postgres::Object,
+        tls: tokio_postgres_rustls::MakeRustlsConnect,
+    ) -> Result<Self, String> {
         verify_pg_relation_scope(&conn).await?;
         Ok(Self {
             object: Some(conn),
             recyclable: AtomicBool::new(true),
+            tls,
         })
     }
 
@@ -67,10 +72,11 @@ impl Drop for PgConn {
                 (self.object.as_ref(), tokio::runtime::Handle::try_current())
             {
                 let cancellation = object.cancel_token();
+                let tls = self.tls.clone();
                 runtime.spawn(async move {
                     let _ = tokio::time::timeout(
                         std::time::Duration::from_secs(1),
-                        cancellation.cancel_query(tokio_postgres::NoTls),
+                        cancellation.cancel_query(tls),
                     )
                     .await;
                 });
@@ -209,7 +215,7 @@ impl SqlitePool {
 #[derive(Clone)]
 pub enum Backend {
     Sqlite(SqlitePool),
-    Pg(deadpool_postgres::Pool),
+    Pg(crate::PostgresPool),
     /// MySQL: a cloneable `mysql_async::Pool`; each streaming request draws a
     /// dedicated connection for the stream's lifetime. Early driver drop releases
     /// the Rust handle; this is not a native statement-cancellation guarantee.

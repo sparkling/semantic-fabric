@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 100);
+    assert_eq!(loaded.catalog.cells.len(), 101);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&69));
+    assert_eq!(counts.get(&Status::Implemented), Some(&70));
     assert_eq!(counts.get(&Status::Planned), Some(&28));
     assert_eq!(counts.get(&Status::Unsupported), Some(&3));
     assert!(loaded
@@ -62,6 +62,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         "health-readiness-probes-generic",
         "mapping-ontology-semantic-admission-generic",
         "service-description-discovery-generic",
+        "verified-source-tls-generic",
     ] {
         let cell = loaded
             .catalog

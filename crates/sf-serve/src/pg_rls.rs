@@ -43,7 +43,7 @@ impl std::ops::Deref for PgRlsClient {
 
 impl PgRlsLease {
     pub(crate) async fn acquire(
-        pool: &deadpool_postgres::Pool,
+        pool: &crate::PostgresPool,
         tables: Option<Arc<[String]>>,
         budget: &RequestBudget,
     ) -> Result<Self, Response> {

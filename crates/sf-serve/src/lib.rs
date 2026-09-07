@@ -69,6 +69,8 @@ mod semantic_admission;
 mod service_description;
 mod snapshot;
 mod source_acquisition;
+mod source_tls;
+pub use pg_pool::PostgresPool;
 mod sqlite_admission;
 mod startup;
 mod telemetry;

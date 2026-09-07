@@ -71,14 +71,27 @@ implements:
 > These security regressions correct the earlier whole-security-group merge;
 > initial precedence tests alone did not establish this boundary. This closes
 > the startup-layering slice, not hot
-> reload, TLS or a direct external secret-store protocol.
+> reload or a direct external secret-store protocol. A subsequent Rust source-TLS
+> slice verifies both certificate chains and host identities for remote PostgreSQL
+> and MySQL. PostgreSQL query/control pools carry their connector into dirty-session
+> cancellation; MySQL's socket fallback and verification bypasses are disabled.
+> Bundled public roots or exclusive environment-injected private PEM roots are
+> supported, with 64 KiB/64-certificate bounds and once-only resolution. Private
+> roots force TLS even on loopback. Network startup is capped at 30 seconds;
+> PostgreSQL create/recycle operations use the positive pool-wait bound too.
+> Required real-TLS loopback tests prove trusted queries, certificate/name failures,
+> PostgreSQL cancellation, no plaintext downgrade and stalled-handshake rejection.
+> A fresh MySQL process proves explicit crypto-provider initialization. CLI tests
+> prove unsafe settings and trust-reference errors reject before file/network I/O.
+> Live encrypted backend and release-artifact qualification remain open; this
+> does not add inbound HTTP TLS or a direct external secret-store protocol.
 >
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
 > but there is no distinct `emit_sql` span and no adapter-internal span propagation
 > into blocking `sf-sql` bridges. **R4 is partial:** the exactly-once sticky
 > governance winner emits both a bounded trace event and the closed counter, but
 > the complete ADR-0010 action set is not yet covered. The remaining ten metric
-> families, OTLP, separate control-listener/authentication policy, verified TLS,
+> families, OTLP, separate control-listener/authentication policy, live TLS qualification,
 > and measured instrumentation-overhead evidence remain
 > pending.
 >
@@ -116,7 +129,8 @@ implements:
 > through that channel. The failure still terminates the stream; it does not turn
 > the response into RFC 9457 or prove an atomic no-prefix contract. That earlier
 > environment-only input was later incorporated into the bounded typed startup
-> layering described above; remote PostgreSQL still uses `NoTls`.
+> layering described above. The later source-TLS slice replaces serving `NoTls`
+> with verified transport, including the cancellation connection.
 > The 2026-09-05 Rust runtime-snapshot foundation exposes a
 > closed redacted readiness state: new requests acquire one immutable snapshot
 > before request-body polling, not-ready state returns `503` with `Retry-After`,
@@ -143,7 +157,7 @@ implements:
 > consumes no request body, runtime lease, deadline, or application-work permit,
 > including while saturated, not ready, or draining. The complete ADR-0011
 > control plane still requires the remaining ten metric families, OTLP,
-> verified TLS, source polling/failure policy, and SLO
+> live encrypted-source qualification, source polling/failure policy, and SLO
 > qualification named above.
 
 ## Context and Problem Statement

@@ -62,7 +62,7 @@ async fn text_as(cfg: Arc<ServeConfig>, token: &str, query: &str) -> String {
     .unwrap()
 }
 
-async fn configured(pool: deadpool_postgres::Pool) -> Arc<ServeConfig> {
+async fn configured(pool: crate::PostgresPool) -> Arc<ServeConfig> {
     let mut cfg = config(pool, "unused", &mapping("parent", "http://ex/name")).await;
     cfg.set_query_admission(registry());
     Arc::new(cfg)

@@ -69,13 +69,13 @@ pub(super) struct ObservedGeneration {
 
 impl DirtyGeneration {
     async fn acquire(
-        pool: &deadpool_postgres::Pool,
+        pool: &crate::PostgresPool,
         source_id: SourceId,
         budget: &RequestBudget,
     ) -> Result<Self, PgGenerationError> {
         let object = budget.run(pool.get()).await?.map_err(map_pool_error)?;
         let conn = budget
-            .run(PgConn::checked(object))
+            .run(PgConn::checked(object, pool.tls.clone()))
             .await?
             .map_err(|_| PgGenerationError::SourceUnavailable)?;
         conn.mark_generation_dirty();
@@ -351,7 +351,7 @@ impl std::ops::Deref for PgGenerationClient {
 }
 
 pub(super) async fn open_observed_generation(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::PostgresPool,
     source_id: SourceId,
     table_names: &[String],
     budget: &RequestBudget,
@@ -372,7 +372,7 @@ pub(super) async fn open_observed_generation(
 
 #[cfg(test)]
 pub(super) async fn open_generation_before_lock_for_test(
-    pool: &deadpool_postgres::Pool,
+    pool: &crate::PostgresPool,
     source_id: SourceId,
     budget: &RequestBudget,
 ) -> Result<OpenGenerationProbe, PgGenerationError> {

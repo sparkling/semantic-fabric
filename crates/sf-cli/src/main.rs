@@ -125,8 +125,20 @@ fn serve(args: ServeArgs) -> ExitCode {
         }
     };
     let source = args.source_input.into_source_ref();
+    let source = match args.source_tls_roots_env {
+        Some(name) => source.with_tls_roots_env(name),
+        None => source,
+    };
     let mapping = args.mapping_input.into_mapping_ref();
-    let additional_source = args.additional_source_input.into_options();
+    let additional_source = args
+        .additional_source_input
+        .into_options()
+        .map(|mut additional| {
+            if let Some(name) = args.source_tls_roots_env_2 {
+                additional.source = additional.source.with_tls_roots_env(name);
+            }
+            additional
+        });
     let opts = ServeOptions {
         query_admission,
         source,

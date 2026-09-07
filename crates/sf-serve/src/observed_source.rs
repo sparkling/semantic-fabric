@@ -44,7 +44,7 @@ impl IntrospectedSource {
     }
 
     pub(crate) fn observed_postgres(
-        pool: deadpool_postgres::Pool,
+        pool: crate::PostgresPool,
         snapshot: sf_sql::introspect::Postgres16PublicObservedSnapshotV1,
     ) -> Self {
         let (schema, observation) = SourceSchemaObservationV1::from_postgres_snapshot(snapshot);
@@ -60,7 +60,7 @@ impl IntrospectedSource {
     /// projection carried by the same opaque observation. The legacy schema
     /// vector is intentionally inaccessible to this path.
     pub(crate) fn observed_postgres_direct(
-        pool: deadpool_postgres::Pool,
+        pool: crate::PostgresPool,
         snapshot: sf_sql::introspect::Postgres16PublicObservedSnapshotV1,
     ) -> Result<Self, PgGenerationError> {
         let (schema, observation) = snapshot
@@ -76,7 +76,7 @@ impl IntrospectedSource {
 
     #[cfg(test)]
     pub(crate) fn postgres_unavailable(
-        pool: deadpool_postgres::Pool,
+        pool: crate::PostgresPool,
         schema: Vec<TableSchema>,
         reason: sf_sql::introspect::PostgresSchemaIdentityUnavailableV1,
     ) -> Self {
@@ -105,7 +105,8 @@ impl IntrospectedSource {
 
     /// Observe PostgreSQL through the exact configured pool and relation scope
     /// that the serving lane will use.
-    pub async fn observe_postgres(pool: deadpool_postgres::Pool) -> Result<Self, String> {
+    pub async fn observe_postgres(pool: impl Into<crate::PostgresPool>) -> Result<Self, String> {
+        let pool = pool.into();
         let mut connection = pool
             .get()
             .await

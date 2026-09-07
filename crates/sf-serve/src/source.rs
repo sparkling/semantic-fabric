@@ -35,6 +35,11 @@ pub(crate) const POSTGRES_RELATION_SCOPE_RECYCLE_SQL: &str =
 pub enum SourceRef {
     Inline(String),
     Environment(String),
+    /// A source with an exclusive PEM trust bundle injected through the named variable.
+    WithTrust {
+        source: Box<SourceRef>,
+        roots_env: String,
+    },
 }
 
 impl SourceRef {
@@ -46,8 +51,17 @@ impl SourceRef {
         Self::Environment(variable.into())
     }
 
+    pub fn with_tls_roots_env(self, variable: impl Into<String>) -> Self {
+        Self::WithTrust {
+            source: Box::new(self),
+            roots_env: variable.into(),
+        }
+    }
+
     pub(crate) fn same_reference(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::WithTrust { source, .. }, other) => source.same_reference(other),
+            (source, Self::WithTrust { source: other, .. }) => source.same_reference(other),
             (Self::Inline(left), Self::Inline(right))
             | (Self::Environment(left), Self::Environment(right)) => left == right,
             _ => false,
@@ -58,6 +72,17 @@ impl SourceRef {
     /// any public error representation.
     pub fn resolve(&self) -> Result<SourceInput, ServeError> {
         match self {
+            Self::WithTrust { source, roots_env } => {
+                validate_environment_name(roots_env)?;
+                let pem = env::var(roots_env).map_err(|_| {
+                    source_error(SourceOrigin::Environment, "source trust bundle unavailable")
+                })?;
+                let roots = crate::source_tls::parse_roots(&pem)
+                    .map_err(|error| source_error(SourceOrigin::Environment, error))?;
+                let mut input = source.resolve()?;
+                input.roots = Some(roots);
+                Ok(input)
+            }
             Self::Inline(value) => SourceInput::new(value.clone(), SourceOrigin::Inline),
             Self::Environment(variable) => {
                 validate_environment_name(variable)?;
@@ -82,6 +107,7 @@ impl fmt::Debug for SourceRef {
         let kind = match self {
             Self::Inline(_) => "inline",
             Self::Environment(_) => "environment",
+            Self::WithTrust { .. } => "source-with-trust-reference",
         };
         formatter
             .debug_struct("SourceRef")
@@ -97,12 +123,17 @@ impl fmt::Debug for SourceRef {
 pub struct SourceInput {
     value: String,
     origin: SourceOrigin,
+    roots: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
 }
 
 impl SourceInput {
     fn new(value: String, origin: SourceOrigin) -> Result<Self, ServeError> {
         validate_source_value(&value, origin)?;
-        Ok(Self { value, origin })
+        Ok(Self {
+            value,
+            origin,
+            roots: None,
+        })
     }
 
     pub fn is_environment_provided(&self) -> bool {
@@ -119,6 +150,12 @@ impl SourceInput {
         let admits_credentials = self.is_environment_provided();
 
         if let Some(path) = self.value.strip_prefix("sqlite:") {
+            if self.roots.is_some() {
+                return Err(source_error_with_label(
+                    label,
+                    "TLS roots require a network source",
+                ));
+            }
             return Ok(PreparedSource::Sqlite {
                 path: path.to_owned(),
                 label,
@@ -142,8 +179,17 @@ impl SourceInput {
                 ));
             }
             config.options(POSTGRES_RELATION_SCOPE_OPTIONS);
+            if self.roots.is_some() {
+                config.ssl_mode(tokio_postgres::config::SslMode::Require);
+            }
+            crate::source_tls::postgres(&mut config)
+                .map_err(|error| source_error_with_label(label, error))?;
             return Ok(PreparedSource::Postgres {
                 config: Box::new(config),
+                tls: Box::new(
+                    crate::source_tls::client_config(self.roots.as_deref())
+                        .map_err(|error| source_error_with_label(label, error))?,
+                ),
                 label,
             });
         }
@@ -157,6 +203,26 @@ impl SourceInput {
                     "inline MySQL credentials are not admitted; use environment injection",
                 ));
             }
+            let options = if let Some(roots) = self.roots {
+                let ssl = options
+                    .ssl_opts()
+                    .cloned()
+                    .unwrap_or_default()
+                    .with_disable_built_in_roots(true)
+                    .with_root_certs(
+                        roots
+                            .into_iter()
+                            .map(|cert| cert.as_ref().to_vec().into())
+                            .collect::<Vec<_>>(),
+                    );
+                mysql_async::OptsBuilder::from_opts(options)
+                    .ssl_opts(Some(ssl))
+                    .into()
+            } else {
+                options
+            };
+            let options = crate::source_tls::mysql(options)
+                .map_err(|error| source_error_with_label(label, error))?;
             return Ok(PreparedSource::Mysql { options, label });
         }
 
@@ -196,6 +262,7 @@ pub(crate) enum PreparedSource {
     },
     Postgres {
         config: Box<tokio_postgres::Config>,
+        tls: Box<rustls::ClientConfig>,
         label: &'static str,
     },
     Mysql {
