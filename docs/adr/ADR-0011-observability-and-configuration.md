@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-06
+updated: 2026-09-07
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -14,7 +14,7 @@ implements:
 
 # Observability & configuration
 
-> **Implementation status (2026-09-06): partially implemented.** Commits
+> **Implementation status (2026-09-07): partially implemented.** Commits
 > `01d0a67` and `0fcad17` implement the current trace/JSON slice; `64bae33`
 > records this boundary and `fc29acc` proves the exact production filter through
 > a real request. After private
@@ -33,13 +33,25 @@ implements:
 > recursion remains inside one stage span so trace volume does not scale with
 > plan branches. Protocol no-body responses are not reported as dropped bodies.
 >
+> Commits `8e7e6e3` and `ae0606b` add the first bounded metrics slice.
+> The default installs no recorder and exposes no `/metrics` route. Explicit
+> `--metrics` installs one fail-closed product recorder and exposes three of the
+> thirteen catalogue families on the existing listener:
+> `sf_query_total{status,body}`, `sf_query_duration_seconds{status}` with
+> fixed buckets, and `sf_governance_rejections_total{reason}`. Their labels and
+> values are closed, foreign targets/names/labels/values become no-ops, fixed
+> control/discovery traffic is excluded, and query/body and sticky governance
+> terminals record exactly once. A real `sf-cli` child proves both the disabled
+> default and enabled endpoint.
+>
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
 > but there is no distinct `emit_sql` span and no adapter-internal span propagation
-> into blocking `sf-sql` bridges. **R4 is trace-only:** the exactly-once sticky
-> governance winner emits a bounded trace event, but no metrics counter. Metrics,
-> Prometheus export, OTLP, the layered configuration model, and measured
-> instrumentation-overhead evidence remain pending; this slice claims none of
-> them.
+> into blocking `sf-sql` bridges. **R4 is partial:** the exactly-once sticky
+> governance winner emits both a bounded trace event and the closed counter, but
+> the complete ADR-0010 action set is not yet covered. The remaining ten metric
+> families, OTLP, separate control-listener/authentication policy, the layered
+> configuration model, and measured instrumentation-overhead evidence remain
+> pending.
 >
 > Earlier boundary work: commits
 > `3e0f920`/`c9e6c53` add the closed pre-commit RFC 9457 problem vocabulary,
@@ -101,8 +113,9 @@ implements:
 > `GET`/`HEAD /sparql` Service Description discovery as control metadata: it
 > consumes no request body, runtime lease, deadline, or application-work permit,
 > including while saturated, not ready, or draining. The complete ADR-0011
-> control plane still requires the pending metrics, OTLP, layered configuration,
-> verified TLS, source polling/failure policy, and SLO qualification named above.
+> control plane still requires the remaining ten metric families, OTLP, layered
+> configuration, verified TLS, source polling/failure policy, and SLO
+> qualification named above.
 
 ## Context and Problem Statement
 
@@ -150,8 +163,8 @@ budgets, and stop new ingress while already-admitted requests retain their
 identities and may complete. At the configured positive monotonic-clock bound,
 `Forced` broadcasts cancellation to remaining identities before the server and
 connections are dropped. This is the implemented M3 probe/shutdown slice, not
-source-health polling, reload, metrics/OTLP, SLOs, or a cross-backend cleanup
-qualification.
+source-health polling, reload, the remaining metrics/OTLP catalogue, SLOs, or a
+cross-backend cleanup qualification.
 
 ### Redaction discipline
 Credentials, result data, PII and bound-parameter values are never logged at any
