@@ -313,6 +313,13 @@ impl BoundPlan {
     pub(crate) const fn source_id(&self) -> SourceId {
         self.source_id
     }
+
+    pub(crate) fn authorize_portable_rows(
+        &mut self,
+        policy: &crate::PortableRowPolicy,
+    ) -> sf_sparql::Result<()> {
+        policy.authorize(self.source_id, Arc::make_mut(&mut self.plan))
+    }
 }
 
 /// A federated plan plus the private binding identities and compile scopes that
@@ -349,6 +356,14 @@ impl BoundFederatedPlan {
 
     pub(crate) fn plan(&self) -> &FederatedPlan {
         &self.plan
+    }
+
+    pub(crate) fn authorize_portable_rows(
+        &mut self,
+        policy: &crate::PortableRowPolicy,
+    ) -> sf_sparql::Result<()> {
+        self.plan
+            .try_for_each_plan_mut(|source, plan| policy.authorize(source, plan))
     }
 
     pub(crate) fn into_bound_plans(self) -> (Vec<String>, [BoundPlan; 2]) {

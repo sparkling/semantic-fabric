@@ -57,6 +57,7 @@ mod pg_pool;
 mod pg_response;
 mod pg_rls;
 mod pg_rls_claims;
+mod portable_rows;
 mod post_body;
 mod problem;
 mod query_security;
@@ -124,6 +125,7 @@ pub use metrics::{
 pub use observed_source::IntrospectedSource;
 pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use pg_rls_claims::PostgresRlsClaims;
+pub use portable_rows::{PortableRowPolicy, PortableRowRule};
 pub use problem::ServeError;
 pub use query_security::{
     BearerQueryAdmission, ProvisionedBearerAdmission, ProvisionedBearerSubject, QueryAdmission,

@@ -18,6 +18,7 @@ use crate::telemetry::{self, CorrelationId};
 struct RequestBudgetState {
     authentication_retained: bool,
     postgres_rls: Option<Arc<crate::PostgresRlsClaims>>,
+    portable_rows: Option<Arc<crate::PortableRowPolicy>>,
     security: Option<sf_core::security_context::SecurityContext>,
     accounting: QueryBudget,
     deadline: Option<Instant>,
@@ -72,6 +73,7 @@ impl RequestBudget {
             authentication_retained: false,
             security: None,
             postgres_rls: None,
+            portable_rows: None,
             accounting: QueryBudget::new(limits),
             deadline: Some(deadline.unwrap_or(now)),
             deadline_representable: deadline.is_some(),
@@ -100,6 +102,7 @@ impl RequestBudget {
             authentication_retained: false,
             security: None,
             postgres_rls: None,
+            portable_rows: None,
             accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
@@ -136,13 +139,17 @@ impl RequestBudget {
         admitted: Option<crate::query_security::AuthenticatedQuery>,
     ) -> Result<(), ()> {
         let state = Arc::get_mut(&mut self.0).ok_or(())?;
-        if state.authentication_retained || state.security.is_some() || state.postgres_rls.is_some()
+        if state.authentication_retained
+            || state.security.is_some()
+            || state.postgres_rls.is_some()
+            || state.portable_rows.is_some()
         {
             return Err(());
         }
         if let Some(admitted) = admitted {
             state.security = Some(admitted.context);
             state.postgres_rls = admitted.rls;
+            state.portable_rows = admitted.portable_rows;
         }
         state.authentication_retained = true;
         Ok(())
@@ -180,6 +187,10 @@ impl RequestBudget {
 
     pub(crate) fn postgres_rls(&self) -> Option<&Arc<crate::PostgresRlsClaims>> {
         self.0.postgres_rls.as_ref()
+    }
+
+    pub(crate) fn portable_rows(&self) -> Option<&Arc<crate::PortableRowPolicy>> {
+        self.0.portable_rows.as_ref()
     }
 
     /// Await a phase without refreshing the original absolute deadline.

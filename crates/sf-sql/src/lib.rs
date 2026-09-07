@@ -26,6 +26,7 @@ pub mod cost;
 pub mod dialect;
 pub mod error;
 pub mod introspect;
+pub mod policy_projection;
 pub mod schema;
 pub mod stream;
 

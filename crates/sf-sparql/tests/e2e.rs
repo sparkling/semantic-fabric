@@ -18,7 +18,8 @@ use sf_core::ir::{
 use sf_core::NamedNode;
 use sf_mapping::parse_r2rml;
 use sf_sparql::{
-    exec, parse_and_translate, translate, translate_unoptimized, translate_with, Tbox,
+    exec, parse_and_translate, translate, translate_flat, translate_unoptimized, translate_with,
+    Error, Tbox,
 };
 use sf_sql::{Column, Dialect, TableSchema};
 
@@ -87,6 +88,21 @@ fn source() -> Connection {
     )
     .unwrap();
     conn
+}
+
+#[test]
+fn lateral_is_preserved_by_the_parser_and_rejected_by_both_compilers() {
+    let query = spargebra::SparqlParser::new()
+        .parse_query(&format!(
+            "SELECT ?e ?d WHERE {{ ?e <{EMP_NAME}> ?n LATERAL {{ ?d <{DEPT_NAME}> ?dn }} }}"
+        ))
+        .unwrap();
+    for result in [
+        translate(&query, &mapping(), Dialect::Sqlite),
+        translate_flat(&query, &mapping(), Dialect::Sqlite),
+    ] {
+        assert!(matches!(result, Err(Error::Unsupported(_))));
+    }
 }
 
 #[test]

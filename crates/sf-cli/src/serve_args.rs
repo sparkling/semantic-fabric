@@ -11,7 +11,7 @@ use crate::telemetry::TelemetryLevel;
 #[derive(clap::Args)]
 pub(super) struct ServeArgs {
     /// Environment variable with a versioned registry of opaque subjects and
-    /// credential/RLS environment references. Every member requires PostgreSQL RLS.
+    /// credential and PostgreSQL-RLS or portable-row-policy environment references.
     #[arg(long, conflicts_with_all = ["auth_token_env", "pg_rls_context_env", "allow_unauthenticated"])]
     pub(super) auth_subjects_env: Option<String>,
     /// Environment variable containing a random query bearer token (32–1024 bytes).

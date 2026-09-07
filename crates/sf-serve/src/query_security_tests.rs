@@ -184,3 +184,31 @@ fn source_claims_partition_cache_identity_and_cannot_change_after_handoff() {
     assert!(request.retain_postgres_rls(b.postgres_rls()).is_err());
     assert!(a.validate(&clone).is_ok());
 }
+
+#[test]
+fn postgres_and_portable_row_policy_families_are_mutually_exclusive() {
+    let claims = crate::PostgresRlsClaims::new(std::collections::BTreeMap::from([(
+        "app.tenant_id".into(),
+        "a".into(),
+    )]))
+    .unwrap();
+    let rows = || {
+        crate::PortableRowPolicy::new(vec![crate::PortableRowRule::new(
+            0, "people", "tenant", "a",
+        )
+        .unwrap()])
+        .unwrap()
+    };
+    assert!(BearerQueryAdmission::for_service_principal(TOKEN)
+        .unwrap()
+        .with_postgres_rls(claims.clone())
+        .unwrap()
+        .with_portable_rows(rows())
+        .is_err());
+    assert!(BearerQueryAdmission::for_service_principal(TOKEN)
+        .unwrap()
+        .with_portable_rows(rows())
+        .unwrap()
+        .with_postgres_rls(claims)
+        .is_err());
+}

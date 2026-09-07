@@ -35,6 +35,7 @@ pub enum QueryAdmission {
 pub(crate) struct AuthenticatedQuery {
     pub(crate) context: SecurityContext,
     pub(crate) rls: Option<std::sync::Arc<crate::PostgresRlsClaims>>,
+    pub(crate) portable_rows: Option<std::sync::Arc<crate::PortableRowPolicy>>,
 }
 
 /// A bounded credential digest and provider-neutral, redacted request identity.
@@ -43,6 +44,7 @@ pub struct BearerQueryAdmission {
     digest: [u8; 32],
     context: SecurityContext,
     rls: Option<std::sync::Arc<crate::PostgresRlsClaims>>,
+    portable_rows: Option<std::sync::Arc<crate::PortableRowPolicy>>,
 }
 
 impl std::fmt::Debug for BearerQueryAdmission {
@@ -77,6 +79,7 @@ impl BearerQueryAdmission {
             digest,
             context,
             rls: None,
+            portable_rows: None,
         })
     }
 
@@ -86,6 +89,9 @@ impl BearerQueryAdmission {
         mut self,
         claims: crate::PostgresRlsClaims,
     ) -> Result<Self, ServeError> {
+        if self.portable_rows.is_some() {
+            return Err(configuration_error());
+        }
         self.context = SecurityContext::new(
             PolicySnapshotId::from_digest(claims.identity(&self.digest, b"sf-pg-rls-policy-v1\0"))
                 .map_err(|_| configuration_error())?,
@@ -96,6 +102,24 @@ impl BearerQueryAdmission {
             .map_err(|_| configuration_error())?,
         );
         self.rls = Some(std::sync::Arc::new(claims));
+        Ok(self)
+    }
+
+    /// Restrict this principal with portable source/table/column equality rules.
+    pub fn with_portable_rows(
+        mut self,
+        policy: crate::PortableRowPolicy,
+    ) -> Result<Self, ServeError> {
+        if self.rls.is_some() {
+            return Err(configuration_error());
+        }
+        self.context = SecurityContext::new(
+            PolicySnapshotId::from_digest(*policy.identity()).map_err(|_| configuration_error())?,
+            self.context.subject(),
+            RequestAttributesIdentity::from_digest(*policy.identity())
+                .map_err(|_| configuration_error())?,
+        );
+        self.portable_rows = Some(std::sync::Arc::new(policy));
         Ok(self)
     }
 
@@ -170,6 +194,7 @@ impl QueryAdmission {
                 Ok(Some(AuthenticatedQuery {
                     context: profile.context,
                     rls: profile.rls.clone(),
+                    portable_rows: profile.portable_rows.clone(),
                 }))
             }
         }
@@ -181,7 +206,8 @@ impl QueryAdmission {
             (Self::Bearer(profile), Some(context))
                 if context.matches_policy_snapshot(profile.context.policy_snapshot())
                     && context == profile.context
-                    && budget.postgres_rls() == profile.rls.as_ref() =>
+                    && budget.postgres_rls() == profile.rls.as_ref()
+                    && budget.portable_rows() == profile.portable_rows.as_ref() =>
             {
                 Ok(())
             }

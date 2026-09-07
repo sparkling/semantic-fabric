@@ -40,6 +40,9 @@ pub(crate) async fn acquire(
     let requirements = snapshot
         .generation_requirements(source_ids)
         .map_err(response_for_error)?;
+    if budget.portable_rows().is_some() && !requirements.is_empty() {
+        return Err(problem::response(ProblemCode::AccessDenied));
+    }
     if requirements.is_empty() {
         return Ok(RequestGenerationAdmission {
             generations: VerifiedGenerationLeases::default(),

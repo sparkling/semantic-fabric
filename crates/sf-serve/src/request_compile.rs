@@ -75,6 +75,7 @@ pub(crate) async fn compile(
     let mode = cfg.query_mode();
     let permits = cfg.compiler_permits();
     let policy = cfg.query_admission.policy();
+    let portable_rows = budget.portable_rows().cloned();
     let work = move |worker_budget: RequestBudget| match mode {
         QueryMode::Single(source_id) if policy.is_some() => snapshot
             .compile_secured(source_id, &query, &worker_budget, policy.unwrap())
@@ -97,7 +98,18 @@ pub(crate) async fn compile(
         Some(reservation) => deadline::run_reserved_compiler(budget, reservation, work).await,
         None => deadline::run_compiler(budget, permits, work).await,
     };
-    map_compiler_result(compiled)
+    let mut bound = map_compiler_result(compiled)?;
+    if let Some(policy) = portable_rows.as_deref() {
+        let authorized = match &mut bound {
+            BoundQuery::Single(plan) => plan.authorize_portable_rows(policy),
+            BoundQuery::Federated(plan) => plan.authorize_portable_rows(policy),
+        };
+        if authorized.is_err() {
+            crate::access_telemetry::record(crate::access_telemetry::AccessDecision::Deny);
+            return Err(problem::response(ProblemCode::AccessDenied));
+        }
+    }
+    Ok(bound)
 }
 
 fn map_compiler_run_error(error: CompilerRunError) -> Response {

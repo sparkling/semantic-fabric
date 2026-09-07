@@ -29,10 +29,13 @@ implements:
 > An explicit PostgreSQL source-RLS profile now binds trusted custom settings
 > inside the same transaction as each public query/UNION fragment, with live
 > isolation and cleanup tests. A bounded provisioned-subject registry now selects
-> each caller's identity and RLS settings atomically on one server/pool. External
-> identity issuers, portable ABAC,
-> sensitivity enforcement, policy-aware hot reload and paired access-decision
-> metrics remain open; this ADR remains incomplete.
+> each caller's identity and RLS settings atomically on one server/pool. A
+> separate portable equality-row profile now injects operator-provisioned
+> source/table/column predicates as bound parameters for the accepted simple
+> authored-mapping shape, including both supported UNION fragments. This is a
+> deliberately narrow ABAC subset. External identity issuers, ontology-backed
+> resource attributes, sensitivity enforcement, policy-aware hot reload and
+> paired access-decision metrics remain open; this ADR remains incomplete.
 
 ### Implemented reference admission profile (2026-09-07)
 
@@ -115,7 +118,9 @@ silently connect to Product Mock or substitute an unavailable database.
 `--auth-subjects-env SF_QUERY_SUBJECTS` selects one immutable registry instead of
 `--auth-token-env`, `--pg-rls-context-env` or `--allow-unauthenticated`. Its JSON
 has `schemaVersion: 1` and 1–256 `subjects`, each with `subjectRef`,
-`credentialEnv` and `postgresRlsContextEnv`. The whole document is at most 128 KiB;
+`credentialEnv` and `postgresRlsContextEnv`. Schema version 2 instead permits
+each subject to select exactly one of `postgresRlsContextEnv` or `portableRows`.
+The whole document is at most 128 KiB;
 environment references are 1–128 ASCII identifier bytes. Subject references are
 opaque operator identifiers of 1–128 ASCII alphanumeric/`_.:-` bytes, not a
 new tenant or sensitivity taxonomy. Unknown/duplicate fields, duplicate subjects,
@@ -145,6 +150,35 @@ rejection and cache/execution isolation between actual registered subjects. CLI
 child tests prove mutual exclusions, startup ordering and redaction. This delivers
 explicitly provisioned per-caller source authorization, not token issuance,
 OIDC/introspection, portable ABAC, sensitivity enforcement or policy hot reload.
+
+### Implemented portable equality-row profile (2026-09-07)
+
+Schema-version-2 registry subjects may provide 1–1024 `portableRows`, each with
+snapshot-local `sourceIndex`, exact mapped `table` and `column`, and a
+`valueEnv` reference. Values are resolved once at startup, bounded to 16 KiB,
+retained only in redacted policy objects, and emitted only as ordinary SQL bound
+parameters. Table and column names are bounded trusted configuration matched
+exactly to mapping-derived plan identifiers; duplicate source/table/column rules
+reject. The complete canonical rule set contributes to the policy and request-
+attribute identity, so subjects with different values cannot share a protected
+cache or execution context.
+
+The profile authorizes direct base-table scans and the compiler's validated
+single-table projection view. Every base table reached by a plan must have a
+matching rule for that source. The AST projection admits only one aliased table,
+column-to-same-name projections, and no join, filter, grouping, ordering, limit,
+CTE, table-function or other authored SQL feature; a policy column omitted by
+the compiler is added to that inner projection before the outer bound predicate.
+Recursive property-path sources and every unproved source-query shape return a
+redacted `403` before pool acquisition. Verified Direct Mapping generation is
+also excluded from this authored-mapping profile.
+
+Required Rust evidence covers SQLite public SELECT/ASK/CONSTRUCT isolation for
+two callers, two-source SQLite UNION isolation, fail-before-source-I/O denial,
+and SQLite/PostgreSQL/MySQL dialect emission with bound values. This does not
+claim live PostgreSQL/MySQL portable-policy qualification, general Boolean ABAC,
+ontology/sensitivity attributes, masking, policy installation, external identity
+issuance or policy-aware reload. The broader three-layer ADR remains incomplete.
 
 ### External policy authority and remaining integration
 

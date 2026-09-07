@@ -295,7 +295,11 @@ The public provisioned-subject registry now authenticates distinct callers on on
 server/pool, retains each identity/settings bundle atomically, and proves cache,
 execution and live SELECT/ASK/CONSTRUCT/UNION isolation. It does not install
 business policies, issue credentials or validate external identity issuers.
-Portable ABAC/sensitivity, external issuer integration and policy-aware reload, general reload/drift,
+The schema-version-2 registry now also enforces a bounded portable equality-row
+subset for exact source/table/column rules using bound parameters, with public
+SQLite query and two-source UNION isolation plus fail-before-I/O rejection.
+General ABAC/sensitivity, live cross-backend portable-policy qualification,
+external issuer integration and policy-aware reload, general reload/drift,
 complete total governance, verified TLS/layered configuration/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.

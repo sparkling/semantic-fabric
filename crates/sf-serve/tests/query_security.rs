@@ -5,7 +5,10 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{router, Backend, BearerQueryAdmission, QueryAdmission, ServeConfig};
+use sf_serve::{
+    router, Backend, BearerQueryAdmission, PortableRowPolicy, PortableRowRule,
+    ProvisionedBearerAdmission, ProvisionedBearerSubject, QueryAdmission, ServeConfig,
+};
 use tower::ServiceExt;
 
 mod support;
@@ -21,12 +24,35 @@ const MAPPING: &str = r#"
 fn config(admission: QueryAdmission) -> ServeConfig {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE people(id INTEGER, name TEXT); INSERT INTO people VALUES(1,'Alice');",
+        "CREATE TABLE people(id INTEGER, name TEXT, tenant TEXT); \
+         INSERT INTO people VALUES(1,'Alice','a'),(2,'Bob','b');",
     )
     .unwrap();
     let mut cfg = support::serve_config(Backend::sqlite(conn), MAPPING);
     cfg.set_query_admission(admission);
     cfg
+}
+
+fn portable_subject(id: &str, token: &str, tenant: &str) -> ProvisionedBearerSubject {
+    ProvisionedBearerSubject::portable_rows(
+        id,
+        token,
+        PortableRowPolicy::new(vec![
+            PortableRowRule::new(0, "people", "tenant", tenant).unwrap()
+        ])
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn portable() -> ServeConfig {
+    config(QueryAdmission::ProvisionedBearers(
+        ProvisionedBearerAdmission::new(vec![
+            portable_subject("alice", TOKEN, "a"),
+            portable_subject("bob", "test-only-query-credential-9876543210", "b"),
+        ])
+        .unwrap(),
+    ))
 }
 
 fn protected() -> ServeConfig {
@@ -95,6 +121,77 @@ async fn credentials_admit_select_ask_and_construct_results() {
             .unwrap()
             .contains(expected));
     }
+}
+
+#[tokio::test]
+async fn portable_policy_isolates_public_select_ask_and_construct() {
+    let app = router(Arc::new(portable()));
+    for (token, present, absent) in [
+        (TOKEN, "Alice", "Bob"),
+        ("test-only-query-credential-9876543210", "Bob", "Alice"),
+    ] {
+        for (query, expected) in [
+            ("SELECT ?name WHERE { ?s <http://ex/name> ?name }", present),
+            (
+                "ASK { ?s <http://ex/name> ?name FILTER(?name = \"Alice\") }",
+                if present == "Alice" { "true" } else { "false" },
+            ),
+            ("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", present),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/sparql")
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .header(header::CONTENT_TYPE, "application/sparql-query")
+                        .body(Body::from(query))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let text = String::from_utf8(
+                response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(text.contains(expected), "{text}");
+            assert!(!text.contains(absent), "{text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn uncovered_table_policy_denies_before_execution() {
+    let policy = PortableRowPolicy::new(vec![
+        PortableRowRule::new(0, "other", "tenant", "a").unwrap()
+    ])
+    .unwrap();
+    let cfg = config(QueryAdmission::ProvisionedBearers(
+        ProvisionedBearerAdmission::new(vec![ProvisionedBearerSubject::portable_rows(
+            "alice", TOKEN, policy,
+        )
+        .unwrap()])
+        .unwrap(),
+    ));
+    let response = router(Arc::new(cfg))
+        .oneshot(
+            Request::post("/sparql")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/sparql-query")
+                .body(Body::from(
+                    "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

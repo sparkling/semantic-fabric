@@ -187,6 +187,18 @@ impl FederatedPlan {
     pub const fn fragments(&self) -> &[SourceFragment; 2] {
         &self.fragments
     }
+
+    /// Apply a fallible source-local plan transform to both already-bound
+    /// fragments without permitting callers to replace source identities.
+    pub fn try_for_each_plan_mut(
+        &mut self,
+        mut transform: impl FnMut(SourceId, &mut Plan) -> Result<()>,
+    ) -> Result<()> {
+        for fragment in &mut self.fragments {
+            transform(fragment.source_id, Arc::make_mut(&mut fragment.plan))?;
+        }
+        Ok(())
+    }
 }
 
 /// Parse and compile the exact two-arm vertical using two immutable compiler

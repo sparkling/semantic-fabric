@@ -188,3 +188,84 @@ fn source_rls_rejection_emits_a_real_deny_decision() {
     assert_eq!(events[0]["event"], "security.access_decision");
     assert_eq!(events[0]["decision"], "deny");
 }
+
+#[test]
+fn portable_row_rejection_emits_a_real_deny_after_credential_allow() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "test-only-portable-audit-principal-0123456789";
+    const MAPPING: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<#people> a rr:TriplesMap; rr:logicalTable [rr:tableName "people"];
+ rr:subjectMap [rr:template "http://ex/{id}"];
+ rr:predicateObjectMap [rr:predicate <http://ex/name>;
+   rr:objectMap [rr:column "name"; rr:datatype xsd:string]].
+"#;
+    let capture = Capture::default();
+    let dispatch = Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish(),
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tracing::dispatcher::with_default(&dispatch, || {
+        runtime.block_on(async {
+            let connection = rusqlite::Connection::open_in_memory().unwrap();
+            connection
+                .execute_batch("CREATE TABLE people(id INTEGER, name TEXT, tenant TEXT);")
+                .unwrap();
+            let mut config = crate::ServeConfig::new_with_unverified_source(
+                crate::Backend::sqlite(connection),
+                sf_mapping::parse_r2rml(MAPPING).unwrap(),
+                crate::test_support::ontology(&[], &["http://ex/name"]),
+                vec![],
+            )
+            .unwrap();
+            let policy = crate::PortableRowPolicy::new(vec![crate::PortableRowRule::new(
+                0,
+                "other",
+                "tenant",
+                "secret-row-value",
+            )
+            .unwrap()])
+            .unwrap();
+            config.set_query_admission(crate::QueryAdmission::ProvisionedBearers(
+                crate::ProvisionedBearerAdmission::new(vec![
+                    crate::ProvisionedBearerSubject::portable_rows("subject", TOKEN, policy)
+                        .unwrap(),
+                ])
+                .unwrap(),
+            ));
+            let response = crate::router(Arc::new(config))
+                .oneshot(
+                    Request::post("/sparql")
+                        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/sparql-query")
+                        .body(Body::from(
+                            "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        })
+    });
+    let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    assert!(!output.contains(TOKEN) && !output.contains("secret-row-value"));
+    let decisions: Vec<Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["event"] == "security.access_decision")
+        .map(|event| event["decision"].clone())
+        .collect();
+    assert_eq!(decisions, vec![Value::from("allow"), Value::from("deny")]);
+}

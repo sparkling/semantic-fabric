@@ -31,19 +31,7 @@ impl ProvisionedBearerSubject {
         credential: &str,
         claims: crate::PostgresRlsClaims,
     ) -> Result<Self, ServeError> {
-        if subject_ref.is_empty()
-            || subject_ref.len() > 128
-            || !subject_ref
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
-        {
-            return Err(invalid_registry());
-        }
-        let mut hash = Sha256::new();
-        hash.update(b"sf-provisioned-subject-v1\0");
-        hash.update((subject_ref.len() as u64).to_be_bytes());
-        hash.update(subject_ref.as_bytes());
-        let subject = hash.finalize().into();
+        let subject = subject_identity(subject_ref)?;
         let attributes = claims.identity(&[0; 32], b"sf-provisioned-rls-attributes-v1\0");
         let principal =
             BearerQueryAdmission::for_service_principal(credential)?.with_postgres_rls(claims)?;
@@ -53,10 +41,43 @@ impl ProvisionedBearerSubject {
             principal,
         })
     }
+
+    /// Bind a credential and opaque subject to a portable row allowlist.
+    pub fn portable_rows(
+        subject_ref: &str,
+        credential: &str,
+        policy: crate::PortableRowPolicy,
+    ) -> Result<Self, ServeError> {
+        let subject = subject_identity(subject_ref)?;
+        let attributes = *policy.identity();
+        let principal =
+            BearerQueryAdmission::for_service_principal(credential)?.with_portable_rows(policy)?;
+        Ok(Self {
+            subject,
+            attributes,
+            principal,
+        })
+    }
 }
 
-/// Bounded service-lifetime registry. Every subject must have explicit RLS
-/// settings; there is no implicit read-all member or anonymous fallback.
+fn subject_identity(subject_ref: &str) -> Result<[u8; 32], ServeError> {
+    if subject_ref.is_empty()
+        || subject_ref.len() > 128
+        || !subject_ref
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+    {
+        return Err(invalid_registry());
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"sf-provisioned-subject-v1\0");
+    hash.update((subject_ref.len() as u64).to_be_bytes());
+    hash.update(subject_ref.as_bytes());
+    Ok(hash.finalize().into())
+}
+
+/// Bounded service-lifetime registry. Every subject must have one explicit
+/// PostgreSQL-RLS or portable-row policy; there is no read-all/anonymous fallback.
 #[derive(Clone)]
 pub struct ProvisionedBearerAdmission {
     subjects: Arc<[BearerQueryAdmission]>,
@@ -86,7 +107,7 @@ impl ProvisionedBearerAdmission {
             return Err(invalid_registry());
         }
         let mut hash = Sha256::new();
-        hash.update(b"sf-provisioned-rls-policy-v1\0");
+        hash.update(b"sf-provisioned-admission-policy-v2\0");
         hash.update((subjects.len() as u64).to_be_bytes());
         for subject in &subjects {
             hash.update(subject.subject);
@@ -132,6 +153,7 @@ impl ProvisionedBearerAdmission {
         self.subjects.iter().any(|subject| {
             budget.security_context() == Some(subject.context)
                 && budget.postgres_rls() == subject.rls.as_ref()
+                && budget.portable_rows() == subject.portable_rows.as_ref()
         })
     }
 }

@@ -124,6 +124,7 @@ fn query_authentication_options_are_mutually_exclusive() {
 #[test]
 fn registry_configuration_rejects_before_source_io_and_redacts_all_values() {
     let document = r#"{"schemaVersion":1,"subjects":[{"subjectRef":"private-opaque-subject","credentialEnv":"SF_TEST_CREDENTIAL","postgresRlsContextEnv":"SF_TEST_CLAIMS"}]}"#;
+    let portable = r#"{"schemaVersion":2,"subjects":[{"subjectRef":"private-portable-subject","credentialEnv":"SF_TEST_CREDENTIAL","portableRows":[{"sourceIndex":0,"table":"private_table","column":"private_column","valueEnv":"SF_TEST_ROW_VALUE"}]}]}"#;
     for registry in [None, Some("{}"), Some(document)] {
         let mut command = serve_command(&missing_mapping());
         command
@@ -160,20 +161,33 @@ fn registry_configuration_rejects_before_source_io_and_redacts_all_values() {
             "startup-configuration",
         );
     }
-    // A valid document passes configuration and reaches the independent source boundary.
-    let mut command = serve_command(&missing_mapping());
-    command
-        .args([
-            "--source-env",
-            "SF_SOURCE_MUST_NOT_BE_READ",
-            "--auth-subjects-env",
-            "SF_TEST_REGISTRY",
-        ])
-        .env("SF_TEST_REGISTRY", document)
-        .env_remove("SF_SOURCE_MUST_NOT_BE_READ")
-        .env("SF_TEST_CREDENTIAL", "test-only-env-credential-0123456789")
-        .env("SF_TEST_CLAIMS", r#"{"app.tenant_id":"a"}"#);
-    assert_opaque_source_failure(run(command), Some("test-only-env-credential-0123456789"));
+    // Both valid schemas pass configuration and reach the independent source boundary.
+    for valid in [document, portable] {
+        let mut command = serve_command(&missing_mapping());
+        command
+            .args([
+                "--source-env",
+                "SF_SOURCE_MUST_NOT_BE_READ",
+                "--auth-subjects-env",
+                "SF_TEST_REGISTRY",
+            ])
+            .env("SF_TEST_REGISTRY", valid)
+            .env_remove("SF_SOURCE_MUST_NOT_BE_READ")
+            .env("SF_TEST_CREDENTIAL", "test-only-env-credential-0123456789")
+            .env("SF_TEST_CLAIMS", r#"{"app.tenant_id":"a"}"#)
+            .env("SF_TEST_ROW_VALUE", "private-row-value");
+        let output = run(command);
+        for secret in [
+            "test-only-env-credential-0123456789",
+            "private-portable-subject",
+            "private_table",
+            "private_column",
+            "private-row-value",
+        ] {
+            assert_absent(&output, secret);
+        }
+        assert_opaque_source_failure(output, None);
+    }
 }
 
 #[test]

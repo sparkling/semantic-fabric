@@ -1,5 +1,5 @@
 //! Bounded startup-only configuration. Documents contain environment references,
-//! not inline credentials or request-provided attributes.
+//! not inline credentials, policy values, or request-provided attributes.
 use super::*;
 use serde::Deserialize;
 
@@ -17,7 +17,19 @@ struct RegistryDocument {
 struct SubjectDocument {
     subject_ref: String,
     credential_env: String,
-    postgres_rls_context_env: String,
+    #[serde(default)]
+    postgres_rls_context_env: Option<String>,
+    #[serde(default)]
+    portable_rows: Vec<PortableRuleDocument>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PortableRuleDocument {
+    source_index: usize,
+    table: String,
+    column: String,
+    value_env: String,
 }
 
 impl ProvisionedBearerAdmission {
@@ -42,11 +54,21 @@ impl ProvisionedBearerAdmission {
         }
         let document: RegistryDocument =
             serde_json::from_str(json).map_err(|_| invalid_registry())?;
-        if document.schema_version != 1
+        if !(document.schema_version == 1 || document.schema_version == 2)
             || document.subjects.is_empty()
             || document.subjects.len() > 256
             || document.subjects.iter().any(|s| {
-                !valid_env_name(&s.credential_env) || !valid_env_name(&s.postgres_rls_context_env)
+                !valid_env_name(&s.credential_env)
+                    || (document.schema_version == 1
+                        && (s.postgres_rls_context_env.is_none() || !s.portable_rows.is_empty()))
+                    || (document.schema_version == 2
+                        && (s.postgres_rls_context_env.is_some() != s.portable_rows.is_empty()))
+                    || s.postgres_rls_context_env
+                        .as_deref()
+                        .is_some_and(|name| !valid_env_name(name))
+                    || s.portable_rows
+                        .iter()
+                        .any(|rule| !valid_env_name(&rule.value_env))
             })
         {
             return Err(invalid_registry());
@@ -56,14 +78,37 @@ impl ProvisionedBearerAdmission {
             .into_iter()
             .map(|s| {
                 let credential = resolve(&s.credential_env).map_err(|_| invalid_registry())?;
-                let claims =
-                    resolve(&s.postgres_rls_context_env).map_err(|_| invalid_registry())?;
-                ProvisionedBearerSubject::postgres_rls(
-                    &s.subject_ref,
-                    &credential,
-                    crate::PostgresRlsClaims::from_json(&claims).map_err(|_| invalid_registry())?,
-                )
-                .map_err(|_| invalid_registry())
+                if let Some(reference) = s.postgres_rls_context_env {
+                    let claims = resolve(&reference).map_err(|_| invalid_registry())?;
+                    ProvisionedBearerSubject::postgres_rls(
+                        &s.subject_ref,
+                        &credential,
+                        crate::PostgresRlsClaims::from_json(&claims)
+                            .map_err(|_| invalid_registry())?,
+                    )
+                    .map_err(|_| invalid_registry())
+                } else {
+                    let rules = s
+                        .portable_rows
+                        .into_iter()
+                        .map(|rule| {
+                            let value = resolve(&rule.value_env).map_err(|_| invalid_registry())?;
+                            crate::PortableRowRule::new(
+                                rule.source_index,
+                                rule.table,
+                                rule.column,
+                                value,
+                            )
+                            .map_err(|_| invalid_registry())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    ProvisionedBearerSubject::portable_rows(
+                        &s.subject_ref,
+                        &credential,
+                        crate::PortableRowPolicy::new(rules).map_err(|_| invalid_registry())?,
+                    )
+                    .map_err(|_| invalid_registry())
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         Self::new(subjects)
@@ -83,11 +128,13 @@ fn valid_env_name(value: &str) -> bool {
 mod tests {
     use super::*;
     const DOCUMENT: &str = r#"{"schemaVersion":1,"subjects":[{"subjectRef":"opaque-1","credentialEnv":"SF_TEST_CREDENTIAL","postgresRlsContextEnv":"SF_TEST_CLAIMS"}]}"#;
+    const PORTABLE_DOCUMENT: &str = r#"{"schemaVersion":2,"subjects":[{"subjectRef":"opaque-1","credentialEnv":"SF_TEST_CREDENTIAL","portableRows":[{"sourceIndex":0,"table":"people","column":"tenant","valueEnv":"SF_TEST_TENANT"}]}]}"#;
     const CREDENTIAL: &str = "test-only-env-credential-0123456789";
     fn resolve(name: &str) -> Result<String, ()> {
         match name {
             "SF_TEST_CREDENTIAL" => Ok(CREDENTIAL.into()),
             "SF_TEST_CLAIMS" => Ok(r#"{"app.tenant_id":"a"}"#.into()),
+            "SF_TEST_TENANT" => Ok("a".into()),
             _ => Err(()),
         }
     }
@@ -105,9 +152,22 @@ mod tests {
         assert!(!format!("{profile:?}").contains("opaque-1"));
     }
     #[test]
+    fn version_two_resolves_portable_values_once() {
+        let mut reads = 0;
+        let profile = ProvisionedBearerAdmission::from_json_with(PORTABLE_DOCUMENT, |name| {
+            reads += 1;
+            resolve(name)
+        })
+        .unwrap();
+        assert_eq!(reads, 2);
+        let digest = Sha256::digest(CREDENTIAL.as_bytes()).into();
+        assert!(profile.match_credential(&digest).is_some());
+        assert!(!format!("{profile:?}").contains("people"));
+    }
+    #[test]
     fn bad_schema_fields_references_and_bounds_reject_before_resolution() {
         for document in [
-            DOCUMENT.replace("\"schemaVersion\":1", "\"schemaVersion\":2"),
+            DOCUMENT.replace("\"schemaVersion\":1", "\"schemaVersion\":3"),
             DOCUMENT.replace(
                 "\"schemaVersion\":1",
                 "\"schemaVersion\":1,\"schemaVersion\":1",
@@ -127,6 +187,19 @@ mod tests {
             assert!(!format!("{error:?}").contains("literal"));
         }
         assert!(ProvisionedBearerAdmission::from_json_with(DOCUMENT, |_| Err(())).is_err());
+        for document in [
+            PORTABLE_DOCUMENT.replace("\"schemaVersion\":2", "\"schemaVersion\":1"),
+            PORTABLE_DOCUMENT.replace(
+                "\"portableRows\":",
+                "\"postgresRlsContextEnv\":\"SF_TEST_CLAIMS\",\"portableRows\":",
+            ),
+            PORTABLE_DOCUMENT.replace("SF_TEST_TENANT", "bad-name"),
+        ] {
+            assert!(ProvisionedBearerAdmission::from_json_with(&document, |_| {
+                panic!("must not resolve")
+            })
+            .is_err());
+        }
     }
     #[test]
     fn duplicate_and_non_string_rls_settings_fail_closed() {
