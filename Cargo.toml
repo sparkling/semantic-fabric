@@ -37,6 +37,7 @@ thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 sha2 = "=0.10.9"
+subtle = "=2.6.1"
 libc = "0.2"
 cargo-platform = "=0.3.2"
 serde = { version = "1", features = ["derive"] }

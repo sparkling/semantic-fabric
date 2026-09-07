@@ -226,7 +226,7 @@ impl SecurityScopedCompiler<'_> {
         context: &SecurityContext,
         sparql: &str,
     ) -> Result<Arc<Plan>, SecurityCompileError> {
-        if context.policy_snapshot() != self.expected_policy {
+        if !context.matches_policy_snapshot(self.expected_policy) {
             return Err(SecurityCompileError::PolicyMismatch);
         }
 
@@ -249,15 +249,7 @@ impl SecurityScopedCompiler<'_> {
             return Ok(cached.shared_plan());
         }
 
-        let plan = Arc::new(crate::translate_tree_with_column_type_use(
-            &query,
-            self.binding.triples_maps(),
-            self.binding.tbox(),
-            self.binding.dialect(),
-            self.binding.schema(),
-            self.binding.column_type_use(),
-            crate::CompilerWorkMode::Uncontrolled,
-        )?);
+        let plan = self.binding.compile_parsed_uncached_shared(&query)?;
         self.cache.put(
             key,
             SecurityCachedPlan::from_shared(

@@ -6,6 +6,7 @@ tags: [security, authorization, row-level-security, abac, multi-tenancy, sensiti
 supersedes: []
 depends-on:
   - ADR-0010
+  - ADR-0011
 implements:
   - ADR-0001
 ---
@@ -23,7 +24,7 @@ implements:
 > exact tracing target. All three seams are dormant and non-authorizing. The
 > public endpoint still has no authenticated request context, policy enforcement,
 > PostgreSQL `SET LOCAL` RLS, portable ABAC/sensitivity enforcement, or emitted
-> access-decision audit trail; this ADR remains incomplete.
+> access-decision trace-and-metric audit trail; this ADR remains incomplete.
 
 ## Context and Problem Statement
 

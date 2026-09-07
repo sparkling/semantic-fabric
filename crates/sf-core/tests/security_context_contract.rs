@@ -68,6 +68,14 @@ fn context_round_trips_only_opaque_fixed_width_identities() {
 }
 
 #[test]
+fn policy_matching_is_exact_for_the_snapshot_owned_identity() {
+    let context = context(7, 8, 9);
+
+    assert!(context.matches_policy_snapshot(PolicySnapshotId::from_digest(digest(7)).unwrap()));
+    assert!(!context.matches_policy_snapshot(PolicySnapshotId::from_digest(digest(6)).unwrap()));
+}
+
+#[test]
 fn diagnostics_and_errors_never_render_identity_material() {
     let context = context(0xa1, 0xb2, 0xc3);
     let forbidden = ["a1".repeat(32), "b2".repeat(32), "c3".repeat(32)];

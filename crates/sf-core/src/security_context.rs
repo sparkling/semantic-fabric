@@ -8,6 +8,7 @@
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 const IDENTITY_BYTES: usize = 32;
 const CACHE_IDENTITY_DOMAIN: &[u8] = b"semantic-fabric/security-cache-identity/v1";
@@ -108,7 +109,7 @@ impl fmt::Display for SecurityCacheIdentity {
 /// Construction is deliberately explicit: there is no `Default`, anonymous,
 /// unrestricted, or omitted-attributes value.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use sf_core::security_context::SecurityContext;
 /// let _implicit: SecurityContext = Default::default();
 /// ```
@@ -143,6 +144,15 @@ impl SecurityContext {
 
     pub const fn request_attributes(self) -> RequestAttributesIdentity {
         self.request_attributes
+    }
+
+    /// Compare the request's policy identity with snapshot-owned authority.
+    ///
+    /// The comparison is constant-time so later boundary wiring cannot turn an
+    /// explicit mismatch into a prefix-timing oracle.
+    #[must_use]
+    pub fn matches_policy_snapshot(&self, expected: PolicySnapshotId) -> bool {
+        bool::from(self.policy_snapshot.0.ct_eq(&expected.0))
     }
 
     /// Derive a domain-separated cache partition from every context dimension.

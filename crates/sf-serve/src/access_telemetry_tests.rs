@@ -38,13 +38,9 @@ impl<'writer> MakeWriter<'writer> for Capture {
 
 #[test]
 fn adopted_access_decision_labels_are_stable() {
+    assert_eq!(AccessDecision::VARIANT_COUNT, 3);
     assert_eq!(
-        [
-            AccessDecision::Allow,
-            AccessDecision::Deny,
-            AccessDecision::Mask,
-        ]
-        .map(AccessDecision::as_str),
+        AccessDecision::VARIANTS.map(AccessDecision::as_str),
         ["allow", "deny", "mask"]
     );
 }
