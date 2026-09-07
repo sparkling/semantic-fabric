@@ -25,6 +25,8 @@ implements: []
 
 ## Status boundary
 
+**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules; product completion remains open.
+
 This decision is **accepted**. It replaces ADR-0038 as the controlling
 definition of product completion and release work for v1. ADR-0038 remains an
 auditable record of the broader SOTA programme; its research and advanced-
@@ -165,11 +167,12 @@ assurance programme, not to deleting evidence that protects a shipped boundary.
 
 ### 5. Integration and writer topology
 
-V1 work uses one canonical integration branch and one integration owner. At
-most two code-writing worktrees are active at once, including the integration
-owner when that owner is writing. Their mutable paths and dependency order must
-be disjoint and stated before work begins. Read-only analysis, test execution,
-and review may run concurrently without becoming additional writers.
+V1 work uses canonical `main` and exactly one integration writer. Never create,
+switch to, or develop in another branch or worktree. Historical recovery refs
+are read-only integration inputs, not new execution lanes; preserve them and
+all unrelated working changes. Read-only investigation, review and compatible
+tests may run concurrently when they shorten the critical path without resource
+contention. Native agents execute; a Ruflo record alone does not launch a worker.
 
 Long-lived milestone branch forests are not an integration plan. A verified
 coherent commit is integrated promptly, and the next work is based on that
@@ -184,10 +187,13 @@ mutation proofs appropriate to its boundary. A dependency, shared-contract,
 unsafe, release, security-enforcement, or uncertain-impact change escalates to
 the affected integrated gate before commit.
 
-After each integrated product slice, the canonical integration branch runs the
-full locked workspace format, test, build, check, and strict-Clippy gates plus
-the relevant feature, live-backend, generated-authority, cache-isolation, and
-cross-source matrices. Unknown impact or selector failure runs the full set.
+At a coherent public-feature integration boundary, `main` runs the full locked
+workspace format, test, build and strict-Clippy gates plus relevant feature,
+live-backend, cache-isolation and cross-source checks. Adjacent micro-commits do
+not each rerun that full set without a new reason. Unknown impact or selector
+failure requires broader verification; passing focused checks is not release
+qualification. Preserve source-bound evidence without repeatedly regenerating
+historical receipts merely because HEAD moved.
 
 The immutable release candidate runs every v1 product and minimum-release gate
 in this ADR. A per-commit success cannot substitute for the integrated or
@@ -195,9 +201,13 @@ release run, and a previous-head result cannot attest a later commit. Pure
 documentation status changes use structural, link, line-count, and diff checks;
 they do not require an unrelated product rebuild.
 
-Ruflo may retain coordination and receipt identifiers, and ADR-0037's harness
-may be invoked for a high-risk boundary or final release review. Neither is a
-product oracle. Full harness evolution and its research score are post-1.0.
+Native Codex/Claude agents build through normal edit/test/inspect loops. Ruflo
+MCP retains useful coordination and verified outcomes. ADR-0037's closed
+candidate evaluator is an optional experiment, not the default builder, a
+per-commit gate or a product oracle. Its legacy worktree-creating launchers are
+incompatible with the main-only rule and must not run in this programme. Keep
+existing isolation checks intact; do not expand or retrofit that harness merely
+to deliver v1. Research scores and harness evolution remain post-1.0.
 
 ### 7. Status and claim discipline
 
@@ -217,7 +227,8 @@ release notes must be generated or updated from the same truth after code lands.
 
 ## Completion sequence
 
-1. Freeze the v1 release profile and current canonical integration head.
+1. Resolve interrupted integration, bring verified recovery work onto `main`,
+   and freeze the exact v1 profile. Do not start another unintegrated lane.
 2. Finish public security enforcement, snapshot reload/drift, total request
    controls, configuration/TLS/metrics, and cross-backend cleanup.
 3. Complete the bounded cross-source join/profile and its live differential.
@@ -225,16 +236,56 @@ release notes must be generated or updated from the same truth after code lands.
    matrices.
 5. Run the full integrated gate, repair only from the resulting exact head, and
    freeze an immutable release candidate.
-6. Produce and verify the minimum release-evidence bundle, then tag only that
-   exact candidate.
+6. Produce and verify the minimum release-evidence bundle. Tag, push or publish
+   that candidate only with explicit authorization in the current task.
+
+### Model and reasoning-effort allocation
+
+Use the selected main model without asking for a downgrade. Choose supporting
+native subscription agents by task, with no spend/token/request/invocation/quota
+ceilings, API keys or OpenRouter. This is an initial execution policy, not a
+claimed model-performance benchmark:
+
+| Task | Starting choice |
+|---|---|
+| Deterministic operations | Ordinary tools; no model delegation required |
+| Bounded mechanical work | Luna or Haiku |
+| Established-pattern implementation | Terra |
+| Normal feature work and test-driven repair | Sol or Sonnet |
+| Difficult cross-component reasoning/review | Astra high or Opus |
+| Hard unresolved semantics, concurrency or integration | Astra max/ultra |
+| Exceptional long-running hard problem | Fable when it adds value |
+
+Astra max and ultra are available. Explicit effort must pass unchanged through
+the Codex candidate/client/adapter; omission uses the native model default, not
+operation-specific high/low overrides. Distinct model/effort configurations need
+distinct candidate IDs when recording routing outcomes. Native client errors
+are authoritative: pause and report the exact client/model/error on subscription
+or requested-model unavailability; never silently clamp, downgrade or substitute.
+Optimize observed time to verified integration and rework. Do not invent monetary
+savings or equate API list prices with subscription billing. Independent native
+Codex and Claude review remains required for the release delta, not every edit.
+
+### Six-hour course correction
+
+The [scheduled prompt](../plans/programme-six-hour-review-prompt.md) compares
+promised requirement-level outcomes and the previous correction with actual
+`main` evidence, then changes execution and continues one primary outcome.
+No progress in an active interval triggers integration/public-path work instead
+of further decomposition, optional research or harness expansion. A missed
+outcome requires an execution change, not an unsupported replacement deadline.
+React to immediate blockers without waiting for the timer. The launcher uses
+native `codex queue` for the pinned conversation, never a competing resume;
+queue failure propagates with no execution fallback. Ruflo MCP memory is
+optional and individually updated; malformed/failed recall cannot block delivery.
 
 ## Current implementation status
 
 The v1 profile is accepted and **not complete** on 2026-09-07. Existing code has
 exact-path, request-admission, immutable-snapshot, bounded-shutdown, partial
 tracing, mapping-evidence, private security-context/cache, and narrow
-multi-source UNION foundations. A default-off, three-family Prometheus candidate
-is verified but pending promotion. Public authorization, general reload/drift,
+multi-source UNION foundations. Default-off three-family Prometheus metrics are
+integrated with their public CLI/HTTP tests. Public authorization, general reload/drift,
 complete total governance, verified TLS/layered configuration/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.

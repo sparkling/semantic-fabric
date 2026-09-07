@@ -13,7 +13,28 @@
 post-1.0 SOTA and advanced-assurance backlog. Reclassification is explicit;
 nothing moved to post-1.0 is relabelled implemented, supported, or complete.
 
-## Execution status
+## Immediate delivery queue (2026-09-07)
+
+Recovery integration `458faf1` on `main` passes full locked Rust tests/build,
+formatting, the hardened harness build and focused integration/model contracts.
+This closes fragmented integration, not the remaining public requirements.
+One integration owner writes on `main`; independent readers/reviewers may help.
+Finish the next public-path closure before opening another implementation lane.
+
+| Order | Required outcome | Observable acceptance |
+|---|---|---|
+| 1 | Public identity and policy enforcement | Authenticated allowed query succeeds; denial and cross-policy/cache isolation fail closed before source access |
+| 2 | Coherent lifecycle and total request controls | Public reload/drift/readiness, timeout, cancellation, overload and cleanup tests pass on every admitted backend |
+| 3 | Secure configuration and remaining observability | Public configuration/TLS validation, redaction, bounded metrics/traces and required operational tests pass |
+| 4 | Useful bounded cross-source join | Public CLI/HTTP results equal the materialized oracle; skew, overflow, cancellation and source failure preserve exactness |
+| 5 | Minimal Rust serving artifact and release | Clean-build live smoke, backend/profile matrix and every ADR-0055 minimum release check verify one immutable artifact |
+
+No required product guarantee is removed; advanced assurance remains open post-1.0.
+Forecasts require measured remaining work/dependencies, not commit counts or a
+replacement four-hour/multi-day promise. The [six-hour correction prompt](programme-six-hour-review-prompt.md)
+must change execution after a missed outcome and test whether that change helped.
+
+## Execution status and dated evidence
 
 | Slice | Status | Verified evidence |
 |---|---|---|
@@ -24,13 +45,13 @@ nothing moved to post-1.0 is relabelled implemented, supported, or complete.
 | M0E — advanced evidence authority | Deferred post-1.0; implemented kernel retained | The Rust transaction/store kernel and Node reference oracle remain valid non-production evidence. Authenticated capture, transparency/witness quorums, two-builder agreement and exhaustive runtime closure stay open and do not block the ADR-0055 minimum release bundle |
 | M0 — ADR-0047 final-`WHERE` mutation slice | Complete; additive V3 hosted replay green (non-authorizing) | A protected source-specific quartet freezes all 19 final-`WHERE` deletion spans against the 6,859-byte projection. Two ten/nine-mutant serializable rollback-only batches preserve the unchanged raw-derived control bag, prove 15 hidden seed families and four zero-candidate guards independently, and produce exactly 19 executed, 15/15 non-equivalent killed, four guard-equivalent and zero unresolved. Its historical service verification remains 611/611. Additive V3 retains the V1/V2 receipts and historical replay implementations byte-exact without invoking those runners, then defines `baseline-v1`, `baseline-v2`, `branch` and `final-where`, each over two distinct fresh networkless anonymous-volume containers. PID 1 must be exactly `postgres` and `pg_isready` must succeed. Hosted run [`33636424967`](https://github.com/sparkling/semantic-fabric/actions/runs/33636424967) at exact `d0cc5fb938a1ff8b70859c19882934461fe23c5a` passes both exact-Node lanes. CASE/JOIN/value/nullability/order/duplicate/array/element and `UNION ALL` replacements, live observations and admission remain open |
 | M1/M2/M5 — boundedness, governance, snapshots | Active; closed PostgreSQL lifecycle and workspace-context/private-cache contracts implemented but dormant | Exact recursive paths, finite root ORDER windows, source-sized fallback rejection, one shared request identity, fail-fast aggregate admission, owned SQLite admission/cancellation, immutable source-keyed snapshots and mandatory authored-mapping semantic admission are integrated. Canonical commit `c701352` adds the closed single-source PostgreSQL-16 Direct lifecycle: immutable resolved inputs, independent request/control pools, one max-size-one control lane, rich-observation-only mapping projection, sealed candidates, full-readiness CAS, serialized skip-tick probing/rebuild, retry/heal and fail-closed supervision. Exact disposable 16.9/16.15 tests pass and independent code review accepted the slice. `6d91fa6`/`a2c25ff` add fixed-width redacted policy/subject/request-attribute identities plus a separate private cache that requires an exact expected policy and partitions every security dimension; mismatch-before-parse/cache, forced-collision and forged-entry tests pass. `e206cab` adds only a dormant payload-free access-decision event vocabulary. Public startup and query handling remain unchanged. Total compiler/database/recursive governance, wider blocking operators, general/public reload, RLS/ABAC/sensitivity enforcement, public context propagation, emitted decision traces and metrics, policy/lineage and production admission remain open |
-| M3 — secure, observable, operable runtime | Probes, bounded shutdown and partial structured tracing complete; bounded-metrics candidate pending promotion | Existing probe/shutdown commits and `01d0a67`/`0fcad17`/`fc29acc` tracing evidence remain integrated. Candidate `8e7e6e3` plus process proof `ae0606b`, rebased on `cd3ce10` but not yet promoted with catalogue/docs authority, adds only explicit `--metrics` on the existing listener and three closed families: query total, query duration and governance rejections. Default operation has no recorder or route. OTLP, layered configuration, verified TLS, SLO/overhead qualification, the full metric catalogue, source-health/failure policy, adapter-internal spans and complete cross-backend cleanup remain open |
+| M3 — secure, observable, operable runtime | Probes, bounded shutdown, partial tracing and default-off bounded metrics integrated | Public CLI/HTTP tests cover explicit `--metrics` on the existing listener and three closed families: query total, query duration and governance rejections. Default operation has no recorder or route. OTLP, layered configuration, verified TLS, SLO/overhead qualification, the full metric catalogue, source-health/failure policy, adapter-internal spans and complete cross-backend cleanup remain open |
 | M4 — v1 standards profile | Release-surface gates active; research train deferred post-1.0 | Three-backend RDB2RDF receipts, Service Description, bounded SQLite DESCRIBE, static Product Mock `M ⋈ T`, and the exact 5,000-case train remain evidence. V1 still needs its dated advertised-surface/live matrix; the nightly 100,000 train, broad NoREC/MR1, long fuzzing, global coverage/mutation ratchets and soak expansion remain open post-1.0 |
 | M6 — cross-source federation | Narrow non-blocking vertical complete; charter-complete M6 active | `43399ce` serves only a top-level SELECT UNION with exactly two one-triple arms that each resolve to one distinct source. One snapshot lease, budget and serializer span sequential `UnionAll`; required compiler/runtime tests and a real CLI child over two file-backed SQLite sources prove bag/UNBOUND semantics, fail-closed admission, failure recovery and generation pinning. Joins, blocking operators, reducers/spill, >2 sources, PostgreSQL/MySQL, consistency vectors, performance qualification and admission remain open; proposed ADR-0040 remains proposed |
 | M7 — v1 release | Gated | Requires the ADR-0055 product guarantees and minimum exact-artifact evidence. Two-builder, transparency, exhaustive runtime-closure and research benchmark proof remain open post-1.0 |
 The current QueryV1 evidence closeout also includes closed malformed-directive proof (`38e9c7a`), one-fingerprint/one-held-descriptor matrix execution with fresh children and an 87% focused runtime reduction (`5a9919b`), and a separately generated default-only Rust closure refresh (`949cf11`). None qualifies the parser dependency/syscall profile or changes product authority.
 Runs `_03`, `_04`, V5 `_05`, and V6 `_01` remain immutable honest failures; `_05` was rejected at 85/100 by frozen prior-attempt law, and `_01` failed closed on native-origin policy. The additive V6 contract never reinterprets V4/V5 evidence.
-Fresh V6 run `programme_v6_h0c_20260828_02` passed every gate at 100/100 with no retry or repair. Its policy, candidate, receipt, envelope, execution-claim, and provider-free replay digests are `e71107e5…ae34`, `a1dc3071…ac7f`, `d9d244ef…0216`, `02c30ed3…9a06`, `578799ef…9c86`, and `f1bcf0fe…bf02`. H0c is complete; ADR-0055 now limits active v1 product work to two writers while M0E expansion stays post-1.0.
+Fresh V6 run `programme_v6_h0c_20260828_02` passed every gate at 100/100 with no retry or repair. Its policy, candidate, receipt, envelope, execution-claim, and provider-free replay digests are `e71107e5…ae34`, `a1dc3071…ac7f`, `d9d244ef…0216`, `02c30ed3…9a06`, `578799ef…9c86`, and `f1bcf0fe…bf02`. H0c is complete; ADR-0055 now requires one integration writer on `main` while M0E expansion stays post-1.0.
 
 The SPARQL regression receipts bind per-test expected SQLite query and Protocol outcomes. They are regression baselines only: they do not attest W3C SPARQL Query/Protocol conformance, runtime provenance, or backend admission.
 Backend-aware v5 mapping receipts bind the execution type profile and all 87 sealed ordered outcomes: SQLite records 81 pass, one deviation and five skips; required-live PostgreSQL records 80 pass, one deviation and six skips; required-live MySQL records 74 pass, the documented `R2RMLTC0002f` deviation and 12 exact typed Direct Mapping unsupported outcomes under `RequirePrimaryKey`. The MySQL SQL-2008 profile is conformance-only; native product MySQL treats ambiguous `TINYINT(1)`/`BOOL` as integer unless explicit `rr:datatype` supplies authority. Provider image/toolchain provenance remains explicitly unbound; pinned exact-image CI/live runs are mapping evidence only, not Query/Protocol conformance or production admission.
@@ -57,24 +78,6 @@ On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links 
 M0A remains open for product minimality/admission and ADR-0055's SBOM,
 signature, provenance and clean-build smoke. Complete binary/runtime closure,
 controlled performance and two-builder byte identity remain post-1.0.
-
-The immediate delivery window is one four-hour v1 integration lane:
-
-1. **0:00–0:30 — freeze truth.** Pin the canonical head, v1 capability target,
-   two disjoint writer scopes, required negative proofs, and release commands.
-2. **0:30–2:30 — close product gaps.** At most two writers work from the same
-   canonical base: one on security/runtime lifecycle, one on the next bounded
-   federation or packaging dependency. Verified commits integrate immediately.
-3. **2:30–3:30 — integrated proof.** Run the full locked Rust workspace and all
-   affected security, cache, live-backend, generated and cross-source gates.
-4. **3:30–4:00 — release decision.** Build and smoke the minimal candidate,
-   generate the minimum SBOM/provenance/checksum evidence, and report either the
-   exact releasable digest or the exact remaining failed gate.
-
-The timebox never changes a result label. If a critical gate remains red at the
-cutoff, v1 remains incomplete at that exact head. Advanced capture/witness work,
-two-builder proof, controlled research benchmarks, broad QE expansion, and
-harness evolution proceed post-1.0 and are not smuggled back into this lane.
 
 ## Outcome
 
@@ -372,19 +375,20 @@ QA gate:
 Outcomes:
 
 - retain the implemented `SourceId`, mapping/source affinity and immutable source registry, then complete capability and backend-generation contracts;
-- extend the implemented exactly-two-source, one-triple-per-arm `UnionAll` fragments into the remaining typed global operators;
-- wire the existing semi-join cost model to IN/temp-table/Bloom reducers with
-  skip-if-unselective behavior, streaming merge and bounded spill;
-- define global bag/NULL/order/group/OPTIONAL/MINUS semantics, consistency model,
-  partial-failure classification, shared cancellation and provenance vector; and
-- admit cross-source shapes one by one through the capability profile.
+- deliver one useful bounded cross-source join profile beyond the implemented
+  exactly-two-source, one-triple-per-arm `UnionAll`, with no silent source omission;
+- preserve exact bag/NULL semantics, source consistency, partial-failure handling,
+  shared cancellation and provenance for every advertised join/operator;
+- use the simplest proven bounded strategy; broader operators, temp-table/Bloom
+  reducers and research spill optimizations stay post-1.0 unless required by an
+  advertised feature; admit source/backend/shape cells through the public profile.
 
 QA gate:
 
 - every released source-count/shape differential equals a trusted materialized
   reference under its admitted failure schedules;
 - coordinator retained state obeys the M1 caps independently of source size;
-- reducers prove exact selective and skip-if-unselective behavior; comparative
+- any implemented reducers prove exactness and safe bypass; comparative
   transfer-efficiency qualification remains post-1.0;
 - cancellation reaches every source and spill artifact; no partial result is
   labeled successful.
@@ -422,21 +426,23 @@ renamed complete; they remain post-1.0.
 ADR-0037 remains available as the engineering control plane, but ADR-0055
 governs its v1 use:
 
-1. One integration owner maintains one canonical integration branch.
-2. At most two writers use isolated, non-overlapping worktrees from its exact
-   head. Read-only review and test processes may still run in parallel.
-3. Each commit runs focused affected gates. Shared contracts, dependencies,
-   security enforcement, uncertain impact, and failed selectors escalate to the
-   integrated gate.
-4. Each completed slice runs the full locked workspace plus relevant feature,
-   live, generated, security/cache and federation evidence.
+1. One integration owner writes and commits directly on `main`; no new branches
+   or worktrees. Preserve unrelated changes and historical recovery refs.
+2. Native agents use normal edit/test loops; parallelize read-only investigation,
+   review or compatible tests, not shared writes. Closed experiments are optional.
+3. Each commit runs affected tests/builds; shared contracts, dependencies,
+   security, unknown impact or failed selection escalate to integrated gates.
+4. Meaningful public-feature integration boundaries run the full locked workspace
+   plus relevant live/security/cache/federation checks, not every micro-commit.
 5. The immutable release candidate runs all ADR-0055 gates and receives
    independent native Codex and Claude exact-delta review.
 
 Ruflo records coordination and evidence identity; deterministic Rust tests and
 release checks remain product authority. Native subscription transport only is
-permitted; OpenRouter and provider API-key fallback remain prohibited. Provider
-exhaustion is reported rather than bypassed.
+permitted; OpenRouter and provider API-key fallback remain prohibited. No subscription spend/token/request/invocation/quota ceiling is permitted.
+Native subscription/model unavailability pauses execution with its exact error.
+ADR-0055 defines task-based model allocation, unchanged Astra max/ultra and
+native-default effort when omitted; the main model is never downgraded.
 
 Historical harness receipts remain valid for their exact claims. MetaHarness V7,
 Darwin/GEPA, AVO, generic score improvement and retrieval-policy evolution are

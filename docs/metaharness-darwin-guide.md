@@ -1,5 +1,7 @@
 # Using metaharness + Darwin Mode to develop a port
 
+> **Historical external example; reviewed 2026-09-07.** This is not Semantic Fabric's build plan. [ADR-0037](adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md) and [ADR-0055](adr/ADR-0055-v1-product-completion-and-release-profile.md) govern this repository: native edit/test loops, one writer on `main`, and no Darwin/GEPA/AVO or retrieval tuning during v1 completion. Do not execute the illustrative prompts/commands below here.
+
 How to use `metaharness` and `@metaharness/darwin` ("freeze the model, evolve the harness")
 to drive a code port, following the pattern rUv (metaharness's author) demonstrated live
 porting Python `PixelRAG` to Rust on `ruvector`.
@@ -7,9 +9,9 @@ porting Python `PixelRAG` to Rust on `ruvector`.
 **The one thing to internalize first:** in the demo, rUv never runs a `darwin` command in a
 shell. He works inside a Claude Code session (in the target repo) and gives the *agent*
 plain-English instructions — "use `@metaharness/darwin` to evolve the code to the best
-possible arch." The agent orchestrates the tooling. That is the primary workflow. The
-`npm run evolve` shell command exists and is documented, but it's the mechanism the agent
-uses, not the thing you type by hand.
+possible arch." The agent orchestrates the tooling in that external example.
+Its illustrative `npm run evolve` command is not provided by this repository;
+Semantic Fabric's harness deliberately has no evolution command.
 
 ---
 

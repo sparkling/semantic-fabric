@@ -10,7 +10,7 @@ implements: []
 ---
 # SOTA application-completion programme
 
-> **Status (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) supersedes this record as v1 completion authority. Its implementation facts remain evidence; work moved to post-1.0 remains open, not complete.
+> **Status (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) supersedes this record as v1 completion authority. The old score, worktree and blanket-gate instructions below are historical, not active delivery rules. Dated implementation facts remain evidence; work moved to post-1.0 remains open, not complete.
 
 ## Context and problem statement
 
@@ -41,7 +41,7 @@ production and evidence layers already anticipated by accepted ADRs.
 SPARQL 1.2 Query and Protocol were Working Drafts at this decision date, so a
 timeless “full SPARQL 1.2” claim is unstable; R2RML is the stable baseline.
 
-## Decision
+## Historical decision (superseded by ADR-0055)
 
 Adopt the issue-independent programme in
 [`docs/plans/sota-application-completion-programme.md`](../plans/sota-application-completion-programme.md)

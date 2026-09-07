@@ -2,6 +2,7 @@
 status: accepted
 date: 2026-07-07
 ratified: 2026-07-07
+updated: 2026-09-07
 tags: [ontop-parity, residue-closure, correctness, feature-completeness, cosmetic, charter, sound-501, =_bag, deferral]
 supersedes: []
 depends-on:
@@ -215,15 +216,17 @@ The `left_join_*` / `not_exists_cond_for` machinery — the most sensitive tier-
 
 ## Recommended Sequencing
 
+**Execution amendment (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) controls the active v1 queue. The historical estimates in this record are not current delivery forecasts. Cosmetic SQL-shape parity is post-1.0; correctness and advertised capabilities remain product requirements. All new writes are serialized on `main`.
+
 1. **Tier 1 first (correctness risk).** Both bugs are genuine ADR-0007 violations; neither is optional. Tier 1 execution should be a dedicated session.
 2. **Tier 2 — revised by the Ontop dossier (2026-07-07, `docs/research/ontop-optimizer-dossier.md`).** The dossier grounds each gap in Ontop's actual source and reshapes the plan:
    - **Gaps 2, 4, 5 collapse into ONE milestone.** All three reduce to a single missing primitive — "pool N UNION branches into one derived table with proven cross-arm compatibility" — which sf already has one narrow working instance of (`try_sql_group_over_union`). Generalizing that into `lower_as_subplan`'s multi-branch path likely closes all three at once (gap 4 grouping-over-path falls out for free once paths are SubPlan-lowerable; gap 5's real fix is fewer shapes reaching `rust_group`, not a new evaluator). Do this milestone first.
    - **Gap 3 (COUNT DISTINCT *)** next — small, self-contained lowering change; note Ontop itself has a *live bug* here (silently drops DISTINCT), so sf's `SELECT DISTINCT`+`COUNT(*)` rewrite is original and more correct than the reference.
    - **Gap 1 (path-in-EXISTS)** last, and reframed as **original work, not a port** — Ontop has no general recursive-path support (only a hard-coded `rdfs:subClassOf*` TBox closure; no `WITH RECURSIVE` anywhere), so sf is already ahead of Ontop here. Largest effort (CTE-aware `SqlCond`).
-3. **Tier 3 after tier-2 correctness is stable.** Waves can run in parallel on separate worktrees (one agent per wave), but shared commits must serial-gate:
-   - Agents working Waves 5/6 in parallel; open PRs simultaneously.
-   - Wave 7 PR waits for Waves 5/6 to merge.
-   - **Before Wave 7 merge:** mandatory adversarial review with the `not_exists_cond_for` match-removing-filter focus.
+3. **Tier 3 after v1, if separately selected.** Read-only analysis may run in parallel; one integration owner writes on `main` without extra branches/worktrees:
+   - Review Waves 5/6 independently, then implement and verify in dependency order.
+   - Wave 7 waits for the applicable Waves 5/6 dependencies.
+   - **Before Wave 7 acceptance:** mandatory adversarial review with the `not_exists_cond_for` match-removing-filter focus.
 
 ---
 
@@ -242,12 +245,12 @@ The `left_join_*` / `not_exists_cond_for` machinery — the most sensitive tier-
 **Good:**
 - Tier 1 work is scoped and gated; no surprise regressions once fixed.
 - Tier 2 items each have a proven architectural blocker; no "just implement it harder" surprises.
-- Tier 3 is parallelizable and cosmetic; can proceed in parallel to new features without correctness risk.
+- Tier 3 is cosmetic and remains post-1.0; SQL-shape rewrites still carry correctness risk.
 
 **Bad/Cost:**
 - Tier 1 bugs touch hot-path machinery (every query uses InnerJoin/OPTIONAL); fixes require surgical adversarial review and carry risk if the review misses an angle.
 - Tier 2 items are each M1–M3 milestones; no quick wins in feature completeness.
-- Tier 3 work is 27 rewrites, not one; requires coordination across multiple agents/worktrees.
+- Tier 3's historical inventory has 27 rewrites, not one; it must not delay v1 or create parallel writing worktrees.
 
 **Neutral:**
 - The ADR-0007 =_bag rule is preserved throughout all tiers.

@@ -1,8 +1,9 @@
 # semantic-fabric coding harness
 
-Private, development-only control plane for verified repository changes. It
-coordinates native Codex/ChatGPT and Claude Code subscriptions, but direct
-repository evaluators decide whether a candidate passes.
+Optional, private development-only closed-candidate experiment. Native
+Codex/ChatGPT and Claude Code agents normally use direct edit/test loops under
+[ADR-0055](../docs/adr/ADR-0055-v1-product-completion-and-release-profile.md);
+this harness is not the default builder or a per-commit delivery gate.
 
 All Node/TypeScript here—including the historically named
 `supervisor-service/` package—is non-deployable evidence/oracle infrastructure.
@@ -16,6 +17,7 @@ owner.
 ## Local verification
 
 ```bash
+umask 0022
 npm ci
 npm run build
 npm test
@@ -27,7 +29,12 @@ keys, ambient proxy variables, base-URL overrides, OpenRouter, and Requesty are
 rejected. The controller injects only a loopback CONNECT endpoint backed by its
 exact-origin Unix-socket broker.
 
-## Transaction
+## Historical closed transaction
+
+This describes the implemented experiment, not permission to run its legacy
+worktree-creating launchers. Current work has one writer on `main`, with no new
+branches/worktrees. Keep the experiment's isolation checks intact; do not
+retrofit or expand it merely to finish the product.
 
 ```text
 frozen baseline + evaluator worktrees
@@ -57,9 +64,16 @@ result can be accepted, and execution failure revokes active broker sessions.
 Native subscription invocations have no project-imposed provider-dollar spend
 ceiling. `subscriptionCostUsd: 0` records zero marginal provider-API charge in
 the receipt/routing ledger; it is neither a budget or cap nor a claim of
-unlimited subscription capacity. Task, turn, time, output, concurrency,
-first-party rate-limit backoff, retry/repair, resource, and receipt limits remain
-operational safety controls.
+unlimited subscription capacity. No subscription cost, token, request,
+invocation or quota ceiling is permitted. Experimental time/output/resource
+controls do not authorize quota-based routing or execution after native failure.
+
+`NativeModelCandidate.reasoningEffort` optionally forwards Codex `low`, `medium`,
+`high`, `xhigh`, `max` or `ultra` unchanged. Astra max and ultra are available;
+absence uses the native default, not implementation-high/review-low overrides.
+Use distinct candidate IDs for distinct model/effort configurations. See
+ADR-0055 for task-based allocation. Unknown effort fails input validation;
+native subscription/model unavailability pauses with the exact client error.
 
 ## Main modules
 
@@ -203,8 +217,8 @@ the live daemon; that must be rechecked after each restart. H0c execution and
 ordinary verified-outcome persistence do not opt into this flywheel.
 
 The explicit Ruflo evaluation path is model-call-free, local, and
-evaluation-only. It currently no-ops because the flywheel-visible neural store
-has no eligible patterns; legacy counters and ReasoningBank data are a different
+evaluation-only. At the dated 2026-08-28 check it no-opped because the visible
+neural store had no eligible patterns; legacy counters and ReasoningBank are a different
 store. Eight owner-visible records, four harvestable records, and a pinned
 non-fallback embedding provider are only the threshold to begin evaluation, not
 production readiness. If a future trial emits a signed receipt, replay verifies

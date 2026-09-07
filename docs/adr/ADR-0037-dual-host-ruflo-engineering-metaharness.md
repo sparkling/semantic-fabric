@@ -13,7 +13,7 @@ implements: []
 
 # Dual-host Ruflo engineering MetaHarness
 
-> **V1 execution amendment (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) retains this control plane but replaces blanket per-commit transactions with focused commit gates and full integrated/release gates; harness evolution moves to post-1.0.
+> **V1 execution amendment (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) makes native Codex/Claude edit/test loops the normal builder, with one writer on `main` and proportional validation. The closed candidate transaction and its rubric below describe an optional, historically qualified experiment, not a per-task delivery gate. Worktree-creating launchers must not run under the current main-only rule; evolution remains post-1.0.
 
 ## Context and problem statement
 
@@ -38,13 +38,13 @@ differential, security, mutation, or live-source evidence.
 
 ## Decision
 
-Upgrade the versioned `coding-harness/` in place into a private, development-
-only engineering control plane. It returns a patch and evidence; it has no
+Retain the implemented `coding-harness/` as an optional private, development-
+only experiment. It returns a patch and evidence; it has no
 product-runtime, commit, merge, push, publish, deploy, or promotion authority.
 
 ### 1. Runtime and orchestration
 
-Use the current `@metaharness/harness` runtime, including:
+The closed experiment uses the pinned `@metaharness/harness` runtime, including:
 
 - `HarnessKernel`, `AlgorithmRouter`, a persistent run-scoped `AgentPool`,
   `PolicyGate`, and `VerifierRegistry`;
@@ -68,9 +68,9 @@ evaluation epoch. `subscriptionCostUsd: 0` records zero marginal provider-API
 charge in the receipt/routing ledger; it is neither a budget or cap nor a claim
 of unlimited subscription capacity. Native subscription invocations have no
 project-imposed provider-dollar spend ceiling, and no fabricated token price is
-supplied to force a route. Task, turn, time, output, concurrency, first-party
-rate-limit backoff, retry/repair, resource, and receipt limits remain operational
-safety controls.
+supplied to force a route. Elapsed-time, output, concurrency, resource and receipt
+limits are experimental safety controls, never subscription cost/token/request/
+invocation/quota ceilings. Native subscription failure pauses with the exact error.
 
 Logical workers retain route, breaker, and outcome state for a run. Individual
 model invocations are ephemeral so task context and credentials do not leak
@@ -91,8 +91,9 @@ its own loopback CONNECT endpoint, backed by an exact-origin Unix-socket broker,
 as the enforcement mechanism; it is not a provider route or fallback. OpenRouter,
 Requesty, and any indirect gateway are prohibited for execution, routing,
 fallback, retry, or mutation.
-Hard decisions require distinct-host proposals and independent cross-vendor
-review; absence of either host fails closed.
+Release review requires distinct native hosts; routine edits do not require
+dual proposals or a closed transaction. Explicit Codex effort passes through
+unchanged, including Astra `max` and `ultra`; no effort means the native default.
 
 CI uses fake native executables and never calls a model provider.
 
@@ -107,7 +108,7 @@ does not claim that native isolation ran.
 
 ### 3. Candidate transaction
 
-Every task follows this dependency graph:
+The historical closed experiment follows this graph, not the normal v1 builder:
 
 ```text
 prepare isolated worktrees and frozen evaluator
@@ -142,8 +143,8 @@ an accepted envelope, and provider-free replay verifies it.
 
 ### 4. Policy and isolation
 
-Each writer owns one branch and worktree; a single integration owner applies
-accepted patches in dependency order. The task contract contains exact mutable
+One integration owner writes directly on `main`; only read-only work runs in
+parallel. Historical recovery refs remain read-only. The task contract contains exact mutable
 paths and protects at least:
 
 - evaluator tests, sealed fixtures, standards expected results, and oracle law;
@@ -154,22 +155,21 @@ paths and protects at least:
 Reject traversal, symlinks/hardlinks that escape the worktree, shell
 metacharacters in structured command fields, undeclared tools, oversized
 output, and newly created files over 500 lines. Deterministic stages execute
-structured argv without a shell. Model tools are read/edit oriented with no
-browser, arbitrary network, nested agents, or MCP control. Native clients may
-reach only their first-party services; candidate tools remain offline except
-for a separately authorized dependency-resolution stage.
+structured argv without a shell. Closed model invocations emit structured
+proposals/patches with tools disabled; normal native builders keep their tools
+outside this experiment. Closed clients reach first-party services only, and
+candidate verification stays offline except authorized dependency resolution.
 
 ### 5. Ruflo coordination ledger
 
 Ruflo coordinates rather than writes product code:
 
-- hierarchical, specialized swarm topology with explicit Raft consensus at the
-  hive/decision layer;
-- persistent agent/task records, dependencies, health, and trace identifiers;
+- the smallest needed structure: independent one-shot readers need no swarm;
+- tracked handoffs use live MCP swarm/agent records, dependencies and health;
 - project and user memory search before work, task/model routing hooks before
   dispatch, verified outcomes after completion, and reusable pattern storage;
-- named researcher/architect, writer, tester, security, and independent-review
-  roles mapped to isolated worktrees and native host invocations.
+- named reader/reviewer roles use native hosts; one integration owner writes
+  on `main`, with no extra branches or worktrees.
 
 No metered Ruflo provider executor is used. Ruflo identifiers and route/outcome
 records are bound into the receipt but remain coordination evidence, not proof
@@ -258,8 +258,8 @@ is a protected task input, and the programme envelope must match its receipt
 digest before deriving diagnostic status. A literal score or hard-constraint
 claim embedded only in controller code is not evidence.
 
-Darwin/GEPA is ineligible until at least five discriminating training tasks and
-five sealed holdouts exist. Task IDs are opaque; evaluator law, thresholds,
+Darwin/GEPA is post-1.0 only; a future authorized experiment also needs at least
+five discriminating training tasks and five sealed holdouts. Task IDs are opaque; evaluator law, thresholds,
 authority, and holdout truth stay outside the genome. Models and route snapshots
 are frozen for comparison. Promotion requires held-out improvement with no
 safety or regression loss; otherwise the seed remains.
@@ -269,7 +269,7 @@ and tool policy remain outside the mutation surface and every promotion signal.
 Each evolution receipt includes a reward-hack scan; a candidate correlated with
 diagnostic score manipulation is rejected.
 
-AVO is eligible only for a named hard-tail with several plausible strategies,
+AVO is post-1.0 only, then eligible for a named hard-tail with several plausible strategies,
 a reliable independent evaluator, and ordinary repair unable to decide. It uses
 copied workspaces, protected inputs, bounded actions/time/invocations, and stops
 at an independently verified winner or honest null. Routine #8, #9, #10, and #6
@@ -343,8 +343,8 @@ daemon path “provably” promotes winners.
 
 ## Acceptance
 
-Harness-programme acceptance requires every hard gate below and at least 98/100
-on this project-owned, seven-dimension evidence rubric:
+Historical closed-experiment acceptance requires every hard gate and ≥98/100
+on this frozen rubric; it is not an application-completion or routine-build gate:
 
 | Dimension | Points | Hard evidence |
 |---|---:|---|
@@ -474,10 +474,10 @@ A fixed-seed 2×1 Darwin Shield run passed only 9/12 gates; evolution stays disa
 
 - Good: hard changes receive parallel, independent native-host reasoning while
   deterministic repository evidence retains final authority.
-- Good: verifier ordering, worktree isolation, policy gates, and receipts make
+- Good: experiment isolation, verifier ordering, policy gates, and receipts make
   repair reproducible and auditable.
-- Good: evolution and search activate only when their evaluators can distinguish
-  real semantic-fabric quality.
+- Good: evolution/search remain disabled in v1; later experiments require
+  separate authorization and discriminating evaluators.
 - Cost: secure native execution adds systemd, mount-namespace, broker, frozen
   dependency-closure, and independent-evidence complexity and latency.
 - Neutral: nothing in this ADR changes an `sf-*` runtime dependency or grants
@@ -487,8 +487,8 @@ A fixed-seed 2×1 Darwin Shield run passed only 9/12 gates; evolution stays disa
 
 - **R1** — no product runtime crate depends on a harness, Darwin genome,
   Agentic-QE, or provider-specific development artifact.
-- **R2** — no real evolution run executes in CI, a scheduler, or a background
-  worker; no evolution command exists before the 5+5 eligibility gate.
+- **R2** — no evolution runs in the v1 programme, CI, scheduler or background
+  worker; post-1.0 authorization and the 5+5 gate are both necessary, not sufficient.
 - **R3** — no aggregate, synthetic, diagnostic, or model score overrides a
   failed product oracle or enters an evolution fitness signal.
 - **R4** — no publication, API-key-backed provider transport, or harness

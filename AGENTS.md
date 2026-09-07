@@ -41,7 +41,7 @@ Use the smallest capable structure derived from dependency edges, shared-state r
 - Independent one-shot native agents need no Ruflo swarm.
 - For persistent topology, shared memory, or tracked handoffs, discover the live schemas, call `swarm_init`, then register each worker with `agent_spawn({agentType: "...", agentId: "..."})`.
 - A tracked record does not launch a native Claude/Codex agent; launch the matching executor separately.
-- Give every writer an isolated worktree and non-overlapping ownership; name one integration owner.
+- Use exactly one integration writer on canonical `main`. Never create/switch branches or worktrees; historical recovery refs are read-only integration inputs.
 - Read-only research may run concurrently. Continue independent work after spawning and wait only on a real dependency.
 - Role strings such as `researcher`, `architect`, `coder`, and `reviewer` are labels, not proof of a specialized runtime.
 
@@ -101,6 +101,7 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`.
 ## Build & Test
 
 - ALWAYS run tests after code changes; ALWAYS verify the build before committing
+- Follow ADR-0055: focused affected tests/builds per coherent commit; full workspace checks at meaningful public-feature integration boundaries and release. Repeat broad checks only for changed code, failures, unknown impact or unresolved risk.
 - The product runtime and every deployable dependency are Rust/Cargo artefacts
 - Node/npm is development and evidence infrastructure only; run it only for a
   changed package under `coding-harness/` or another explicitly non-deployable
@@ -113,6 +114,17 @@ cargo build --workspace --locked
 ```
 
 ## Codex platform notes
+
+### Delivery execution (ADR-0055, updated 2026-09-07)
+
+- Native Codex/Claude subscription agents build with their normal edit/test tools. Ruflo is the MCP coordination/memory ledger. The closed experimental candidate harness is optional, never the default builder or a per-commit gate.
+- Finish integration and public request behavior before starting another foundation. Count verified requirement closure, not commits, tests, scores, reviews or receipts alone.
+- Preserve the selected main model. Supporting tasks start with Luna/Haiku for bounded mechanical work, Terra for established patterns, Sol/Sonnet for ordinary implementation, Astra/Opus for difficult reasoning, and Fable for exceptional hard work.
+- Astra `max` and `ultra` are supported choices. Forward explicit effort unchanged; never clamp it based on an obsolete adapter or silently substitute a model. Use stronger effort for demonstrated task difficulty, not as a blanket default.
+- Native subscription authentication only: no API keys, OpenRouter, or spend/token/request/invocation/quota budgets. If the native subscription/requested model is unavailable, pause model execution and report the exact client, model and error.
+- Do not expand Darwin/GEPA/AVO, retrieval tuning, benchmark trains or release research during v1 completion. Required security, exactness, boundedness, lifecycle, federation and minimum release checks remain blockers.
+- Use the tracked six-hour prompt at `docs/plans/programme-six-hour-review-prompt.md`. Scheduled delivery queues into the existing conversation; never launch a competing writer/resume. A missed outcome requires a concrete course correction and an evidence-based forecast.
+- Update affected living ADR status/date and docs in the same verified slice. Commit only scoped changes on `main`; push, tag, deploy or publish only when the current task explicitly authorizes it.
 
 - **Skill syntax**: invoke skills with `$skill-name`. (Claude Code uses `/skill-name`; see `CLAUDE.md`.)
 - **Execution model**: `claude-flow` = LEDGER (coordinates memory, routing, swarm state); **Codex = EXECUTOR** (writes code, runs tests, creates files). Coordination commands return instantly, so DON'T STOP after them; continue immediately with the next implementation step.

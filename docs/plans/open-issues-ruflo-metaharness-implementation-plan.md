@@ -1,14 +1,16 @@
 ---
 status: executed-acceptance-rejected
 date: 2026-08-25
-updated: 2026-08-26
+updated: 2026-09-07
 owners: [integration-owner, query-semantics, dependency-governance, harness-control-plane]
 decisions: [ADR-0010, ADR-0024, ADR-0035, ADR-0036, ADR-0037]
 ---
 
 # Open-issue remediation with a dual-host Ruflo MetaHarness
 
-## Outcome
+> **Historical plan; not the active queue (2026-09-07).** The dated issue outcomes and rejected acceptance result below remain unchanged. [ADR-0055](../adr/ADR-0055-v1-product-completion-and-release-profile.md) and the [application programme](sota-application-completion-programme.md) now govern delivery: one integration writer on `main`, native builders and proportional checks. The old branches/worktrees, phase sequence, dual-proposal rules and ≥98 harness rubric below are historical experiment instructions, not current application gates. No GitHub issue or PR supplies the current backlog; no new worktree, harness expansion or evolution is authorized here.
+
+## Historical outcome
 
 Deliver the wrong-result fixes in issues #8 and #9, the dependency unblock in
 #10, and evidence-backed dispositions for #7 and #6. Build the versioned
@@ -156,7 +158,7 @@ its exact-origin Unix-socket broker. If either native host is unavailable,
 cross-vendor gates fail closed; there is no OpenRouter, gateway, provider-API,
 or same-vendor substitute.
 
-### Worktree and writer map
+### Historical worktree and writer map (do not recreate)
 
 | Lane | Branch/worktree | Mutable scope | Serialization |
 |---|---|---|---|
@@ -168,9 +170,9 @@ or same-vendor substitute.
 | C connectors | `design/cloud-providers` | read-only evaluator/design first | Product writes wait for Q/D gates and a provider ADR. |
 | M materialization | `design/nova-sink` | consumer reproducer/spec first | No API write until a focused red test exists. |
 
-Use detached candidate and verifier worktrees pinned to exact commits. Evaluator
-inputs are protected and overlaid only into the verifier transaction. A single
-integration owner stages scoped paths and preserves every unrelated change.
+The historical transaction used detached candidate/verifier worktrees and
+protected overlays. Those refs are recovery evidence only. Current changes are
+made by one integration owner directly on `main`, preserving unrelated work.
 
 ## SPARC delivery phases
 
@@ -424,8 +426,8 @@ Commit each verified slice immediately with conventional messages, for example:
 5. `fix(r2rml): unify graph-map query semantics`
 6. `chore(deps): upgrade rusqlite to 0.40.2`
 
-The evaluator may be a protected red branch during the transaction, but the
-integrated product commit includes its reviewed regression tests and passes.
+The historical experiment used protected evaluator refs; new regression tests
+are written and verified with the product change directly on `main`.
 Stage only task-owned paths. Never commit user/concurrent state, credentials,
 provider settings, generated sessions, or `.env` files. Commits do not authorize
 a push, merge, release, deployment, issue update, or publication.

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-30
-updated: 2026-09-01
+updated: 2026-09-07
 tags: [ontop-parity, ir, architecture, optimizer, operator-tree, iq, substitution-lifting, normalization, t-mappings, saturation, aggregation, charter]
 supersedes: []
 depends-on:
@@ -93,7 +93,7 @@ Built directly on a dedicated branch, correctness-gated continuously — **not**
 
 ### Confirmation
 
-* `=_bag` differential (PG↔SQLite) + W3C RDB2RDF floor (≥82/0) + `cargo clippy --all-targets -D warnings` + `cargo fmt --check` hold at every gate; every commit standalone-compiles.
+* **Execution amendment (2026-09-07):** every commit compiles and passes affected tests/formatting. IR/lowering changes require relevant `=_bag` differentials and standards gates; meaningful integrated product boundaries and release run the full locked workspace under [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md). A documentation-only edit does not rerun the entire IR programme. The IR decision and exactness invariant are unchanged.
 * The ported Ontop optimizer suite (ADR-0022 oracle + the per-class scenarios) and the SPARQL conformance/spareval differential are the parity measure; the GTFS benchmark confirms sf stays faster than Ontop @1× and @10× (no regression).
 * Parity is reported as honest fractions (oracle-green + intent-green / total; documented out-of-charter residue), never "100%".
 

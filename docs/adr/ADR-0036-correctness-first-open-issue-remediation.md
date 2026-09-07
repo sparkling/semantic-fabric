@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-26
+updated: 2026-09-07
 tags: [correctness, open-issues, r2rml, dependencies, cloud-backends, api]
 supersedes: []
 depends-on:
@@ -15,6 +15,8 @@ implements: []
 # Correctness-first remediation of open issues #6–#10
 
 ## Implementation status
+
+**Execution amendment (2026-09-07):** this issue-remediation record preserves its dated closure evidence; it is not the active application backlog. [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) now governs main-only integration, native builders and proportional verification. No current GitHub issue state is inferred from this historical record.
 
 **Accepted; product slices executed and external closure recorded.** The serialized correctness lane landed
 #8 as `10dedd4` and #9 as `5218874`; the parallel dependency lane landed the
@@ -88,10 +90,10 @@ evaluator authors are allowed; parallel writers to the same source are not.
 
 ### 2. Upgrade SQLite independently, after freezing the dependency baseline
 
-Issue #10 may proceed in an isolated worktree in parallel with #8. Before any
-manifest edit, the lane records PR #12's base and touched manifests, resolves a
-fresh isolated lock, and captures inverse dependency trees for `rusqlite`,
-`mysql_async`, and `lru`. The current ignored/stale lock is not evidence.
+The historical #10 lane reconciled PR #12 before dependency edits. New dependency
+work uses one writer on `main`, preserves unrelated changes, and verifies the
+locked resolution plus inverse dependency trees for affected packages. An
+ignored or stale lock is not evidence; no new writing worktree is authorized.
 
 The implementation centralizes the synchronized versions in workspace
 dependencies while preserving each crate's existing feature set. It does not
@@ -135,9 +137,9 @@ ADR/evaluator baselines
 provider to pass every protocol, security, streaming, and live-canary gate.
 ```
 
-Each writing lane uses its own branch and worktree. A single integration owner
-accepts digest-bound patches in dependency order. No two writers share a
-worktree.
+One integration owner writes and commits on `main` in dependency order. Read-only
+research and review may run concurrently. Historical branches/worktrees are
+recovery evidence only, never a route for new development.
 
 ## Acceptance
 
