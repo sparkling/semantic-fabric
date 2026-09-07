@@ -66,8 +66,7 @@ pub(super) async fn respond_select(
             stream::select_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec_mysql::select_each_mysql_controlled(&plan, conn, &drive_budget, sink)
-                            .await
+                        crate::mysql_query::select(&plan, conn, &drive_budget, sink).await
                     })
                 },
                 fmt,
@@ -136,7 +135,7 @@ pub(super) async fn respond_ask(
             };
             let task_budget = budget.clone();
             let run = deadline::spawn_request_task(async move {
-                exec_mysql::ask_each_mysql_controlled(&plan, conn, &task_budget).await
+                crate::mysql_query::ask(&plan, conn, &task_budget).await
             });
             match deadline::join_task(budget.clone(), run).await {
                 Err(JoinedTaskError::Control(error)) => {
@@ -229,13 +228,7 @@ pub(super) async fn respond_construct(
             stream::construct_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec_mysql::construct_each_mysql_controlled(
-                            &plan,
-                            conn,
-                            &drive_budget,
-                            sink,
-                        )
-                        .await
+                        crate::mysql_query::construct(&plan, conn, &drive_budget, sink).await
                     })
                 },
                 fmt,

@@ -50,6 +50,7 @@ mod health;
 mod http;
 mod lifecycle;
 mod metrics;
+mod mysql_query;
 mod observed_source;
 mod pg_direct_lifecycle;
 mod pg_generation;

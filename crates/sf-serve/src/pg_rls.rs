@@ -125,7 +125,7 @@ impl PgRlsLease {
     pub(crate) async fn finish(self) -> sf_sparql::Result<()> {
         if Arc::strong_count(&self.0) == 1
             && matches!(
-                tokio::time::timeout(Duration::from_secs(2), self.0.batch_execute("ROLLBACK"))
+                tokio::time::timeout(Duration::from_secs(2), self.0.batch_execute("ROLLBACK; RESET statement_timeout; RESET idle_in_transaction_session_timeout"))
                     .await,
                 Ok(Ok(()))
             )

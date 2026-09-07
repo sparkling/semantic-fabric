@@ -75,7 +75,11 @@ impl DirtyGeneration {
     ) -> Result<Self, PgGenerationError> {
         let object = budget.run(pool.get()).await?.map_err(map_pool_error)?;
         let conn = budget
-            .run(PgConn::checked(object, pool.tls.clone()))
+            .run(PgConn::checked_for_request(
+                object,
+                pool.tls.clone(),
+                budget.clone(),
+            ))
             .await?
             .map_err(|_| PgGenerationError::SourceUnavailable)?;
         conn.mark_generation_dirty();

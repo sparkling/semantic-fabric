@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::response::Response;
 use sf_core::query_control::QueryControl;
-use sf_sparql::{exec, exec_mysql, exec_pg, Plan};
+use sf_sparql::{exec, exec_pg, Plan};
 use sparesults::QueryResultsFormat;
 
 use crate::backend::PgConn;
@@ -42,7 +42,7 @@ enum AcquiredFragment {
         plan: Arc<Plan>,
     },
     MySql {
-        connection: mysql_async::Conn,
+        connection: crate::mysql_query::MysqlQuery,
         plan: Arc<Plan>,
     },
 }
@@ -183,15 +183,22 @@ async fn drive(
             exec::select_each_sqlite_owned_interruptible_leased(&plan, lease, control, sink).await
         }
         AcquiredFragment::Postgres { connection, plan } => {
-            exec_pg::select_each_pg_controlled(&plan, *connection, control.as_ref(), sink).await
+            let conn = Arc::new(*connection);
+            let result = exec_pg::select_each_pg_controlled(
+                &plan,
+                crate::backend::PgQueryClient(conn.clone()),
+                control.as_ref(),
+                sink,
+            )
+            .await;
+            conn.finish_result(result, budget).await
         }
         AcquiredFragment::VerifiedPostgres { lease, plan } => lease
             .select_each_with_control(&plan, budget, control.as_ref(), sink)
             .await
             .map_err(|_| sf_sparql::Error::Sql("verified generation close failed".into()))?,
         AcquiredFragment::MySql { connection, plan } => {
-            exec_mysql::select_each_mysql_controlled(&plan, connection, control.as_ref(), sink)
-                .await
+            crate::mysql_query::select(&plan, connection, control.as_ref(), sink).await
         }
     }
 }

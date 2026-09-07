@@ -9,7 +9,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use sf_core::query_control::{QueryCharge, QueryControl};
-use sf_sparql::{exec, exec_mysql, Plan, PlanForm};
+use sf_sparql::{exec, Plan, PlanForm};
 
 use crate::activation::RuntimeSnapshotLease;
 use crate::admission;

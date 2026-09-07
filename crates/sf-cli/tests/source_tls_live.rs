@@ -1,5 +1,7 @@
 //! Required live TLS qualification, always using test-owned disposable providers.
 #![cfg(unix)]
+#[path = "source_tls_live/cancellation.rs"]
+mod cancellation;
 #[path = "source_tls_live/join.rs"]
 mod join;
 #[path = "source_tls_live/reload.rs"]
@@ -252,6 +254,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
             "mysql-reloaded"
         };
         reload::assert_reloads(&fixture, database, None, &[expected]);
+        cancellation::assert_native_stop(&fixture, database, std::ptr::eq(database, &postgres));
         let (mut wrong_ca, address) = command(&fixture, database, None);
         wrong_ca.env(
             "SF_TLS_ROOTS",

@@ -7,6 +7,7 @@ use axum::response::Response;
 use sf_sparql::{exec_pg, Plan};
 use sparesults::QueryResultsFormat;
 
+use crate::backend::PgQueryClient;
 use crate::budget::RequestBudget;
 use crate::pg_generation::{PgGenerationError, VerifiedPostgresGenerationLease};
 use crate::problem::{self, ProblemCode};
@@ -54,11 +55,18 @@ pub(crate) async fn select(
             budget,
         )
     } else {
-        let conn = crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?;
+        let conn = Arc::new(crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?);
         stream::select_body_streaming_controlled(
             move |sink| {
                 Box::pin(async move {
-                    exec_pg::select_each_pg_controlled(&plan, conn, &drive_budget, sink).await
+                    let result = exec_pg::select_each_pg_controlled(
+                        &plan,
+                        PgQueryClient(conn.clone()),
+                        &drive_budget,
+                        sink,
+                    )
+                    .await;
+                    conn.finish_result(result, &drive_budget).await
                 })
             },
             format,
@@ -96,9 +104,13 @@ pub(crate) async fn ask(
             .map_err(|_| problem::response_with_retry_after(ProblemCode::SourceUnavailable))?;
         return result.map_err(problem::response_for_control);
     }
-    let conn = crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?;
+    let conn = Arc::new(crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?);
     budget
-        .run(exec_pg::ask_pg_controlled(&plan, conn, &budget))
+        .run(async {
+            let result =
+                exec_pg::ask_pg_controlled(&plan, PgQueryClient(conn.clone()), &budget).await;
+            conn.finish_result(result, &budget).await
+        })
         .await
         .map_err(problem::response_for_control)
 }
@@ -142,11 +154,18 @@ pub(crate) async fn construct(
             budget,
         )
     } else {
-        let conn = crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?;
+        let conn = Arc::new(crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?);
         stream::construct_body_streaming_controlled(
             move |sink| {
                 Box::pin(async move {
-                    exec_pg::construct_each_pg_controlled(&plan, conn, &drive_budget, sink).await
+                    let result = exec_pg::construct_each_pg_controlled(
+                        &plan,
+                        PgQueryClient(conn.clone()),
+                        &drive_budget,
+                        sink,
+                    )
+                    .await;
+                    conn.finish_result(result, &drive_budget).await
                 })
             },
             format,

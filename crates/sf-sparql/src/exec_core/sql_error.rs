@@ -9,6 +9,14 @@ pub(super) fn map_sql_err(e: sf_sql::Error) -> Error {
     // `sf_sparql::Error::Unsupported` directly from `pg_value` (never `Sql`).
     let e = match e {
         sf_sql::Error::QueryControl(error) => return Error::QueryControl(error),
+        sf_sql::Error::Mysql(mysql_async::Error::Server(error)) if error.code == 3024 => {
+            // ER_QUERY_TIMEOUT identifies the server's execution-time limit,
+            // including a stricter source policy than the HTTP deadline. Do not
+            // infer deadlines from SQL text or generic cancellation codes.
+            return Error::QueryControl(
+                sf_core::query_control::QueryControlError::DeadlineExceeded,
+            );
+        }
         sf_sql::Error::Unsupported(message) => return Error::Unsupported(message),
         other => other,
     };
@@ -20,4 +28,31 @@ pub(super) fn map_sql_err(e: sf_sql::Error) -> Error {
         src = s.source();
     }
     Error::Sql(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_mysql_timeout_stays_typed_without_reclassifying_other_errors() {
+        for code in [3024, 1317, 1064] {
+            let error =
+                sf_sql::Error::Mysql(mysql_async::Error::Server(mysql_async::ServerError {
+                    code,
+                    state: "HY000".into(),
+                    message: "redacted provider detail".into(),
+                }));
+            let mapped = map_sql_err(error);
+            if code == 3024 {
+                assert!(matches!(
+                    mapped,
+                    Error::QueryControl(
+                        sf_core::query_control::QueryControlError::DeadlineExceeded
+                    )
+                ));
+            } else {
+                assert!(matches!(mapped, Error::Sql(_)));
+            }
+        }
+    }
 }

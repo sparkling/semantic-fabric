@@ -199,6 +199,12 @@ async fn open_backend_inner(
             Ok(IntrospectedSource::observed_postgres(pool, snapshot))
         }
         PreparedSource::Mysql { options, label } => {
+            let options = crate::mysql_query::target_options(options).map_err(|error| {
+                ServeError::new(StartupCause::SourceConnect {
+                    spec: label.to_owned(),
+                    error: error.to_owned(),
+                })
+            })?;
             let pool = mysql_async::Pool::new(options);
             let mut conn = pool.get_conn().await.map_err(|error| {
                 ServeError::new(StartupCause::SourceConnect {

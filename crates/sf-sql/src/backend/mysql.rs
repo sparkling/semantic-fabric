@@ -104,6 +104,12 @@ pub struct MysqlBackend<C> {
 }
 
 impl<C: BorrowMut<Conn>> MysqlBackend<C> {
+    /// Return the owned connection holder after the executor releases its cursor.
+    /// Serving uses this to acknowledge cleanup before permitting pool reuse.
+    pub fn into_inner(self) -> C {
+        self.conn
+    }
+
     pub fn new(conn: C) -> Self {
         Self {
             conn,

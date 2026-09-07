@@ -65,7 +65,14 @@ async fn row(stream: &mut (impl AsyncWriteExt + Unpin)) {
     frame(stream, b'C', b"SELECT 1\0").await;
 }
 
-async fn pg_peer(listener: TcpListener, acceptor: TlsAcceptor) {
+async fn pg_peer(
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    pause: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+) {
     let (mut socket, _) = listener.accept().await.unwrap();
     assert_eq!(packet(&mut socket).await, 80877103u32.to_be_bytes());
     socket.write_all(b"S").await.unwrap();
@@ -99,6 +106,10 @@ async fn pg_peer(listener: TcpListener, acceptor: TlsAcceptor) {
         }
     }
     let (mut cancellation, _) = listener.accept().await.unwrap();
+    if let Some((ready, release)) = pause {
+        ready.send(()).unwrap();
+        let _ = release.await;
+    }
     assert_eq!(packet(&mut cancellation).await, 80877103u32.to_be_bytes());
     cancellation.write_all(b"S").await.unwrap();
     let mut cancellation = acceptor.accept(cancellation).await.unwrap();
@@ -110,11 +121,20 @@ async fn pg_peer(listener: TcpListener, acceptor: TlsAcceptor) {
 
 #[tokio::test]
 async fn trusted_query_and_dirty_connection_cancel_share_private_trust() {
+    checked_connection_cancel(true).await;
+}
+
+#[tokio::test]
+async fn ordinary_checked_connection_drop_cancels_before_pool_reuse() {
+    checked_connection_cancel(false).await;
+}
+
+async fn checked_connection_cancel(mark_generation: bool) {
     tokio::time::timeout(BOUND, async {
         let (certificate, acceptor) = identity("127.0.0.1");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let peer = tokio::spawn(pg_peer(listener, acceptor));
+        let peer = tokio::spawn(pg_peer(listener, acceptor, None));
         let mut config = format!(
             "host=127.0.0.1 port={} user=test sslmode=require",
             address.port()
@@ -133,10 +153,67 @@ async fn trusted_query_and_dirty_connection_cancel_share_private_trust() {
         let checked = crate::backend::PgConn::checked(connection, pool.tls.clone())
             .await
             .unwrap();
-        checked.mark_generation_dirty();
+        if mark_generation {
+            checked.mark_generation_dirty();
+        }
         drop(checked);
         peer.await.unwrap();
-        assert_eq!(pool.status().size, 0);
+        while pool.status().size != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn native_cancel_retains_request_and_pool_capacity_until_cleanup_ends() {
+    tokio::time::timeout(BOUND, async {
+        let (certificate, acceptor) = identity("127.0.0.1");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(pg_peer(listener, acceptor, Some((ready_tx, release_rx))));
+        let mut config = format!(
+            "host=127.0.0.1 port={} user=test sslmode=require",
+            address.port()
+        )
+        .parse()
+        .unwrap();
+        super::postgres(&mut config).unwrap();
+        let pool = crate::pg_pool::build_with_tls(
+            config,
+            1,
+            Duration::from_secs(1),
+            super::client_config(Some(&[certificate])).unwrap(),
+        )
+        .unwrap();
+        let admission = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut budget = crate::budget::RequestBudget::after(
+            BOUND,
+            sf_core::query_control::QueryLimits::new(100, 100, 100, 100),
+        );
+        budget
+            .retain_admission(admission.clone().acquire_owned().await.unwrap())
+            .unwrap();
+        let checked = crate::backend::PgConn::checked_for_request(
+            pool.get().await.unwrap(),
+            pool.tls.clone(),
+            budget,
+        )
+        .await
+        .unwrap();
+        drop(checked);
+        ready_rx.await.unwrap();
+        assert_eq!(admission.available_permits(), 0);
+        assert_eq!(pool.status().size, 1);
+        assert_eq!(pool.status().available, 0);
+        release_tx.send(()).unwrap();
+        peer.await.unwrap();
+        while pool.status().size != 0 || admission.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
     })
     .await
     .unwrap();

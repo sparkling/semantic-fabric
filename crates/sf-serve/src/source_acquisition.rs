@@ -10,11 +10,13 @@ use crate::problem::{self, ProblemCode};
 pub(crate) async fn acquire_mysql(
     pool: &mysql_async::Pool,
     budget: &RequestBudget,
-) -> Result<mysql_async::Conn, Response> {
+) -> Result<crate::mysql_query::MysqlQuery, Response> {
     match budget.run(pool.get_conn()).await {
         Err(error) => Err(problem::response_for_control(error)),
         Ok(Err(_)) => Err(problem::response(ProblemCode::SourceUnavailable)),
-        Ok(Ok(conn)) => Ok(conn),
+        Ok(Ok(conn)) => crate::mysql_query::MysqlQuery::acquire(conn, budget.clone())
+            .await
+            .map_err(|error| problem::response_for_sparql(&error)),
     }
 }
 
@@ -32,9 +34,21 @@ pub(crate) async fn acquire_pg(
         PoolError::Timeout(_) => problem::response_with_retry_after(ProblemCode::SourceUnavailable),
         _ => problem::response(ProblemCode::Internal),
     })?;
-    match budget.run(PgConn::checked(conn, pool.tls.clone())).await {
+    match budget
+        .run(PgConn::checked_for_request(
+            conn,
+            pool.tls.clone(),
+            budget.clone(),
+        ))
+        .await
+    {
         Err(error) => Err(problem::response_for_control(error)),
         Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
-        Ok(Ok(conn)) => Ok(conn),
+        Ok(Ok(conn)) => {
+            conn.bound_statement(&budget)
+                .await
+                .map_err(|error| problem::response_for_sparql(&error))?;
+            Ok(conn)
+        }
     }
 }

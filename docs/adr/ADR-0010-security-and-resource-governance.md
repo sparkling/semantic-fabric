@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-03
+updated: 2026-09-07
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -260,6 +260,42 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > or recursive-work accounting, raw/conformance governance, SQLite raw-mutex or
 > busy/UDF/VFS/I/O pre-emption, PostgreSQL/MySQL native cancellation, response
 > atomicity after `200`, per-request fairness, or production backend admission.
+
+### Native serving cancellation status (2026-09-07)
+
+Ordinary PostgreSQL and MySQL serving SELECT/ASK/CONSTRUCT and source fragments
+now own a dirty connection before query setup. Success requires an acknowledged
+drain/reset barrier before reuse; error, timeout and drop instead retain request
+capacity through a bounded native stop attempt, then discard the connection.
+PostgreSQL uses the pool's immutable TLS policy for CancelRequest (one-second
+allowance); transaction-local RLS/generation cleanup remains protected. MySQL
+uses a separate same-credential/TLS control connection (two seconds), not the
+possibly exhausted data pool. Unpredictable named locks pin target/control
+sessions; a missing, SQL-NULL or mismatched target witness refuses KILL. Only
+the driver's numeric ID is used and KILL is never retried. These are
+session-affine endpoint controls, not arbitrary multiplexing/failover-proxy
+qualification or an atomic check-and-KILL guarantee against external termination
+and ID reuse. Stop acknowledgements are not termination acknowledgements.
+
+The public MySQL pool excludes constructor queries/callbacks and supplies client
+settings before connection creation, avoiding an unowned settings-result drain
+on cancellation. Defaults are a 4 MiB packet limit and 30-second client idle TTL;
+explicit client settings are preserved. Neither is a server execution deadline.
+The control constructor has no settings queries or caller setup either. Dirty
+disconnect is polled before drop so the pinned driver's recycler discards rather
+than drains it, including an aborted/unpolled cleanup task. Raw caller-created
+embedding pools require separate constructor/recycler qualification.
+
+Native statement limits supplement the original absolute application deadline;
+MySQL retains a stricter existing SELECT execution limit and its native timeout
+code remains a typed pre-response 504. An unrelated SQL cancellation is not
+mislabelled deadline expiry. Required owned PostgreSQL 16.15/MySQL 8.4.11 TLS CLI
+tests observe server work stop after ASK timeout and SELECT/CONSTRUCT disconnect,
+then prove cap-one pool recovery; a stricter MySQL source timeout is also tested.
+Peer/unit tests cover retained capacity, nullable witnesses and setup exclusions.
+Protected PostgreSQL generation and public RLS isolation/cleanup tests still pass.
+Full forced-shutdown/federated/backend admission qualification, SQLite busy/UDF/
+VFS/I/O, total compiler/database/recursive work and post-200 atomicity remain open.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
