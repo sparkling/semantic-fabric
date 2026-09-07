@@ -316,6 +316,17 @@ jobs:
           test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
           cargo test --locked -p sf-serve --lib "$test_name" -- \
             --ignored --exact --test-threads=1 --nocapture
+      - name: test required-live PostgreSQL public row security
+        timeout-minutes: 5
+        env:
+          SF_PG_RLS_TEST_URL: "host=127.0.0.1 port=5432 user=sftest password=sftest dbname=sftest"
+        run: |
+          set -euo pipefail
+          test_name='pg_generation::live_tests::rls::public_row_security_is_isolated_and_cleans_pool'
+          listed="$(cargo test --locked -p sf-serve --lib "$test_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-serve --lib "$test_name" -- \
+            --ignored --exact --test-threads=1 --nocapture
       # DuckDB backend (embedded, `bundled` feature — no external service needed).
       # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
       # crate in the dependency graph turns it on, so these tests never ran in CI

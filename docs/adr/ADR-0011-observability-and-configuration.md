@@ -46,8 +46,10 @@ implements:
 >
 > ADR-0018's public bearer query-admission profile now emits the existing
 > payload-free `security.access_decision` allow/deny trace once per attempt;
-> credential material never enters its fields. A real-request capture test
-> verifies the path. Mask enforcement and paired access-decision metrics remain
+> credential material never enters its fields. Source-RLS profile rejection now
+> adds an actual `deny`; an earlier credential `allow` is not a row authorization
+> result. Real-request and source-denial capture tests verify these boundaries.
+> Mask enforcement and paired access-decision metrics remain
 > open; the three-family Prometheus contract is unchanged.
 >
 > **R1 is partial:** the root and current request/compiler boundaries are traced,

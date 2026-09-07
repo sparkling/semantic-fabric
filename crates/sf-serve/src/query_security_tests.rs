@@ -147,3 +147,40 @@ fn served_plan_cache_reuses_only_an_exact_security_partition() {
         assert!(!std::ptr::eq(first.plan(), miss.plan()));
     }
 }
+
+#[test]
+fn source_claims_partition_cache_identity_and_cannot_change_after_handoff() {
+    let claims = |tenant: &str| {
+        crate::PostgresRlsClaims::new(std::collections::BTreeMap::from([(
+            "app.tenant_id".into(),
+            tenant.into(),
+        )]))
+        .unwrap()
+    };
+    let profile = |tenant: &str| {
+        QueryAdmission::Bearer(
+            BearerQueryAdmission::for_service_principal(TOKEN)
+                .unwrap()
+                .with_postgres_rls(claims(tenant))
+                .unwrap(),
+        )
+    };
+    let a = profile("a");
+    let b = profile("b");
+    let ca = context(&a, TOKEN);
+    let cb = context(&b, TOKEN);
+    assert_eq!(ca.subject(), cb.subject());
+    assert_ne!(ca.request_attributes(), cb.request_attributes());
+    assert_ne!(ca.policy_snapshot(), cb.policy_snapshot());
+    let mut request = budget(Some(ca));
+    assert!(
+        a.validate(&request).is_err(),
+        "missing claims must reject even matching digest"
+    );
+    request.retain_postgres_rls(a.postgres_rls()).unwrap();
+    assert!(a.validate(&request).is_ok());
+    assert!(b.validate(&request).is_err());
+    let clone = request.clone();
+    assert!(request.retain_postgres_rls(b.postgres_rls()).is_err());
+    assert!(a.validate(&clone).is_ok());
+}

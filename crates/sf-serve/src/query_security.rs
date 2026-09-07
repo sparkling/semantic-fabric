@@ -1,4 +1,4 @@
-//! Query-level admission, not row-level ABAC, sensitivity enforcement or source RLS.
+//! Query admission and an optional explicit PostgreSQL source-RLS profile.
 use axum::http::{header, HeaderMap};
 use sf_core::security_context::{
     PolicySnapshotId, RequestAttributesIdentity, SecurityContext, SubjectIdentity,
@@ -19,7 +19,8 @@ pub enum QueryAdmission {
     Deny,
     /// Anyone may read all mapped data. Only for explicitly unprotected development.
     UnrestrictedDevelopment,
-    /// The configured service principal may read all mapped data. Not end-user identity.
+    /// Service principal, optionally restricted by explicit PostgreSQL RLS claims.
+    /// Without source RLS it may read all mapped data. Not end-user identity.
     Bearer(BearerQueryAdmission),
 }
 
@@ -28,6 +29,7 @@ pub enum QueryAdmission {
 pub struct BearerQueryAdmission {
     digest: [u8; 32],
     context: SecurityContext,
+    rls: Option<std::sync::Arc<crate::PostgresRlsClaims>>,
 }
 
 impl std::fmt::Debug for BearerQueryAdmission {
@@ -58,7 +60,30 @@ impl BearerQueryAdmission {
             RequestAttributesIdentity::from_digest(identity(b"sf-query-bearer-attributes-v1\0"))
                 .map_err(|_| configuration_error())?,
         );
-        Ok(Self { digest, context })
+        Ok(Self {
+            digest,
+            context,
+            rls: None,
+        })
+    }
+
+    /// Restrict this principal to database-enforced RLS on authored PostgreSQL
+    /// public base-table mappings. Other sources and logical SQL queries deny.
+    pub fn with_postgres_rls(
+        mut self,
+        claims: crate::PostgresRlsClaims,
+    ) -> Result<Self, ServeError> {
+        self.context = SecurityContext::new(
+            PolicySnapshotId::from_digest(claims.identity(&self.digest, b"sf-pg-rls-policy-v1\0"))
+                .map_err(|_| configuration_error())?,
+            self.context.subject(),
+            RequestAttributesIdentity::from_digest(
+                claims.identity(&self.digest, b"sf-pg-rls-attributes-v1\0"),
+            )
+            .map_err(|_| configuration_error())?,
+        );
+        self.rls = Some(std::sync::Arc::new(claims));
+        Ok(self)
     }
 
     /// Read a credential through an environment reference, never a literal CLI argument.
@@ -125,7 +150,8 @@ impl QueryAdmission {
             (Self::UnrestrictedDevelopment, None) => Ok(()),
             (Self::Bearer(profile), Some(context))
                 if context.matches_policy_snapshot(profile.context.policy_snapshot())
-                    && context == profile.context =>
+                    && context == profile.context
+                    && budget.postgres_rls() == profile.rls.as_ref() =>
             {
                 Ok(())
             }
@@ -136,6 +162,13 @@ impl QueryAdmission {
     pub(crate) fn policy(&self) -> Option<PolicySnapshotId> {
         match self {
             Self::Bearer(profile) => Some(profile.context.policy_snapshot()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn postgres_rls(&self) -> Option<std::sync::Arc<crate::PostgresRlsClaims>> {
+        match self {
+            Self::Bearer(profile) => profile.rls.clone(),
             _ => None,
         }
     }

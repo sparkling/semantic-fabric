@@ -162,3 +162,29 @@ fn access_decisions_emit_only_closed_payload_free_fields_on_the_m3_target() {
         assert_eq!(line["decision"], decision);
     }
 }
+
+#[test]
+fn source_rls_rejection_emits_a_real_deny_decision() {
+    let capture = Capture::default();
+    let dispatch = Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish(),
+    );
+    tracing::dispatcher::with_default(&dispatch, || {
+        assert_eq!(
+            crate::pg_rls::denied().status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+    });
+    let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    let events: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["event"], "security.access_decision");
+    assert_eq!(events[0]["decision"], "deny");
+}

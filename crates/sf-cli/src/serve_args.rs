@@ -11,9 +11,13 @@ use crate::telemetry::TelemetryLevel;
 #[derive(clap::Args)]
 pub(super) struct ServeArgs {
     /// Environment variable containing a random query bearer token (32–1024 bytes).
-    /// Its holder may read all mapped data; use TLS at the deployment edge.
+    /// Its holder may read all mapped data unless RLS is configured; use TLS at the edge.
     #[arg(long, conflicts_with = "allow_unauthenticated")]
     pub(super) auth_token_env: Option<String>,
+    /// Environment variable with trusted PostgreSQL RLS custom settings as a JSON object.
+    /// Requires authored public base-table mappings and an RLS-enforced reader role.
+    #[arg(long, requires = "auth_token_env")]
+    pub(super) pg_rls_context_env: Option<String>,
     /// Explicitly allow anyone to query all mapped data (development only).
     /// Without this or --auth-token-env, all query requests are denied.
     #[arg(long, default_value_t = false)]

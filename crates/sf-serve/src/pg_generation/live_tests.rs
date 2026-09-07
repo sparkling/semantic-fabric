@@ -24,6 +24,8 @@ mod fixture;
 mod lifecycle_profile;
 #[path = "live_tests/request_route.rs"]
 mod request_route;
+#[path = "live_tests/rls.rs"]
+mod rls;
 #[path = "live_tests/runtime_role.rs"]
 mod runtime_role;
 use fixture::*;

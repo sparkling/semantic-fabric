@@ -79,7 +79,14 @@ fn initialize_telemetry_for(
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
     let query_admission = match args.auth_token_env.as_deref() {
-        Some(name) => match sf_serve::BearerQueryAdmission::from_env(name) {
+        Some(name) => match sf_serve::BearerQueryAdmission::from_env(name).and_then(|profile| {
+            match args.pg_rls_context_env.as_deref() {
+                Some(name) => {
+                    profile.with_postgres_rls(sf_serve::PostgresRlsClaims::from_env(name)?)
+                }
+                None => Ok(profile),
+            }
+        }) {
             Ok(profile) => sf_serve::QueryAdmission::Bearer(profile),
             Err(error) => {
                 error.record_telemetry();

@@ -16,6 +16,10 @@ use crate::problem::{self, ProblemCode};
 use crate::{sqlite_admission, stream, Backend};
 
 enum AcquiredFragment {
+    RlsPostgres {
+        lease: crate::pg_rls::PgRlsLease,
+        plan: Arc<Plan>,
+    },
     Sqlite {
         lease: sf_sql::backend::sqlite::SqliteOwnedLease,
         plan: Arc<Plan>,
@@ -63,6 +67,7 @@ pub(crate) async fn select_union_body(
     budget: RequestBudget,
 ) -> Result<Body, Response> {
     let (variables, fragments) = execution.into_parts();
+    let rls_tables = fragments.each_ref().map(|fragment| fragment.rls_tables());
     let fragments = fragments.map(|fragment| fragment.into_parts());
     let valid = fragments[0].0 != fragments[1].0
         && fragments.iter().all(
@@ -77,7 +82,9 @@ pub(crate) async fn select_union_body(
     }
 
     let mut acquired = Vec::with_capacity(2);
-    for (source_id, binding_identity, backend, verified_generation, plan) in fragments {
+    for ((source_id, binding_identity, backend, verified_generation, plan), tables) in
+        fragments.into_iter().zip(rls_tables)
+    {
         let source = match backend {
             Backend::Sqlite(pool) => sqlite_admission::acquire(&pool, &budget)
                 .await
@@ -89,6 +96,11 @@ pub(crate) async fn select_union_body(
                 verified_generation,
             ) {
                 Ok(Some(lease)) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
+                Ok(None) if budget.postgres_rls().is_some() => {
+                    crate::pg_rls::PgRlsLease::acquire(&pool, tables, &budget)
+                        .await
+                        .map(|lease| AcquiredFragment::RlsPostgres { lease, plan })
+                }
                 Ok(None) => crate::source_acquisition::acquire_pg(&pool, budget.clone())
                     .await
                     .map(|connection| AcquiredFragment::Postgres {
@@ -121,6 +133,17 @@ pub(crate) async fn select_union_body(
             Box::pin(async move {
                 for fragment in acquired {
                     match fragment {
+                        AcquiredFragment::RlsPostgres { lease, plan } => {
+                            let result = exec_pg::select_each_pg_controlled(
+                                &plan,
+                                lease.client(),
+                                &drive_budget,
+                                &mut sink,
+                            )
+                            .await;
+                            lease.finish().await?;
+                            result?;
+                        }
                         AcquiredFragment::Sqlite { lease, plan } => {
                             let control: Arc<dyn QueryControl> = Arc::new(drive_budget.clone());
                             exec::select_each_sqlite_owned_interruptible_leased(
@@ -169,8 +192,14 @@ pub(crate) async fn select_union_body(
 
 async fn close_acquired(acquired: Vec<AcquiredFragment>) {
     for fragment in acquired {
-        if let AcquiredFragment::VerifiedPostgres { lease, .. } = fragment {
-            let _ = lease.rollback_bounded().await;
+        match fragment {
+            AcquiredFragment::VerifiedPostgres { lease, .. } => {
+                let _ = lease.rollback_bounded().await;
+            }
+            AcquiredFragment::RlsPostgres { lease, .. } => {
+                let _ = lease.finish().await;
+            }
+            _ => {}
         }
     }
 }

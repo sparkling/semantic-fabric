@@ -23,7 +23,7 @@ Finish the next public-path closure before opening another implementation lane.
 
 | Order | Required outcome | Observable acceptance |
 |---|---|---|
-| 1 | Public identity and policy enforcement | Bearer query admission, context-bound execution and isolated cache now pass public/CLI tests; finish row-level RLS/ABAC, external sensitivity and policy-aware reload |
+| 1 | Public identity and policy enforcement | Bearer admission/cache and explicit PostgreSQL source-RLS now pass public/live isolation and cleanup tests; finish portable ABAC, external sensitivity, end-user identity and policy-aware reload |
 | 2 | Coherent lifecycle and total request controls | Public reload/drift/readiness, timeout, cancellation, overload and cleanup tests pass on every admitted backend |
 | 3 | Secure configuration and remaining observability | Public configuration/TLS validation, redaction, bounded metrics/traces and required operational tests pass |
 | 4 | Useful bounded cross-source join | Public CLI/HTTP results equal the materialized oracle; skew, overflow, cancellation and source failure preserve exactness |
@@ -346,7 +346,7 @@ and one-hour controlled soak are labelled post-1.0 work.
 
 ### M5 — Snapshot lifecycle, identity, policy and lineage ([ADR-0050](../adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md))
 
-Current bounded slice (2026-09-07): the dormant `PgDirectLifecycleV1` builder/coordinator retains exact 16.9/16.15 disposable live proof. The public Rust/CLI bearer service-principal profile now defaults closed, validates an environment-referenced credential before query body/source work, retains the provider-neutral `SecurityContext` through execution, partitions the single-source cache and compiles protected UNION uncached. Real allow/deny traces emit. The profile grants its principal read access to all mapped data; it does not implement per-user/tenant rows, RLS/ABAC/sensitivity, policy-aware hot reload or access-decision metrics. Rotation requires a new server. Public SQLite query-form and real CLI/federation tests pass; ADR-0018 remains incomplete and no backend gains production admission.
+Current bounded slice (2026-09-07): the dormant `PgDirectLifecycleV1` builder/coordinator retains exact 16.9/16.15 disposable live proof. The public Rust/CLI bearer service-principal profile now defaults closed, validates an environment-referenced credential before query body/source work, retains the provider-neutral `SecurityContext` through execution, partitions the single-source cache and compiles protected UNION uncached. Real allow/deny traces emit. The default bearer profile grants read access to all mapped data. Its optional PostgreSQL source-RLS profile now binds explicitly configured claims in read-only transactions, guards every mapped public table and role, and rolls back or discards connections. Public SELECT/ASK/CONSTRUCT and both UNION fragments pass disposable PostgreSQL 16.15 row-isolation, concurrency, failure, deadline and pool-cleanup tests. This does not implement general end-user identity, portable ABAC/sensitivity, policy-aware hot reload or access-decision metrics. Rotation requires a new server. Public SQLite query-form and real CLI/federation tests pass; ADR-0018 remains incomplete and no backend gains production admission.
 
 Outcomes:
 
@@ -355,7 +355,7 @@ Outcomes:
   queries retain their original snapshot;
 - fingerprint source schemas, detect drift, invalidate affected plans, roll back
   invalid snapshots and expose readiness state;
-- retain the now-wired public query-admission context and isolated cache; add PostgreSQL transactional `SET LOCAL` RLS, portable ABAC/sensitivity and atomic policy-aware snapshot reload;
+- retain the now-wired public query-admission context and isolated cache; retain the implemented PostgreSQL transactional source-RLS profile and add portable ABAC/sensitivity, end-user identity and atomic policy-aware snapshot reload;
 - extend emitted query-admission allow/deny traces to row/sensitivity decisions and add a paired bounded access-decision metric; and
 - implement opt-in query-time provenance using mapping/source/row-key and plan/
   policy hashes, never persisted instance data or source values in telemetry.

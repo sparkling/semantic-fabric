@@ -233,6 +233,11 @@ pub(crate) struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    pub(crate) fn permits_rls(&self, source: SourceId) -> bool {
+        self.registry
+            .binding(source)
+            .is_some_and(RuntimeBinding::permits_rls)
+    }
     /// Validate source identity uniqueness before constructing any bindings.
     pub(crate) fn new(
         epoch: Epoch,

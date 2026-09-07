@@ -16,6 +16,7 @@ pub(crate) async fn select(
     pool: deadpool_postgres::Pool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
+    rls_tables: Option<Arc<[String]>>,
     format: QueryResultsFormat,
     variables: Vec<String>,
     budget: RequestBudget,
@@ -26,6 +27,26 @@ pub(crate) async fn select(
             move |sink| {
                 Box::pin(async move {
                     flatten_stream_result(lease.select_each(&plan, &drive_budget, sink).await)
+                })
+            },
+            format,
+            variables,
+            budget,
+        )
+    } else if budget.postgres_rls().is_some() {
+        let lease = crate::pg_rls::PgRlsLease::acquire(&pool, rls_tables, &budget).await?;
+        stream::select_body_streaming_controlled(
+            move |sink| {
+                Box::pin(async move {
+                    let result = exec_pg::select_each_pg_controlled(
+                        &plan,
+                        lease.client(),
+                        &drive_budget,
+                        sink,
+                    )
+                    .await;
+                    lease.finish().await?;
+                    result
                 })
             },
             format,
@@ -52,6 +73,7 @@ pub(crate) async fn ask(
     pool: deadpool_postgres::Pool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
+    rls_tables: Option<Arc<[String]>>,
     budget: RequestBudget,
 ) -> Result<sf_sparql::Result<bool>, Response> {
     if let Some(lease) = generation {
@@ -62,6 +84,17 @@ pub(crate) async fn ask(
             )),
             Ok(Ok(result)) => Ok(result),
         };
+    }
+    if budget.postgres_rls().is_some() {
+        let lease = crate::pg_rls::PgRlsLease::acquire(&pool, rls_tables, &budget).await?;
+        let result = budget
+            .run(exec_pg::ask_pg_controlled(&plan, lease.client(), &budget))
+            .await;
+        lease
+            .finish()
+            .await
+            .map_err(|_| problem::response_with_retry_after(ProblemCode::SourceUnavailable))?;
+        return result.map_err(problem::response_for_control);
     }
     let conn = crate::source_acquisition::acquire_pg(&pool, budget.clone()).await?;
     budget
@@ -74,6 +107,7 @@ pub(crate) async fn construct(
     pool: deadpool_postgres::Pool,
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
+    rls_tables: Option<Arc<[String]>>,
     format: RdfFormat,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
@@ -83,6 +117,25 @@ pub(crate) async fn construct(
             move |sink| {
                 Box::pin(async move {
                     flatten_stream_result(lease.construct_each(&plan, &drive_budget, sink).await)
+                })
+            },
+            format,
+            budget,
+        )
+    } else if budget.postgres_rls().is_some() {
+        let lease = crate::pg_rls::PgRlsLease::acquire(&pool, rls_tables, &budget).await?;
+        stream::construct_body_streaming_controlled(
+            move |sink| {
+                Box::pin(async move {
+                    let result = exec_pg::construct_each_pg_controlled(
+                        &plan,
+                        lease.client(),
+                        &drive_budget,
+                        sink,
+                    )
+                    .await;
+                    lease.finish().await?;
+                    result
                 })
             },
             format,

@@ -5,6 +5,10 @@ use crate::{BearerQueryAdmission, QueryAdmission};
 const TOKEN: &str = "test-only-federation-principal-0123456789";
 
 #[tokio::test]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "deliberately retain the source lock to prove authentication rejects without source admission"
+)]
 async fn protected_union_rejects_before_pool_acquisition_and_then_serves_both_sources() {
     let (mut cfg, pools, _files) = config(
         ["http://example.test/left", "http://example.test/right"],

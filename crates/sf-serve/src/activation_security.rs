@@ -4,6 +4,9 @@ use crate::budget::RequestBudget;
 use sf_core::security_context::PolicySnapshotId;
 
 impl RuntimeSnapshotLease {
+    pub(crate) fn permits_rls(&self, source: SourceId) -> bool {
+        self.snapshot.permits_rls(source)
+    }
     pub(crate) fn compile_secured(
         &self,
         source: SourceId,

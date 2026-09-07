@@ -34,6 +34,9 @@ pub(crate) async fn acquire(
         .validate(budget)
         .map_err(problem::response)?;
     let source_ids = cfg.query_mode().source_ids().into_iter().flatten();
+    if budget.postgres_rls().is_some() && source_ids.clone().any(|id| !snapshot.permits_rls(id)) {
+        return Err(crate::pg_rls::denied());
+    }
     let requirements = snapshot
         .generation_requirements(source_ids)
         .map_err(response_for_error)?;

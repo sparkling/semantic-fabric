@@ -106,6 +106,55 @@ fn query_authentication_options_are_mutually_exclusive() {
 }
 
 #[test]
+fn rls_context_requires_bearer_and_invalid_claims_are_redacted_before_source_io() {
+    let mut no_bearer = serve_command(&missing_mapping());
+    no_bearer.args([
+        "--source",
+        "sqlite::memory:",
+        "--pg-rls-context-env",
+        "SF_RLS_TEST",
+    ]);
+    assert_eq!(run(no_bearer).status.code(), Some(2));
+    for value in [
+        None,
+        Some("{}"),
+        Some("not-json"),
+        Some("{\"role\":\"secret-superuser\"}"),
+    ] {
+        let mut command = serve_command(&missing_mapping());
+        command
+            .args([
+                "--source-env",
+                "SF_SOURCE_MUST_NOT_BE_READ",
+                "--auth-token-env",
+                "SF_QUERY_AUTH_TEST",
+                "--pg-rls-context-env",
+                "SF_RLS_TEST",
+            ])
+            .env("SF_QUERY_AUTH_TEST", "test-only-rls-credential-0123456789")
+            .env_remove("SF_RLS_TEST")
+            .env_remove("SF_SOURCE_MUST_NOT_BE_READ");
+        if let Some(value) = value {
+            command.env("SF_RLS_TEST", value);
+        }
+        let output = run(command);
+        assert_eq!(output.status.code(), Some(1));
+        for secret in [
+            "secret-superuser",
+            "SF_RLS_TEST",
+            "SF_SOURCE_MUST_NOT_BE_READ",
+            "test-only-rls-credential-0123456789",
+        ] {
+            assert_absent(&output, secret);
+        }
+        assert_structured_startup_failure(
+            &String::from_utf8(output.stderr).unwrap(),
+            "startup-configuration",
+        );
+    }
+}
+
+#[test]
 fn bad_query_credential_reference_fails_before_source_or_file_io_and_is_redacted() {
     for value in [
         None,

@@ -55,6 +55,8 @@ mod pg_direct_lifecycle;
 mod pg_generation;
 mod pg_pool;
 mod pg_response;
+mod pg_rls;
+mod pg_rls_claims;
 mod post_body;
 mod problem;
 mod query_security;
@@ -121,6 +123,7 @@ pub use metrics::{
 };
 pub use observed_source::IntrospectedSource;
 pub use ontology::{tbox_from_turtle, SemanticOntology};
+pub use pg_rls_claims::PostgresRlsClaims;
 pub use problem::ServeError;
 pub use query_security::{BearerQueryAdmission, QueryAdmission};
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};

@@ -1,4 +1,4 @@
-//! Payload-free query-admission decisions (ADR-0018 / ADR-0011).
+//! Payload-free query/source-admission decisions (ADR-0018 / ADR-0011).
 
 use sf_core::TELEMETRY_TARGET;
 
@@ -34,8 +34,8 @@ define_access_decisions! {
 /// Emit only the closed decision label on M3's exact telemetry target.
 ///
 /// There is intentionally no request-context or policy payload parameter and
-/// the function records an admission decision made at the outer request boundary; it neither
-/// makes nor enforces one.
+/// the function records a decision made by query/source admission; it neither
+/// makes nor enforces one. Credential admission can precede a source-RLS denial.
 pub(crate) fn record(decision: AccessDecision) {
     tracing::info!(
         target: TELEMETRY_TARGET,

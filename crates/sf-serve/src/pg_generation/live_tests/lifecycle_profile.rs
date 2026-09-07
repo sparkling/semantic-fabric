@@ -97,7 +97,9 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
         .await
         .expect("the rebuilt successor generation reobserves exactly");
 
-    let (config, expectation) = crate::ServeConfig::from_initial_pg_direct(rebuilt);
+    let (mut config, expectation) = crate::ServeConfig::from_initial_pg_direct(rebuilt);
+    // This private lifecycle fixture is not testing credential admission.
+    config.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
     let config = Arc::new(config);
     request_route::exercise_config(fixture, &config).await;
     let policy = PgDirectCoordinatorPolicy::for_spec(Duration::from_secs(60), &spec)

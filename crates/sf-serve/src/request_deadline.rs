@@ -132,6 +132,9 @@ impl Service<Request<Body>> for RequestDeadlineService {
                         Ok(context) => {
                             if context
                                 .is_some_and(|context| budget.retain_security(context).is_err())
+                                || budget
+                                    .retain_postgres_rls(self.cfg.query_admission.postgres_rls())
+                                    .is_err()
                             {
                                 return Admission::Rejected {
                                     budget,

@@ -81,6 +81,7 @@ impl BackendProfile {
 /// Raw catalogue observations become a constraint-quarantined compiler view
 /// before the binding or cache exists.
 pub(crate) struct RuntimeBinding {
+    rls_tables: Option<Arc<[String]>>,
     security_cache: sf_sparql::cache::SecurityPlanCache,
     binding_identity: RuntimeBindingIdentity,
     backend: Backend,
@@ -108,6 +109,11 @@ impl RuntimeBinding {
         let schema_observation = observation.bind(profile.kind(), source_id);
         let (mapping, ontology_digest, semantic_admission_digest, semantic_warnings) =
             mapping.into_parts();
+        let rls_tables = if profile.kind() == BackendKind::Postgres && !generation.is_verified() {
+            crate::pg_rls::mapped_tables(&mapping)
+        } else {
+            None
+        };
         #[cfg(test)]
         let observed_schema: Arc<[TableSchema]> = schema.clone().into();
         let compiler = CompilerBinding::from_observation_with_semantic_identity(
@@ -121,6 +127,7 @@ impl RuntimeBinding {
         );
         Self {
             binding_identity: RuntimeBindingIdentity::fresh(),
+            rls_tables,
             security_cache: sf_sparql::cache::SecurityPlanCache::new(
                 std::num::NonZeroUsize::new(PLAN_CACHE_CAP).unwrap(),
             ),
@@ -224,6 +231,7 @@ impl RuntimeBinding {
         }
         Ok(ExecutablePlan {
             binding_identity: self.binding_identity.clone(),
+            rls_tables: self.rls_tables.clone(),
             backend: self.backend.clone(),
             source_id: self.source_id(),
             verified_generation: self.generation.is_verified(),
@@ -233,6 +241,10 @@ impl RuntimeBinding {
 
     pub(crate) const fn source_id(&self) -> SourceId {
         self.compiler.source_id()
+    }
+
+    pub(crate) fn permits_rls(&self) -> bool {
+        self.rls_tables.is_some()
     }
 
     pub(crate) const fn scope(&self) -> CompileScope {
@@ -378,6 +390,7 @@ impl fmt::Debug for BoundPlan {
 
 /// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
+    rls_tables: Option<Arc<[String]>>,
     binding_identity: RuntimeBindingIdentity,
     backend: Backend,
     source_id: SourceId,
@@ -386,6 +399,9 @@ pub(crate) struct ExecutablePlan {
 }
 
 impl ExecutablePlan {
+    pub(crate) fn rls_tables(&self) -> Option<Arc<[String]>> {
+        self.rls_tables.clone()
+    }
     pub(crate) fn into_parts(self) -> (SourceId, RuntimeBindingIdentity, Backend, bool, Arc<Plan>) {
         (
             self.source_id,

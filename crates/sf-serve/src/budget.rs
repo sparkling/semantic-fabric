@@ -16,6 +16,7 @@ use crate::lifecycle::ShutdownPhase;
 use crate::telemetry::{self, CorrelationId};
 
 struct RequestBudgetState {
+    postgres_rls: Option<Arc<crate::PostgresRlsClaims>>,
     security: Option<sf_core::security_context::SecurityContext>,
     accounting: QueryBudget,
     deadline: Option<Instant>,
@@ -68,6 +69,7 @@ impl RequestBudget {
         let deadline = now.checked_add(timeout);
         let request = Self(Arc::new(RequestBudgetState {
             security: None,
+            postgres_rls: None,
             accounting: QueryBudget::new(limits),
             deadline: Some(deadline.unwrap_or(now)),
             deadline_representable: deadline.is_some(),
@@ -94,6 +96,7 @@ impl RequestBudget {
         let (terminal, _) = watch::channel(None);
         Self(Arc::new(RequestBudgetState {
             security: None,
+            postgres_rls: None,
             accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
@@ -137,6 +140,22 @@ impl RequestBudget {
 
     pub(crate) fn security_context(&self) -> Option<sf_core::security_context::SecurityContext> {
         self.0.security
+    }
+
+    pub(crate) fn retain_postgres_rls(
+        &mut self,
+        claims: Option<Arc<crate::PostgresRlsClaims>>,
+    ) -> Result<(), ()> {
+        let state = Arc::get_mut(&mut self.0).ok_or(())?;
+        if state.postgres_rls.is_some() || (claims.is_some() && state.security.is_none()) {
+            return Err(());
+        }
+        state.postgres_rls = claims;
+        Ok(())
+    }
+
+    pub(crate) fn postgres_rls(&self) -> Option<&Arc<crate::PostgresRlsClaims>> {
+        self.0.postgres_rls.as_ref()
     }
 
     /// Await a phase without refreshing the original absolute deadline.

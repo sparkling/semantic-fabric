@@ -25,8 +25,10 @@ implements:
 > service-principal profile: deny by default, bounded credential reference,
 > query admission before body/source work, context-bound execution, partitioned
 > single-source caching and uncached protected UNION. Real allow/deny traces emit.
-> This permits its authenticated principal to read **all mapped data**, not
-> individual end-user/tenant rows. PostgreSQL `SET LOCAL` RLS, portable ABAC,
+> The default bearer profile permits its principal to read **all mapped data**.
+> An explicit PostgreSQL source-RLS profile now binds trusted custom settings
+> inside the same transaction as each public query/UNION fragment, with live
+> isolation and cleanup tests. General end-user identity, portable ABAC,
 > sensitivity enforcement, policy-aware hot reload and paired access-decision
 > metrics remain open; this ADR remains incomplete.
 
@@ -57,6 +59,66 @@ secret-redaction tests. Astra and native-subscription Claude Sonnet performed
 independent read-only code reviews; tests, not their agreement, establish behaviour.
 
 ## Context and Problem Statement
+
+### Implemented PostgreSQL source-RLS profile (2026-09-07)
+
+`--auth-token-env SF_QUERY_BEARER --pg-rls-context-env SF_PG_RLS_CONTEXT`
+selects the public profile. The second environment variable is a bounded JSON
+object of trusted custom-setting names to string values. Embeddings use
+`BearerQueryAdmission::with_postgres_rls(PostgresRlsClaims::new(settings)?)`.
+Names have exactly two lowercase ASCII identifier segments, at most 128 bytes,
+and no reserved `pg_` namespace; there are 1–16 settings, each value is nonempty,
+at most 1024 bytes and contains no NUL. The environment JSON is at most 32768
+bytes. Framed, sorted claims join the credential digest in policy/attribute
+identity, so changing a claim changes the cache partition. Diagnostics redact
+names and values. Settings are never taken from unverified headers.
+
+The implemented source profile is authored R2RML over 1–256 ordinary `public`
+PostgreSQL base tables with simple ASCII names of at most 63 bytes. Explicit
+`rr:datatype` is required where the existing observation cannot prove a literal
+type. Raw `rr:sqlQuery`, views, inheritance/partition trees, other backends and
+verified Direct Mapping generations fail closed; their existing contracts are
+not weakened. Every mapped table, including reference parents, must be RLS-active
+for a non-superuser/non-BYPASSRLS, non-owner reader, with no effective owner-role
+membership. Unqualified execution must resolve to the exact guarded public OID.
+
+One dirty-owned connection begins a repeatable-read, read-only transaction,
+sets bounded local timeouts and `row_security=on`, locks the mapped relations,
+checks the role/relation profile, and binds both arguments to
+`pg_catalog.set_config($1,$2,true)`. SELECT/ASK/CONSTRUCT and both supported UNION
+fragments execute on their own exact held transactions. Both UNION sources are
+admitted before HTTP success. Acknowledged bounded rollback plus unique ownership
+permits reuse; abandoned/failed/timed-out cleanup discards the pooled session.
+These follow PostgreSQL's [transaction-local setting semantics](https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-ADMIN-SET)
+and [RLS role/owner rules](https://www.postgresql.org/docs/16/ddl-rowsecurity.html).
+
+The operator owns the dedicated reader pools, source policies/functions and
+complete claim-to-policy contract. Fabric verifies RLS is active, not that an
+operator-authored policy expresses the intended business authorization. No
+`SET ROLE`, policy installation, universal tenant column, end-user issuer or
+cross-database atomic policy snapshot is claimed. Credential admission may emit
+`allow` before a later source-profile `deny`; neither is a per-row disclosure log.
+
+Required-live test `pg_generation::live_tests::rls::public_row_security_is_isolated_and_cleans_pool`
+uses `SF_PG_RLS_TEST_URL` for an explicitly disposable administrator endpoint.
+It provisions and cleans its own database/reader; tests public forms, alternating
+and concurrent identities, both UNION fragments, errors/deadlines/body drop,
+normal reuse, abandoned/timeout discard, owner/BYPASSRLS/disabled-RLS rejection
+and catalog-shadow name rejection. CI runs it explicitly; ordinary tests do not
+silently connect to Product Mock or substitute an unavailable database.
+
+### External policy authority and remaining integration
+
+`semantic-modelling` owns Category 11 under ODR-0071k: `hm:dataSensitivity`
+uses Public/Internal/Confidential/Restricted; DPV concepts are reference values,
+not an independently invented Fabric taxonomy. Semantic Builder's gold is
+classification evidence, not executable authorization authority. Product Mock
+has no canonical PostgreSQL RLS/GUC convention or universal tenant column.
+`app.tenant_id` and `app.identity` below remain examples, not defaults. Before
+Product Mock policy integration, its owner must specify the table/column
+boundaries, whether `businessScope` is tenancy or another attribute, exact GUC
+encodings and clearance/purpose decisions. This does not block the explicit
+operator-configured source-RLS transport implemented here.
 
 ADR-0010 establishes injection-safety + resource governance and "the mapping is the allow-list." That allow-list is **schema-reachability control, not an authorization model**: anyone who can query reads all mapped rows; there is no per-identity / tenant / value differentiation; and because the fabric connects with a single service account, **source RLS is inert unless identity is propagated**. AuthN/TLS belong at the edge (ADR-0010 R5), but **row-level access, tenancy, and sensitivity cannot be delegated to a reverse proxy** — it never sees the generated SQL or the source rows (the same argument ADR-0010 makes for why injection/DoS must be in-engine). These need an in-engine or source-delegated layer.
 
