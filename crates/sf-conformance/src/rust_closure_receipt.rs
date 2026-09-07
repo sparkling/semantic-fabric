@@ -36,7 +36,10 @@ pub use qualification::{
     RECEIPT_PATH as PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH,
 };
 
-pub const RECEIPT_PATH: &str = "tests/rust-dependency-closure.tsv";
+/// Historical parser-profile baseline: never regenerated for current builds.
+pub const LEGACY_RECEIPT_PATH: &str = "tests/rust-dependency-closure.tsv";
+/// Living default developer-CLI graph, distinct from both legacy and serving.
+pub const RECEIPT_PATH: &str = "tests/rust-dependency-closure-current.tsv";
 pub const ROOT_MANIFEST: &str = "crates/sf-cli/Cargo.toml";
 pub const ROOT_PACKAGE: &str = "sf-cli";
 pub const ROOT_BINARY: &str = "semantic-fabric";

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-06
+updated: 2026-09-07
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -174,7 +174,18 @@ claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
 
-### 7. Implementation status (through 2026-09-06)
+### 7. Implementation status (through 2026-09-07)
+
+Under accepted ADR-0055, `sf-cli --no-default-features` is the standalone serving
+build. Its Cargo graph excludes optional `sf-conformance`/`sf-bench` and their
+development-only backend features, without removing SQLite, PostgreSQL, MySQL
+or semantic validation. The default `development-tools` feature preserves the
+developer commands. The root-specific graph guard and public CLI tests run in
+CI, including owned PostgreSQL/MySQL TLS providers. A workspace build is not
+proof of this minimal graph because Cargo unifies features. The default CLI
+receipt remains developer-profile evidence; neither it nor this split closes
+ADR-0055's exact-artifact release bundle. No new server crate or Node runtime is
+introduced; proposed ADR-0039 is not accepted by implementing this boundary.
 
 Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
 metadata while preserving the dependency-free Node oracle. Commits `13b8187`,

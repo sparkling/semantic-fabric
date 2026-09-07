@@ -11,7 +11,8 @@ name = "semantic-fabric"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["development-tools"]
+development-tools = ["dep:sf-conformance", "dep:sf-bench"]
 parser-worker-evidence = ["sf-sparql/parser-worker-evidence"]
 query-v1-transport-evidence = ["sf-sparql/query-v1-transport-evidence"]
 query-v1-transport-mutant-evidence = ["sf-sparql/query-v1-transport-mutant-evidence"]
@@ -34,8 +35,8 @@ required-features = ["query-v1-transport-mutant-evidence"]
 [dependencies]
 sf-core.workspace = true
 sf-sparql.workspace = true
-sf-conformance.workspace = true
-sf-bench.workspace = true
+sf-conformance = { workspace = true, optional = true }
+sf-bench = { workspace = true, optional = true }
 sf-serve.workspace = true
 clap.workspace = true
 anyhow.workspace = true

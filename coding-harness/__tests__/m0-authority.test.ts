@@ -191,7 +191,7 @@ const M0_AUTHORITY_PATHS = [
   'docs/plans/sota-application-completion-programme.md',
   'tests/capabilities/catalog-v1.json',
   'tests/capabilities/schema-v1.json',
-  'tests/rust-dependency-closure.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
+  'tests/rust-dependency-closure.tsv', 'tests/rust-dependency-closure-current.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
   'tests/sparql/protocol/inventory.tsv',
   'tests/sparql/protocol/sqlite-expected-regression-baseline.tsv',
   'tests/sparql/query/inventory.tsv',

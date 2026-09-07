@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use sf_conformance::rust_closure_receipt::{
-    self, PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH, RECEIPT_PATH,
+    self, LEGACY_RECEIPT_PATH, PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH, RECEIPT_PATH,
 };
 use sha2::{Digest, Sha256};
 
@@ -14,7 +14,8 @@ const DEFAULT_RECEIPT_SHA256: &str =
 #[test]
 fn tracked_default_receipt_is_a_frozen_legacy_contract() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let bytes = std::fs::read(root.join(RECEIPT_PATH)).expect("read tracked default receipt");
+    assert_ne!(LEGACY_RECEIPT_PATH, RECEIPT_PATH);
+    let bytes = std::fs::read(root.join(LEGACY_RECEIPT_PATH)).expect("read frozen legacy receipt");
 
     assert_eq!(bytes.len(), DEFAULT_RECEIPT_BYTES);
     assert_eq!(

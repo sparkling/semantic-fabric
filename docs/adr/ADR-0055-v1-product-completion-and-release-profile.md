@@ -25,7 +25,7 @@ implements: []
 
 ## Status boundary
 
-**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable equality-row authorization and typed layered startup configuration close narrow product boundaries, not general ABAC or operability. Configuration follow-up corrects row-policy loss during token rotation, argument bypass/injection, blocking non-regular input and unredacted effective-value errors; real authenticated two-source HTTP execution supplements precedence tests. Product completion remains open on the explicit release blockers below.
+**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable equality-row authorization, safe layered configuration and verified remote-source TLS close narrow product boundaries, not general ABAC or operability. A standalone serving-only Cargo build now excludes conformance/benchmark crates and their extra backend features while preserving SQLite/PostgreSQL/MySQL, semantic admission and all serving controls. Required native CLI tests exercise that profile, including authenticated encrypted single-source and mixed PostgreSQL/MySQL UNION. Product completion and the exact release bundle remain open.
 
 This decision is **accepted**. It replaces ADR-0038 as the controlling
 definition of product completion and release work for v1. ADR-0038 remains an
@@ -120,6 +120,16 @@ The following remain release blockers for every admitted v1 path:
 An accepted ADR applicable to these guarantees must be implemented for the v1
 profile or explicitly superseded. An implementation foundation or private seam
 does not satisfy a public runtime gate.
+
+The serving build is `cargo build --locked --release -p sf-cli --no-default-features`.
+Build only that package: workspace feature unification can re-enable development
+backends. The default `development-tools` feature preserves the existing
+`conformance`/`bench` CLI for developers; it is excluded from the serving artifact.
+`bash scripts/check-serving-profile.sh` checks the root-specific normal/build
+graph; `cargo test --locked -p sf-cli --no-default-features` retains public serving
+regressions and requires developer-command rejection. Required-live source TLS
+also runs with defaults disabled. Dependency graphs and local tests are not an
+SBOM, clean-machine smoke, signed release, or backend admission.
 
 ### 3. Minimum release evidence
 

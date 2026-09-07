@@ -1,5 +1,7 @@
 //! Non-serving commands retain their pre-telemetry CLI output surface.
 
+#![cfg(feature = "development-tools")]
+
 use std::process::Command;
 
 #[test]

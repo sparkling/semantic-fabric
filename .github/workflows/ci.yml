@@ -297,13 +297,16 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
-      - name: test required-live authenticated PostgreSQL/MySQL source TLS
+      - name: verify standalone serving profile and required-live source TLS
         timeout-minutes: 6
         run: |
           set -euo pipefail
+          bash scripts/check-serving-profile.sh
+          cargo clippy --locked -p sf-cli --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p sf-cli --no-default-features
           test_name='authenticated_public_queries_require_verified_source_tls'
-          cargo test --locked -p sf-cli --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
-          cargo test --locked -p sf-cli --test source_tls_live -- --ignored --exact "$test_name" --nocapture
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
       # Private ADR-0040 comparison evidence only. The feature stays default-off
       # and this gate does not admit the substrate into product execution.
       - name: clippy (sf-sparql secure-spill-prototype)

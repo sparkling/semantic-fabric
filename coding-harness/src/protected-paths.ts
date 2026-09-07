@@ -438,7 +438,7 @@ const BASE_REQUIRED_PROTECTED_PATHS = Object.freeze([
   'scratch/sqlx-spike/Cargo.toml',
   'tests/capabilities/catalog-v1.json',
   'tests/capabilities/schema-v1.json',
-  'tests/rust-dependency-closure.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
+  'tests/rust-dependency-closure.tsv', 'tests/rust-dependency-closure-current.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
   'tests/sparql/protocol/inventory.tsv',
   'tests/sparql/protocol/sqlite-expected-regression-baseline.tsv',
   'tests/sparql/protocol/supported-surface-v1.tsv',

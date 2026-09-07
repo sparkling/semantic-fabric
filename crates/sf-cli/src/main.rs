@@ -4,12 +4,17 @@
 //! (ADR-0005/0006); `serve` runs the live SPARQL 1.2 Protocol endpoint over the
 //! OBDA virtualiser (ADR-0019 G8, ADR-0010/0011; `sf-serve`).
 
+#[cfg(feature = "development-tools")]
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "development-tools")]
+use std::time::Instant;
 
 use clap::{Parser, Subcommand};
+#[cfg(feature = "development-tools")]
 use sf_bench::{run_obda_scenario, Scenario};
+#[cfg(feature = "development-tools")]
 use sf_conformance::{run_and_report, Kind};
 use sf_serve::{serve_blocking, ServeOptions};
 #[cfg(test)]
@@ -47,9 +52,22 @@ enum Command {
     /// Serve the live SPARQL 1.2 Protocol endpoint over an RDBMS (ADR-0019 G8).
     Serve(Box<ServeArgs>),
     /// Run the W3C RDB2RDF conformance suite (ADR-0005).
+    #[cfg(feature = "development-tools")]
     Conformance,
     /// Run GTFS-Madrid OBDA benchmarks (ADR-0005).
+    #[cfg(feature = "development-tools")]
     Bench,
+}
+
+#[cfg(test)]
+impl Command {
+    fn into_serve(self) -> Box<ServeArgs> {
+        match self {
+            Self::Serve(args) => args,
+            #[cfg(feature = "development-tools")]
+            _ => panic!("serve command"),
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -67,8 +85,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     match command {
+        #[cfg(feature = "development-tools")]
         Command::Conformance => conformance(),
         Command::Serve(args) => serve(*args),
+        #[cfg(feature = "development-tools")]
         Command::Bench => bench(),
     }
 }
@@ -79,6 +99,7 @@ fn initialize_telemetry_for(
 ) -> Result<(), telemetry::InitError> {
     match command {
         Command::Serve(args) => initialize(args.log_level),
+        #[cfg(feature = "development-tools")]
         Command::Conformance | Command::Bench => Ok(()),
     }
 }
@@ -175,6 +196,7 @@ fn serve(args: ServeArgs) -> ExitCode {
 /// (no materialisation). Prints wall-clock per scale; the quantitative per-query
 /// latency and the constant-memory demonstration live in the `criterion` benches
 /// and the `constant_memory` test (pointers below).
+#[cfg(feature = "development-tools")]
 fn bench() -> ExitCode {
     println!("=== GTFS-Madrid OBDA benchmark (live SPARQL->SQL over SQLite; ADR-0005/0006) ===");
     for scale in [1u32, 4] {
@@ -200,6 +222,7 @@ fn bench() -> ExitCode {
 /// The vendored W3C RDB2RDF suite root, fixed relative to the workspace; the same
 /// location the harness test drives (ADR-0005). `cases/` holds the `D###`
 /// scenarios; the EARL reports are written here beside the suite.
+#[cfg(feature = "development-tools")]
 fn suite_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf")
 }
@@ -210,11 +233,13 @@ fn suite_root() -> PathBuf {
 /// only on an UNEXPECTED failure (a regression). Documented standards deviations
 /// (`EXPECTED_DEVIATIONS`, e.g. R2RMLTC0002f — ADR-0015) are reported as such, not
 /// as failures; skips are untested, not failures (ADR-0005 honesty contract).
+#[cfg(feature = "development-tools")]
 fn conformance() -> ExitCode {
     let root = suite_root();
     conformance_to(&root)
 }
 
+#[cfg(feature = "development-tools")]
 fn conformance_to(out_dir: &Path) -> ExitCode {
     let root = suite_root();
     let report = match run_and_report(&root, out_dir) {

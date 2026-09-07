@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-01
+updated: 2026-09-07
 tags: [production, packaging, release, cargo, reproducibility, sbom, provenance, supply-chain]
 supersedes: []
 depends-on:
@@ -20,7 +20,18 @@ implements:
 
 This ADR is a **proposal**, not an acceptance or implementation claim. Its
 `implements` relationship means that it is the subordinate design lock requested
-by ADR-0038 M0; no release is conformant until the acceptance gates below pass.
+by historical ADR-0038 M0. Accepted ADR-0055 now controls v1 completion: this
+proposal's two-builder and exhaustive runtime-closure gates are post-1.0, not
+additional v1 prerequisites. Its broader design remains proposed.
+
+The 2026-09-07 implementation uses the existing Rust `sf-cli` with
+`--no-default-features` as the standalone serving build, excluding optional
+conformance/benchmark crates while retaining all three required database drivers.
+It does not adopt this proposal's new `sf-server` crate layout. Default developer
+commands remain available under `development-tools`; root-only graph and public
+CLI checks cover the serving profile. Exact-artifact release qualification is
+still open under ADR-0055, and historical observations below are not relabelled
+as evidence for the new build.
 
 The clean-checkout repeatability run at `ad94cdb` and the current directional
 artifact comparator are useful diagnostics, but they do not satisfy the two-
@@ -29,8 +40,8 @@ independent trust-root witness, exact-artifact agreement, or pair receipt exists
 
 [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) requires
 any future `sf-server` closure and release image to be Rust-only, excluding Node,
-npm, MetaHarness and every `coding-harness/` package. The current all-in-one
-`sf-cli` remains the only product binary; a future Rust supervisor is separately
+npm, MetaHarness and every `coding-harness/` package. The existing `sf-cli`
+supplies the serving-only and developer builds; a future Rust supervisor is separately
 packaged evidence infrastructure with no product-crate dependency.
 
 Interim M0 tooling records and verifies a host-observed non-closure observation

@@ -118,11 +118,13 @@ Key properties:
 Prerequisite: the pinned Rust toolchain in `rust-toolchain.toml`.
 
 ```bash
-cargo build --locked --workspace
-cargo run --locked -p sf-cli -- --help
+cargo build --locked --release -p sf-cli --no-default-features
+target/release/semantic-fabric --help
 ```
 
-The binary has three commands:
+This serving-only build retains SQLite/PostgreSQL/MySQL but excludes developer commands and dependencies. Build only `sf-cli`: a workspace build can re-enable development backend features. `bash scripts/check-serving-profile.sh` checks the dependency boundary; CI also runs serving regressions and live source TLS with defaults disabled. This is not yet a qualified release artifact.
+
+For development, `cargo run --locked -p sf-cli -- --help` keeps all three commands through the default `development-tools` feature:
 
 | Command | Purpose |
 |---|---|
@@ -295,8 +297,7 @@ harness score:
 - Per-test expected SQLite query and Protocol regression baselines are now
   receipt-bound. They are product regression oracles, not evidence of W3C SPARQL
   Query/Protocol conformance, runtime provenance, or backend admission.
-- The default `sf-cli` dependency receipt closes locked package resolution,
-  enabled features, and normal/build dependency edges only. It does not attest
+- The living `tests/rust-dependency-closure-current.tsv` receipt covers the default **developer** profile's locked packages/features/edges; `tests/rust-dependency-closure.tsv` remains byte-frozen historical evidence. Neither attests
   binary bytes, build-script output, linker or system provenance, an SBOM,
   reproducibility, or production admission.
 - Differential suites compare flat and operator-tree planners with native
@@ -320,8 +321,7 @@ cargo run --locked -p sf-cli -- conformance
 
 ## Application-completion programme
 
-The issue-independent [completion programme](docs/plans/sota-application-completion-programme.md)
-is governed by accepted [ADR-0055](docs/adr/ADR-0055-v1-product-completion-and-release-profile.md).
+The issue-independent [completion programme](docs/plans/sota-application-completion-programme.md) is governed by accepted [ADR-0055](docs/adr/ADR-0055-v1-product-completion-and-release-profile.md).
 It preserves the virtualisation-only, Rust-native, cross-RDBMS charter.
 [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md) is superseded
 as completion authority; its dated evidence and post-1.0 research backlog remain
@@ -330,7 +330,7 @@ visible, not relabelled complete.
 The application is **not complete**. The remaining product path is public
 authentication/authorization, coherent reload and drift handling, total request
 controls and backend cancellation, secure configuration and observability,
-a useful bounded cross-source join, and the minimal deployable Rust artifact.
+a useful bounded cross-source join, and qualification of the serving-only Rust artifact.
 Each closes only through its public API/CLI and required negative/live tests;
 private context/cache, lifecycle or parser-worker components alone do not close it.
 The generated capability table above is the current evidence-scoped status.

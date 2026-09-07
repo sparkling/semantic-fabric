@@ -2,7 +2,7 @@ use super::*;
 use clap::Parser;
 use std::path::PathBuf;
 
-use crate::{Cli, Command};
+use crate::Cli;
 
 #[test]
 fn file_environment_and_cli_have_exact_precedence() {
@@ -35,9 +35,7 @@ metrics = true
     })
     .expect("layer config");
     let parsed = Cli::try_parse_from(expanded).expect("parse layered args");
-    let Command::Serve(args) = parsed.command else {
-        panic!("serve command")
-    };
+    let args = parsed.command.into_serve();
     assert_eq!(args.max_result_items, 30);
     assert!(!args.metrics);
     assert_eq!(args.source_input.source.as_deref(), Some("sqlite:file.db"));
@@ -70,9 +68,7 @@ ontology = "ontology.ttl"
     })
     .expect("layer config");
     let parsed = Cli::try_parse_from(expanded).expect("parse layered args");
-    let Command::Serve(args) = parsed.command else {
-        panic!("serve command")
-    };
+    let args = parsed.command.into_serve();
     assert_eq!(args.source_input.source_env.as_deref(), Some("LIVE_SOURCE"));
     assert!(args.source_input.source.is_none());
     std::fs::remove_file(path).expect("remove config");
@@ -124,9 +120,7 @@ fn credential_reference_override_must_preserve_row_security() {
                 .then(|| "NEW_TOKEN".into())
         })
         .expect("layer configuration");
-        let Command::Serve(args) = Cli::try_parse_from(expanded).unwrap().command else {
-            panic!("serve")
-        };
+        let args = Cli::try_parse_from(expanded).unwrap().command.into_serve();
         assert_eq!(args.auth_token_env.as_deref(), Some("NEW_TOKEN"));
         assert_eq!(args.pg_rls_context_env.as_deref(), Some("ROW_POLICY"));
     }
@@ -197,9 +191,7 @@ fn effective_scalar_overrides_are_validated_after_merge() {
         _ => None,
     })
     .unwrap();
-    let Command::Serve(args) = Cli::try_parse_from(expanded).unwrap().command else {
-        panic!("serve")
-    };
+    let args = Cli::try_parse_from(expanded).unwrap().command.into_serve();
     assert_eq!(args.timeout_secs, 30);
     assert_eq!(args.log_level, crate::TelemetryLevel::Warn);
     assert!(!args.metrics);
@@ -235,9 +227,7 @@ fn values_cannot_inject_options_or_request_help() {
         .chain([path.clone().into_os_string()])
         .collect();
     let expanded = expand_with_env(argv, |_| None).unwrap();
-    let Command::Serve(args) = Cli::try_parse_from(expanded).unwrap().command else {
-        panic!("serve")
-    };
+    let args = Cli::try_parse_from(expanded).unwrap().command.into_serve();
     assert_eq!(args.mapping_input.mapping.as_deref(), Some("--help"));
     assert_eq!(args.ontology, "--allow-unauthenticated");
     assert!(!args.allow_unauthenticated);
@@ -304,9 +294,7 @@ fn command_line_alone_preserves_false_and_enforces_the_size_bound() {
     .map(Into::into)
     .collect();
     let expanded = expand_with_env(argv.clone(), |_| None).unwrap();
-    let Command::Serve(args) = Cli::try_parse_from(expanded).unwrap().command else {
-        panic!("serve")
-    };
+    let args = Cli::try_parse_from(expanded).unwrap().command.into_serve();
     assert_eq!(args.auth_token_env.as_deref(), Some("TOKEN"));
     assert!(!args.allow_unauthenticated);
     let mut oversized = argv[..argv.len() - 1].to_vec();

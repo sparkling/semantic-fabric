@@ -19,7 +19,7 @@ Recovery integration `458faf1` on `main` passes full locked Rust tests/build,
 formatting, the hardened harness build and focused integration/model contracts.
 This closes fragmented integration, not the remaining public requirements.
 One integration owner writes on `main`; independent readers/reviewers may help.
-Finish the next public-path closure before opening another implementation lane.
+Finish the next public-path closure before opening another implementation lane. The serving/developer split now builds `sf-cli` alone with defaults disabled, retains SQLite/PostgreSQL/MySQL and all serving controls, and excludes conformance/benchmark dependencies. Required CLI tests include command rejection and live encrypted PostgreSQL/MySQL single-source/mixed UNION execution. Exact artifact smoke, versioning, reference deployment and the minimum release bundle remain open; this does not adopt proposed ADR-0039's post-1.0 gates.
 
 | Order | Required outcome | Observable acceptance |
 |---|---|---|
@@ -75,8 +75,8 @@ ADR-0042 through ADR-0047 remain proposed. Their implemented Rust kernel and Nod
 
 On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder `umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-intentional skips), replayed the RDB2RDF, query, Protocol, dependency-closure, performance-scenario, and capability authorities, remained Git-clean, and produced byte-identical authority and controller digests. The harness correctly rejected an earlier pair created under `umask 0002` because tracked inputs were group-writable; no trust check was relaxed. This closes current-tranche checkout repeatability, not binary reproducibility or final agreement.
 
-M0A remains open for product minimality/admission and ADR-0055's SBOM,
-signature, provenance and clean-build smoke. Complete binary/runtime closure,
+M0A's standalone serving dependency boundary is implemented; admission and ADR-0055's SBOM,
+signature, provenance and clean-build smoke remain open. Complete binary/runtime closure,
 controlled performance and two-builder byte identity remain post-1.0.
 
 ## Outcome

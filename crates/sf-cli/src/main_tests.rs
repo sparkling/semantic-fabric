@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "development-tools")]
 #[test]
 fn non_serve_commands_bypass_structured_subscriber_initialization() {
     for command in [Command::Conformance, Command::Bench] {
@@ -13,6 +14,7 @@ fn non_serve_commands_bypass_structured_subscriber_initialization() {
     }
 }
 
+#[cfg(feature = "development-tools")]
 #[test]
 fn suite_root_points_at_the_vendored_w3c_suite_relative_to_the_crate() {
     let root = suite_root();
@@ -26,6 +28,7 @@ fn suite_root_points_at_the_vendored_w3c_suite_relative_to_the_crate() {
     );
 }
 
+#[cfg(feature = "development-tools")]
 #[test]
 fn suite_root_cases_dir_and_earl_report_paths_exist_under_the_workspace() {
     let root = suite_root();
@@ -166,9 +169,7 @@ fn serve_second_source_requires_one_selector_and_its_mapping() {
         "second.ttl",
     ]))
     .expect("complete two-source startup arguments");
-    let Command::Serve(parsed) = parsed.command else {
-        panic!("serve command")
-    };
+    let parsed = parsed.command.into_serve();
     assert_eq!(
         parsed
             .additional_source_input
@@ -193,9 +194,7 @@ fn serve_second_source_requires_one_selector_and_its_mapping() {
         "http://example.com/second/",
     ]))
     .expect("complete two-source Direct Mapping startup arguments");
-    let Command::Serve(direct) = direct.command else {
-        panic!("serve command")
-    };
+    let direct = direct.command.into_serve();
     assert_eq!(
         direct
             .additional_source_input
@@ -219,9 +218,7 @@ fn serve_request_admission_limit_has_a_finite_default_and_accepts_an_override() 
         "ontology.ttl",
     ];
     let defaults = Cli::try_parse_from(base).expect("default serve arguments");
-    let Command::Serve(defaults) = defaults.command else {
-        panic!("serve command")
-    };
+    let defaults = defaults.command.into_serve();
     assert_eq!(
         defaults.max_concurrent_requests,
         DEFAULT_MAX_CONCURRENT_REQUESTS
@@ -233,17 +230,13 @@ fn serve_request_admission_limit_has_a_finite_default_and_accepts_an_override() 
 
     let explicit = Cli::try_parse_from(base.into_iter().chain(["--max-concurrent-requests", "7"]))
         .expect("explicit request-admission limit");
-    let Command::Serve(explicit) = explicit.command else {
-        panic!("serve command")
-    };
+    let explicit = explicit.command.into_serve();
     assert_eq!(explicit.max_concurrent_requests, 7);
 
     let explicit_shutdown =
         Cli::try_parse_from(base.into_iter().chain(["--shutdown-timeout-secs", "9"]))
             .expect("explicit shutdown timeout");
-    let Command::Serve(explicit_shutdown) = explicit_shutdown.command else {
-        panic!("serve command")
-    };
+    let explicit_shutdown = explicit_shutdown.command.into_serve();
     assert_eq!(explicit_shutdown.shutdown_timeout_secs, 9);
 }
 
@@ -260,9 +253,7 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
         "ontology.ttl",
     ];
     let parsed = Cli::try_parse_from(base).unwrap();
-    let Command::Serve(args) = parsed.command else {
-        panic!("serve command")
-    };
+    let args = parsed.command.into_serve();
     assert_eq!(args.log_level, TelemetryLevel::Info);
     assert!(!args.metrics);
 
@@ -273,9 +264,7 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
         ("info", TelemetryLevel::Info),
     ] {
         let parsed = Cli::try_parse_from(base.into_iter().chain(["--log-level", value])).unwrap();
-        let Command::Serve(args) = parsed.command else {
-            panic!("serve command")
-        };
+        let args = parsed.command.into_serve();
         assert_eq!(args.log_level, expected);
     }
     for invalid in ["debug", "trace", "sf_sql=debug", "info,hyper=trace"] {
@@ -283,9 +272,7 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
     }
 
     let parsed = Cli::try_parse_from(base.into_iter().chain(["--metrics"])).unwrap();
-    let Command::Serve(args) = parsed.command else {
-        panic!("serve command")
-    };
+    let args = parsed.command.into_serve();
     assert!(args.metrics);
 }
 
@@ -317,8 +304,8 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
                 direct_mapping_base: None,
             },
         },
-        ontology: suite_root()
-            .join("manifest-evaluation.ttl")
+        ontology: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/w3c/rdb2rdf/manifest-evaluation.ttl")
             .to_string_lossy()
             .into_owned(),
         bind: "127.0.0.1:0".to_owned(),
@@ -340,6 +327,7 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
     assert_eq!(serve(opts), ExitCode::FAILURE);
 }
 
+#[cfg(feature = "development-tools")]
 #[test]
 fn conformance_returns_success_exit_code_on_the_real_suite() {
     let unique = std::time::SystemTime::now()
