@@ -9,7 +9,11 @@ use sf_serve::{
 use crate::telemetry::TelemetryLevel;
 
 #[derive(clap::Args)]
+#[command(args_override_self = true)]
 pub(super) struct ServeArgs {
+    /// Validated TOML configuration. CLI arguments override environment, then file values.
+    #[arg(long)]
+    pub(super) config: Option<String>,
     /// Environment variable with a versioned registry of opaque subjects and
     /// credential and PostgreSQL-RLS or portable-row-policy environment references.
     #[arg(long, conflicts_with_all = ["auth_token_env", "pg_rls_context_env", "allow_unauthenticated"])]
@@ -24,7 +28,7 @@ pub(super) struct ServeArgs {
     pub(super) pg_rls_context_env: Option<String>,
     /// Explicitly allow anyone to query all mapped data (development only).
     /// Without this, --auth-token-env, or --auth-subjects-env, all queries are denied.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
     pub(super) allow_unauthenticated: bool,
     #[command(flatten)]
     pub(super) source_input: SourceArgs,
@@ -42,7 +46,7 @@ pub(super) struct ServeArgs {
     #[arg(long, value_enum, default_value_t = TelemetryLevel::Info)]
     pub(super) log_level: TelemetryLevel,
     /// Expose bounded-cardinality Prometheus metrics at `/metrics`.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
     pub(super) metrics: bool,
     /// Request timeout in seconds (ADR-0010).
     #[arg(long, default_value_t = 30)]

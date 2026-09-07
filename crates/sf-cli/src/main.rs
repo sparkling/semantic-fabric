@@ -18,6 +18,7 @@ use sf_serve::{
     DEFAULT_SHUTDOWN_TIMEOUT,
 };
 
+mod layered_config;
 mod metrics;
 mod serve_args;
 mod telemetry;
@@ -53,7 +54,14 @@ enum Command {
 
 fn main() -> ExitCode {
     sf_sparql::dispatch_private_parser_worker_v1();
-    let command = Cli::parse().command;
+    let argv = match layered_config::expand(std::env::args_os().collect()) {
+        Ok(argv) => argv,
+        Err(error) => {
+            eprintln!("semantic-fabric: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let command = Cli::parse_from(argv).command;
     if let Err(error) = initialize_telemetry_for(&command, telemetry::init) {
         eprintln!("semantic-fabric: {error}");
         return ExitCode::FAILURE;

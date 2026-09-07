@@ -52,13 +52,25 @@ implements:
 > Mask enforcement and paired access-decision metrics remain
 > open; the three-family Prometheus contract is unchanged.
 >
+> The current public `serve` boundary now implements typed startup layering:
+> validated defaults `<` a bounded deny-unknown TOML document `<`
+> `SEMANTIC_FABRIC_*` environment values `<` explicit CLI arguments. Source,
+> mapping, secondary-source and security alternatives replace as whole selector
+> groups at the higher tier, so layering cannot combine mutually exclusive
+> transports. TOML is capped at 1 MiB and contains only environment references
+> for source credentials, bearer material, RLS claims and portable row values;
+> existing startup boundaries resolve those values once and keep all failures
+> redacted. Required unit and real-child tests prove precedence, rejection and
+> public-path reachability. This closes the startup-layering slice, not hot
+> reload, TLS or a direct external secret-store protocol.
+>
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
 > but there is no distinct `emit_sql` span and no adapter-internal span propagation
 > into blocking `sf-sql` bridges. **R4 is partial:** the exactly-once sticky
 > governance winner emits both a bounded trace event and the closed counter, but
 > the complete ADR-0010 action set is not yet covered. The remaining ten metric
-> families, OTLP, separate control-listener/authentication policy, the layered
-> configuration model, and measured instrumentation-overhead evidence remain
+> families, OTLP, separate control-listener/authentication policy, verified TLS,
+> and measured instrumentation-overhead evidence remain
 > pending.
 >
 > Earlier boundary work: commits
@@ -93,9 +105,9 @@ implements:
 > body error
 > `result stream failed`, so driver, mapping, schema and SQL text cannot escape
 > through that channel. The failure still terminates the stream; it does not turn
-> the response into RFC 9457 or prove an atomic no-prefix contract. Environment
-> injection is not the layered
-> TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
+> the response into RFC 9457 or prove an atomic no-prefix contract. That earlier
+> environment-only input was later incorporated into the bounded typed startup
+> layering described above; remote PostgreSQL still uses `NoTls`.
 > The 2026-09-05 Rust runtime-snapshot foundation exposes a
 > closed redacted readiness state: new requests acquire one immutable snapshot
 > before request-body polling, not-ready state returns `503` with `Retry-After`,
@@ -157,7 +169,7 @@ Concrete catalogue:
 Limit-hit / timeout / rejection / injection-attempt emit **both** a `tracing` warn-event **and** a `metrics` counter — one trace, one alertable metric.
 
 ### Configuration model
-Layered precedence: **defaults < config file (TOML) < env vars < secret injection** (via `figment`/`config` + `serde`, validated at startup, fail-fast). Sections: `[source]` (connections, dialect — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level, OTLP endpoint, metrics port), `[serve]` (endpoint config). **Secrets** are referenced, never inline (e.g. `password_env = "PG_PASSWORD"`).
+Layered precedence: **defaults < config file (TOML) < env vars < secret injection**, validated at startup and fail-fast. The implemented boundary uses an explicit bounded `serde`/TOML model and translates validated layers into the existing typed Clap contract; a general `figment`/`config` dependency is not required. Sections: `[source]` (connections, dialect — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level, OTLP endpoint, metrics port), `[serve]` (endpoint config), and `[security]` (environment references only). **Secrets** are referenced, never inline (e.g. `auth_token_env = "SF_QUERY_BEARER"`).
 
 ### Health, readiness, and bounded shutdown
 

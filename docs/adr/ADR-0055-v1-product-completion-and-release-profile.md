@@ -25,7 +25,7 @@ implements: []
 
 ## Status boundary
 
-**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules; product completion remains open.
+**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable row authorization and typed layered startup configuration have now closed two product boundaries; product completion remains open on the explicit release blockers below.
 
 This decision is **accepted**. It replaces ADR-0038 as the controlling
 definition of product completion and release work for v1. ADR-0038 remains an

@@ -27,6 +27,19 @@ fn serve_command(mapping: &str) -> Command {
     command
 }
 
+fn config_file(contents: &str) -> std::path::PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "sf_cli_layered_config_{}_{unique}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, contents).expect("write isolated configuration");
+    path
+}
+
 fn run(mut command: Command) -> Output {
     command.output().expect("run semantic-fabric")
 }
@@ -68,6 +81,52 @@ fn assert_structured_startup_failure(stderr: &str, expected: &str) {
         .expect("correlation string");
     assert!(correlation.starts_with("sf-"), "stderr={stderr:?}");
     assert_eq!(correlation.len(), 36, "stderr={stderr:?}");
+}
+
+#[test]
+fn layered_config_reaches_the_public_source_boundary_and_never_embeds_secrets() {
+    const LAYERED_SECRET: &str = "sf_layered_secret_NEVER_EXPOSE_0123456789";
+    let mapping = missing_mapping();
+    let config = config_file(&format!(
+        r#"
+[source]
+source_env = "SF_LAYERED_SOURCE_REF"
+[mappings]
+mapping = "{mapping}"
+[graphs]
+ontology = "{ONTOLOGY}"
+[governance]
+max_query_len = 2048
+[security]
+auth_token_env = "SF_LAYERED_QUERY_TOKEN"
+"#
+    ));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
+    command
+        .args(["serve", "--config"])
+        .arg(&config)
+        .env_remove("SF_LAYERED_SOURCE_REF")
+        .env("SF_LAYERED_QUERY_TOKEN", LAYERED_SECRET);
+    let output = run(command);
+    assert_opaque_source_failure(output, Some(LAYERED_SECRET));
+    std::fs::remove_file(config).expect("remove isolated configuration");
+}
+
+#[test]
+fn invalid_layered_config_is_bounded_and_redacted_before_clap_or_source_io() {
+    let config = config_file("unknown_secret = 'NEVER_PRINT_THIS_VALUE'");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
+    command.args(["serve", "--config"]).arg(&config);
+    let output = run(command);
+    assert_eq!(output.status.code(), Some(1));
+    assert_absent(&output, "NEVER_PRINT_THIS_VALUE");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.len() < 512);
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("UTF-8"),
+        "semantic-fabric: startup configuration is invalid\n"
+    );
+    std::fs::remove_file(config).expect("remove isolated configuration");
 }
 
 #[test]
