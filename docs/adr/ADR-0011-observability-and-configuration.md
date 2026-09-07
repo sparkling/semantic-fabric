@@ -55,13 +55,22 @@ implements:
 > The current public `serve` boundary now implements typed startup layering:
 > validated defaults `<` a bounded deny-unknown TOML document `<`
 > `SEMANTIC_FABRIC_*` environment values `<` explicit CLI arguments. Source,
-> mapping, secondary-source and security alternatives replace as whole selector
-> groups at the higher tier, so layering cannot combine mutually exclusive
-> transports. TOML is capped at 1 MiB and contains only environment references
+> mapping and secondary-source alternatives replace as whole selector groups.
+> Token-reference rotation retains lower row claims; a registry cannot become a
+> lone unrestricted bearer. Explicit mode changes reject incompatible settings,
+> and false anonymous permission never conflicts with authentication. Values
+> merge before effective scalar validation and render as single option/value
+> arguments. Non-regular files reject without waiting for a FIFO writer; TOML,
+> environment, CLI and effective settings are each capped at 1 MiB. Static help
+> bypasses configuration; argument terminators cannot bypass it during execution.
+> TOML contains only environment references
 > for source credentials, bearer material, RLS claims and portable row values;
 > existing startup boundaries resolve those values once and keep all failures
-> redacted. Required unit and real-child tests prove precedence, rejection and
-> public-path reachability. This closes the startup-layering slice, not hot
+> redacted. Required unit and real-child tests prove precedence, row-policy
+> preservation, opaque errors and an authenticated exact two-source HTTP query.
+> These security regressions correct the earlier whole-security-group merge;
+> initial precedence tests alone did not establish this boundary. This closes
+> the startup-layering slice, not hot
 > reload, TLS or a direct external secret-store protocol.
 >
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
@@ -133,8 +142,8 @@ implements:
 > `GET`/`HEAD /sparql` Service Description discovery as control metadata: it
 > consumes no request body, runtime lease, deadline, or application-work permit,
 > including while saturated, not ready, or draining. The complete ADR-0011
-> control plane still requires the remaining ten metric families, OTLP, layered
-> configuration, verified TLS, source polling/failure policy, and SLO
+> control plane still requires the remaining ten metric families, OTLP,
+> verified TLS, source polling/failure policy, and SLO
 > qualification named above.
 
 ## Context and Problem Statement
@@ -169,7 +178,7 @@ Concrete catalogue:
 Limit-hit / timeout / rejection / injection-attempt emit **both** a `tracing` warn-event **and** a `metrics` counter — one trace, one alertable metric.
 
 ### Configuration model
-Layered precedence: **defaults < config file (TOML) < env vars < secret injection**, validated at startup and fail-fast. The implemented boundary uses an explicit bounded `serde`/TOML model and translates validated layers into the existing typed Clap contract; a general `figment`/`config` dependency is not required. Sections: `[source]` (connections, dialect — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level, OTLP endpoint, metrics port), `[serve]` (endpoint config), and `[security]` (environment references only). **Secrets** are referenced, never inline (e.g. `auth_token_env = "SF_QUERY_BEARER"`).
+Layered precedence: **defaults < config file (TOML) < env vars < CLI**, validated at startup and fail-fast. Secret references are resolved once after settings merge, not as another settings tier. The implemented boundary uses a bounded `serde`/TOML model and validates effective values through the typed Clap contract; a general `figment`/`config` dependency is not required. Sections: `[source]` (connections — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level and metrics enablement), `[serve]` (endpoint config), and `[security]` (environment references and explicit anonymous permission). OTLP endpoint/metrics-port settings are not implemented. **Secrets** are referenced, never inline (e.g. `auth_token_env = "SF_QUERY_BEARER"`); direct external secret-store transport remains separate work.
 
 ### Health, readiness, and bounded shutdown
 

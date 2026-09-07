@@ -136,6 +136,14 @@ fn start_server(enable_metrics: bool) -> (Fixture, SocketAddr, Server) {
 }
 
 fn start_with_token(enable_metrics: bool, token: Option<&str>) -> (Fixture, SocketAddr, Server) {
+    start_configured(enable_metrics, token, false)
+}
+
+fn start_configured(
+    enable_metrics: bool,
+    token: Option<&str>,
+    use_config: bool,
+) -> (Fixture, SocketAddr, Server) {
     let mut fixture = Fixture::new();
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
@@ -156,30 +164,75 @@ fn start_with_token(enable_metrics: bool, token: Option<&str>) -> (Fixture, Sock
 
     let address = available_address();
     let mut command = Command::new(BINARY);
-    command.args([
-        "serve",
-        "--source",
-        &format!("sqlite:{}", first_db.display()),
-        "--mapping",
-        first_mapping.to_str().unwrap(),
-        "--source-2",
-        &format!("sqlite:{}", second_db.display()),
-        "--mapping-2",
-        second_mapping.to_str().unwrap(),
-        "--ontology",
-        ontology.to_str().unwrap(),
-        "--bind",
-        &address.to_string(),
-    ]);
-    if let Some(token) = token {
+    command.env_clear();
+    if use_config {
+        let config = fixture.path("serve.toml");
+        let value = toml::toml! {
+            [source]
+            source_env = "SF_TEST_SOURCE"
+            source_env_2 = "SF_TEST_SOURCE_2"
+            [mappings]
+            mapping = (first_mapping.to_str().unwrap())
+            mapping_2 = (second_mapping.to_str().unwrap())
+            [graphs]
+            ontology = (ontology.to_str().unwrap())
+            [governance]
+            timeout_secs = 0
+            [serve]
+            bind = "invalid-file-bind"
+            [observability]
+            metrics = true
+            log_level = "invalid-file-level"
+            [security]
+            auth_token_env = "SF_OLD_TOKEN"
+            allow_unauthenticated = false
+        };
+        std::fs::write(&config, toml::to_string(&value).unwrap()).unwrap();
         command
-            .args(["--auth-token-env", "SF_TEST_QUERY_BEARER"])
-            .env("SF_TEST_QUERY_BEARER", token);
+            .args(["serve", "--config"])
+            .arg(config)
+            .args([
+                "--bind",
+                &address.to_string(),
+                "--auth-token-env",
+                "SF_TEST_QUERY_BEARER",
+            ])
+            .arg(format!("--metrics={enable_metrics}"))
+            .env("SF_TEST_SOURCE", format!("sqlite:{}", first_db.display()))
+            .env(
+                "SF_TEST_SOURCE_2",
+                format!("sqlite:{}", second_db.display()),
+            )
+            .env("SF_TEST_QUERY_BEARER", token.unwrap())
+            .env("SEMANTIC_FABRIC_TIMEOUT_SECS", "30")
+            .env("SEMANTIC_FABRIC_LOG_LEVEL", "info")
+            .env("SEMANTIC_FABRIC_BIND", "invalid-env-bind");
     } else {
-        command.arg("--allow-unauthenticated");
-    }
-    if enable_metrics {
-        command.arg("--metrics");
+        command.args([
+            "serve",
+            "--source",
+            &format!("sqlite:{}", first_db.display()),
+            "--mapping",
+            first_mapping.to_str().unwrap(),
+            "--source-2",
+            &format!("sqlite:{}", second_db.display()),
+            "--mapping-2",
+            second_mapping.to_str().unwrap(),
+            "--ontology",
+            ontology.to_str().unwrap(),
+            "--bind",
+            &address.to_string(),
+        ]);
+        if let Some(token) = token {
+            command
+                .args(["--auth-token-env", "SF_TEST_QUERY_BEARER"])
+                .env("SF_TEST_QUERY_BEARER", token);
+        } else {
+            command.arg("--allow-unauthenticated");
+        }
+        if enable_metrics {
+            command.arg("--metrics");
+        }
     }
     let child = command
         .stdout(Stdio::null())
@@ -213,8 +266,17 @@ fn cli_serves_the_two_source_union_vertical() {
 
 #[test]
 fn cli_bearer_reference_protects_real_two_source_queries() {
+    assert_authenticated_union(false);
+}
+
+#[test]
+fn layered_configuration_serves_authenticated_union_with_effective_overrides() {
+    assert_authenticated_union(true);
+}
+
+fn assert_authenticated_union(use_config: bool) {
     const TOKEN: &str = "test-only-native-cli-token-0123456789";
-    let (_fixture, address, mut server) = start_with_token(false, Some(TOKEN));
+    let (_fixture, address, mut server) = start_configured(false, Some(TOKEN), use_config);
     let deadline = Instant::now() + Duration::from_secs(10);
     let denied = loop {
         if let Some(response) = request_with_token(address, None) {
@@ -234,6 +296,10 @@ fn cli_bearer_reference_protects_real_two_source_queries() {
     let wrong = request_with_token(address, Some("wrong")).unwrap();
     assert!(wrong.starts_with("HTTP/1.1 401"));
     assert!(!wrong.contains(TOKEN));
+    assert!(
+        metrics(address).is_none(),
+        "false CLI metrics override must keep the route disabled"
+    );
 }
 
 #[test]

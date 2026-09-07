@@ -25,7 +25,7 @@ implements: []
 
 ## Status boundary
 
-**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable row authorization and typed layered startup configuration have now closed two product boundaries; product completion remains open on the explicit release blockers below.
+**Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable equality-row authorization and typed layered startup configuration close narrow product boundaries, not general ABAC or operability. Configuration follow-up corrects row-policy loss during token rotation, argument bypass/injection, blocking non-regular input and unredacted effective-value errors; real authenticated two-source HTTP execution supplements precedence tests. Product completion remains open on the explicit release blockers below.
 
 This decision is **accepted**. It replaces ADR-0038 as the controlling
 definition of product completion and release work for v1. ADR-0038 remains an
@@ -300,7 +300,7 @@ subset for exact source/table/column rules using bound parameters, with public
 SQLite query and two-source UNION isolation plus fail-before-I/O rejection.
 General ABAC/sensitivity, live cross-backend portable-policy qualification,
 external issuer integration and policy-aware reload, general reload/drift,
-complete total governance, verified TLS/layered configuration/OTLP, the full
+complete total governance, verified TLS/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.
 

@@ -26,7 +26,7 @@ As of 2026-09-07, the generated catalog records:
 - **Limitation:** Full SPARQL 1.2 Query or Protocol conformance is not claimed.
 - **Qualified:** The required per-PR generated QE train is exactly 5,000 fixed-seed SQLite SELECT cases: 50 generated schema/data/R2RML fixtures times 100 queries, compared across four compiler paths and a separately materialized spareval oracle with ordinal replay. It meets only that numeric M4 sub-gate; nightly 100,000, other backends/forms, NoREC/MR1, fuzz/shrink, coverage/mutation, live-service and load/soak gates remain open.
 - **Current:** GET /livez reports fixed event-loop liveness and GET /readyz projects only immutable runtime plus administrative readiness. Their fixed JSON responses do not poll sources or bodies or consume application-work capacity. Automatic source-health detection, reload, the remaining metrics/OTLP catalogue, TLS, SLOs and the complete ADR-0011 control plane remain open.
-- **Current:** Serve layers validated defaults, a bounded deny-unknown typed TOML document, SEMANTIC_FABRIC_* environment overrides and final CLI overrides. Selector groups replace atomically at the higher tier, and configuration stores only secret environment references; values are resolved once through existing redacted startup boundaries. Hot reload, TLS and a direct external secret-store protocol remain open.
+- **Current:** Serve merges bounded typed TOML, environment and final CLI settings over defaults, then validates effective values with redacted errors. Token rotation preserves row policies; a registry cannot become a lone unrestricted bearer. Values cannot inject flags or bypass layers. Required real-child tests prove authenticated exact two-source HTTP execution, bounded input and policy resolution before source I/O. Hot reload, TLS and direct external secret-store transport remain open.
 - **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
 - **Qualified:** Sealed required-live MySQL RDB2RDF execution records 62 passes and one documented R2RMLTC0002f deviation across 63 R2RML cases, plus 12 passes and 12 exact typed unsupported outcomes across 24 Direct Mapping cases under RequirePrimaryKey. Its mysql-w3c-sql-2008-v1 type profile is conformance-only; native product MySQL conservatively treats ambiguous TINYINT(1)/BOOL as integer unless explicit rr:datatype supplies authority. The v5 receipt leaves provider image/toolchain provenance unbound. This is mapping evidence only, not Query/Protocol conformance or production admission.
 - **Qualified:** Before runtime binding, mandatory ontology and effective authored-R2RML mapping form one bounded source-local M-join-T graph. The sealed contract is exactly four rules: three SHACL Core shapes run through rudof Native and one exact parsed, digest-pinned datatype sh:select runs once globally against the same checked store. Violations reject, warnings remain advisory counts, and detailed reports are discarded. Policy v2 binds exact shapes/query, topology, evaluator/parser identities and features, limits, preflight revision and blank-focus policy. The static Product Mock replay keeps ontology categories 01-12 and 14 in T and independently supplies category 13 as M. ADR-0050 is accepted as the lifecycle design, while its wider runtime phases remain incomplete. Private PostgreSQL Direct Mapping generation is separately required-live; public Direct Mapping, generalized SHACL, other backend generations and production admission remain open.
@@ -204,9 +204,14 @@ sensitivity masking, policy installation, or live PostgreSQL/MySQL qualification
 
 `serve` can load the same typed settings from a bounded TOML file. Precedence is
 validated defaults, then TOML, then `SEMANTIC_FABRIC_*` environment variables,
-then explicit CLI arguments. A higher-precedence source, mapping, secondary-source
-or security selector replaces that whole mutually exclusive group. Unknown TOML
-fields, malformed values and documents over 1 MiB fail at startup. Store only
+then explicit CLI arguments. Higher source, mapping and secondary-source selectors
+replace their mutually exclusive group. Rotating a bearer reference preserves its
+row policy; replacing a subject registry with a lone unrestricted token is rejected.
+Explicit anonymous mode must not conflict with credentials or row policies, and
+`allow_unauthenticated = false` never enables it. Values merge before effective
+scalar validation and cannot inject CLI flags. Unknown TOML fields, non-regular
+files and inputs over 1 MiB fail safely; environment and effective settings have
+the same aggregate cap. `serve --help` needs no working configuration. Store only
 environment-variable names for credentials and policy values; their contents are
 resolved once by the existing redacted startup boundary.
 
