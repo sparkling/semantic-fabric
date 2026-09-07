@@ -358,6 +358,10 @@ impl BoundFederatedPlan {
         &self.plan
     }
 
+    pub(crate) fn bounded_join(&self) -> Option<sf_sparql::federation::BoundedJoin> {
+        self.plan.bounded_join().cloned()
+    }
+
     pub(crate) fn authorize_portable_rows(
         &mut self,
         policy: &crate::PortableRowPolicy,
@@ -431,14 +435,24 @@ impl ExecutablePlan {
 pub(crate) struct ExecutableFederatedPlan {
     variables: Vec<String>,
     fragments: [ExecutablePlan; 2],
+    join: Option<sf_sparql::federation::BoundedJoin>,
 }
 
 impl ExecutableFederatedPlan {
-    pub(crate) fn new(variables: Vec<String>, fragments: [ExecutablePlan; 2]) -> Self {
+    pub(crate) fn new(
+        variables: Vec<String>,
+        fragments: [ExecutablePlan; 2],
+        join: Option<sf_sparql::federation::BoundedJoin>,
+    ) -> Self {
         Self {
             variables,
             fragments,
+            join,
         }
+    }
+
+    pub(crate) fn bounded_join(&mut self) -> Option<sf_sparql::federation::BoundedJoin> {
+        self.join.take()
     }
 
     pub(crate) fn into_parts(self) -> (Vec<String>, [ExecutablePlan; 2]) {

@@ -19,9 +19,24 @@ impl VerifiedPostgresGenerationLease {
         F: FnMut(Vec<Option<Term>>) -> Fut + Send,
         Fut: Future<Output = sf_sparql::Result<()>> + Send,
     {
+        self.select_each_with_control(plan, control, control, sink)
+            .await
+    }
+
+    pub(crate) async fn select_each_with_control<F, Fut>(
+        self,
+        plan: &Plan,
+        budget: &RequestBudget,
+        control: &dyn sf_core::query_control::QueryControl,
+        sink: F,
+    ) -> Result<sf_sparql::Result<()>, PgGenerationError>
+    where
+        F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+        Fut: Future<Output = sf_sparql::Result<()>> + Send,
+    {
         let result =
             exec_pg::select_each_pg_controlled(plan, self.execution_client(), control, sink).await;
-        self.finish_bounded(control).await?;
+        self.finish_bounded(budget).await?;
         Ok(result)
     }
 

@@ -69,7 +69,7 @@ impl QueryMode {
 /// The immutable server configuration shared (in an `Arc`) across all requests.
 /// Semantic/compiler/backend state is private and inseparable inside one
 /// immutable [`RuntimeSnapshot`]. The serving API selects either one registered
-/// source or the exact bounded two-source UNION profile; only request-governance
+/// source or the sealed bounded two-source UNION/join profiles; request-governance
 /// knobs remain configurable.
 pub struct ServeConfig {
     pub(crate) query_admission: crate::QueryAdmission,
@@ -110,7 +110,7 @@ impl ServeConfig {
     }
 
     /// Build the bounded two-source serving profile. This mode accepts only the
-    /// source-affine top-level SELECT UNION vertical; it is not broad federation.
+    /// source-affine SELECT UNION and bounded inner join; not broad federation.
     #[cfg(test)]
     pub(crate) fn new_federated(
         sources: [RuntimeSource; 2],

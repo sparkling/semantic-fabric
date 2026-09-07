@@ -1435,6 +1435,25 @@ fn render_cond(
             let ph = dialect.placeholder(*pidx);
             let c = colref(col, dialect, actuals);
             match op {
+                StrMatchOp::CoarseLexicalEqual => match dialect {
+                    Dialect::Sqlite => {
+                        format!("(typeof({c}) <> 'text' OR rtrim({c}, ' ') = rtrim({ph}, ' '))")
+                    }
+                    Dialect::Postgres => format!(
+                        "(pg_catalog.pg_typeof({c}) NOT IN ('pg_catalog.text'::regtype, \
+                         'pg_catalog.varchar'::regtype) OR CAST({c} AS TEXT) = {ph})"
+                    ),
+                    Dialect::MySql => format!(
+                        "(CASE WHEN @@character_set_client <> 'utf8mb4' \
+                         OR @@character_set_connection <> 'utf8mb4' \
+                         OR @@character_set_results IS NULL \
+                         OR @@character_set_results <> 'utf8mb4' \
+                         OR CHARSET({c}) = 'binary' THEN TRUE \
+                         WHEN JSON_VALID(CAST({c} AS CHAR)) THEN TRUE \
+                         ELSE RTRIM(CAST({c} AS CHAR)) = RTRIM({ph}) END)"
+                    ),
+                    _ => return Err(Error::Unsupported("bounded join reducer dialect".into())),
+                },
                 StrMatchOp::Like => format!("{c} LIKE {ph} ESCAPE '\\'"),
                 StrMatchOp::RegexMatch => format!("{c} ~ {ph}"),
                 StrMatchOp::RegexMatchI => format!("{c} ~* {ph}"),

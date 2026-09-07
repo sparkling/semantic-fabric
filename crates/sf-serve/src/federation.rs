@@ -1,4 +1,4 @@
-//! Execution of the bounded two-source `UnionAll` vertical.
+//! Execution of sealed two-source UNION and bounded inner-join profiles.
 
 use std::sync::Arc;
 
@@ -14,6 +14,15 @@ use crate::budget::RequestBudget;
 use crate::pg_generation::{VerifiedGenerationLeases, VerifiedPostgresGenerationLease};
 use crate::problem::{self, ProblemCode};
 use crate::{sqlite_admission, stream, Backend};
+
+mod join;
+type RowSink = Box<
+    dyn FnMut(
+            Vec<Option<sf_core::Term>>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = sf_sparql::Result<()>> + Send>>
+        + Send,
+>;
 
 enum AcquiredFragment {
     RlsPostgres {
@@ -59,16 +68,18 @@ fn take_postgres_generation(
 }
 
 /// Acquire both participating sources before committing a success response,
-/// then concatenate their source-local solution streams through one serializer.
+/// then dispatch sequential UNION streaming or the capped pre-200 join.
 pub(crate) async fn select_union_body(
-    execution: ExecutableFederatedPlan,
+    mut execution: ExecutableFederatedPlan,
     mut generations: VerifiedGenerationLeases,
     format: QueryResultsFormat,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
+    let join = execution.bounded_join();
     let (variables, fragments) = execution.into_parts();
     let rls_tables = fragments.each_ref().map(|fragment| fragment.rls_tables());
     let fragments = fragments.map(|fragment| fragment.into_parts());
+    let source_ids = fragments.each_ref().map(|fragment| fragment.0);
     let valid = fragments[0].0 != fragments[1].0
         && fragments.iter().all(
             |(source_id, binding_identity, backend, verified_generation, _)| {
@@ -123,8 +134,13 @@ pub(crate) async fn select_union_body(
         }
     }
     if !generations.is_empty() {
+        close_acquired(acquired).await;
         let _ = generations.finish().await;
         return Err(problem::response(ProblemCode::Internal));
+    }
+
+    if let Some(join) = join {
+        return join::body(acquired, source_ids, join, variables, format, budget).await;
     }
 
     let drive_budget = budget.clone();
@@ -132,54 +148,13 @@ pub(crate) async fn select_union_body(
         move |mut sink| {
             Box::pin(async move {
                 for fragment in acquired {
-                    match fragment {
-                        AcquiredFragment::RlsPostgres { lease, plan } => {
-                            let result = exec_pg::select_each_pg_controlled(
-                                &plan,
-                                lease.client(),
-                                &drive_budget,
-                                &mut sink,
-                            )
-                            .await;
-                            lease.finish().await?;
-                            result?;
-                        }
-                        AcquiredFragment::Sqlite { lease, plan } => {
-                            let control: Arc<dyn QueryControl> = Arc::new(drive_budget.clone());
-                            exec::select_each_sqlite_owned_interruptible_leased(
-                                &plan, lease, control, &mut sink,
-                            )
-                            .await?;
-                        }
-                        AcquiredFragment::Postgres { connection, plan } => {
-                            exec_pg::select_each_pg_controlled(
-                                &plan,
-                                *connection,
-                                &drive_budget,
-                                &mut sink,
-                            )
-                            .await?;
-                        }
-                        AcquiredFragment::VerifiedPostgres { lease, plan } => {
-                            match lease.select_each(&plan, &drive_budget, &mut sink).await {
-                                Ok(result) => result?,
-                                Err(_) => {
-                                    return Err(sf_sparql::Error::Sql(
-                                        "verified generation close failed".to_owned(),
-                                    ))
-                                }
-                            }
-                        }
-                        AcquiredFragment::MySql { connection, plan } => {
-                            exec_mysql::select_each_mysql_controlled(
-                                &plan,
-                                connection,
-                                &drive_budget,
-                                &mut sink,
-                            )
-                            .await?;
-                        }
-                    }
+                    drive(
+                        fragment,
+                        &drive_budget,
+                        Arc::new(drive_budget.clone()),
+                        &mut sink,
+                    )
+                    .await?;
                 }
                 Ok(())
             })
@@ -188,6 +163,49 @@ pub(crate) async fn select_union_body(
         variables,
         budget.clone(),
     ))
+}
+
+async fn drive(
+    fragment: AcquiredFragment,
+    budget: &RequestBudget,
+    control: Arc<dyn QueryControl>,
+    sink: &mut RowSink,
+) -> sf_sparql::Result<()> {
+    match fragment {
+        AcquiredFragment::RlsPostgres { lease, plan } => {
+            let result =
+                exec_pg::select_each_pg_controlled(&plan, lease.client(), control.as_ref(), sink)
+                    .await;
+            lease.finish().await?;
+            result
+        }
+        AcquiredFragment::Sqlite { lease, plan } => {
+            exec::select_each_sqlite_owned_interruptible_leased(&plan, lease, control, sink).await
+        }
+        AcquiredFragment::Postgres { connection, plan } => {
+            exec_pg::select_each_pg_controlled(&plan, *connection, control.as_ref(), sink).await
+        }
+        AcquiredFragment::VerifiedPostgres { lease, plan } => lease
+            .select_each_with_control(&plan, budget, control.as_ref(), sink)
+            .await
+            .map_err(|_| sf_sparql::Error::Sql("verified generation close failed".into()))?,
+        AcquiredFragment::MySql { connection, plan } => {
+            exec_mysql::select_each_mysql_controlled(&plan, connection, control.as_ref(), sink)
+                .await
+        }
+    }
+}
+
+impl AcquiredFragment {
+    fn plan_mut(&mut self) -> &mut Arc<Plan> {
+        match self {
+            Self::Sqlite { plan, .. }
+            | Self::Postgres { plan, .. }
+            | Self::RlsPostgres { plan, .. }
+            | Self::VerifiedPostgres { plan, .. }
+            | Self::MySql { plan, .. } => plan,
+        }
+    }
 }
 
 async fn close_acquired(acquired: Vec<AcquiredFragment>) {

@@ -25,6 +25,8 @@ const UNION_REVERSED: &str = "SELECT ?s ?left ?right WHERE { \
     { ?s <http://example.test/right> ?right } UNION \
     { ?s <http://example.test/left> ?left } }";
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+#[path = "federated_join_tests.rs"]
+mod join_tests;
 #[path = "federated_security_tests.rs"]
 mod security_tests;
 

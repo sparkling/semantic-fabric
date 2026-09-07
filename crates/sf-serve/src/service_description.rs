@@ -43,17 +43,19 @@ const TWO_SOURCE: &str = r#"@prefix sd: <http://www.w3.org/ns/sparql-service-des
 
 <> a sd:Service ;
     sd:endpoint <> ;
-    sd:supportedLanguage sf:two-source-select-union-query-v1 ;
+    sd:supportedLanguage sf:two-source-bounded-select-query-v1 ;
     sd:resultFormat <http://www.w3.org/ns/formats/SPARQL_Results_JSON>,
         <http://www.w3.org/ns/formats/SPARQL_Results_XML>,
         <http://www.w3.org/ns/formats/SPARQL_Results_CSV>,
         <http://www.w3.org/ns/formats/SPARQL_Results_TSV> ;
     sd:feature sf:select-query,
-        sf:source-affine-two-arm-select-union-v1 .
+        sf:source-affine-two-arm-select-union-v1,
+        sf:source-affine-two-pattern-bounded-join-v1 .
 
-sf:two-source-select-union-query-v1 a sd:Language .
+sf:two-source-bounded-select-query-v1 a sd:Language .
 sf:select-query a sd:Feature .
 sf:source-affine-two-arm-select-union-v1 a sd:Feature .
+sf:source-affine-two-pattern-bounded-join-v1 a sd:Feature .
 "#;
 
 /// The W3C Service Description discovery request is an exact, query-less GET.

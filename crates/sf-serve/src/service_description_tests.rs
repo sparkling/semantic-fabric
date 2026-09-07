@@ -187,7 +187,7 @@ async fn queryless_get_is_stable_redacted_rdf_with_a_matching_endpoint() {
 }
 
 #[tokio::test]
-async fn two_source_mode_adds_only_the_exact_union_feature() {
+async fn two_source_mode_adds_only_the_sealed_union_and_join_features() {
     let (_, _, single) = send(
         single_config(),
         request(Method::GET, Some("text/turtle"), Body::empty()),
@@ -205,12 +205,12 @@ async fn two_source_mode_adds_only_the_exact_union_feature() {
     assert_eq!(first, second);
     assert_ne!(first, single);
     let triples = parsed(&first);
-    assert_eq!(triples.len(), 12);
+    assert_eq!(triples.len(), 14);
     let features = object_iris(&triples, &format!("{SD}feature"));
-    assert_eq!(features.len(), 2);
+    assert_eq!(features.len(), 3);
     assert_eq!(
         object_iris(&triples, &format!("{SD}supportedLanguage")),
-        BTreeSet::from([format!("{SF}two-source-select-union-query-v1")])
+        BTreeSet::from([format!("{SF}two-source-bounded-select-query-v1")])
     );
     assert_eq!(
         object_iris(&triples, &format!("{SD}resultFormat")),
@@ -222,6 +222,7 @@ async fn two_source_mode_adds_only_the_exact_union_feature() {
         ])
     );
     assert!(features.contains(&format!("{SF}source-affine-two-arm-select-union-v1")));
+    assert!(features.contains(&format!("{SF}source-affine-two-pattern-bounded-join-v1")));
     let text = String::from_utf8(first.to_vec()).unwrap();
     for forbidden in [
         SECRET,

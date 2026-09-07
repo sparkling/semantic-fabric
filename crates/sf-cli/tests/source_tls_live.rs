@@ -1,5 +1,7 @@
 //! Required live TLS qualification, always using test-owned disposable providers.
 #![cfg(unix)]
+#[path = "source_tls_live/join.rs"]
+mod join;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
 #[path = "source_tls_live/support.rs"]
@@ -285,6 +287,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     let (mut wrong_second_ca, address) = command(&fixture, &postgres, Some(&mysql));
     wrong_second_ca.env("SF_TLS_ROOTS_2", &postgres.roots);
     assert_rejects(wrong_second_ca, address, &fixture);
+    join::assert_joins(&fixture, &postgres, &mysql);
     eprintln!(
         "Live TLS providers: PostgreSQL {}; MySQL {}",
         postgres.sql("SHOW server_version"),

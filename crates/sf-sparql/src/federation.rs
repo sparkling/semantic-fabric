@@ -1,12 +1,11 @@
 //! Narrow, source-affine federation primitives.
 //!
-//! This module admits only a top-level two-arm `SELECT ... UNION ...` whose
-//! arms each contain exactly one triple pattern. Each arm is still compiled by
-//! an unchanged source-local [`Plan`]; [`FederatedPlan`] only records that the
-//! two resulting bags are concatenated by sequential streaming. This is the
-//! non-blocking merge shape accepted by ADR-0006; it adds no blocking global
-//! operator, spill substrate, general federated algebra, or in-process join
-//! engine, and therefore does not treat proposed ADR-0040 as accepted.
+//! Two sealed ADR-0006 profiles: sequential one-triple `SELECT UNION` arms,
+//! and a two-pattern inner join with a fixed driving batch, conservative key
+//! reducer, exact bounded source-triple sets and capped pre-200 serialization.
+//! Both retain source identity and reject wider algebra before I/O. This adds
+//! no general join engine, source-sized DISTINCT or spill, and does not accept
+//! proposed ADR-0040.
 
 use std::sync::Arc;
 
@@ -21,6 +20,8 @@ use crate::{CompilerBinding, Error, Plan, PlanForm, Result};
 
 #[allow(dead_code)] // Private ADR-0040 comparison prototype; not serving admission.
 mod global;
+mod join;
+pub use join::BoundedJoin;
 
 /// One parsed source-local arm of the narrow federated UNION profile.
 #[derive(Clone, Debug)]
@@ -45,6 +46,7 @@ struct SourceAffineUnion {
 impl SourceAffineUnion {
     /// Parse once, reject every global or composite operator outside the first
     /// bounded federation vertical, and construct two source-local SELECTs.
+    #[cfg(test)]
     fn parse(sparql: &str) -> Result<Self> {
         let query = SparqlParser::new()
             .parse_query(sparql)
@@ -116,7 +118,7 @@ fn validate_arm(pattern: &GraphPattern) -> Result<()> {
 
 fn unsupported<T>() -> Result<T> {
     Err(Error::Unsupported(
-        "federation admits only a two-source SELECT UNION with one triple pattern per arm"
+        "federation requires a qualified two-source SELECT UNION or bounded two-pattern join"
             .to_owned(),
     ))
 }
@@ -163,6 +165,7 @@ fn source_local_union_arm(plan: &Plan) -> bool {
 pub struct FederatedPlan {
     variables: Vec<String>,
     fragments: [SourceFragment; 2],
+    join: Option<BoundedJoin>,
 }
 
 impl FederatedPlan {
@@ -177,7 +180,13 @@ impl FederatedPlan {
         Ok(Self {
             variables,
             fragments,
+            join: None,
         })
+    }
+
+    /// Present only for the sealed bounded two-pattern inner-join profile.
+    pub fn bounded_join(&self) -> Option<&BoundedJoin> {
+        self.join.as_ref()
     }
 
     pub fn variables(&self) -> &[String] {
@@ -201,7 +210,7 @@ impl FederatedPlan {
     }
 }
 
-/// Parse and compile the exact two-arm vertical using two immutable compiler
+/// Parse and compile a sealed UNION or bounded join using two immutable compiler
 /// bindings. Fragment construction stays inside this crate, so no caller can
 /// attach an arbitrary `SourceId` to a detached plan.
 pub fn compile_source_affine_union(
@@ -212,9 +221,9 @@ pub fn compile_source_affine_union(
     compile_source_affine_union_with(sparql, bindings, control, CompileMode::Cached)
 }
 
-/// Compile the exact two-arm profile without reading or populating either
+/// Compile the sealed profiles without reading or populating either
 /// source cache. Serving discards preflight results before generation admission,
-/// then may invoke this again for authoritative protected UNION compilation
+/// then may invoke this again for authoritative protected compilation
 /// under the admitted generation lease and security context.
 pub fn compile_source_affine_union_uncached(
     sparql: &str,
@@ -241,9 +250,15 @@ fn compile_source_affine_union_with(
             "federated compiler bindings must have distinct source identities".to_owned(),
         ));
     }
+    let query = SparqlParser::new()
+        .parse_query(sparql)
+        .map_err(|error| Error::Parse(error.to_string()))?;
+    if join::is_join(&query) {
+        return join::compile(query, bindings, control);
+    }
     let parsed = crate::compiler_telemetry::in_stage(
         crate::compiler_telemetry::CompilerStage::Parse,
-        || SourceAffineUnion::parse(sparql),
+        || SourceAffineUnion::from_query(query),
     )?;
     let mut selected = Vec::with_capacity(2);
     for arm in parsed.arms() {

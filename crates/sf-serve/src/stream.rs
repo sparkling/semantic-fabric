@@ -1,7 +1,7 @@
 //! Bounded-memory serialisation + HTTP-body streaming (ADR-0010 §C, ADR-0006).
 //!
-//! **Every** result path streams end to end through one generic streamer per query
-//! form — none collects the result set or the whole serialised body. Since ADR-0024
+//! Single-source SELECT/graph paths stream through one generic streamer per query
+//! form. The separate bounded federated join stages a capped body pre-200. Since ADR-0024
 //! M5 the three backends share a single async pipeline: each `spawn`ed task acquires
 //! its backend (SQLite `SqliteOwnedBackend` over a `spawn_blocking` cap-1 bridge; PG
 //! `PgBackend<Arc<Client>>`; MySQL a DEDICATED pooled `Conn`), then drives the

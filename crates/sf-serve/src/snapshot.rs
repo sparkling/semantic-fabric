@@ -419,6 +419,7 @@ impl RuntimeSnapshot {
         &self,
         bound: BoundFederatedPlan,
     ) -> Result<ExecutableFederatedPlan, BindingMismatch> {
+        let join = bound.bounded_join();
         let (variables, plans) = bound.into_bound_plans();
         let mut executable = Vec::with_capacity(2);
         for plan in plans {
@@ -429,7 +430,7 @@ impl RuntimeSnapshot {
             executable.push(binding.prepare_execution(plan)?);
         }
         let executable = executable.try_into().map_err(|_| BindingMismatch)?;
-        Ok(ExecutableFederatedPlan::new(variables, executable))
+        Ok(ExecutableFederatedPlan::new(variables, executable, join))
     }
 }
 

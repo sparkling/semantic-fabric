@@ -241,7 +241,7 @@ release notes must be generated or updated from the same truth after code lands.
    and freeze the exact v1 profile. Do not start another unintegrated lane.
 2. Finish public security enforcement, snapshot reload/drift, total request
    controls, configuration/TLS/metrics, and cross-backend cleanup.
-3. Complete the bounded cross-source join/profile and its live differential.
+3. Retain the implemented bounded join/live differential; finish its native cancellation, consistency/admission and exact-release qualification.
 4. Split and version the minimal production artifact and close admitted backend
    matrices.
 5. Run the full integrated gate, repair only from the resulting exact head, and
@@ -294,7 +294,7 @@ optional and individually updated; malformed/failed recall cannot block delivery
 The v1 profile is accepted and **not complete** on 2026-09-07. Existing code has
 exact-path, request-admission, immutable-snapshot, bounded-shutdown, partial
 tracing, mapping-evidence, public bearer query admission/security-partitioned cache, and narrow
-multi-source UNION foundations. Default-off three-family Prometheus metrics are
+multi-source UNION and bounded join paths. Default-off three-family Prometheus metrics are
 integrated with their public CLI/HTTP tests. ADR-0018's explicit bearer profile
 now defaults closed, authenticates before body/source work, preserves context
 through execution, and isolates single-source caches; protected UNION is uncached.
@@ -309,9 +309,9 @@ The schema-version-2 registry now also enforces a bounded portable equality-row
 subset for exact source/table/column rules using bound parameters, with public
 SQLite query and two-source UNION isolation plus fail-before-I/O rejection.
 General ABAC/sensitivity, live cross-backend portable-policy qualification,
-external issuer integration and policy-aware reload, general reload/drift,
+external issuer integration and policy/configuration hot reload, protected backend generations,
 complete total governance, exact-artifact TLS qualification/OTLP, the full
-metric catalogue, useful cross-source join execution, production packaging,
+metric catalogue, total cross-source cancellation, exact production packaging,
 backend admission, and the minimum release bundle remain open.
 
 The Rust serving connectors now enforce certificate/hostname verification for
@@ -322,6 +322,17 @@ Required native CLI tests now verify authenticated exact queries on digest-pinne
 PostgreSQL 16.15/MySQL 8.4.11, including their mixed UNION, actual encrypted
 sessions and independent-CA/hostname failures. Exact-release-artifact evidence
 and backend admission remain required; this narrow result does not complete M3/M6.
+
+The public bounded two-pattern join now implements ADR-0006's fixed-cap merge:
+128 distinct complete driving triples, 4,096 probe triples, conservative bound
+key parameters and exact RDF comparison. Independent graph-oracle and public
+negative tests cover collation, padding, language, NULLs, bags, authorization,
+caps and pre-200 failure. Required CLI tests prove SQLite reload and encrypted
+PostgreSQL/MySQL joins in both triple orders. Each source has its own statement
+view under one application generation; no distributed snapshot is claimed.
+Wider algebra rejects before I/O; native cancellation, protected backend
+generations and exact-release qualification remain required. General DISTINCT,
+spill, Bloom/temp-table optimizations and ADR-0040 are not silently adopted.
 
 ## Consequences
 

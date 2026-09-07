@@ -1,11 +1,10 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
 use serde_json::Value;
 use sf_conformance::capability_catalog::{self, Status};
 use sf_conformance::capability_model::{CommandMode, Verification};
 use sf_conformance::capability_render;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -39,9 +38,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 102);
+    assert_eq!(loaded.catalog.cells.len(), 103);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&71));
+    assert_eq!(counts.get(&Status::Implemented), Some(&72));
     assert_eq!(counts.get(&Status::Planned), Some(&28));
     assert_eq!(counts.get(&Status::Unsupported), Some(&3));
     assert!(loaded
@@ -58,6 +57,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         "authored-generation-reload-generic",
         "bounded-graceful-shutdown-generic",
         "describe-execution-sqlite",
+        "federated-bounded-join-multi-source",
         "federated-two-source-union-multi-source",
         "generated-qe-per-pr-sqlite",
         "health-readiness-probes-generic",

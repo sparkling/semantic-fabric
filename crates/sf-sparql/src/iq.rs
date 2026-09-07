@@ -457,6 +457,10 @@ pub enum SqlCond {
 /// unsupported (the FILTER is not rewritten — never silently dropped).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrMatchOp {
+    /// Federation-only conservative lexical reducer, NOT RDF equality. Its
+    /// statement-local type/encoding guards overfetch uncertain values; the
+    /// bounded coordinator must compare reconstructed RDF terms afterwards.
+    CoarseLexicalEqual,
     /// `col LIKE ? ESCAPE '\'` — substring/prefix/suffix match. Emitted only on
     /// PostgreSQL, whose `LIKE` is genuinely case-sensitive (SPARQL semantics).
     Like,

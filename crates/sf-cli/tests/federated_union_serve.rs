@@ -13,6 +13,8 @@ const QUERY: &str = "SELECT ?s ?value WHERE { \
     { ?s <http://example.test/left> ?value } UNION \
     { ?s <http://example.test/right> ?value } }";
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+#[path = "federated_union_serve/join.rs"]
+mod join;
 #[path = "federated_union_serve/reload.rs"]
 mod reload;
 
@@ -104,6 +106,10 @@ fn request(address: SocketAddr) -> Option<String> {
 }
 
 fn request_with_token(address: SocketAddr, token: Option<&str>) -> Option<String> {
+    request_query(address, QUERY, token)
+}
+
+fn request_query(address: SocketAddr, query: &str, token: Option<&str>) -> Option<String> {
     let auth = token
         .map(|token| format!("Authorization: Bearer {token}\r\n"))
         .unwrap_or_default();
@@ -111,8 +117,8 @@ fn request_with_token(address: SocketAddr, token: Option<&str>) -> Option<String
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     write!(
         stream,
-        "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{QUERY}",
-        QUERY.len()
+        "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{query}",
+        query.len()
     )
     .ok()?;
     let mut response = String::new();
