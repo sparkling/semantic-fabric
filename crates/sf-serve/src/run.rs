@@ -1,10 +1,9 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
 use crate::source::PreparedSource;
-use crate::{router, Backend, IntrospectedSource, ServeError, SourceRef};
+use crate::{Backend, IntrospectedSource, ServeError, SourceRef};
 
 pub struct ServeOptions {
     /// Explicit service-lifetime access policy; resolve credentials before source I/O.
@@ -41,6 +40,8 @@ pub struct ServeOptions {
     pub sqlite_pool_size: usize,
     /// Maximum time to drain active requests after SIGTERM or Ctrl-C.
     pub shutdown_timeout: Duration,
+    /// Periodic authored-generation observation/reload; zero disables the worker.
+    pub reload_interval: Duration,
     /// Optional Prometheus renderer. `None` keeps `/metrics` absent.
     pub metrics: Option<crate::MetricsEndpoint>,
 }
@@ -72,6 +73,7 @@ impl MappingRef {
 
 /// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
+    crate::reload::validate_interval(opts.reload_interval)?;
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;
     crate::lifecycle::validate_request_timeout(opts.timeout)?;
@@ -100,24 +102,10 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
                 error: error.to_string(),
             })
         })?;
-    let result = rt.block_on(async move { serve_async(opts, source, additional).await });
+    let result =
+        rt.block_on(async move { crate::reload::serve_async(opts, source, additional).await });
     rt.shutdown_timeout(Duration::ZERO);
     result
-}
-
-async fn serve_async(
-    opts: ServeOptions,
-    source: PreparedSource,
-    additional: Option<PreparedSource>,
-) -> Result<(), ServeError> {
-    let cfg = crate::startup::build_config(&opts, source, additional).await?;
-
-    let cfg = Arc::new(cfg);
-    let app = match opts.metrics {
-        Some(metrics) => crate::router_with_metrics(cfg.clone(), metrics),
-        None => router(cfg.clone()),
-    };
-    crate::lifecycle::serve(&opts.bind, app, cfg, opts.shutdown_timeout).await
 }
 
 /// Open the prepared backend and pair it with its observed base-table schema.

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-02
-updated: 2026-09-06
+updated: 2026-09-07
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
@@ -55,9 +55,11 @@ The publication primitive is crate-private and deliberately non-authorizing.
 The construction path requires bounded sealed `M ⋈ T` validation before a
 binding, and its policy-v2 receipt partitions compile/cache identity. The
 all-or-nothing registry validates every source before constructing any binding.
-The closed `PgDirectLifecycleV1` path now has an off-path candidate builder and
-one automatic coordinator, but there is still no general reload builder, public
-reload surface or admitted backend profile.
+The closed `PgDirectLifecycleV1` has an off-path candidate builder and one automatic coordinator; no backend profile is production-admitted.
+
+The 2026-09-07 authored profile exposes `--reload-interval-secs` (zero/off by default, otherwise 1–86400 seconds). One serialized off-path worker captures bounded regular-file bytes, rebuilds all configured bindings and sealed semantic admission, rechecks the captured files, then publishes by exact readiness CAS. Changed bytes fence before parsing/source I/O; changed schema fences immediately after that source observation, before remaining validation or the next source. Unchanged observations keep readiness while rebuilding. Fresh pools are a new resource identity even with equal schema, so SQLite replacement cannot keep an old inode through a digest no-op.
+A 60-second attempt deadline fences readiness; the coordinator retains a timed-out worker until actual completion rather than queueing replacements. Panic, including after timeout, is terminal; shutdown cannot be healed. Source endpoints, resolved credentials/TLS trust, caller policies, source slots and service limits remain fixed. Required tests exercise old/new public request results, immediate drift fencing, invalid-input recovery, portable row-policy preservation, FIFO rejection, timeout ownership, actual CLI reload/shutdown, and encrypted PostgreSQL/MySQL single/mixed-source reload.
+This is coherent application-generation publication with observational drift detection, **not** a backend DDL-generation lease, Direct Mapping promotion, configuration/policy hot reload or completion of the broad lifecycle profile.
 
 A private PostgreSQL candidate/request foundation now implements the essential
 verified-generation ownership law. One pool member is marked dirty before

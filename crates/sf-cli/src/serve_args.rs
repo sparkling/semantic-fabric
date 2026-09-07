@@ -90,6 +90,10 @@ pub(super) struct ServeArgs {
     /// Max seconds to drain active requests after SIGTERM or Ctrl-C.
     #[arg(long, default_value_t = DEFAULT_SHUTDOWN_TIMEOUT.as_secs())]
     pub(super) shutdown_timeout_secs: u64,
+    /// Observe and reload authored mappings/ontology at this interval; 0 disables it.
+    /// Source endpoints, credentials, TLS trust and caller policies remain fixed.
+    #[arg(long, default_value_t = 0)]
+    pub(super) reload_interval_secs: u64,
 }
 
 /// Exactly one primary mapping input: authored R2RML or live Direct Mapping.

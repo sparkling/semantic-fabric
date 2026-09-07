@@ -25,6 +25,7 @@ fn options(max_concurrent_requests: usize) -> ServeOptions {
         pg_pool_wait: Duration::from_secs(1),
         sqlite_pool_size: 1,
         shutdown_timeout: std::time::Duration::from_secs(30),
+        reload_interval: Duration::ZERO,
         metrics: None,
     }
 }
@@ -35,6 +36,18 @@ fn invalid_request_ceiling_fails_before_source_file_runtime_or_network_io() {
         let error = serve_blocking(options(invalid))
             .expect_err("request-admission configuration must fail first");
         assert_eq!(error.code(), "startup-configuration");
+    }
+}
+
+#[test]
+fn invalid_reload_interval_fails_before_source_file_runtime_or_network_io() {
+    for interval in [Duration::from_nanos(1), Duration::from_secs(86_401)] {
+        let mut opts = options(1);
+        opts.reload_interval = interval;
+        assert_eq!(
+            serve_blocking(opts).unwrap_err().code(),
+            "startup-configuration"
+        );
     }
 }
 

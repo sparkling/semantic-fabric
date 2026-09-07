@@ -186,7 +186,12 @@ fn production_api_requires_both_sealed_candidate_and_transition_authority() {
     let activation = include_str!("../../activation.rs");
     assert!(activation.contains("candidate: ValidatedRuntimeCandidate"));
     assert!(activation.contains("_authority: &RuntimeTransitionAuthority"));
-    assert!(!activation.contains("candidate: RuntimeSnapshot,"));
+    assert!(activation.contains("\n    fn publish("));
+    assert!(!activation.contains("pub(crate) fn publish("));
+    assert!(!activation.contains("pub fn publish("));
+    let authored = include_str!("../../activation_reload.rs");
+    assert!(authored.contains("candidate: crate::reload::AuthoredCandidate"));
+    assert!(authored.contains("_authority: &crate::reload::ReloadAuthority"));
 
     for request_path in [
         include_str!("../../request_generation.rs"),
@@ -195,6 +200,7 @@ fn production_api_requires_both_sealed_candidate_and_transition_authority() {
     ] {
         assert!(!request_path.contains("transition_not_ready"));
         assert!(!request_path.contains("RuntimeTransitionAuthority"));
+        assert!(!request_path.contains("ReloadAuthority"));
     }
 }
 

@@ -13,8 +13,9 @@ use crate::schema_observation::SourceSchemaObservationV1;
 /// Pairing prevents later constructors from independently mixing a handle and
 /// unrelated schema vector. PostgreSQL observes one coherent read-only,
 /// repeatable-read `public` catalogue snapshot; SQLite and MySQL do not yet
-/// observe a whole catalogue in one explicit transaction. No path detects later
-/// drift, so this type deliberately says `Introspected`, not `VerifiedSnapshot`.
+/// observe a whole catalogue in one explicit transaction. The optional authored
+/// coordinator compares later observations, but supplies no protected DDL lease:
+/// this type deliberately says `Introspected`, not `VerifiedSnapshot`.
 pub struct IntrospectedSource {
     backend: Backend,
     schema: Vec<TableSchema>,

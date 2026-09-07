@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 101);
+    assert_eq!(loaded.catalog.cells.len(), 102);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&70));
+    assert_eq!(counts.get(&Status::Implemented), Some(&71));
     assert_eq!(counts.get(&Status::Planned), Some(&28));
     assert_eq!(counts.get(&Status::Unsupported), Some(&3));
     assert!(loaded
@@ -55,6 +55,7 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
 fn bounded_slices_do_not_promote_broad_programme_profiles() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     for id in [
+        "authored-generation-reload-generic",
         "bounded-graceful-shutdown-generic",
         "describe-execution-sqlite",
         "federated-two-source-union-multi-source",
@@ -73,7 +74,11 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         assert_eq!(cell.status, Status::Implemented);
         assert_eq!(cell.verification, Verification::CiRequired);
     }
-    for id in ["federation-multi-source", "observability-lifecycle-generic"] {
+    for id in [
+        "federation-multi-source",
+        "immutable-snapshot-generic",
+        "observability-lifecycle-generic",
+    ] {
         let cell = loaded
             .catalog
             .cells
@@ -345,7 +350,6 @@ fn unknown_fields_and_missing_cross_product_cells_fail_closed() {
     })
     .unwrap_err();
     assert!(unknown.contains("unknown field"), "{unknown}");
-
     let missing = mutated(|value| {
         array(value, "cells").retain(|cell| cell["id"] != "ask-execution-sqlite");
     })
@@ -360,7 +364,6 @@ fn evidence_drift_and_non_normalized_paths_fail_closed() {
     })
     .unwrap_err();
     assert!(digest.contains("digest mismatch"), "{digest}");
-
     let path = mutated(|value| {
         by_id(array(value, "evidence"), "e-inventory")["path"] =
             Value::String("tests/capabilities/../w3c/rdb2rdf/inventory.tsv".to_owned());
@@ -378,7 +381,6 @@ fn mapping_evidence_cannot_promote_query_or_protocol_cells() {
     })
     .unwrap_err();
     assert!(error.contains("promotes mapping evidence"), "{error}");
-
     let postgres = mutated(|value| {
         let cell = by_id(array(value, "cells"), "select-execution-postgresql");
         cell["evidenceIds"] = serde_json::json!(["e-receipt-postgresql"]);
@@ -411,9 +413,7 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
         .expect("PostgreSQL verified-generation cell");
     assert_eq!(generation.status, Status::Implemented);
     assert_eq!(generation.verification, Verification::CiRequired);
-    assert!(generation.semantic_exact);
-    assert!(generation.bounded);
-    assert!(!generation.advertisable);
+    assert!(generation.semantic_exact && generation.bounded && !generation.advertisable);
     assert_eq!(
         generation.limitation_ids,
         ["l-verified-source-generation-promotion"]
@@ -469,7 +469,6 @@ fn production_admission_and_public_claims_cannot_self_promote() {
     })
     .unwrap_err();
     assert!(admission.contains("production law"), "{admission}");
-
     let claim = mutated(|value| {
         by_id(array(value, "claims"), "claim-compiler-describe")["cellIds"] =
             serde_json::json!(["runtime-source-path-mysql"]);

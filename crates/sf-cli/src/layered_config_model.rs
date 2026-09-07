@@ -69,6 +69,7 @@ struct ServeConfig {
     pg_pool_wait_secs: Option<u64>,
     sqlite_pool_size: Option<usize>,
     shutdown_timeout_secs: Option<u64>,
+    reload_interval_secs: Option<u64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -125,7 +126,8 @@ impl FileConfig {
             pg_pool_size,
             pg_pool_wait_secs,
             sqlite_pool_size,
-            shutdown_timeout_secs
+            shutdown_timeout_secs,
+            reload_interval_secs
         );
         section!(
             security,

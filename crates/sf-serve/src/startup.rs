@@ -1,13 +1,12 @@
 //! Startup assembly for single-source and bounded two-source serving modes.
 
-use std::io::Read;
-
 use sf_core::query_control::QueryLimits;
 use sf_core::SourceId;
 
 use crate::problem::StartupCause;
 use crate::run::ServeOptions;
 use crate::semantic_admission::{MappingOrigin, ValidatedMapping};
+use crate::snapshot::RuntimeSnapshot;
 use crate::source::PreparedSource;
 use crate::{
     IntrospectedSource, MappingRef, RuntimeSource, SemanticOntology, ServeConfig, ServeError,
@@ -20,39 +19,23 @@ pub(crate) async fn build_config(
     opts: &ServeOptions,
     primary: PreparedSource,
     additional: Option<PreparedSource>,
-) -> Result<ServeConfig, ServeError> {
-    let ontology = read_ontology(Some(opts.ontology_path.as_str()))?;
-    let primary_mapping = PreparedMapping::new(&opts.mapping, source_id(0), &ontology)?;
-    let additional_mapping = opts
-        .additional_source
-        .as_ref()
-        .map(|options| PreparedMapping::new(&options.mapping, source_id(1), &ontology))
-        .transpose()?;
-    admit_mapping_profile(
-        &primary_mapping,
-        &primary,
-        additional_mapping.as_ref(),
-        additional.as_ref(),
-    )?;
-    let primary = open_source(opts, primary).await?;
-    let primary = primary_mapping.finish(opts, primary, &ontology).await?;
-
-    let mut config = match (additional_mapping, additional) {
-        (None, None) => ServeConfig::from_runtime_source(primary, ontology),
-        (Some(additional_mapping), Some(additional)) => {
-            let additional = open_source(opts, additional).await?;
-            let additional = additional_mapping
-                .finish(opts, additional, &ontology)
-                .await?;
-            ServeConfig::new_federated([primary, additional], ontology)
-        }
-        _ => {
-            return Err(ServeError::new(StartupCause::Configuration {
-                error: "additional source and mapping must be configured together".to_owned(),
-            }))
-        }
+) -> Result<(ServeConfig, crate::reload::Baseline), ServeError> {
+    let inputs = crate::startup_inputs::SemanticInputs::capture(opts)?;
+    let mut observations = Default::default();
+    let snapshot = build_snapshot(opts, &inputs, primary, additional, |id, source| {
+        crate::reload::Baseline::record(&mut observations, id, source);
+        Ok(())
+    })
+    .await?;
+    if crate::startup_inputs::SemanticInputs::capture(opts)? != inputs {
+        return Err(configuration_error("semantic files changed during startup"));
     }
-    .map_err(snapshot_error)?;
+    let mode = if opts.additional_source.is_some() {
+        crate::config::QueryMode::SourceAffineUnion([source_id(0), source_id(1)])
+    } else {
+        crate::config::QueryMode::Single(source_id(0))
+    };
+    let mut config = ServeConfig::from_snapshot(mode, snapshot);
 
     config.timeout = opts.timeout;
     config.set_query_admission(opts.query_admission.clone());
@@ -66,7 +49,67 @@ pub(crate) async fn build_config(
         opts.max_serialized_bytes,
     )
     .with_max_retained_bytes(opts.max_order_bytes);
-    Ok(config)
+    Ok((config, crate::reload::Baseline::new(inputs, observations)))
+}
+
+pub(crate) async fn build_snapshot(
+    opts: &ServeOptions,
+    inputs: &crate::startup_inputs::SemanticInputs,
+    primary: PreparedSource,
+    additional: Option<PreparedSource>,
+    mut observe: impl FnMut(SourceId, &IntrospectedSource) -> Result<(), ServeError>,
+) -> Result<RuntimeSnapshot, ServeError> {
+    let ontology = SemanticOntology::from_turtle(&inputs.ontology)
+        .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))?;
+    let primary_mapping = PreparedMapping::from_capture(
+        &opts.mapping,
+        source_id(0),
+        &ontology,
+        inputs.primary.as_deref(),
+    )?;
+    let additional_mapping = opts
+        .additional_source
+        .as_ref()
+        .map(|options| {
+            PreparedMapping::from_capture(
+                &options.mapping,
+                source_id(1),
+                &ontology,
+                inputs.additional.as_deref(),
+            )
+        })
+        .transpose()?;
+    admit_mapping_profile(
+        &primary_mapping,
+        &primary,
+        additional_mapping.as_ref(),
+        additional.as_ref(),
+    )?;
+    let primary = open_source(opts, primary).await?;
+    observe(source_id(0), &primary)?;
+    let primary = primary_mapping.finish(opts, primary, &ontology).await?;
+
+    match (additional_mapping, additional) {
+        (None, None) => RuntimeSnapshot::single(sf_sparql::Epoch::default(), ontology, primary),
+        (Some(additional_mapping), Some(additional)) => {
+            let additional = open_source(opts, additional).await?;
+            observe(source_id(1), &additional)?;
+            let additional = additional_mapping
+                .finish(opts, additional, &ontology)
+                .await?;
+            RuntimeSnapshot::new(
+                sf_sparql::Epoch::default(),
+                ontology,
+                vec![primary, additional],
+            )
+        }
+        _ => {
+            return Err(ServeError::new(StartupCause::Configuration {
+                error: "additional source and mapping must be configured together".to_owned(),
+            }))
+        }
+    }
+    .map_err(snapshot_error)
 }
 
 fn source_id(index: usize) -> SourceId {
@@ -85,20 +128,26 @@ enum PreparedMapping {
 }
 
 impl PreparedMapping {
+    #[cfg(test)]
     fn new(
         mapping: &MappingRef,
         source_id: SourceId,
         ontology: &SemanticOntology,
     ) -> Result<Self, ServeError> {
+        Self::from_capture(mapping, source_id, ontology, None)
+    }
+
+    fn from_capture(
+        mapping: &MappingRef,
+        source_id: SourceId,
+        ontology: &SemanticOntology,
+        turtle: Option<&str>,
+    ) -> Result<Self, ServeError> {
         match mapping {
-            MappingRef::R2rmlFile(path) => {
-                let turtle = read_bounded_utf8(path).map_err(|error| {
-                    ServeError::new(StartupCause::MappingRead {
-                        path: path.to_owned(),
-                        error: error.to_string(),
-                    })
-                })?;
-                sf_mapping::parse_r2rml_for_source(&turtle, source_id)
+            MappingRef::R2rmlFile(_) => {
+                let turtle =
+                    turtle.ok_or_else(|| configuration_error("missing captured mapping"))?;
+                sf_mapping::parse_r2rml_for_source(turtle, source_id)
                     .map_err(mapping_error)
                     .and_then(|mapping| {
                         ValidatedMapping::preflight(&mapping, ontology)
@@ -237,42 +286,6 @@ fn semantic_admission_error(error: crate::SemanticAdmissionError) -> ServeError 
 fn snapshot_error(error: crate::SnapshotError) -> ServeError {
     ServeError::new(StartupCause::Configuration {
         error: error.to_string(),
-    })
-}
-
-fn read_ontology(path: Option<&str>) -> Result<SemanticOntology, ServeError> {
-    let Some(path) = path else {
-        return Err(configuration_error(
-            "an explicit ontology Turtle document is required for semantic admission",
-        ));
-    };
-    let turtle = read_bounded_utf8(path).map_err(|error| {
-        ServeError::new(StartupCause::OntologyRead {
-            path: path.to_owned(),
-            error: error.to_string(),
-        })
-    })?;
-    SemanticOntology::from_turtle(&turtle)
-        .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))
-}
-
-fn read_bounded_utf8(path: &str) -> std::io::Result<String> {
-    let maximum = sf_validation::DEFAULT_GRAPH_LIMITS.max_utf8_bytes;
-    let file = std::fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    file.take(u64::try_from(maximum.saturating_add(1)).unwrap_or(u64::MAX))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > maximum {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "semantic input exceeds its byte limit",
-        ));
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "semantic input is not valid UTF-8",
-        )
     })
 }
 

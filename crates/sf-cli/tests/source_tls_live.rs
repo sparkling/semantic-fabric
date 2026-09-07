@@ -1,5 +1,7 @@
 //! Required live TLS qualification, always using test-owned disposable providers.
 #![cfg(unix)]
+#[path = "source_tls_live/reload.rs"]
+mod reload;
 #[path = "source_tls_live/support.rs"]
 mod support;
 
@@ -238,8 +240,16 @@ fn authenticated_public_queries_require_verified_source_tls() {
     let mut postgres = Database::start(&fixture, true);
     let mut mysql = Database::start(&fixture, false);
     assert_ne!(postgres.roots, mysql.roots);
+    postgres.sql("ALTER TABLE public.items ADD COLUMN refreshed TEXT; UPDATE public.items SET refreshed='postgres-reloaded'");
+    mysql.sql("ALTER TABLE sf_tls.items ADD COLUMN refreshed VARCHAR(32); UPDATE sf_tls.items SET refreshed='mysql-reloaded'");
     for database in [&postgres, &mysql] {
         assert_serves(&fixture, database, None, &["same"]);
+        let expected = if std::ptr::eq(database, &postgres) {
+            "postgres-reloaded"
+        } else {
+            "mysql-reloaded"
+        };
+        reload::assert_reloads(&fixture, database, None, &[expected]);
         let (mut wrong_ca, address) = command(&fixture, database, None);
         wrong_ca.env(
             "SF_TLS_ROOTS",
@@ -258,6 +268,12 @@ fn authenticated_public_queries_require_verified_source_tls() {
         assert_rejects(wrong_name, address, &fixture);
     }
     assert_serves(&fixture, &postgres, Some(&mysql), &["same", "same"]);
+    reload::assert_reloads(
+        &fixture,
+        &postgres,
+        Some(&mysql),
+        &["postgres-reloaded", "mysql-reloaded"],
+    );
     postgres.sql("UPDATE public.items SET value='postgres-only'");
     mysql.sql("UPDATE sf_tls.items SET value='mysql-only'");
     assert_serves(

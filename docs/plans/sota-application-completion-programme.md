@@ -24,7 +24,7 @@ Finish the next public-path closure before opening another implementation lane. 
 | Order | Required outcome | Observable acceptance |
 |---|---|---|
 | 1 | Public identity and policy enforcement | Provisioned callers now share one server/policy/pool with distinct trusted RLS settings; public forms/UNION, cache isolation and cleanup pass. Finish portable ABAC, external sensitivity, external identity issuers and policy-aware reload |
-| 2 | Coherent lifecycle and total request controls | Public reload/drift/readiness, timeout, cancellation, overload and cleanup tests pass on every admitted backend |
+| 2 | Coherent lifecycle and total request controls | Opt-in authored reload now has immediate drift fencing, atomic generation replacement, fixed policy preservation, timeout/worker ownership and real CLI recovery/shutdown evidence across SQLite and encrypted PostgreSQL/MySQL single/mixed UNION. Protected backend generations, policy/config hot reload and total controls remain open |
 | 3 | Secure configuration and remaining observability | Public configuration/TLS validation, redaction, bounded metrics/traces and required operational tests pass |
 | 4 | Useful bounded cross-source join | Public CLI/HTTP results equal the materialized oracle; skew, overflow, cancellation and source failure preserve exactness |
 | 5 | Minimal Rust serving artifact and release | Clean-build live smoke, backend/profile matrix and every ADR-0055 minimum release check verify one immutable artifact |

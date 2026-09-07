@@ -12,6 +12,8 @@ use crate::binding::{
 use crate::pg_direct_lifecycle::{RuntimeTransitionAuthority, ValidatedRuntimeCandidate};
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
 use crate::snapshot::RuntimeSnapshot;
+#[path = "activation_reload.rs"]
+mod reload;
 #[path = "activation_security.rs"]
 mod security;
 
@@ -333,16 +335,32 @@ impl RuntimeManager {
             .map_err(|_| ActivationError::StatePoisoned)
     }
 
-    /// Publish a sealed, fully validated candidate if its complete expected
-    /// readiness state is still current. Both arguments are lifecycle-only
-    /// capabilities that request paths cannot construct.
+    /// Publish a sealed candidate only against its complete expected readiness.
+    /// Both arguments are lifecycle-only capabilities request paths cannot mint.
     pub(crate) fn activate_candidate(
         &self,
         _authority: &RuntimeTransitionAuthority,
         candidate: ValidatedRuntimeCandidate,
     ) -> Result<ActivationId, ActivationError> {
         let expected = candidate.expected();
-        let candidate = Arc::new(candidate.into_snapshot());
+        self.publish(expected, candidate.into_snapshot())
+    }
+
+    fn publish(
+        &self,
+        expected: RuntimeReadiness,
+        candidate: RuntimeSnapshot,
+    ) -> Result<ActivationId, ActivationError> {
+        if matches!(
+            expected,
+            RuntimeReadiness::NotReady {
+                cause: ReadinessCause::Administrative | ReadinessCause::StateRevisionExhausted,
+                ..
+            }
+        ) {
+            return Err(ActivationError::ShuttingDown);
+        }
+        let candidate = Arc::new(candidate);
         let mut state = self
             .state
             .write()
@@ -366,8 +384,7 @@ impl RuntimeManager {
         Ok(next)
     }
 
-    /// Test-only bridge: production callers must present the sealed lifecycle
-    /// candidate instead of a raw snapshot.
+    /// Test-only raw bridge; production requires the sealed lifecycle candidate.
     #[cfg(test)]
     pub(crate) fn activate_test_snapshot(
         &self,
@@ -380,11 +397,18 @@ impl RuntimeManager {
         )
     }
 
-    /// Stop new request leases after generation-bound drift or an explicit
-    /// administrative transition. Existing leases remain valid.
+    /// Fence new leases after observed drift; existing leases remain valid.
     pub(crate) fn transition_not_ready(
         &self,
         _authority: &RuntimeTransitionAuthority,
+        expected: RuntimeReadiness,
+        cause: ReadinessCause,
+    ) -> Result<RuntimeReadiness, ActivationError> {
+        self.fence(expected, cause)
+    }
+
+    fn fence(
+        &self,
         expected: RuntimeReadiness,
         cause: ReadinessCause,
     ) -> Result<RuntimeReadiness, ActivationError> {

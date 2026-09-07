@@ -111,6 +111,7 @@ impl ServeConfig {
 
     /// Build the bounded two-source serving profile. This mode accepts only the
     /// source-affine top-level SELECT UNION vertical; it is not broad federation.
+    #[cfg(test)]
     pub(crate) fn new_federated(
         sources: [RuntimeSource; 2],
         ontology: SemanticOntology,
@@ -155,7 +156,7 @@ impl ServeConfig {
         )
     }
 
-    fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
+    pub(crate) fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
         let (shutdown, _) = watch::channel(ShutdownPhase::Running);

@@ -13,6 +13,8 @@ const QUERY: &str = "SELECT ?s ?value WHERE { \
     { ?s <http://example.test/left> ?value } UNION \
     { ?s <http://example.test/right> ?value } }";
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+#[path = "federated_union_serve/reload.rs"]
+mod reload;
 
 struct Fixture {
     root: PathBuf,
@@ -144,6 +146,15 @@ fn start_configured(
     token: Option<&str>,
     use_config: bool,
 ) -> (Fixture, SocketAddr, Server) {
+    start_reloading(enable_metrics, token, use_config, 0)
+}
+
+fn start_reloading(
+    enable_metrics: bool,
+    token: Option<&str>,
+    use_config: bool,
+    reload_interval: u64,
+) -> (Fixture, SocketAddr, Server) {
     let mut fixture = Fixture::new();
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
@@ -235,6 +246,7 @@ fn start_configured(
         }
     }
     let child = command
+        .args(["--reload-interval-secs", &reload_interval.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

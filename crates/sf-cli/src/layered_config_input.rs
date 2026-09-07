@@ -38,6 +38,7 @@ pub(super) const OPTIONS: &[&str] = &[
     "pg-pool-wait-secs",
     "sqlite-pool-size",
     "shutdown-timeout-secs",
+    "reload-interval-secs",
 ];
 
 pub(super) fn environment_name(name: &str) -> String {

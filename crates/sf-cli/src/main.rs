@@ -179,6 +179,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
         shutdown_timeout: Duration::from_secs(args.shutdown_timeout_secs),
+        reload_interval: Duration::from_secs(args.reload_interval_secs),
         metrics,
     };
     match serve_blocking(opts) {

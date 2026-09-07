@@ -255,6 +255,7 @@ impl SourceOrigin {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum PreparedSource {
     Sqlite {
         path: String,
