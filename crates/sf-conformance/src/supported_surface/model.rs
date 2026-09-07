@@ -40,6 +40,7 @@ impl Surface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardReference {
     pub id: String,
+    pub url: String,
     pub status: String,
     pub snapshot_date: String,
     pub byte_length: u64,
@@ -51,6 +52,7 @@ impl StandardReference {
         match surface {
             Surface::SparqlQuery => Self {
                 id: "sparql12-query-2026".to_owned(),
+                url: "https://www.w3.org/TR/2026/WD-sparql12-query-20260625/".to_owned(),
                 status: "w3c-working-draft".to_owned(),
                 snapshot_date: "2026-06-25".to_owned(),
                 byte_length: 1_021_305,
@@ -59,6 +61,7 @@ impl StandardReference {
             },
             Surface::SparqlProtocol => Self {
                 id: "sparql12-protocol-2026".to_owned(),
+                url: "https://www.w3.org/TR/2026/WD-sparql12-protocol-20260708/".to_owned(),
                 status: "w3c-working-draft".to_owned(),
                 snapshot_date: "2026-07-08".to_owned(),
                 byte_length: 160_577,

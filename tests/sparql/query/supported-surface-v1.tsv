@@ -1,0 +1,27 @@
+semantic-fabric-supported-surface-manifest-v1
+meta	profile-id	sqlite-public-query-supported-surface-v1
+meta	surface	sparql-query
+meta	backend	sqlite
+meta	standard-id	sparql12-query-2026
+meta	standard-url	https://www.w3.org/TR/2026/WD-sparql12-query-20260625/
+meta	standard-status	w3c-working-draft
+meta	standard-snapshot-date	2026-06-25
+meta	standard-byte-length	1021305
+meta	standard-sha256	85cf4270bdc0cc3191ed84803fa1a91fe258776448ea0c82fc91685c577fb4c1
+meta	standard-binding	retrieved-reference-metadata
+meta	hash-algorithm	sha256
+meta	attestation-scope	sqlite-public-query-supported-surface-not-mapping-protocol-full-w3c-runtime-provenance-or-backend-admission
+meta	case-count	12
+meta	cases-sha256	bfb9577d9d9770c72b1a6335c646cd319539f60999608b7183853b22323f8204
+case	query-ask-false	query-ask-false	supported	200	application/sparql-results+json	ask-boolean	10d1023f3bc7c95255973bb3cbd99c01e1d482c31ceff5c392cee31b95fba897
+case	query-ask-true	query-ask-true	supported	200	application/sparql-results+json	ask-boolean	720720050a363bb561e17cd72673ea9078d43f763bea126d88921136faf819ee
+case	query-construct-basic	query-construct-basic	supported	200	text/turtle	construct-graph	8483ab09c5db4575e044a21ac97f110fb084689760de626a932789e73908a7ab
+case	query-describe-constant-one-hop	query-describe-constant-one-hop	supported	200	text/turtle	describe-graph	562613e8b196d6d3e96e39fa09512f8478675559820508fefb5533e1a2606886
+case	query-describe-multiple-targets-unsupported	query-describe-multiple-targets-unsupported	unsupported	501	application/problem+json	unsupported-query	d5bfde393fb404fed5407cf1ecf97d642138c8df02705a9217d936afaaafcf3d
+case	query-describe-unbound-target-unsupported	query-describe-unbound-target-unsupported	unsupported	501	application/problem+json	unsupported-query	d5bfde393fb404fed5407cf1ecf97d642138c8df02705a9217d936afaaafcf3d
+case	query-describe-variable-one-hop	query-describe-variable-one-hop	supported	200	text/turtle	describe-graph	562613e8b196d6d3e96e39fa09512f8478675559820508fefb5533e1a2606886
+case	query-select-bgp	query-select-bgp	supported	200	application/sparql-results+json	select-bindings	366f71094e93dbf6c1cd24e37f2b96eea0e4814e25bb19a93f6a3cdf2d3bd3a9
+case	query-select-filter	query-select-filter	supported	200	application/sparql-results+json	select-bindings	492059ec6e349bfb96ee8c56de98d7d8fa36b16368531bd8a337d1efba0b21eb
+case	query-select-optional-unbound	query-select-optional-unbound	supported	200	application/sparql-results+json	select-bindings	fbb7963b91931a3593428ca1edd1008cc1df6cf95b0e685932fa4e30e89604e7
+case	query-select-order-window	query-select-order-window	supported	200	application/sparql-results+json	select-bindings	728dae5c2ddf86857b405171dfdaf0d4f40f4d5aed57d370d0b023401728f8ab
+case	query-service-unsupported	query-service-unsupported	unsupported	501	application/problem+json	unsupported-query	d5bfde393fb404fed5407cf1ecf97d642138c8df02705a9217d936afaaafcf3d

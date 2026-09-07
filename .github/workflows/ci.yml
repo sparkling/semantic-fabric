@@ -364,6 +364,17 @@ jobs:
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check
       - name: replay expected SQLite SPARQL protocol regression baseline
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check
+      # This is a project-supported subset replay, not a W3C Query/Protocol
+      # conformance or backend-admission claim. The fixed test inventory keeps a
+      # removed replay or mutation gate from degrading into a zero-test pass.
+      - name: replay sealed SQLite supported SPARQL Query and Protocol surface
+        run: |
+          set -euo pipefail
+          listed="$(cargo test --locked -p sf-conformance --features evidence-receipts \
+            --test supported_surface_sqlite -- --list)"
+          test "$(printf '%s\n' "$listed" | grep -Ec ': test$')" = 4
+          cargo test --locked -p sf-conformance --features evidence-receipts \
+            --test supported_surface_sqlite -- --test-threads=1
       - name: verify default sf-cli package dependency closure
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check
       - name: verify parser-worker qualification inputs

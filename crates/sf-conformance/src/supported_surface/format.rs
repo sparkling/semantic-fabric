@@ -25,6 +25,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     write_meta(&mut output, "surface", manifest.surface.name());
     write_meta(&mut output, "backend", &manifest.backend);
     write_meta(&mut output, "standard-id", &manifest.standard.id);
+    write_meta(&mut output, "standard-url", &manifest.standard.url);
     write_meta(&mut output, "standard-status", &manifest.standard.status);
     write_meta(
         &mut output,
@@ -119,6 +120,7 @@ pub fn parse_manifest(input: &str) -> Result<Manifest, String> {
         backend: take(&mut metadata, "backend")?.to_owned(),
         standard: StandardReference {
             id: take(&mut metadata, "standard-id")?.to_owned(),
+            url: take(&mut metadata, "standard-url")?.to_owned(),
             status: take(&mut metadata, "standard-status")?.to_owned(),
             snapshot_date: take(&mut metadata, "standard-snapshot-date")?.to_owned(),
             byte_length: parse_u64(

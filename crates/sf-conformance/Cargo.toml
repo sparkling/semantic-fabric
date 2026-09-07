@@ -54,6 +54,8 @@ axum.workspace = true
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
 deadpool-postgres = "0.14"
+oxjsonld.workspace = true
+sparesults.workspace = true
 
 [[test]]
 name = "differential_mssql"
@@ -86,6 +88,10 @@ required-features = ["evidence-receipts"]
 
 [[test]]
 name = "regression_baseline_cli"
+required-features = ["evidence-receipts"]
+
+[[test]]
+name = "supported_surface_sqlite"
 required-features = ["evidence-receipts"]
 
 [[test]]
