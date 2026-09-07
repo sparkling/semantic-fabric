@@ -22,6 +22,10 @@ use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 use crate::stream::PgRowStream;
 
+mod timetz;
+
+use timetz::pg_timetz_value;
+
 /// A PostgreSQL backend over any handle that derefs to a live [`Client`]. Generic
 /// over the holder `C` so the same adapter serves both lanes:
 ///
@@ -65,7 +69,7 @@ fn pg_xsd_code(ty: &Type) -> Option<XsdTypeCode> {
         // (an honest error, never a wrong answer).
         Type::NUMERIC => Some(Decimal),
         Type::DATE => Some(Date),
-        Type::TIME => Some(Time),
+        Type::TIME | Type::TIMETZ => Some(Time),
         Type::TIMESTAMP | Type::TIMESTAMPTZ => Some(DateTime),
         Type::BYTEA => Some(HexBinary),
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR | Type::UNKNOWN => {
@@ -189,23 +193,23 @@ fn decode_pg_numeric(raw: &[u8]) -> Result<String> {
         NAN => {
             return Err(Error::Unsupported(
                 "PostgreSQL NUMERIC NaN has no xsd:decimal representation".to_owned(),
-            ))
+            ));
         }
         PINF => {
             return Err(Error::Unsupported(
                 "PostgreSQL NUMERIC +Infinity has no xsd:decimal representation".to_owned(),
-            ))
+            ));
         }
         NINF => {
             return Err(Error::Unsupported(
                 "PostgreSQL NUMERIC -Infinity has no xsd:decimal representation".to_owned(),
-            ))
+            ));
         }
         POS | NEG => {}
         other => {
             return Err(Error::Marshal(format!(
                 "PG NUMERIC: unrecognised sign 0x{other:04X}"
-            )))
+            )));
         }
     }
     if ndigits < 0 {
@@ -276,6 +280,18 @@ fn decode_pg_numeric(raw: &[u8]) -> Result<String> {
 /// lexical form is the downstream sf-core chokepoint's concern. A type the
 /// reader does not cover surfaces as a hard [`Error::Unsupported`] (turned into a
 /// documented `501` skip by the conformance / serve layer).
+fn recover_pg_from_sql_error(error: tokio_postgres::Error) -> Error {
+    let recovered = error
+        .source()
+        .and_then(|source| source.downcast_ref::<Error>())
+        .and_then(|source| match source {
+            Error::Marshal(message) => Some(Error::Marshal(message.clone())),
+            Error::Unsupported(message) => Some(Error::Unsupported(message.clone())),
+            _ => None,
+        });
+    recovered.unwrap_or_else(|| Error::from(error))
+}
+
 fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
     let s = match *ty {
         Type::BOOL => row.try_get::<_, Option<bool>>(idx)?.map(|b| b.to_string()),
@@ -288,27 +304,19 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
         // via `PgNumeric`'s `FromSql` (`decode_pg_numeric`) — `postgres-types` has no
         // decimal `FromSql` route at all, so this match previously fell to the `_ =>`
         // hard-501 below on ANY NUMERIC column. NaN/±Infinity have no `xsd:decimal`
-        // representation, so `decode_pg_numeric` returns `Error::Unsupported` for
-        // them — but `tokio_postgres::Row::try_get` re-wraps ANY `FromSql` failure as
+        // representation, while malformed wire is `Error::Marshal` — but
+        // `tokio_postgres::Row::try_get` re-wraps ANY `FromSql` failure as
         // its own `Kind::FromSql` error (`tokio_postgres::Error::from_sql`), so a bare
         // `?` here would flatten straight to the generic `#[from] tokio_postgres::Error`
-        // conversion (`Error::Postgres`, the `_ =>` fallthrough of this match's `Err`
-        // arm below), silently demoting a sound 501 refusal to a 500. The ORIGINAL
-        // `decode_pg_numeric` error survives one more `.source()` hop down
+        // conversion (`Error::Postgres`), silently demoting either classification.
+        // The ORIGINAL decoder error survives one more `.source()` hop down
         // (`tokio_postgres::Error`'s `cause`, confirmed against `postgres-types`'
         // `Option<T>::from_sql`, which passes a `Some`-case error through unchanged) —
         // recover it before falling back.
-        Type::NUMERIC => match row.try_get::<_, Option<PgNumeric>>(idx) {
-            Ok(v) => v.map(|n| n.0),
-            Err(e) => {
-                if let Some(Error::Unsupported(m)) =
-                    e.source().and_then(|s| s.downcast_ref::<Error>())
-                {
-                    return Err(Error::Unsupported(m.clone()));
-                }
-                return Err(Error::from(e));
-            }
-        },
+        Type::NUMERIC => row
+            .try_get::<_, Option<PgNumeric>>(idx)
+            .map_err(recover_pg_from_sql_error)?
+            .map(|numeric| numeric.0),
         Type::BYTEA => row.try_get::<_, Option<Vec<u8>>>(idx)?.map(|b| {
             let mut out = std::string::String::new();
             datatype::hex_binary_upper(&b, &mut out);
@@ -317,7 +325,7 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
         Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR | Type::UNKNOWN => {
             row.try_get::<_, Option<std::string::String>>(idx)?
         }
-        // DATE/TIME/TIMESTAMP[TZ] (pg_value/pg_xsd_code parity fix): `pg_xsd_code` above
+        // DATE/TIME/TIMETZ/TIMESTAMP[TZ] (pg_value/pg_xsd_code parity fix): `pg_xsd_code` above
         // has claimed these as Date/Time/DateTime since the adapter's introduction, but
         // this match had no extraction arm for them — any PostgreSQL DATE/TIME/TIMESTAMP
         // column hard-501'd on read (`_ =>` below). Decode via chrono's binary `FromSql`
@@ -332,6 +340,7 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
         Type::TIME => row
             .try_get::<_, Option<chrono::NaiveTime>>(idx)?
             .map(|t| t.to_string()), // "HH:MM:SS[.ffffff]"
+        Type::TIMETZ => pg_timetz_value(row, idx)?,
         Type::TIMESTAMP => row
             .try_get::<_, Option<chrono::NaiveDateTime>>(idx)?
             .map(|dt| dt.to_string()), // "YYYY-MM-DD HH:MM:SS[.ffffff]" (space; normalize_timestamp handles it)
@@ -341,7 +350,7 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
         _ => {
             return Err(Error::Unsupported(format!(
                 "PostgreSQL result type {ty} reconstruction"
-            )))
+            )));
         }
     };
     Ok(s)
@@ -392,257 +401,4 @@ impl BranchStream for PgRowStream {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio_postgres::NoTls;
-
-    /// Base connection params (host/port/user, no dbname): `SF_PG_URL` if set, else
-    /// a local trust-auth default keyed on `$USER` (matches `sf-conformance`'s
-    /// `differential_pg_sqlite.rs::base_conn`).
-    fn base_conn() -> String {
-        std::env::var("SF_PG_URL").unwrap_or_else(|_| {
-            let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
-            format!("host=localhost port=5432 user={user}")
-        })
-    }
-
-    /// DATE/TIME/TIMESTAMP[TZ] column read (the pg_xsd_code/pg_value parity fix).
-    /// Live-PG only; gracefully skips (passes as a no-op) when no server is
-    /// reachable, matching `sf-conformance`'s live-PG test convention.
-    #[test]
-    fn pg_value_reads_date_time_timestamp_columns() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let conn_str = format!("{} dbname=postgres", base_conn());
-            let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
-                eprintln!("skipping pg_value_reads_date_time_timestamp_columns: no live PostgreSQL reachable");
-                return;
-            };
-            tokio::spawn(async move {
-                let _ = connection.await;
-            });
-            let db = format!("sf_sql_pgdt_test_{}", std::process::id());
-            let _ = client
-                .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
-                .await;
-            client
-                .batch_execute(&format!("CREATE DATABASE {db}"))
-                .await
-                .expect("create test db");
-            let conn_str2 = format!("{} dbname={db}", base_conn());
-            let (client2, connection2) = tokio_postgres::connect(&conn_str2, NoTls)
-                .await
-                .expect("connect to test db");
-            tokio::spawn(async move {
-                let _ = connection2.await;
-            });
-            client2
-                .batch_execute(
-                    "CREATE TABLE t (d DATE, tm TIME, ts TIMESTAMP, tstz TIMESTAMPTZ);
-                     INSERT INTO t VALUES \
-                       ('2024-03-15', '13:45:30', '2024-03-15 13:45:30', '2024-03-15 13:45:30+00');
-                     INSERT INTO t VALUES (NULL, NULL, NULL, NULL);",
-                )
-                .await
-                .expect("seed table");
-
-            let mut backend = PgBackend::new(&client2);
-            let mut stream = backend
-                .open_branch("SELECT d, tm, ts, tstz FROM t ORDER BY d NULLS LAST", &[])
-                .await
-                .expect("open_branch");
-
-            let row1 = stream
-                .next_row()
-                .await
-                .expect("next_row row1")
-                .expect("row1 present");
-            assert_eq!(row1.codes, vec![
-                Some(XsdTypeCode::Date),
-                Some(XsdTypeCode::Time),
-                Some(XsdTypeCode::DateTime),
-                Some(XsdTypeCode::DateTime),
-            ]);
-            assert_eq!(row1.values[0].as_deref(), Some("2024-03-15"));
-            assert_eq!(row1.values[1].as_deref(), Some("13:45:30"));
-            assert_eq!(row1.values[2].as_deref(), Some("2024-03-15 13:45:30"));
-            assert!(
-                row1.values[3].as_deref().unwrap().starts_with("2024-03-15T13:45:30"),
-                "TIMESTAMPTZ should render ISO-8601 'T'-separated with an offset, got {:?}",
-                row1.values[3]
-            );
-
-            let row2 = stream
-                .next_row()
-                .await
-                .expect("next_row row2")
-                .expect("row2 present");
-            assert_eq!(row2.values, vec![None, None, None, None], "NULL columns stay None");
-
-            drop(stream);
-            drop(client2);
-            let _ = client.batch_execute(&format!("DROP DATABASE IF EXISTS {db}")).await;
-        });
-    }
-
-    /// PG NUMERIC NaN/±Infinity refusal, through the REAL `pg_value`/`next_row`
-    /// path (not just `decode_pg_numeric` in isolation — see the `decode_pg_numeric_
-    /// *_is_unsupported` tests below for that unit-level coverage). This is the
-    /// layer that actually carried the classification bug: `tokio_postgres::Row::
-    /// try_get`'s `FromSql`-failure wrapping demoted `decode_pg_numeric`'s sound
-    /// `Error::Unsupported` to a generic `Error::Postgres` once routed through a
-    /// bare `?`, so `next_row` — and downstream, `exec_core::map_sql_err` — would
-    /// classify a NaN/±Infinity NUMERIC column as a 500, not the intended 501.
-    /// Live-PG only; gracefully skips when no server is reachable.
-    #[test]
-    fn pg_value_numeric_nan_and_infinity_surface_as_unsupported() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let conn_str = format!("{} dbname=postgres", base_conn());
-            let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
-                eprintln!("skipping pg_value_numeric_nan_and_infinity_surface_as_unsupported: no live PostgreSQL reachable");
-                return;
-            };
-            tokio::spawn(async move {
-                let _ = connection.await;
-            });
-            let db = format!("sf_sql_pgnan_test_{}", std::process::id());
-            let _ = client
-                .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
-                .await;
-            client
-                .batch_execute(&format!("CREATE DATABASE {db}"))
-                .await
-                .expect("create test db");
-            let conn_str2 = format!("{} dbname={db}", base_conn());
-            let (client2, connection2) = tokio_postgres::connect(&conn_str2, NoTls)
-                .await
-                .expect("connect to test db");
-            tokio::spawn(async move {
-                let _ = connection2.await;
-            });
-            client2
-                .batch_execute(
-                    "CREATE TABLE t (id INTEGER, p NUMERIC);
-                     INSERT INTO t VALUES (1, 'NaN'), (2, 'Infinity'), (3, '-Infinity');",
-                )
-                .await
-                .expect("seed table");
-
-            // Each non-finite class gets its own query, so a regression pinpoints
-            // exactly which sign value broke (mirrors decode_pg_numeric's own 3-way
-            // unit split below).
-            for (id, class) in [(1, "NaN"), (2, "+Infinity"), (3, "-Infinity")] {
-                let mut backend = PgBackend::new(&client2);
-                let mut stream = backend
-                    .open_branch(&format!("SELECT p FROM t WHERE id = {id}"), &[])
-                    .await
-                    .expect("open_branch");
-                match stream.next_row().await {
-                    Ok(_) => panic!("PG NUMERIC {class} must be refused, not decoded"),
-                    Err(err) => assert!(
-                        matches!(err, Error::Unsupported(_)),
-                        "PG NUMERIC {class} must classify as Error::Unsupported (-> 501), got {err:?}"
-                    ),
-                }
-            }
-
-            drop(client2);
-            let _ = client
-                .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
-                .await;
-        });
-    }
-
-    // --- decode_pg_numeric (M3 fix 2) ------------------------------------------
-
-    /// Hand-build a PG `NUMERIC` binary wire buffer (`numeric_send`'s layout) so
-    /// the decode can be unit-tested without a live server.
-    fn numeric_wire(ndigits: i16, weight: i16, sign: u16, dscale: u16, digits: &[i16]) -> Vec<u8> {
-        let mut b = Vec::with_capacity(8 + digits.len() * 2);
-        b.extend_from_slice(&ndigits.to_be_bytes());
-        b.extend_from_slice(&weight.to_be_bytes());
-        b.extend_from_slice(&sign.to_be_bytes());
-        b.extend_from_slice(&dscale.to_be_bytes());
-        for d in digits {
-            b.extend_from_slice(&d.to_be_bytes());
-        }
-        b
-    }
-
-    #[test]
-    fn decode_pg_numeric_zero() {
-        let b = numeric_wire(0, 0, 0x0000, 0, &[]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "0");
-    }
-
-    #[test]
-    fn decode_pg_numeric_one() {
-        let b = numeric_wire(1, 0, 0x0000, 0, &[1]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "1");
-    }
-
-    #[test]
-    fn decode_pg_numeric_negative_one() {
-        let b = numeric_wire(1, 0, 0x4000, 0, &[1]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "-1");
-    }
-
-    #[test]
-    fn decode_pg_numeric_12345_678() {
-        // 12345.678: integer groups [1, 2345] (weight=1), fractional group [6780]
-        // truncated to dscale=3 digits ("6780" -> "678").
-        let b = numeric_wire(3, 1, 0x0000, 3, &[1, 2345, 6780]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "12345.678");
-    }
-
-    #[test]
-    fn decode_pg_numeric_0_0001() {
-        // 0.0001: no integer part (weight=-1), one fractional group [1] zero-padded
-        // to "0001".
-        let b = numeric_wire(1, -1, 0x0000, 4, &[1]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "0.0001");
-    }
-
-    #[test]
-    fn decode_pg_numeric_weight_exceeds_stored_digits_trailing_zeros() {
-        // 100000000 (1e8): ONE stored digit (1) at weight=2 -- place-value
-        // positions 1 and 0 are never transmitted, only implied zero.
-        let b = numeric_wire(1, 2, 0x0000, 0, &[1]);
-        assert_eq!(decode_pg_numeric(&b).unwrap(), "100000000");
-    }
-
-    #[test]
-    fn decode_pg_numeric_nan_is_unsupported_not_a_wrong_value() {
-        let b = numeric_wire(0, 0, 0xC000, 0, &[]);
-        let err = decode_pg_numeric(&b).unwrap_err();
-        assert!(
-            matches!(err, Error::Unsupported(_)),
-            "expected Unsupported, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn decode_pg_numeric_positive_infinity_is_unsupported() {
-        let b = numeric_wire(0, 0, 0xD000, 0, &[]);
-        assert!(matches!(
-            decode_pg_numeric(&b).unwrap_err(),
-            Error::Unsupported(_)
-        ));
-    }
-
-    #[test]
-    fn decode_pg_numeric_negative_infinity_is_unsupported() {
-        let b = numeric_wire(0, 0, 0xF000, 0, &[]);
-        assert!(matches!(
-            decode_pg_numeric(&b).unwrap_err(),
-            Error::Unsupported(_)
-        ));
-    }
-}
+mod tests;

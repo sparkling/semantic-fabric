@@ -10,6 +10,8 @@
 //! backend → serialise the negotiated form, **streaming** the bytes into the
 //! response body (ADR-0010 §C; [`stream`]). Values stay bound parameters end to
 //! end—the rewriter/executors never interpolate (ADR-0010 R1).
+//! An exact query-less `GET`/`HEAD /sparql` returns a fixed, redacted W3C Service
+//! Description without acquiring query capacity or a runtime/source lease.
 //!
 //! Governance (ADR-0010): one request budget spans body extraction, admitted
 //! compilation, pool wait, controlled execution, and serialisation. It combines
@@ -32,36 +34,99 @@ pub mod run;
 pub mod source;
 pub mod stream;
 
+#[allow(dead_code)] // ADR-0018 vocabulary; no enforcement call site exists yet.
+mod access_telemetry;
+mod activation;
 mod admission;
 mod backend;
 mod binding;
+mod binding_identity;
 mod budget;
 mod config;
+mod correlation;
 mod deadline;
+mod federation;
+mod health;
 mod http;
+mod lifecycle;
+mod metrics;
+mod observed_source;
+mod pg_direct_lifecycle;
+mod pg_generation;
+mod pg_pool;
+mod pg_response;
 mod post_body;
 mod problem;
+mod request_compile;
 mod request_deadline;
+mod request_generation;
+mod schema_observation;
+mod semantic_admission;
+mod service_description;
+mod snapshot;
+mod source_acquisition;
 mod sqlite_admission;
+mod startup;
+mod telemetry;
+mod telemetry_body;
 mod terminal_body;
 
 #[cfg(test)]
 mod sqlite_admission_tests;
 
 #[cfg(test)]
+mod budget_tests;
+#[cfg(test)]
 mod deadline_tests;
+#[cfg(test)]
+mod federated_union_tests;
+#[cfg(test)]
+mod health_tests;
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
+mod metrics_tests;
 #[cfg(test)]
 mod query_budget_tests;
 #[cfg(test)]
 mod request_admission_tests;
+#[cfg(test)]
+mod runtime_activation_http_tests;
+#[cfg(test)]
+mod runtime_snapshot_tests;
+#[cfg(test)]
+mod semantic_admission_tests;
+#[cfg(test)]
+mod telemetry_acceptance_tests;
+#[cfg(test)]
+mod telemetry_tests;
+#[cfg(test)]
+mod test_support;
 
+pub use activation::{
+    ActivationError, ActivationId, ReadinessCause, RuntimeReadiness, RuntimeStateRevision,
+};
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
-pub use binding::{BackendProfile, IntrospectedSource};
-pub use config::{ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_QUERY_LIMITS};
-pub use http::router;
-pub use ontology::tbox_from_turtle;
+pub use binding::BackendProfile;
+pub use config::{
+    ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
+    DEFAULT_QUERY_LIMITS,
+};
+pub use http::{router, router_with_metrics};
+pub use lifecycle::DEFAULT_SHUTDOWN_TIMEOUT;
+pub use metrics::{
+    describe_all as describe_metrics, MetricsEndpoint, ProductMetricsRecorder, METRICS_TARGET,
+    QUERY_DURATION_BUCKETS, QUERY_DURATION_SECONDS,
+};
+pub use observed_source::IntrospectedSource;
+pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use problem::ServeError;
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
-pub use run::{serve_blocking, ServeOptions};
+pub use run::{serve_blocking, AdditionalSourceOptions, MappingRef, ServeOptions};
+pub use semantic_admission::SemanticAdmissionError;
+#[cfg(test)]
+pub(crate) use snapshot::RuntimeSnapshot;
+pub(crate) use snapshot::RuntimeSource;
+pub use snapshot::SnapshotError;
 pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;

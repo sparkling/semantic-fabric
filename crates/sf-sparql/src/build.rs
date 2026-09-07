@@ -267,7 +267,7 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNodePattern>) -
         }),
         // ORDER BY — reuse the flat OrderKey lowering exactly (a variable key →
         // `expr: None`; a complex expression key → the stored Expression under a
-        // synthetic `__sf_ord_{n}` variable, evaluated by exec at lowering, iq.rs).
+        // grammar-impossible internal variable, evaluated by exec, iq.rs).
         GraphPattern::OrderBy { inner, expression } => Ok(IqNode::OrderBy {
             child: Box::new(build_tree(inner, current_graph)?),
             keys: order_keys(expression),

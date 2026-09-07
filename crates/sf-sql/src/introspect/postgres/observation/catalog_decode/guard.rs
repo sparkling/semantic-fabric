@@ -46,7 +46,7 @@ impl CatalogGuardRowV1 {
             (
                 self.client_encoding.as_str(),
                 "UTF8",
-                PostgresSchemaIdentityGuardCodeV1::ServerEncoding,
+                PostgresSchemaIdentityGuardCodeV1::ClientEncoding,
             ),
             (
                 self.integer_datetimes.as_str(),
@@ -58,17 +58,20 @@ impl CatalogGuardRowV1 {
                 "origin",
                 PostgresSchemaIdentityGuardCodeV1::ReplicationRole,
             ),
-            (
-                self.search_path.as_str(),
-                "pg_catalog,public,pg_temp",
-                PostgresSchemaIdentityGuardCodeV1::SearchPath,
-            ),
         ];
         if let Some((_, _, code)) = exact
             .into_iter()
             .find(|(actual, expected, _)| actual != expected)
         {
             return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(code));
+        }
+        if !matches!(
+            self.search_path.as_str(),
+            "pg_catalog,public,pg_temp" | "pg_catalog, public, pg_temp"
+        ) {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::SearchPath,
+            ));
         }
         if self.max_identifier_length != 63 {
             return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(

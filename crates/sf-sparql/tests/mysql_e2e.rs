@@ -12,13 +12,14 @@ use sf_core::ir::{
     LogicalSource, ObjectMap, PredicateObjectMap, SubjectMap, Template, TermMap, TermSpec,
     TriplesMap,
 };
-use sf_core::NamedNode;
+use sf_core::{NamedNode, Term};
 use sf_sparql::{exec_mysql, parse_and_translate};
 use sf_sql::Dialect;
 
 const EMP_NAME: &str = "http://ex/empName";
 const EMP_DEPT: &str = "http://ex/empDept";
 const DEPT_NAME: &str = "http://ex/deptName";
+const MYSQL_UNAVAILABLE: &str = "SKIP MySQL integration test: isolated provider is unavailable";
 
 fn iri(s: &str) -> NamedNode {
     NamedNode::new_unchecked(s)
@@ -30,6 +31,10 @@ fn template_iri(t: &str) -> TermMap {
 
 fn column_literal(c: &str) -> TermMap {
     TermMap::Column(c.into(), TermSpec::plain_literal())
+}
+
+fn column_typed_literal(c: &str, datatype: NamedNode) -> TermMap {
+    TermMap::Column(c.into(), TermSpec::typed_literal(datatype))
 }
 
 fn pom(predicate: &str, object: TermMap) -> PredicateObjectMap {
@@ -107,10 +112,7 @@ async fn setup_tables(conn: &mut mysql_async::Conn) {
 #[tokio::test]
 async fn mysql_select_emp_names() {
     let Some(mut conn) = try_connect().await else {
-        eprintln!(
-            "SKIP mysql_select_emp_names: no MySQL at {} — set SF_MYSQL_URL to run",
-            mysql_url()
-        );
+        eprintln!("{MYSQL_UNAVAILABLE}");
         return;
     };
     setup_tables(&mut conn).await;
@@ -135,10 +137,7 @@ async fn mysql_select_emp_names() {
 #[tokio::test]
 async fn mysql_select_cross_table_join() {
     let Some(mut conn) = try_connect().await else {
-        eprintln!(
-            "SKIP mysql_select_cross_table_join: no MySQL at {} — set SF_MYSQL_URL to run",
-            mysql_url()
-        );
+        eprintln!("{MYSQL_UNAVAILABLE}");
         return;
     };
     setup_tables(&mut conn).await;
@@ -172,10 +171,7 @@ async fn mysql_select_cross_table_join() {
 #[tokio::test]
 async fn mysql_construct_triples() {
     let Some(mut conn) = try_connect().await else {
-        eprintln!(
-            "SKIP mysql_construct_triples: no MySQL at {} — set SF_MYSQL_URL to run",
-            mysql_url()
-        );
+        eprintln!("{MYSQL_UNAVAILABLE}");
         return;
     };
     setup_tables(&mut conn).await;
@@ -189,5 +185,114 @@ async fn mysql_construct_triples() {
         triples.len(),
         2,
         "CONSTRUCT must produce 2 emp:name triples"
+    );
+}
+
+#[tokio::test]
+async fn mysql_native_tinyint_one_value_two_is_an_integer_literal() {
+    use mysql_async::prelude::Queryable;
+
+    let Some(mut conn) = try_connect().await else {
+        eprintln!("{MYSQL_UNAVAILABLE}");
+        return;
+    };
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS sf_mysql_native_flag \
+         (id INT PRIMARY KEY, flag TINYINT(1) NOT NULL)",
+    )
+    .await
+    .unwrap();
+    conn.query_drop(
+        "INSERT INTO sf_mysql_native_flag VALUES (1, 2) \
+         ON DUPLICATE KEY UPDATE flag = 2",
+    )
+    .await
+    .unwrap();
+    let maps = vec![TriplesMap {
+        id: "FLAG".to_owned(),
+        source: LogicalSource::Table("sf_mysql_native_flag".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/flag/{id}"),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![pom("http://ex/flagValue", column_literal("flag"))],
+    }];
+    let plan = parse_and_translate(
+        "SELECT ?v WHERE { <http://ex/flag/1> <http://ex/flagValue> ?v }",
+        &maps,
+        Dialect::MySql,
+    )
+    .unwrap();
+    let result = exec_mysql::select_mysql(&plan, &mut conn).await.unwrap();
+    let Term::Literal(literal) = result.rows[0][0].as_ref().unwrap() else {
+        panic!("native MySQL flag value did not reconstruct as a literal");
+    };
+    assert_eq!(literal.value(), "2");
+    assert_eq!(literal.datatype(), sf_core::vocab::xsd::INTEGER);
+}
+
+#[tokio::test]
+async fn mysql_explicit_datetime_reconstructs_t_separated_midnight() {
+    use mysql_async::prelude::Queryable;
+
+    let Some(mut conn) = try_connect().await else {
+        eprintln!("{MYSQL_UNAVAILABLE}");
+        return;
+    };
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS sf_mysql_explicit_datetime \
+         (id INT PRIMARY KEY, observed_at DATETIME(6) NOT NULL)",
+    )
+    .await
+    .unwrap();
+    conn.query_drop(
+        "INSERT INTO sf_mysql_explicit_datetime VALUES \
+         (1, '2024-03-15 00:00:00.000000'), (2, '2024-03-15 13:45:30.123456') \
+         ON DUPLICATE KEY UPDATE observed_at = VALUES(observed_at)",
+    )
+    .await
+    .unwrap();
+    let maps = vec![TriplesMap {
+        id: "EXPLICIT_DATETIME".to_owned(),
+        source: LogicalSource::Table("sf_mysql_explicit_datetime".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/observation/{id}"),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![pom(
+            "http://ex/observedAt",
+            column_typed_literal(
+                "observed_at",
+                NamedNode::from(sf_core::vocab::xsd::DATE_TIME),
+            ),
+        )],
+    }];
+    let plan = parse_and_translate(
+        "SELECT ?v WHERE { ?s <http://ex/observedAt> ?v }",
+        &maps,
+        Dialect::MySql,
+    )
+    .unwrap();
+    let result = exec_mysql::select_mysql(&plan, &mut conn).await.unwrap();
+    let mut values: Vec<String> = result
+        .rows
+        .iter()
+        .map(|row| {
+            let Term::Literal(literal) = row[0].as_ref().unwrap() else {
+                panic!("explicit MySQL datetime did not reconstruct as a literal");
+            };
+            assert_eq!(literal.datatype(), sf_core::vocab::xsd::DATE_TIME);
+            literal.value().to_owned()
+        })
+        .collect();
+    values.sort();
+    assert_eq!(
+        values,
+        vec![
+            "2024-03-15T00:00:00".to_owned(),
+            "2024-03-15T13:45:30.123456".to_owned(),
+        ]
     );
 }

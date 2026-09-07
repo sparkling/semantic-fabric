@@ -5,8 +5,10 @@
 //! materially different descriptor, lifecycle, and containment invariants.
 //! Nothing outside `parser_isolation` can launch this worker. The public binary
 //! has a fail-closed private entry discriminator, and only a non-default Rust
-//! evidence seam can reach the Hello/Ready/EOF exchange. No parser request can
-//! yet reach the supervisor.
+//! evidence seam can reach the Hello/Ready/EOF exchange. The parser peer remains
+//! control-only. Independently gated peers exercise a fixed parser-free QueryV1
+//! transport, a sealed-corpus real-parser QueryV1 differential, and closed
+//! transport mutants. None has admission authority.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -14,11 +16,11 @@
 //! libraries, restrict filesystem/network/ioctl access, drop OS privilege,
 //! implement a general syscall sandbox, or make reap bounded under
 //! uninterruptible kernel sleep. Parent pipe operations are cumulative-byte
-//! bounded, nonblocking, and share the immutable spawn deadline, but no protocol
-//! query exchange calls them yet. The default-allow stage-one filter is safe
-//! only because the worker verifies its inherited state and stacks a
-//! default-kill control-ready candidate before reading peer-controlled bytes.
-//! That candidate is not parser-qualified and grants no query admission.
+//! bounded, nonblocking, and share the immutable spawn deadline across both the
+//! handshake and synthetic frame. The default-allow stage-one filter is safe
+//! only because the worker verifies its inherited state and stacks a default-kill
+//! control-ready candidate before reading peer-controlled bytes. That candidate
+//! is not parser-qualified and grants no query admission.
 
 use std::fmt;
 use std::io as std_io;
@@ -40,6 +42,31 @@ mod io;
 mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod parser_observation;
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod query_v1_mutant;
+#[cfg(all(
+    any(
+        feature = "parser-worker-evidence",
+        feature = "query-v1-transport-evidence",
+        feature = "query-v1-transport-mutant-evidence"
+    ),
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod query_v1_transport;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod seccomp;
 
@@ -134,6 +161,43 @@ impl PreparedParserExecutable {
         let prepared = handshake::prepare(self, source)?;
         handshake::launch(self, prepared)
     }
+
+    #[cfg(feature = "parser-worker-evidence")]
+    fn launch_parser_observation(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_parser_observation(self, prepared)
+    }
+
+    #[cfg(feature = "parser-worker-evidence")]
+    fn launch_parser_query_v1(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_parser_query_v1(self, prepared)
+    }
+
+    #[cfg(feature = "query-v1-transport-evidence")]
+    fn launch_query_v1_transport(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_query_v1_transport(self, prepared)
+    }
+
+    #[cfg(feature = "query-v1-transport-mutant-evidence")]
+    fn launch_query_v1_transport_mutant(
+        &self,
+        source: &str,
+        mutant: super::query_v1_mutant::QueryV1TransportMutant,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare_query_v1_mutant(self, source)?;
+        handshake::launch_query_v1_transport_mutant(self, prepared, mutant)
+    }
 }
 
 #[cfg(all(
@@ -150,6 +214,104 @@ pub(super) fn exercise_handshake_for_evidence(
     prepared
         .launch_private_worker(source)?
         .finish_without_query()
+}
+
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_parser_observation_corpus_for_evidence(
+    file: std::fs::File,
+) -> Result<super::parser_observation::ParserObservationSummaryV1, SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    parser_observation::exercise_corpus(&prepared)
+}
+
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_parser_query_v1_corpus_for_evidence(
+    file: std::fs::File,
+) -> Result<super::parser_observation::ParserObservationSummaryV1, SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_transport::exercise_parser_corpus(&prepared)
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_transport_for_evidence(
+    file: std::fs::File,
+    source: &str,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_transport::finish(prepared.launch_query_v1_transport(source)?)
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_transport_mutant_for_evidence(
+    file: std::fs::File,
+    source: &str,
+    mutant: super::query_v1_mutant::QueryV1TransportMutant,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::finish(
+        prepared.launch_query_v1_transport_mutant(source, mutant)?,
+        mutant,
+    )
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_mutant_matrix_for_evidence(
+    file: std::fs::File,
+    source: &str,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::exercise_matrix(&prepared, source)
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_malformed_directives_for_evidence(
+    file: std::fs::File,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::exercise_malformed_directives(&prepared)
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_request_eof_order_for_evidence(
+    file: std::fs::File,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::exercise_request_eof_order(&prepared)
 }
 
 /// Buildable fail-closed stub for every unqualified target.

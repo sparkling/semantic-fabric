@@ -108,6 +108,7 @@ fn successful_empty_ask_has_an_independently_spelled_outer_and_inner_vector() {
         .encode()
         .expect("golden success encodes");
     assert_eq!(&encoded[..RESULT_HEADER_LEN], expected_header);
+    assert_eq!(SYNTHETIC_EMPTY_ASK_QUERY_V1, expected_payload);
     assert_eq!(&encoded[RESULT_HEADER_LEN..], expected_payload);
     assert!(ParseResultV1::decode_exact_for(&encoded, &request).is_ok());
 }

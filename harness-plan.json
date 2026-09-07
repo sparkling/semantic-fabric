@@ -1,12 +1,18 @@
 {
+  "schemaVersion": 1,
+  "authority": "curated-project-bootstrap",
   "name": "semantic-fabric-harness",
   "hosts": [
-    "claude-code"
+    "claude-code",
+    "codex"
   ],
+  "hostAuthentication": {
+    "claude-code": "native-anthropic-subscription",
+    "codex": "native-openai-subscription"
+  },
   "template": "vertical:coding",
   "archetypeId": "rust-crate-harness",
-  "confidence": 0.65,
-  "engine": "lexical",
+  "archetypeSelection": "explicit-project-override",
   "agents": [
     "architect",
     "implementer",
@@ -20,7 +26,12 @@
     "doctor",
     "review-diff"
   ],
-  "mcp": "local",
+  "mcp": "off",
+  "projectMcpLaunchers": "default-denied",
+  "externalCoordination": {
+    "scope": "external-user-level",
+    "transport": "stdio"
+  },
   "policy": {
     "defaultDeny": true,
     "allowNetwork": false,
@@ -34,14 +45,25 @@
   "riskProfile": "shell gated, network gated, file-write read-scoped",
   "suggestedCommands": [
     {
-      "command": "cargo build",
+      "command": "cargo build --workspace --locked",
       "trust": "inferred",
       "execution": "disabled"
     },
     {
-      "command": "cargo test",
+      "command": "cargo test --workspace --locked",
       "trust": "inferred",
       "execution": "disabled"
     }
-  ]
+  ],
+  "runtimeBoundary": {
+    "product": "rust-cargo-only",
+    "developmentEvidence": [
+      "node",
+      "npm"
+    ]
+  },
+  "evolution": {
+    "enabled": false,
+    "eligible": false
+  }
 }

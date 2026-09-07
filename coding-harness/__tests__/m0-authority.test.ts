@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -8,9 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import {
-  PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
-  PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
-  PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
+  POSTGRESQL_PRODUCT_SLICE_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
 } from '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
@@ -183,6 +180,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/tests/regression_baseline_cli.rs',
   'crates/sf-conformance/tests/rust_closure_receipt.rs',
   'crates/sf-conformance/tests/w3c_pg_suite.rs',
+  ...POSTGRESQL_PRODUCT_SLICE_PROTECTED_PATHS_V1,
   'crates/sf-serve/src/http_tests.rs', 'crates/sf-serve/src/post_body.rs', 'crates/sf-serve/src/request_deadline.rs', 'crates/sf-serve/tests/post_body_admission.rs',
   'crates/sf-serve/tests/endpoint.rs',
   'crates/sf-sparql/tests/e2e.rs',
@@ -193,7 +191,7 @@ const M0_AUTHORITY_PATHS = [
   'docs/plans/sota-application-completion-programme.md',
   'tests/capabilities/catalog-v1.json',
   'tests/capabilities/schema-v1.json',
-  'tests/rust-dependency-closure.tsv',
+  'tests/rust-dependency-closure.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
   'tests/sparql/protocol/inventory.tsv',
   'tests/sparql/protocol/sqlite-expected-regression-baseline.tsv',
   'tests/sparql/query/inventory.tsv',
@@ -204,28 +202,26 @@ const M0_AUTHORITY_PATHS = [
 ] as const;
 
 const EXPECTED_ARTIFACT_INTERFACE_PATHS = [
-  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs',
-  'crates/sf-conformance/tests/binary_artifact_receipt.rs',
+  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs', 'crates/sf-conformance/tests/binary_artifact_receipt.rs',
 ] as const;
 
 const REQUIRED_CI_COMMANDS = [
-  'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check',
-  'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
+  'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check', 'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
   'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check',
+  'cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check --profile parser-worker-qualification-inputs-v1',
   'cargo run --locked -p sf-bench --features performance-receipts --bin sf-performance-receipt -- check-scenarios',
   'cargo run --locked -p sf-conformance --bin capability-matrix -- --check',
 ] as const;
 
 const REQUIRED_FEATURE_CLIPPY = [
-  'cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings',
-  'cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings',
+  'cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings', 'cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings',
 ] as const;
 
 const REQUIRED_ARTIFACT_OBSERVATION_TEST =
-  'cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
+  'cargo test --locked -p sf-conformance --features evidence-receipts --lib --bin rust-closure-receipt --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
 
 const NATIVE_PREPARED_OBSERVATION_TEST =
   'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies';
@@ -324,6 +320,7 @@ describe('M0 protected authority and CI contract', () => {
   it('automatically protects every tracked capability and receipt authority', () => {
     for (const directory of [
       'crates/sf-bench/src/performance/',
+      'crates/sf-capture-supervisor/',
       'crates/sf-conformance/src/execution_receipt/',
       'crates/sf-conformance/src/regression_receipt/',
       'crates/sf-conformance/src/rust_closure_receipt/',
@@ -357,9 +354,11 @@ describe('M0 protected authority and CI contract', () => {
 
   it('runs each read-only authority check exactly once and in dependency order', () => {
     const workflow = readFileSync(resolve(repository, '.github/workflows/ci.yml'), 'utf8');
+    const workflowLines = workflow.split(/\r?\n/);
     const positions = REQUIRED_CI_COMMANDS.map((command) => {
-      expect(workflow.split(command)).toHaveLength(2);
-      return workflow.indexOf(command);
+      const line = `        run: ${command}`;
+      expect(workflowLines.filter((candidate) => candidate === line)).toHaveLength(1);
+      return workflowLines.indexOf(line);
     });
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     for (const binary of [
@@ -390,7 +389,7 @@ describe('M0 protected authority and CI contract', () => {
     const build = 'npm --prefix coding-harness run build';
     const attestation =
       'git diff --exit-code -- coding-harness/.harness/controller-build.json';
-    expect(workflow.split(build)).toHaveLength(2);
+    expect(workflow.split(build)).toHaveLength(3);
     expect(workflow.split(attestation)).toHaveLength(2);
     expect(workflow.indexOf(attestation)).toBeGreaterThan(workflow.indexOf(build));
     for (const command of REQUIRED_FEATURE_CLIPPY) {

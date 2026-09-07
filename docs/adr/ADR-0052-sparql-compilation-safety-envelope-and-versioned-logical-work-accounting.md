@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-03
-updated: 2026-09-04
+updated: 2026-09-06
 tags: [sparql, compiler, resource-governance, cancellation, cache, dos]
 supersedes: []
 depends-on: [ADR-0004, ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
@@ -15,6 +15,7 @@ This ADR is **proposed**. Implemented foundations include the compiler-work
 `QueryBudget` dimension and typed terminal causes, mandatory
 `QueryControl::terminate`, exact request-budget handoff and compiler-permit
 retention, profile-keyed cache entries, and active serving reuse of `Arc<Plan>`.
+The raw cache and dormant zero-capacity governed shard are physically distinct.
 Private dormant primitives provide fallible algebra/Plan measurement, bounded
 canonical key rendering, compiler reservations and exact clone roots. Five
 fan-out/rollback sites privately meter each retained clone operation by binding
@@ -32,28 +33,29 @@ Compiler-measurement work-stack allocation failure has a distinct typed cause
 and a dormant redacted `503` mapping without `Retry-After`; no public controlled
 compiler path serves it.
 
-ADR-0053's private parent has cumulative-cap nonblocking pipe I/O under the
-immutable spawn deadline. Fixed-buffer partial operations and
-`EINTR`/`EAGAIN`/hangup/error outcomes are contained through termination/reap.
-The evidence seam prepares and caps an owned request before spawn, sends only
-`Hello` then EOF, and verifies it after EOF, successful exit and reap. Candidate totals are 1,048,856
-input and 8,388,920 output bytes, separate from the 67,108,864-byte file limit.
-Private 96-byte `ParseRequestV1` and 128-byte `ParseResultV1` codecs remain dormant.
+ADR-0053's normal control-only parser peer, selector-free parser-free peer and separately feature-gated parser-free mutant peer use exact private tuples, the same held ELF, cumulative-cap nonblocking pipes and one immutable spawn deadline. Evidence commits `e55fccd` and `ce5487e` implement the closed child/parent mutant matrix, `d103438` tracks its sources in the development harness, and `fa9d977` proves live request-EOF ordering; these commits are integrated evidence, not shipment or release qualification.
 
-The private Rust `QueryV1` codec provides fixed canonical bytes, allocation-free
-preflight, exact validation, fallible iterative reconstruction and exact replay.
-Its 22 inner and 17 outer-frame tests cover pinned variants, malformed wire,
-correlation, closed outcomes and raw caps. Limits remain provisional; no worker
-emits these bytes. A private typed comparator adds eight tests for eligibility,
-closed outcomes, exact SELECT outputs and bounded alpha comparison. Its profile
-is correlation-only; no paired worker differential or admissible receipt exists.
+The normal path sends a prepared 96-byte header plus source after `Hello`/`Ready`, closes stdin, and preserves structural preflight → one complete request allocation → exact EOF → nonce/digest/UTF-8 validation. The parent preserves stack header preflight → prospective output cap → one complete result allocation → exact EOF → pidfd waitability/group sweep/exact reap/success → post-reap request replay, correlation, digest, `QueryV1` decode/direct re-encode/static equality. Only unit escapes from either hidden evidence seam.
+
+A closed two-byte big-endian directive before `Hello` selects ten same-executable mutants. Four exit-zero correlation/payload defects fail only after reap; status 78 and deadline dominate wrong correlation after 412 accepted output bytes; a trailing byte fails EOF before semantics while accepted output stays 412; exact-cap output accepts 8,388,920 bytes before post-reap invalid-`QueryV1`; cap+1 fails prospectively at 312 bytes before body allocation; and request-frame allocation refusal means zero result bytes after the required 184-byte `Ready`, followed by EOF, exact reap and raw 78. Live bad nonce, source digest and UTF-8 requests remain alive and silent until stdin EOF, then close output and raw-exit 78. Each case permits a clean next launch.
+
+Commit `38e9c7a` additionally exercises closed zero-, one-, and three-byte plus unknown-`u16` directives against one held executable, proving zero output, exact exit 78, reap and recovery. Commit `5a9919b` reuses one verified held descriptor for the complete ten-case matrix while retaining a fresh child and unchanged controls per case; this removes redundant whole-file hashing but grants no additional authority. The refreshed default dependency receipt at `949cf11` remains distinct from the unqualified parser-profile closure.
+
+The provisional whole-life input cap is exactly 1,048,856 bytes: the normal source ceiling is 1,048,576, while the directive reduces the mutant ceiling to 1,048,574. Output is capped at 8,388,920 bytes (`Ready` 184 + result header 128 + body 8,388,608), independently of the 67,108,864-byte `RLIMIT_FSIZE`. Commit `235084d` adds a separately feature-gated real-parser `QueryV1` evidence peer across the sealed seven-case starter corpus: fresh contained children parse six inputs and return one fixed syntax rejection. Success is accepted only after EOF, exact reap and correlation, worker decode/re-encode byte replay, independent direct decode/re-encode byte replay, and source/profile-bound alpha equivalence. Only aggregate counts escape; no witness or authority is minted. Fresh parser encodings are not required to be byte-identical because generated identifiers may differ.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
-request-control handoff checkpoints. No request-owned `CompileContext` enters a
-publicly reachable compiler path. Parser construction/destruction, remaining
-owned phases and recursive-copy sites, cache capacity/eviction and provisional
-limits are not governed.
+request-control handoff checkpoints. For a private verified-generation
+requirement, a non-cache-authorizing semantic/resource preflight now reserves
+one opaque compiler permit before source I/O, retains that exact permit across
+lease acquisition, and moves it into authoritative compilation without
+requeueing while relation locks are held. Required-live SELECT, ASK and
+CONSTRUCT prove that handoff; 34 inventory-derived metadata units admit and 33
+reject before pool I/O. This closes a semaphore/lock-ordering hazard, not
+logical-work governance. No request-owned `CompileContext` enters a publicly
+reachable compiler path; parser construction/destruction, remaining owned phases
+and recursive-copy sites, cache capacity/eviction and provisional limits remain
+ungoverned.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -84,10 +86,10 @@ The current compiler semaphore limits aggregate concurrency, not work per
 request. A deadline can release the async waiter while `spawn_blocking` keeps a
 non-cooperative compiler and both its compiler and aggregate admission permits
 alive. Cache hits skip much cold work, but the current key has no governance
-authority: the dormant profile discriminator prevents a raw semantic hit, but
-both profiles share one physical cache and only the uncontrolled path is wired.
-Raw churn can still impose eviction/drop work. Integer overflow, charging after
-allocation and cache-dependent authorization are additional fail-open risks.
+authority. Physical profile shards prevent raw hits and eviction from entering
+governed state. Serving capacity stays raw; dormant governed capacity is zero.
+Future governed eviction/drop work, overflow, post-allocation charging and
+cache-dependent authorization remain risks.
 
 The threat model includes an unauthenticated client choosing query text and
 timing, repeated cache priming or eviction, and concurrent requests racing a
@@ -277,11 +279,11 @@ query, mapping, schema or driver text.
 
 The implemented cache key includes `CompileProfileId` in addition to the
 existing `CompileScope`, structural hash and collision-resolving canonical
-content. Implemented values already hold `Arc<Plan>`, so raw compilation cannot
-seed or hit a governed key but both profiles currently share one physical
-entry-count cache. Raw churn can therefore evict governed entries, and insertion
-can synchronously drop an unmetered recursive plan. That shared resource is not
-governed authority.
+content. Commits `19dc567` and `4b3c73d` physically separate raw and governed
+caches, so raw compilation cannot seed, hit or evict governed state. Existing binding capacity
+remains the aggregate: `N` raw entries and zero dormant governed entries. A future governed constructor must
+take explicit raw/governed capacities, checked-add their aggregate, and control
+recursive plan eviction/drop; partitioning alone grants no governed authority.
 
 An initial isolated-parser cache may use admitted source bytes plus immutable
 compile configuration/scope to locate a candidate bucket, but that index grants
@@ -353,31 +355,26 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 1. **Core identity — foundation implemented:** the fourth counter/error/limit
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
-2. **Parser/envelope — dormant codecs and control-ready evidence candidate only:** raw
-   lexical, parser-view direct-IRI and allocation-fallible iterative algebra/Plan
-   measurements exist with provisional limits. ADR-0053's private parent has
-   held-executable validation and a descriptor-exact private launch primitive under exact rlimits, a
-   default-allow stage-one seccomp filter, cumulative-cap nonblocking parent
-   pipes sharing the immutable spawn deadline, and a termination/reap
-   containment path for live-process I/O failures. A hidden first-statement
-   dispatcher now distinguishes the exact reserved two-token invocation before
-   Clap/application thread-pool initialization and requires raw-empty Linux
-   `environ`. The non-default evidence seam launches a held ELF, correlates one
-   independently observed bounded GNU build ID, repairs and verifies the
-   post-exec envelope, compares local candidate profile/limit material, installs
-   and self-probes a default-kill policy candidate, verifies `Ready`, and then
-   requires exact EOF. Malformed or unprepared reserved invocations still exit
-   silently with status 78 via raw Unix `_exit`. This candidate is neither the
-   final parser policy nor a governed dependency closure and adds no UID/GID,
-   group, capability or privilege-transition contract. The workspace exact-pins
-   `spargebra =0.4.6`; parser/evidence code requires
-   `x86_64-unknown-linux-gnu`; and inner QueryV1 plus 96/128-byte outer codecs
-   are implemented. An owned request is prepared and reverified after clean EOF,
-   exit and reap, while the seam still sends only `Hello` then EOF. Exact
-   direction totals and a separate file limit are bound. A private typed alpha
-   comparator exists. First exercise exact request/result framing, bounded
-   transport, clean EOF/exit/reap and post-reap decode only against a separately named synthetic Rust peer; that evidence grants no parser execution or parser-policy/profile, paired-corpus, witness, cache, serving, release or admission authority.
-   Then qualify and calibrate the complete parser profile before real worker parsing, worker-produced QueryV1, paired-corpus evidence or activation; normal loader/Rust startup precedes dispatch.
+2. **Parser/envelope — real-parser starter evidence; profile still unqualified:**
+   provisional raw lexical, direct-IRI and algebra/Plan measurements exist.
+   ADR-0053 holds and descriptor-launches one ELF under rlimits, a stage-one
+   filter, one deadline, cumulative nonblocking-pipe caps and deterministic
+   termination/reap. Its first-statement dispatcher recognizes exact private
+   tuples before Clap/thread-pool startup and requires raw-empty Linux `environ`.
+   The evidence seam correlates a bounded GNU build ID, repairs/verifies the
+   post-exec envelope, checks candidate profile/limits, self-probes a default-kill
+   candidate and completes the exact handshake. The normal parser-free exchange
+   and all ten closed mutant outcomes prove structural/preallocation checks,
+   terminal/deadline/trailing-output precedence, exact cap and cap+1 behavior,
+   post-EOF request validation, whole-life byte accounting and clean recovery.
+   The matrix and source capture are recorded by `e55fccd`, `ce5487e`, `d103438`
+   and `fa9d977` as evidence, not shipment. `spargebra =0.4.6` is exact-pinned and
+   evidence requires `x86_64-unknown-linux-gnu`; normal loader/Rust startup still
+   precedes dispatch. Fresh real parses now travel over `QueryV1` for the sealed
+   seven-case starter corpus with exact replay plus direct
+   alpha equivalence after reap. The policy/dependency profile remains
+   unqualified and adds no credential boundary. Complete qualification and the
+   full corpus before any witness, governed cache, serving or admission.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -394,14 +391,17 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    normalization/cascade, canonical content, remaining hidden recursive copies
    and plan construction; reserve before work and prove whole-path governed/raw
    semantic equivalence.
-4. **Cache — partial:** key-level profile separation, a dormant bounded writer,
-   `Arc<Plan>` storage and serving propagation are present. Add the admitted
-   witness, physical capacity separation, governed writer activation, stored
-   final measurement and eviction/drop control.
+4. **Cache — partial:** key-level and physical profile separation, a zero-capacity
+   dormant governed shard, `Arc<Plan>` storage and serving propagation are
+   present without changing the serving binding's `N`-entry aggregate bound.
+   Add the admitted witness, explicit calibrated governed capacity, governed
+   writer activation, stored final measurement and eviction/drop control.
 5. **Serving — partial:** a finite placeholder value, typed/redacted error
    mapping, exact worker `RequestBudget` handoff and permit retention are present.
-   Add the explicit calibrated CLI/config limit and call only the future governed
-   API after the parser, owned-work and cache gates pass.
+   The private verified-generation path also retains one preflight reservation
+   across source acquisition and authoritative compilation without upgrading it
+   to `GovernedV1`. Add the calibrated CLI/config limit and call only the future
+   governed API after the parser, owned-work and cache gates pass.
 6. **Claims:** update capability and operational documentation only after all
    relevant gates pass; keep this ADR proposed until its constants and work
    model receive explicit maintainer acceptance.
@@ -420,9 +420,11 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   preserve every ordered structure/option and exact top-level SELECT schema, and
   use one query-wide variable map, one global pattern blank-node map and one
   separate CONSTRUCT-template map. The private typed comparator covers this
-  structural core; paired fresh-worker corpus recipes, exact wire bindings and
-  receipts must still reject split, merged, partial and cross-domain renamings.
-  Generated-name heuristics are inadmissible.
+  structural core. The sealed seven-case starter now provides paired fresh-worker
+  outcomes, exact per-side replay and alpha equivalence; broaden it to the full
+  grammar/adversarial corpus and persist replayable receipts that reject split,
+  merged, partial and cross-domain renamings. Generated-name heuristics are
+  inadmissible.
 - Iterative algebra tests cover node, depth, collection and payload boundaries,
   fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
@@ -452,19 +454,16 @@ logical-work accounting across governed cold and cache-hit paths.”
 
 ## Known blocker and nonclaims
 
-`spargebra` 0.4.6 exposes parsing without `QueryControl`, globally decodes
-Unicode and uses recursive PEG productions and allocation-heavy semantic
-actions. The raw scanner does not bound that parser. Checkpoints before and
-after the call cannot interrupt construction or safe destruction. ADR-0053's
-selected bounded Rust process isolation now has a private parent-side launch,
-bounded-pipe-I/O and cleanup foundation plus an evidence-only control-policy
-candidate and bounded `Hello`/`Ready`/`EOF` handshake. The pure inner QueryV1
-codec provides preflight, fallible iterative decode and exact replay; dormant
-request/result codecs provide closed, correlated outer framing. Profile
-qualification, request/result transport, worker parse/encode, paired-corpus
-alpha receipts and a witness remain blockers for `compile_controlled` and every
-parser-inclusive boundedness claim—not merely a stronger one-second cancellation SLA. A separately named
-post-parse-only mode would not be whole-compiler governance.
+`spargebra` 0.4.6 parses without `QueryControl`, globally decodes Unicode and
+uses recursive PEG productions and allocation-heavy semantic actions. The raw
+scanner and call-boundary checkpoints cannot bound construction or destruction.
+ADR-0053 now has private launch, bounded pipe I/O, cleanup, a control-policy
+candidate, parser-free mutation evidence and sealed-corpus real parsing into
+`QueryV1`. Inner wire replay and a fresh direct alpha comparison pass for that
+starter corpus. Complete parser/dependency/syscall qualification, comprehensive
+paired-corpus receipts, cancellation linkage and an opaque witness remain
+blockers for `compile_controlled` and every parser-inclusive boundedness claim.
+A post-parse-only mode would not be whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database
 rows scanned or recursive SQL iterations; source-cost governance; raw or

@@ -8,6 +8,14 @@ description = "semantic-fabric virtualizer: SPARQL→SQL OBDA rewriting (ADR-000
 
 [features]
 parser-worker-evidence = []
+query-v1-transport-evidence = []
+query-v1-transport-mutant-evidence = []
+secure-spill-prototype = [
+    "dep:chacha20poly1305",
+    "dep:getrandom",
+    "dep:rustix",
+    "dep:zeroize",
+]
 
 [dependencies]
 sf-core.workspace = true
@@ -18,6 +26,7 @@ oxrdf.workspace = true
 oxiri.workspace = true # exact IRI resolution parity with the pinned spargebra parser
 oxilangtag.workspace = true # allocation-free QueryV1 language-tag validation
 oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) — the SAME fixed-point i128 type the spareval oracle uses for decimal AVG, never f64
+bigdecimal.workspace = true    # arbitrary-precision numeric ORDER keys; avoids f64 collisions
 # sparopt (ADR-0007 pipeline step 2, opt-in/bypassable) is intentionally NOT
 # wired into the engine optimizer. The ADR-0007 order-disciplined cascade is the
 # sole optimizer, so adding an opt-in pre-rewrite stage would duplicate authority.
@@ -25,6 +34,7 @@ oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) �
 # remains available transitively through the conformance oracle (ADR-0019).
 oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-0006/0019); wired now so the 1.2 surface resolves
 thiserror.workspace = true
+tracing.workspace = true
 libc.workspace = true          # Linux parser-worker process containment (ADR-0053)
 sha2.workspace = true          # observed held-executable fingerprint; not release authority
 rayon = "1.12"                  # chunked term-gen batch parallelism, exec_core (ADR-0006 rayon/tokio pool separation, M4 wave-2 batch restructure)
@@ -34,5 +44,14 @@ tokio-postgres = "0.7"         # PostgreSQL execution of emitted SQL via PgRowSt
 bytes = "1"                    # BytesMut, for the ToSql wrapper that binds lexical params to the placeholder's inferred PG type
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] } # MySQL execution (WS-D)
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Private, default-off ADR-0040 comparison only. These are not in the default
+# product dependency closure and the module is additionally target-gated.
+chacha20poly1305 = { version = "=0.10.1", default-features = false, optional = true }
+getrandom = { version = "=0.3.4", optional = true }
+rustix = { version = "=1.1.4", features = ["fs"], optional = true }
+zeroize = { version = "=1.9.0", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # async MySQL integration test
+tracing-subscriber.workspace = true

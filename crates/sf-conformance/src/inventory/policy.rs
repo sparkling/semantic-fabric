@@ -35,7 +35,7 @@ const R2RML_SUFFIXES: &str = "0000 0001a 0001b 0002a 0002b 0002c 0002d 0002e 000
 const DIRECT_SUFFIXES: &str = "0000 0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015 0016 0017 0018 0021 0022 0023 0024 0025";
 const ERROR_IDS: &str = "R2RMLTC0002c R2RMLTC0002e R2RMLTC0002f R2RMLTC0002g R2RMLTC0002h R2RMLTC0003a R2RMLTC0004b R2RMLTC0007h R2RMLTC0012c R2RMLTC0012d R2RMLTC0015b R2RMLTC0019b R2RMLTC0020b";
 
-pub(super) fn allowed_outcomes(id: &str) -> (AllowedOutcome, AllowedOutcome) {
+pub(super) fn allowed_outcomes(id: &str) -> (AllowedOutcome, AllowedOutcome, AllowedOutcome) {
     let sqlite = if id == "R2RMLTC0002f" {
         AllowedOutcome::Deviation
     } else if matches!(
@@ -65,7 +65,28 @@ pub(super) fn allowed_outcomes(id: &str) -> (AllowedOutcome, AllowedOutcome) {
     } else {
         AllowedOutcome::Pass
     };
-    (sqlite, postgres)
+    let mysql = if id == "R2RMLTC0002f" {
+        AllowedOutcome::Deviation
+    } else if matches!(
+        id,
+        "DirectGraphTC0000"
+            | "DirectGraphTC0001"
+            | "DirectGraphTC0002"
+            | "DirectGraphTC0003"
+            | "DirectGraphTC0004"
+            | "DirectGraphTC0005"
+            | "DirectGraphTC0012"
+            | "DirectGraphTC0014"
+            | "DirectGraphTC0017"
+            | "DirectGraphTC0018"
+            | "DirectGraphTC0022"
+            | "DirectGraphTC0025"
+    ) {
+        AllowedOutcome::Skip
+    } else {
+        AllowedOutcome::Pass
+    };
+    (sqlite, postgres, mysql)
 }
 
 pub(super) fn expected_scenarios() -> BTreeSet<String> {

@@ -11,6 +11,7 @@ pub mod config;
 mod digest;
 pub mod format;
 pub mod model;
+pub mod order_window_rss;
 pub mod paths;
 pub mod proc_status;
 pub mod producer;

@@ -33,13 +33,13 @@ use sf_core::NamedNode;
 pub struct Tbox {
     /// class IRI → all its sub-classes (reflexive-transitive closure, **excluding**
     /// the class itself; the class is always matched directly).
-    sub_classes: HashMap<String, Vec<String>>,
+    pub(crate) sub_classes: HashMap<String, Vec<String>>,
     /// property IRI → all its sub-properties (transitive, excluding itself).
-    sub_properties: HashMap<String, Vec<String>>,
+    pub(crate) sub_properties: HashMap<String, Vec<String>>,
     /// property IRI → its inverse property IRI (`owl:inverseOf`, both directions).
-    inverses: HashMap<String, String>,
+    pub(crate) inverses: HashMap<String, String>,
     /// symmetric properties (`owl:SymmetricProperty`).
-    symmetric: HashSet<String>,
+    pub(crate) symmetric: HashSet<String>,
 }
 
 impl Tbox {

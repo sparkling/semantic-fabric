@@ -20,6 +20,7 @@ import type {
 } from './types.js';
 import {
   assertAdapterExecutable,
+  codexReasoningArguments,
   parseRecord,
   processSucceeded,
   signalAborted,
@@ -199,8 +200,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       '--color',
       'never',
       ...CODEX_FIXED_CONFIG.flatMap((value) => ['-c', value]),
-      '-c', request.operation === 'implementation' || request.operation === 'repair'
-        ? 'model_reasoning_effort="high"' : 'model_reasoning_effort="low"',
+      ...codexReasoningArguments(request.reasoningEffort),
       '-',
     ];
     return this.#processRequest(

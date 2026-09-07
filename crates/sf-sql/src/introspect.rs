@@ -215,19 +215,32 @@ fn sqlite_has_stat1(conn: &rusqlite::Connection) -> Result<bool> {
 mod postgres;
 pub use postgres::{
     introspect_postgres, introspect_postgres_all, introspect_postgres_public_observed_snapshot,
+    introspect_postgres_public_observed_snapshot_in_transaction,
+    introspect_postgres_public_observed_snapshot_in_transaction_classified,
     introspect_postgres_public_snapshot, introspect_postgres_public_snapshot_guarded,
+    lock_postgres_public_base_tables, lock_postgres_public_base_tables_classified,
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
+    PostgresGenerationObservationFailure, PostgresPublicTableLockFailure,
     PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
     PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailableV1,
     POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1, POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1,
-    POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1,
+    POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1, POSTGRES_GENERATION_TRANSACTION_PROBE_QUERY_COUNT_V1,
+    POSTGRES_LEGACY_CATALOGUE_QUERY_COUNT_V1, POSTGRES_PROFILE_PREQUALIFICATION_QUERY_COUNT_V1,
+    POSTGRES_RICH_CAPTURE_CATALOGUE_QUERY_COUNT_V1,
+};
+#[cfg(feature = "postgres-observation-evidence")]
+pub use postgres::{
+    introspect_postgres_public_observed_snapshot_with_evidence, PostgresObservationCommitV1,
+    PostgresObservationEvidenceV1, PostgresObservationPhaseV1, PostgresObservationSavepointV1,
+    PostgresObservationStreamEvidenceV1, PostgresObservationStreamTerminalV1,
+    PostgresObservationStreamV1,
 };
 
 // --- MySQL (integration-tested, ADR-0012) -------------------------------------
 
 /// Columns, NOT NULL, and data type — from `information_schema.COLUMNS`, bound
 /// by table name with a `?` positional placeholder (Dialect::MySql, ADR-0010 R1).
-const MYSQL_COLUMNS_SQL: &str = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
+const MYSQL_COLUMNS_SQL: &str = "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE \
      FROM information_schema.COLUMNS \
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
      ORDER BY ORDINAL_POSITION";
@@ -272,15 +285,15 @@ pub async fn introspect_mysql(conn: &mut mysql_async::Conn, table: &str) -> Resu
         let name: String = row.get(0).ok_or_else(|| {
             Error::Introspection(format!("MySQL COLUMNS missing COLUMN_NAME for {table}"))
         })?;
-        let data_type: String = row.get(1).ok_or_else(|| {
-            Error::Introspection(format!("MySQL COLUMNS missing DATA_TYPE for {name}"))
+        let column_type: String = row.get(1).ok_or_else(|| {
+            Error::Introspection(format!("MySQL COLUMNS missing COLUMN_TYPE for {name}"))
         })?;
         let is_nullable: String = row.get(2).ok_or_else(|| {
             Error::Introspection(format!("MySQL COLUMNS missing IS_NULLABLE for {name}"))
         })?;
         schema.columns.push(Column::new(
             name,
-            data_type,
+            column_type,
             is_nullable.eq_ignore_ascii_case("NO"),
         ));
     }

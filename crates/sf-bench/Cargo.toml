@@ -93,3 +93,8 @@ required-features = ["performance-receipts"]
 [[test]]
 name = "performance_subprocess"
 required-features = ["performance-receipts"]
+
+[[test]]
+name = "order_window_rss"
+harness = false
+required-features = ["performance-receipts"]

@@ -2,20 +2,14 @@
 
 use std::fmt;
 
-use tokio_postgres::{GenericClient, Row};
-
 use sf_core::schema_identity::{
     ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
     SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
-    MAX_RELATIONS_V1,
 };
-
-use tokio_postgres::types::Type;
 
 use crate::schema::TableSchema;
 
-use super::legacy_query::{query_bounded_mapped, TypedQueryParameter};
-
+mod capture;
 #[allow(dead_code)]
 mod catalog_decode;
 #[allow(dead_code)]
@@ -25,24 +19,16 @@ mod constraint_budget;
 #[allow(dead_code)]
 mod constraints;
 #[allow(dead_code)]
+mod direct_mapping;
+#[allow(dead_code)]
 mod relation;
 #[allow(dead_code)]
 mod source_type;
 #[allow(dead_code)]
 mod trigger_evidence;
 
-pub(super) async fn qualify_profile_guard<C>(
-    client: &C,
-) -> Result<(), PostgresSchemaIdentityUnavailableV1>
-where
-    C: GenericClient + Sync,
-{
-    let row: Row = client
-        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
-    catalog_decode::decode_guard_row_v1(&row).map(|_| ())
-}
+pub(super) use capture::{capture_registered_observation, qualify_profile_guard};
+pub(in crate::introspect::postgres) use catalog_sql::RICH_CAPTURE_QUERY_INVENTORY_V1;
 
 pub const POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.structural-v1";
@@ -87,107 +73,18 @@ fn build_registered_observation(
     constraints: Vec<ConstraintInputV1>,
 ) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
     let profiles = select_registered_profile_v1(server_version_num)?.profiles()?;
+    let direct_mapping_tables =
+        direct_mapping::project_direct_mapping_tables_v1(&relations, &constraints)?;
     let identity = ObservedSchemaIdentityV1::build(SchemaObservationInputV1 {
         profiles,
         relations,
         constraints,
     })
     .map_err(map_schema_identity_error_v1)?;
-    Ok(Postgres16PublicObservedSchemaV1 { identity })
-}
-
-/// Assemble a registered observation from the private normalized relation
-/// graph and bounded raw constraint evidence. This is the single pure seam
-/// that the eventual SQL snapshot adapter must call.
-#[allow(dead_code)]
-fn build_registered_observation_from_raw(
-    server_version_num: i32,
-    relations: relation::Postgres16NormalizedRelationsV1,
-    raw_constraints: Vec<constraints::Postgres16RawConstraintV1>,
-) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
-    let constraints =
-        constraints::normalize_postgres16_constraints_v1(&relations, raw_constraints)?;
-    build_registered_observation(server_version_num, relations.into_relations(), constraints)
-}
-
-/// Capture and assemble the rich profile inside one caller-owned snapshot.
-/// Every row is decoded and bounded before the pure normalizers run.
-#[allow(dead_code)]
-pub(super) async fn capture_registered_observation<C>(
-    client: &C,
-    schema_name: &str,
-) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1>
-where
-    C: GenericClient + Sync,
-{
-    let guard_row = client
-        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
-    let guard = catalog_decode::decode_guard_row_v1(&guard_row)?;
-    let server_version_num = guard.server_version_num;
-    let text_limit = catalog_decode::MAX_CATALOG_TEXT_BYTES_V1 as i32;
-    let relation_limit = MAX_RELATIONS_V1 as i64 + 1;
-    let relations = query_bounded_mapped(
-        client,
-        catalog_sql::RICH_RELATIONS_SQL_V1,
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&text_limit, Type::INT4),
-            TypedQueryParameter::new(&relation_limit, Type::INT8),
-        ],
-        MAX_RELATIONS_V1,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::RichRelations,
-            )
-        },
-        |row| catalog_decode::decode_relation_row_v1(&row)?.into_catalog_fact(),
-    )
-    .await?;
-    let attribute_limit = relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1 as i64 + 1;
-    let attributes = query_bounded_mapped(
-        client,
-        catalog_sql::RICH_ATTRIBUTES_SQL_V1,
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&text_limit, Type::INT4),
-            TypedQueryParameter::new(&attribute_limit, Type::INT8),
-        ],
-        relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes,
-            )
-        },
-        |row| catalog_decode::decode_attribute_row_v1(&row)?.into_catalog_fact(&guard),
-    )
-    .await?;
-    let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
-    let mut raw_constraints = constraints::observed_not_null_constraints_v1(&normalized)?;
-    let (remaining_constraints, constraint_limit) =
-        constraint_budget::constraint_catalog_budget_v1(raw_constraints.len())?;
-    let mut catalog_constraints = query_bounded_mapped(
-        client,
-        catalog_sql::RICH_CONSTRAINTS_SQL_V1,
-        &[
-            TypedQueryParameter::new(&schema_name, Type::TEXT),
-            TypedQueryParameter::new(&constraint_limit, Type::INT8),
-        ],
-        remaining_constraints,
-        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
-        || {
-            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::RawConstraints,
-            )
-        },
-        |row| catalog_decode::decode_constraint_row_v1(&row)?.into_raw_constraint(),
-    )
-    .await?;
-    raw_constraints.append(&mut catalog_constraints);
-    build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
+    Ok(Postgres16PublicObservedSchemaV1 {
+        identity,
+        direct_mapping_tables,
+    })
 }
 
 fn registered_profile_id(
@@ -246,17 +143,24 @@ const fn map_schema_identity_limit_v1(
 ///
 /// ```compile_fail
 /// use sf_sql::introspect::Postgres16PublicObservedSchemaV1;
-/// let _forged = Postgres16PublicObservedSchemaV1 {};
+/// let _forged = Postgres16PublicObservedSchemaV1 { identity: panic!(), direct_mapping_tables: Vec::new() };
 /// ```
 #[derive(Eq, PartialEq)]
 pub struct Postgres16PublicObservedSchemaV1 {
     identity: ObservedSchemaIdentityV1,
+    direct_mapping_tables: Vec<TableSchema>,
 }
 
 impl Postgres16PublicObservedSchemaV1 {
     /// Returns the non-authorizing content identity carried by this observation.
     pub const fn identity(&self) -> &ObservedSchemaIdentityV1 {
         &self.identity
+    }
+
+    /// Returns the Direct-Mapping DTOs derived from the exact admitted rich
+    /// relation, type, and constraint facts carried by this observation.
+    pub fn direct_mapping_tables(&self) -> &[TableSchema] {
+        &self.direct_mapping_tables
     }
 }
 
@@ -269,6 +173,7 @@ impl fmt::Debug for Postgres16PublicObservedSchemaV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PostgresSchemaIdentityGuardCodeV1 {
     ServerEncoding,
+    ClientEncoding,
     IdentifierLength,
     IndexKeyLimit,
     IntegerDatetimes,
@@ -338,6 +243,7 @@ impl std::error::Error for PostgresSchemaIdentityUnavailableV1 {}
 const fn guard_message(code: PostgresSchemaIdentityGuardCodeV1) -> &'static str {
     match code {
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding => "server encoding unsupported",
+        PostgresSchemaIdentityGuardCodeV1::ClientEncoding => "client encoding unsupported",
         PostgresSchemaIdentityGuardCodeV1::IdentifierLength => "identifier length unsupported",
         PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit => "index key limit unsupported",
         PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes => "integer datetimes unsupported",
@@ -405,8 +311,8 @@ impl fmt::Debug for PostgresSchemaIdentityAvailabilityV1 {
 /// One committed legacy projection plus its inseparable identity availability.
 ///
 /// ```compile_fail
-/// use sf_sql::introspect::Postgres16PublicObservedSnapshotV1;
-/// let _forged = Postgres16PublicObservedSnapshotV1 {};
+/// use sf_sql::introspect::*;
+/// let _forged = Postgres16PublicObservedSnapshotV1 { legacy_tables: Vec::new(), availability: PostgresSchemaIdentityAvailabilityV1::Unavailable(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented) };
 /// ```
 pub struct Postgres16PublicObservedSnapshotV1 {
     legacy_tables: Vec<TableSchema>,
@@ -424,12 +330,54 @@ impl Postgres16PublicObservedSnapshotV1 {
         }
     }
 
+    pub(super) fn unavailable(
+        legacy_tables: Vec<TableSchema>,
+        reason: PostgresSchemaIdentityUnavailableV1,
+    ) -> Self {
+        Self {
+            legacy_tables,
+            availability: PostgresSchemaIdentityAvailabilityV1::Unavailable(reason),
+        }
+    }
+
     pub fn legacy_tables(&self) -> &[TableSchema] {
         &self.legacy_tables
     }
 
     pub const fn availability(&self) -> &PostgresSchemaIdentityAvailabilityV1 {
         &self.availability
+    }
+
+    /// Returns the rich-authority Direct-Mapping projection when identity is
+    /// available. Legacy DTOs are deliberately not substituted on failure.
+    pub fn direct_mapping_tables(&self) -> Option<&[TableSchema]> {
+        match &self.availability {
+            PostgresSchemaIdentityAvailabilityV1::Available(observation) => {
+                Some(observation.direct_mapping_tables())
+            }
+            PostgresSchemaIdentityAvailabilityV1::Unavailable(_) => None,
+        }
+    }
+
+    /// Consumes this snapshot into the Direct-Mapping projection and the exact
+    /// rich observation from which that projection was derived.
+    ///
+    /// This is the only compatibility projection suitable for lifecycle
+    /// admission. An unavailable rich observation fails closed; the legacy
+    /// projection is never substituted.
+    pub fn into_direct_mapping_parts(
+        self,
+    ) -> Result<
+        (Vec<TableSchema>, Postgres16PublicObservedSchemaV1),
+        PostgresSchemaIdentityUnavailableV1,
+    > {
+        match self.availability {
+            PostgresSchemaIdentityAvailabilityV1::Available(observation) => {
+                let tables = observation.direct_mapping_tables.clone();
+                Ok((tables, observation))
+            }
+            PostgresSchemaIdentityAvailabilityV1::Unavailable(reason) => Err(reason),
+        }
     }
 
     /// Preserves both the legacy projection and its identity availability.

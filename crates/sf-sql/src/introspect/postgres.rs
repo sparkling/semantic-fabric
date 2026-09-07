@@ -7,21 +7,46 @@ use tokio_postgres::types::Type;
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
+mod evidence;
+mod generation;
 mod legacy_bounds;
+mod legacy_inventory;
 mod legacy_query;
 mod legacy_row;
 mod legacy_sql;
 mod observation;
-use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
+mod observed_snapshot;
+#[allow(unused_imports)] // Re-exported by introspect.rs when the serving caller is wired.
+pub use generation::{
+    introspect_postgres_public_observed_snapshot_in_transaction,
+    introspect_postgres_public_observed_snapshot_in_transaction_classified,
+    lock_postgres_public_base_tables, lock_postgres_public_base_tables_classified,
+    PostgresGenerationObservationFailure, PostgresPublicTableLockFailure,
+    POSTGRES_GENERATION_TRANSACTION_PROBE_QUERY_COUNT_V1,
+    POSTGRES_PROFILE_PREQUALIFICATION_QUERY_COUNT_V1,
+};
+use legacy_bounds::{
+    require_same_schema, validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1,
+};
+use legacy_inventory::LegacyCatalogueQueryV1;
 use legacy_query::{
-    query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
-    LEGACY_SET_QUERY_LIMIT_PG16_V1, MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+    query_bounded, query_bounded_observed, TypedQueryParameter,
+    LEGACY_RELATION_QUERY_LIMIT_PG16_V1, LEGACY_SET_QUERY_LIMIT_PG16_V1,
+    MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
 };
 use legacy_row::{LegacyRow, LEGACY_TEXT_QUERY_LIMIT_PG16_V1};
+#[cfg(test)]
 use legacy_sql::{
     COLUMNS_SQL, EARLIER_RELATION_COLLISIONS_SQL, FOREIGN_KEYS_SQL, KEYS_SQL, NDISTINCT_SQL,
     RELTUPLES_SQL, TABLES_SQL,
 };
+
+/// Query count for one complete version-1 legacy public-catalogue projection.
+pub const POSTGRES_LEGACY_CATALOGUE_QUERY_COUNT_V1: u64 =
+    legacy_inventory::LEGACY_CATALOGUE_QUERY_INVENTORY_V1.len() as u64;
+/// Query count for one version-1 rich-profile capture, including its guard.
+pub const POSTGRES_RICH_CAPTURE_CATALOGUE_QUERY_COUNT_V1: u64 =
+    observation::RICH_CAPTURE_QUERY_INVENTORY_V1.len() as u64;
 pub use observation::{
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
     PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
@@ -29,10 +54,22 @@ pub use observation::{
     POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1, POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1,
     POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1,
 };
+pub use observed_snapshot::{
+    introspect_postgres_public_observed_snapshot, introspect_postgres_public_snapshot_guarded,
+};
+
+#[cfg(feature = "postgres-observation-evidence")]
+pub use evidence::{
+    PostgresObservationCommitV1, PostgresObservationEvidenceV1, PostgresObservationPhaseV1,
+    PostgresObservationSavepointV1, PostgresObservationStreamEvidenceV1,
+    PostgresObservationStreamTerminalV1, PostgresObservationStreamV1,
+};
+#[cfg(feature = "postgres-observation-evidence")]
+pub use observed_snapshot::introspect_postgres_public_observed_snapshot_with_evidence;
 
 const RUNTIME_SCHEMA: &str = "public";
 const SNAPSHOT_TIMEOUTS_SQL: &str =
-    "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s'; SELECT set_config('search_path','pg_catalog,public,pg_temp',true); SET LOCAL session_replication_role = origin;";
+    "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s'; SELECT set_config('search_path','pg_catalog,public,pg_temp',true);";
 
 /// Introspect one table from the runtime-supported PostgreSQL `public` schema.
 pub async fn introspect_postgres(
@@ -75,7 +112,7 @@ pub async fn introspect_postgres_public_snapshot(
     transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
     let rows = query_bounded(
         &transaction,
-        TABLES_SQL,
+        LegacyCatalogueQueryV1::Tables.sql(),
         &[
             TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
             TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
@@ -92,88 +129,6 @@ pub async fn introspect_postgres_public_snapshot(
     let schemas = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
     transaction.commit().await?;
     Ok(schemas)
-}
-
-/// Capture the legacy public snapshot only after the frozen PostgreSQL-16
-/// profile guards pass. Rich identity availability is not yet returned by
-/// this compatibility-shaped API; callers needing it must use the future
-/// observed-snapshot entry point.
-pub async fn introspect_postgres_public_snapshot_guarded(
-    client: &mut tokio_postgres::Client,
-) -> Result<Vec<TableSchema>> {
-    let transaction = client
-        .build_transaction()
-        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
-        .read_only(true)
-        .start()
-        .await?;
-    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
-    observation::qualify_profile_guard(&transaction)
-        .await
-        .map_err(|error| Error::Introspection(error.to_string()))?;
-    let rows = query_bounded(
-        &transaction,
-        TABLES_SQL,
-        &[
-            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
-            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
-            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
-        ],
-        MAX_LEGACY_RELATIONS_PG16_V1,
-        "table rows",
-    )
-    .await?;
-    let tables: Vec<String> = rows
-        .into_iter()
-        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
-        .collect::<Result<_>>()?;
-    let schemas = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
-    transaction.commit().await?;
-    Ok(schemas)
-}
-
-/// Capture a guarded snapshot with an available, non-authorizing identity.
-/// Rich catalogue evidence is collected in the same repeatable-read
-/// transaction; guard, query, decode, and unsupported-evidence failures are
-/// currently returned as redacted introspection errors.
-pub async fn introspect_postgres_public_observed_snapshot(
-    client: &mut tokio_postgres::Client,
-) -> Result<Postgres16PublicObservedSnapshotV1> {
-    let transaction = client
-        .build_transaction()
-        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
-        .read_only(true)
-        .start()
-        .await?;
-    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
-    observation::qualify_profile_guard(&transaction)
-        .await
-        .map_err(|error| Error::Introspection(error.to_string()))?;
-    let rows = query_bounded(
-        &transaction,
-        TABLES_SQL,
-        &[
-            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
-            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
-            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
-        ],
-        MAX_LEGACY_RELATIONS_PG16_V1,
-        "table rows",
-    )
-    .await?;
-    let tables: Vec<String> = rows
-        .into_iter()
-        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
-        .collect::<Result<_>>()?;
-    let legacy_tables = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
-    let rich = observation::capture_registered_observation(&transaction, RUNTIME_SCHEMA)
-        .await
-        .map_err(|error| Error::Introspection(error.to_string()))?;
-    transaction.commit().await?;
-    Ok(observation::Postgres16PublicObservedSnapshotV1::available(
-        legacy_tables,
-        rich,
-    ))
 }
 
 async fn introspect_in_schema<C>(
@@ -183,6 +138,20 @@ async fn introspect_in_schema<C>(
 ) -> Result<Vec<TableSchema>>
 where
     C: tokio_postgres::GenericClient + Sync,
+{
+    let mut observer = evidence::NoopPostgresObservationObserverV1;
+    introspect_in_schema_observed(client, schema_name, tables, &mut observer).await
+}
+
+async fn introspect_in_schema_observed<C, O>(
+    client: &C,
+    schema_name: &str,
+    tables: &[String],
+    observer: &mut O,
+) -> Result<Vec<TableSchema>>
+where
+    C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
     validate_legacy_table_names(
         tables.iter().map(String::as_str),
@@ -201,11 +170,11 @@ where
         ));
     }
 
-    reject_earlier_relation_collisions(client, tables).await?;
-    load_columns(client, schema_name, tables, &mut schemas).await?;
-    load_keys(client, schema_name, tables, &mut schemas).await?;
-    load_foreign_keys(client, schema_name, tables, &mut schemas).await?;
-    load_statistics(client, schema_name, tables, &mut schemas).await?;
+    reject_earlier_relation_collisions(client, tables, observer).await?;
+    load_columns(client, schema_name, tables, &mut schemas, observer).await?;
+    load_keys(client, schema_name, tables, &mut schemas, observer).await?;
+    load_foreign_keys(client, schema_name, tables, &mut schemas, observer).await?;
+    load_statistics(client, schema_name, tables, &mut schemas, observer).await?;
 
     tables
         .iter()
@@ -217,14 +186,19 @@ where
         .collect()
 }
 
-async fn reject_earlier_relation_collisions<C>(client: &C, tables: &[String]) -> Result<()>
+async fn reject_earlier_relation_collisions<C, O>(
+    client: &C,
+    tables: &[String],
+    observer: &mut O,
+) -> Result<()>
 where
     C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
     let earlier_schema = "pg_catalog";
-    let collisions: Vec<String> = query_bounded(
+    let collisions: Vec<String> = query_bounded_observed(
         client,
-        EARLIER_RELATION_COLLISIONS_SQL,
+        LegacyCatalogueQueryV1::EarlierRelationCollisions.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&earlier_schema, Type::TEXT),
@@ -233,6 +207,8 @@ where
         ],
         MAX_LEGACY_RELATIONS_PG16_V1,
         "catalogue-collision rows",
+        evidence::PostgresObservationStreamV1::LegacyEarlierCollisions,
+        observer,
     )
     .await?
     .into_iter()
@@ -248,18 +224,20 @@ where
     )))
 }
 
-async fn load_columns<C>(
+async fn load_columns<C, O>(
     client: &C,
     schema_name: &str,
     tables: &[String],
     schemas: &mut BTreeMap<String, TableSchema>,
+    observer: &mut O,
 ) -> Result<()>
 where
     C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
-    for row in query_bounded(
+    for row in query_bounded_observed(
         client,
-        COLUMNS_SQL,
+        LegacyCatalogueQueryV1::Columns.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -268,6 +246,8 @@ where
         ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "column rows",
+        evidence::PostgresObservationStreamV1::LegacyColumns,
+        observer,
     )
     .await?
     {
@@ -294,20 +274,22 @@ where
     Ok(())
 }
 
-async fn load_keys<C>(
+async fn load_keys<C, O>(
     client: &C,
     schema_name: &str,
     tables: &[String],
     schemas: &mut BTreeMap<String, TableSchema>,
+    observer: &mut O,
 ) -> Result<()>
 where
     C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
     let mut primary: HashMap<String, Vec<String>> = HashMap::new();
     let mut unique: HashMap<String, BTreeMap<String, Vec<String>>> = HashMap::new();
-    for row in query_bounded(
+    for row in query_bounded_observed(
         client,
-        KEYS_SQL,
+        LegacyCatalogueQueryV1::Keys.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -316,6 +298,8 @@ where
         ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "key rows",
+        evidence::PostgresObservationStreamV1::LegacyKeys,
+        observer,
     )
     .await?
     {
@@ -345,19 +329,21 @@ where
     Ok(())
 }
 
-async fn load_foreign_keys<C>(
+async fn load_foreign_keys<C, O>(
     client: &C,
     schema_name: &str,
     tables: &[String],
     schemas: &mut BTreeMap<String, TableSchema>,
+    observer: &mut O,
 ) -> Result<()>
 where
     C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
     let mut foreign: HashMap<String, BTreeMap<String, ForeignKey>> = HashMap::new();
-    for row in query_bounded(
+    for row in query_bounded_observed(
         client,
-        FOREIGN_KEYS_SQL,
+        LegacyCatalogueQueryV1::ForeignKeys.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -366,6 +352,8 @@ where
         ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "foreign-key rows",
+        evidence::PostgresObservationStreamV1::LegacyForeignKeys,
+        observer,
     )
     .await?
     {
@@ -398,18 +386,20 @@ where
     Ok(())
 }
 
-async fn load_statistics<C>(
+async fn load_statistics<C, O>(
     client: &C,
     schema_name: &str,
     tables: &[String],
     schemas: &mut BTreeMap<String, TableSchema>,
+    observer: &mut O,
 ) -> Result<()>
 where
     C: tokio_postgres::GenericClient + Sync,
+    O: evidence::PostgresObservationObserverV1,
 {
-    for row in query_bounded(
+    for row in query_bounded_observed(
         client,
-        RELTUPLES_SQL,
+        LegacyCatalogueQueryV1::RelationStatistics.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -418,6 +408,8 @@ where
         ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "relation-statistic rows",
+        evidence::PostgresObservationStreamV1::LegacyRelationStatistics,
+        observer,
     )
     .await?
     {
@@ -430,9 +422,9 @@ where
             }
         }
     }
-    for row in query_bounded(
+    for row in query_bounded_observed(
         client,
-        NDISTINCT_SQL,
+        LegacyCatalogueQueryV1::ColumnStatistics.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -441,6 +433,8 @@ where
         ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "column-statistic rows",
+        evidence::PostgresObservationStreamV1::LegacyColumnStatistics,
+        observer,
     )
     .await?
     {
@@ -465,21 +459,6 @@ where
         }
     }
     Ok(())
-}
-
-fn require_same_schema(
-    expected: &str,
-    parent: &str,
-    child_table: &str,
-    constraint: &str,
-) -> Result<()> {
-    if parent == expected {
-        return Ok(());
-    }
-    Err(Error::Introspection(format!(
-        "PostgreSQL foreign key {constraint:?} on {child_table:?} crosses from schema \
-         {expected:?} to {parent:?}; schema-qualified foreign keys are not supported"
-    )))
 }
 
 #[cfg(test)]

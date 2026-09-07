@@ -7,18 +7,9 @@ use std::path::PathBuf;
 use sf_core::Term;
 use sf_sparql::{exec_pg, parse_and_translate_with, Tbox};
 use sf_sql::introspect::introspect_postgres;
-use sf_sql::{Column, Dialect, ForeignKey};
+use sf_sql::Dialect;
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config, IsolationLevel, NoTls};
-
-const DIRECT_SQL: &str = "SELECT style_number, version FROM public.style \
-    ORDER BY style_number ASC, version ASC LIMIT 10001";
-const SPARQL: &str = r#"SELECT ?styleNumber ?version WHERE {
-  ?style <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?styleNumber ;
-         <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ?version .
-}
-ORDER BY ?styleNumber ?version
-LIMIT 10001"#;
 
 fn validated_loopback_config(value: &str) -> Result<Config, &'static str> {
     let config: Config = value
@@ -133,7 +124,7 @@ async fn run_snapshot(client: &Client, gold: &support::GoldVertical) -> Result<(
         return Err("Style row count is outside the admitted bound");
     }
     let direct: Vec<(String, i32)> = client
-        .query(DIRECT_SQL, &[])
+        .query(support::STYLE_DIRECT_SQL, &[])
         .await
         .map_err(|_| "direct Style query failed")?
         .into_iter()
@@ -146,7 +137,7 @@ async fn run_snapshot(client: &Client, gold: &support::GoldVertical) -> Result<(
     let maps =
         sf_mapping::parse_r2rml(&gold.r2rml).map_err(|_| "sealed Style R2RML did not parse")?;
     let plan = parse_and_translate_with(
-        SPARQL,
+        support::STYLE_SPARQL_QUERY,
         &maps,
         Dialect::Postgres,
         &Tbox::default(),
@@ -292,29 +283,21 @@ fn assert_production_schema(
     actual: &sf_sql::TableSchema,
     expected: &support::StyleSchema,
 ) -> Result<(), &'static str> {
-    let columns: Vec<_> = actual
+    let expected = support::style_table_schema(expected);
+    let actual_columns: Vec<_> = actual
         .columns
         .iter()
-        .map(|column| Column::new(&column.name, &column.sql_type, column.not_null))
+        .map(|column| (&column.name, &column.sql_type, column.not_null))
         .collect();
     let expected_columns: Vec<_> = expected
         .columns
         .iter()
-        .map(|column| Column::new(&column.name, &column.store_type, !column.nullable))
+        .map(|column| (&column.name, &column.sql_type, column.not_null))
         .collect();
-    let foreign_keys: Vec<_> = expected
-        .foreign_keys
-        .iter()
-        .map(|key| ForeignKey {
-            columns: key.child_columns.clone(),
-            parent_table: key.parent_table.clone(),
-            parent_columns: key.parent_columns.clone(),
-        })
-        .collect();
-    if actual.name != "style"
-        || columns != expected_columns
+    if actual.name != expected.name
+        || actual_columns != expected_columns
         || actual.primary_key != expected.primary_key
-        || actual.foreign_keys != foreign_keys
+        || actual.foreign_keys != expected.foreign_keys
     {
         return Err("production Style schema contract mismatch");
     }

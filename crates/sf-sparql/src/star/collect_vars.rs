@@ -1,7 +1,6 @@
-//! Whole-pattern variable collection: [`collect_pattern_vars`], the one
-//! entry point [`super::top_level::rewrite_union`] uses for its uniform-
-//! composed-ness agreement check (which variables do a `Union`'s two arms
-//! BOTH syntactically mention?). Split out from the pattern walker itself
+//! Whole-pattern variable collection: [`collect_pattern_vars`], shared by
+//! rewrites that must distinguish generated variables from every authored
+//! variable occurrence. Split out from the pattern walker itself
 //! ([`super::walk`]) because it is a completely different kind of traversal —
 //! collecting names rather than rewriting structure — with its own recursion
 //! shape mirroring `GraphPattern`/`Expression` one-for-one.
@@ -10,16 +9,37 @@ use std::collections::BTreeSet;
 
 use spargebra::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
+use spargebra::Query;
+
+/// Every variable name already present in a parsed query before this module
+/// introduces its own bindings. In addition to the query pattern, CONSTRUCT's
+/// separate template must be included: a template-only variable is unbound by
+/// definition, but capturing it with a generated component variable would make
+/// it spuriously bound and change the produced graph.
+pub(super) fn collect_query_vars(query: &Query) -> BTreeSet<Variable> {
+    let mut out = match query {
+        Query::Select { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. }
+        | Query::Construct { pattern, .. } => collect_pattern_vars(pattern),
+    };
+    if let Query::Construct { template, .. } = query {
+        for triple in template {
+            collect_triple_vars(triple, &mut out);
+        }
+    }
+    out
+}
 
 /// Every [`Variable`] mentioned anywhere in `gp` — triple-pattern subject/
 /// object (recursing into a nested quoted triple), VALUES/Extend/Group/Path
 /// variables, and `Expression::Variable`/`Bound` references (recursing into
 /// EXISTS bodies) — used by [`super::top_level::rewrite_union`]'s uniform-
 /// composed-ness check. Deliberately broad (a var mentioned only in a FILTER
-/// still counts): a false positive here costs only an unnecessary — but
-/// harmless — agreement check; missing a real disagreement would not be
-/// sound.
-pub(super) fn collect_pattern_vars(gp: &GraphPattern) -> BTreeSet<Variable> {
+/// still counts). Missing an occurrence can make a generated binding capture
+/// authored syntax, so this traversal deliberately follows the complete
+/// `GraphPattern` and `Expression` trees.
+pub(crate) fn collect_pattern_vars(gp: &GraphPattern) -> BTreeSet<Variable> {
     let mut out = BTreeSet::new();
     collect_pattern_vars_into(gp, &mut out);
     out
@@ -60,7 +80,12 @@ fn collect_pattern_vars_into(gp: &GraphPattern, out: &mut BTreeSet<Variable>) {
             collect_expr_vars(expr, out);
             collect_pattern_vars_into(inner, out);
         }
-        GraphPattern::Graph { name, inner } => {
+        GraphPattern::Graph { name, inner }
+        | GraphPattern::Service {
+            name,
+            inner,
+            silent: _,
+        } => {
             if let NamedNodePattern::Variable(v) = name {
                 out.insert(v.clone());
             }
@@ -106,9 +131,6 @@ fn collect_pattern_vars_into(gp: &GraphPattern, out: &mut BTreeSet<Variable>) {
                     collect_expr_vars(expr, out);
                 }
             }
-            collect_pattern_vars_into(inner, out);
-        }
-        GraphPattern::Service { inner, .. } => {
             collect_pattern_vars_into(inner, out);
         }
     }
@@ -176,6 +198,32 @@ fn collect_expr_vars(e: &Expression, out: &mut BTreeSet<Variable>) {
             for e in args {
                 collect_expr_vars(e, out);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_inventory_includes_graph_service_and_extend_binding_sites() {
+        let query = spargebra::SparqlParser::new()
+            .parse_query(
+                "SELECT ?s WHERE { \
+                 GRAPH ?__sf_star_0 { ?s ?p ?o } \
+                 BIND(?s AS ?__sf_star_1) \
+                 SERVICE ?__sf_star_2 { ?a ?b ?c } \
+                 }",
+            )
+            .expect("all three binding sites are legal SPARQL");
+
+        let variables = collect_query_vars(&query);
+        for name in ["__sf_star_0", "__sf_star_1", "__sf_star_2"] {
+            assert!(
+                variables.contains(&Variable::new_unchecked(name)),
+                "missing binding-site variable {name}"
+            );
         }
     }
 }

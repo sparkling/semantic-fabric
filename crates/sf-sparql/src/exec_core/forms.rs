@@ -153,38 +153,24 @@ where
     .await
 }
 
-/// ADR-0034 item 3 (Run 5) — whether `lib.rs`'s per-branch template-projection
-/// dedup (`dedup_construct_template_projected_vars`) cannot see far enough to
-/// answer §16.2's "CONSTRUCT output is a SET" on its own: MULTIPLE branches
-/// exist (that pass pushes a SQL-level `DISTINCT` into ONE branch's own
-/// `SELECT` — it can never see a SIBLING branch, e.g. a UNION arm over a
-/// DIFFERENT triple pattern, instantiating the identical triple) AND
-/// `plan.construct_drops_some_branch_var` — captured by that SAME pass, from
-/// each branch's ORIGINAL bindings, before its own narrowing loop overwrites
-/// them to match the template exactly (a narrowed branch is afterward
-/// indistinguishable from one that never bound anything extra, so this CANNOT
-/// be recomputed here from `plan.branches` alone — found the hard way: an
-/// earlier version of this function recomputed it from the post-narrowing
-/// bindings and both never fired, per the `s7b`-shaped case, and — the more
-/// dangerous direction — a naive `branches.len() > 1` shortcut with no drop
-/// check at all over-fired on an ordinary multi-TriplesMap `?s ?p ?o` dump,
-/// where the template keeps every var every branch binds: `sf-bench`'s
-/// `engine_memory_is_bounded_under_growing_source`/`_pg` measured that
-/// regression to LINEAR memory growth, `mem_ratio` 13.72x at 16x scale,
-/// before it could land). "Nothing dropped anywhere" is safe regardless of
-/// branch count: when the template keeps every bound variable, two branches
-/// instantiating the identical triple is exactly two branches producing the
-/// identical WHERE solution — D2's own cross-branch mechanism (`unfold::
-/// pool_pattern_relation` / `iq::resolve`'s Intensional arm: provable
-/// disjointness, SQL pooling, or the C0e shared seen-set) already resolves
-/// that BEFORE the template ever sees it, which is why BRANCH COUNT ALONE
-/// must never be the gate either. `false` is the fast path and MUST stay
-/// untouched — it is the unbounded `?s ?p ?o`-shaped dump case ADR-0006's
-/// constant-memory invariant exists for. Where `true`, [`construct`]/
-/// [`construct_each_async`] dedup the PRODUCED triples with a Rust-side
-/// `HashSet` — bounded by DISTINCT OUTPUT triples, not total input rows, the
-/// same documented trade `cascade::eligible_for_term_dedup`'s single-branch
-/// term dedup already makes.
+/// Whether per-branch SQL DISTINCT cannot finish graph-set construction because
+/// multiple branches may still emit the same triple. There are two explicit
+/// triggers:
+///
+/// 1. ADR-0034 item 3: an ordinary CONSTRUCT template dropped a WHERE variable.
+///    `construct_drops_some_branch_var` captures that fact before projection
+///    erases it.
+/// 2. The bounded DESCRIBE lowering narrowed every branch to its outgoing triple
+///    terms but could not prove the branches pairwise disjoint. It overwrites
+///    the same internal marker with that exact residual; serving resource
+///    admission then rejects the source-sized fallback before I/O.
+///
+/// Branch count alone is never sufficient: the unbounded `?s ?p ?o` dump fast
+/// path must remain streaming, and D2 already resolves duplicate full-pattern
+/// solutions by disjointness, SQL pooling, or a shared term set. When this
+/// predicate is true, [`construct`]/[`construct_each_async`] deduplicate produced
+/// triples with a Rust `HashSet`, bounded by distinct output triples rather than
+/// input rows. Serving sees that state through `SourceSizedState::ConstructDedup`.
 pub(crate) fn construct_may_need_cross_branch_dedup(plan: &Plan) -> bool {
     plan.branches.len() > 1 && plan.construct_drops_some_branch_var
 }

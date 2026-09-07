@@ -5,6 +5,10 @@ use std::process::{Command, Output};
 use sf_serve::MAX_SOURCE_INPUT_BYTES;
 
 const SECRET: &str = "sf_secret_NEVER_EXPOSE_c913";
+const ONTOLOGY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/w3c/rdb2rdf/manifest-evaluation.ttl"
+);
 
 fn missing_mapping() -> String {
     std::env::temp_dir()
@@ -19,7 +23,7 @@ fn missing_mapping() -> String {
 
 fn serve_command(mapping: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
-    command.args(["serve", "--mapping", mapping]);
+    command.args(["serve", "--mapping", mapping, "--ontology", ONTOLOGY]);
     command
 }
 
@@ -48,8 +52,22 @@ fn assert_opaque_source_failure(output: Output, secret: Option<&str>) {
     assert!(output.stdout.len() < 512, "unbounded stdout surface");
     assert!(output.stderr.len() < 512, "unbounded stderr surface");
     let stderr = String::from_utf8(output.stderr).expect("stderr UTF-8");
-    assert!(stderr.contains("startup-source"), "stderr={stderr:?}");
-    assert!(stderr.contains("correlation sf-"), "stderr={stderr:?}");
+    assert_structured_startup_failure(&stderr, "startup-source");
+}
+
+fn assert_structured_startup_failure(stderr: &str, expected: &str) {
+    let event = stderr
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .expect("startup failure must be one structured JSON event");
+    assert_eq!(event["level"], "ERROR", "stderr={stderr:?}");
+    assert_eq!(event["event"], "startup.failed", "stderr={stderr:?}");
+    assert_eq!(event["failure"], expected, "stderr={stderr:?}");
+    let correlation = event["correlation_id"]
+        .as_str()
+        .expect("correlation string");
+    assert!(correlation.starts_with("sf-"), "stderr={stderr:?}");
+    assert_eq!(correlation.len(), 36, "stderr={stderr:?}");
 }
 
 #[test]

@@ -38,10 +38,14 @@ pub mod ir;
 pub mod query_control;
 pub mod schema;
 pub mod schema_identity;
+pub mod security_context;
 pub mod term;
 
 pub use affinity::{SourceId, SourceIdError, SourceMapping};
 pub use schema::{Column, ForeignKey, FunctionalDep, SideStats, TableSchema};
+
+/// The sole tracing target accepted by the serving process subscriber.
+pub const TELEMETRY_TARGET: &str = "semantic_fabric::telemetry";
 
 /// Errors raised by the shared core.
 #[derive(Debug, thiserror::Error)]

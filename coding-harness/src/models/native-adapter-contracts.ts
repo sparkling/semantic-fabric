@@ -5,11 +5,22 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { resolveWorkspacePath } from '../workspace.js';
 import type {
   ClaudeInvocationRequest,
+  CodexReasoningEffort,
   NativePreflightRequest,
   NativeProcessResult,
 } from './types.js';
 
 export const NATIVE_PROMPT_MAX_BYTES = 1_000_000;
+
+export function codexReasoningArguments(effort: CodexReasoningEffort | undefined): string[] {
+  if (effort === undefined) return [];
+  if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) {
+    throw new Error('HARNESS_NATIVE_REASONING_EFFORT_INVALID');
+  }
+  // The native client is authority for model availability: never clamp or retry
+  // an explicitly requested effort with a different model/effort/provider.
+  return ['-c', `model_reasoning_effort="${effort}"`];
+}
 
 export function assertAdapterExecutable(executable: string): void {
   if (executable.trim().length === 0 || executable.includes('\0')) {

@@ -416,7 +416,11 @@ async fn run_direct_pg(entry: &SealedCase, client: &Client) -> Result<CaseOutcom
             ))
         }
     };
-    let maps = match sf_mapping::direct_mapping(&schemas, BASE) {
+    let maps = match sf_mapping::direct_mapping_with_row_identity(
+        &schemas,
+        BASE,
+        sf_mapping::DirectMappingRowIdentity::PostgresCtidConformance,
+    ) {
         Ok(m) => m,
         Err(error) => {
             return Ok(outcome(

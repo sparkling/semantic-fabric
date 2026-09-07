@@ -1,0 +1,16 @@
+sf-performance-runner-profile-v1
+profile-id	operator-must-name-profile
+controlled	false
+os	linux
+architecture	x86_64
+kernel-release	6.8.0-137-generic
+cpu-model	AMD Ryzen 9 7950X3D 16-Core Processor
+online-cpus	0-31
+allowed-cpus	0-31
+isolated-cpus	
+scaling-governor	powersave
+turbo	unavailable
+swap-total-kib	33519612
+mem-total-kib	196944104
+load1-limit-milli	0
+build-profile	release

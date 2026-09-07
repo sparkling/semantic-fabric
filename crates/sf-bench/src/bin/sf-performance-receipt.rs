@@ -13,7 +13,8 @@ use sf_bench::performance::paths::{
 use sf_bench::performance::proc_status::read_self_process_identity;
 use sf_bench::performance::producer::produce;
 use sf_bench::performance::profile::{
-    parse_profile, render_uncontrolled_template, LinuxRunnerProbe, RunnerProbe, MAX_PROFILE_BYTES,
+    parse_profile, render_uncontrolled_template, validate_control_contract, LinuxRunnerProbe,
+    RunnerProbe, MAX_PROFILE_BYTES,
 };
 use sf_bench::performance::worker::{render_worker_result, validate_run_token, WorkerResult};
 use sf_bench::performance::workload_runner::{
@@ -169,6 +170,7 @@ fn load_fixed_authorities(layout: &RepositoryLayout) -> Result<FixedAuthorities,
         .read_fixed(PROFILE_PATH, MAX_PROFILE_BYTES)
         .map_err(|error| error.to_string())?;
     let profile = parse_profile(&profile_bytes).map_err(|error| error.to_string())?;
+    validate_control_contract(&profile).map_err(|error| error.to_string())?;
     Ok(FixedAuthorities {
         scenarios,
         profile_id: profile.profile_id.clone(),

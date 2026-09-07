@@ -24,6 +24,7 @@ jobs:
       coding_harness: ${{ steps.selector.outputs.coding_harness }}
       supervisor: ${{ steps.selector.outputs.supervisor }}
       acl_replay: ${{ steps.selector.outputs.acl_replay }}
+      pg_observation: ${{ steps.selector.outputs.pg_observation }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -41,7 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           full() {
-            printf '%s\n' 'rust=true' 'coding_harness=true' 'supervisor=true' 'acl_replay=true' >> "$GITHUB_OUTPUT"
+            printf '%s\n' 'rust=true' 'coding_harness=true' 'supervisor=true' \
+              'acl_replay=true' 'pg_observation=true' >> "$GITHUB_OUTPUT"
           }
           if [ "$EVENT_NAME" != pull_request ]; then
             full
@@ -49,6 +51,7 @@ jobs:
           fi
           selector="$RUNNER_TEMP/select-ci-gates.mjs"
           manifest="$RUNNER_TEMP/base-harness-manifest.json"
+          qualification_inventory="$RUNNER_TEMP/base-pg-observation-inputs.tsv"
           if ! git show "${BASE_SHA}:coding-harness/scripts/select-ci-gates.mjs" > "$selector"; then
             full
             exit 0
@@ -57,8 +60,25 @@ jobs:
             full
             exit 0
           fi
-          node "$selector" --event "$EVENT_NAME" --repository "$GITHUB_WORKSPACE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --manifest "$manifest" >> "$GITHUB_OUTPUT"
+          if ! git show "${BASE_SHA}:tests/postgresql/observation-qualification-inputs-v1.tsv" \
+            > "$qualification_inventory"; then
+            full
+            exit 0
+          fi
+          selected="$RUNNER_TEMP/selected-ci-gates"
+          if ! node "$selector" --event "$EVENT_NAME" --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --manifest "$manifest" \
+            --qualification-inventory "$qualification_inventory" > "$selected"; then
+            full
+            exit 0
+          fi
+          # A trusted base predating this fifth output cannot classify it. Run it
+          # until the new selector is itself present on the protected base.
+          if ! grep -Eq '^pg_observation=(true|false)$' "$selected"; then
+            full
+            exit 0
+          fi
+          cat "$selected" >> "$GITHUB_OUTPUT"
 
   coding-harness:
     name: coding harness · node ${{ matrix.node }} · build · test
@@ -149,15 +169,64 @@ jobs:
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs branch
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs final-where
 
+  postgresql-observation-qualification:
+    name: PostgreSQL observation · ${{ matrix.postgres_patch }} · node ${{ matrix.node }}
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.pg_observation != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20.0.0'
+            postgres_patch: '16.9'
+            postgres_image: postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f
+          - node: '24.14.1'
+            postgres_patch: '16.9'
+            postgres_image: postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f
+          - node: '20.0.0'
+            postgres_patch: '16.15'
+            postgres_image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
+          - node: '24.14.1'
+            postgres_patch: '16.15'
+            postgres_image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The receipt verifier reads exact historical source commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Node builds and executes evidence tooling; it is not product runtime.
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: coding-harness/package-lock.json
+      - name: install pinned evidence-harness dependencies
+        run: npm --prefix coding-harness ci --ignore-scripts
+      - name: build canonical evidence harness
+        run: npm --prefix coding-harness run build
+      - name: pull exact Rust builder platform manifest
+        env:
+          RUST_BUILDER_IMAGE: rust@sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120
+        run: docker pull --platform linux/amd64 "$RUST_BUILDER_IMAGE"
+      - name: pull exact PostgreSQL platform manifest
+        env:
+          POSTGRES_IMAGE: ${{ matrix.postgres_image }}
+        run: docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
+      - name: replay exact PostgreSQL observation receipt
+        run: npm --prefix coding-harness run postgres-observation-qualification -- replay --patch "${{ matrix.postgres_patch }}"
+
   build:
     name: fmt · clippy · build · test
     needs: changes
     if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.rust != 'false') }}
     runs-on: ubuntu-24.04
     # Live PostgreSQL/MySQL/SQL Server service containers. The sealed PostgreSQL
-    # RDB2RDF receipt check below explicitly requires this live service; the other
-    # provider-specific suites still expose their live-optional grade in the generated
-    # capability matrix rather than silently becoming production-admission evidence.
+    # and MySQL RDB2RDF receipt checks below explicitly require their live services;
+    # other provider-specific suites still expose their live-optional grade in the
+    # generated capability matrix rather than becoming production-admission evidence.
     # `sqlserver-backend` is
     # already enabled here via workspace feature unification (sf-conformance
     # depends on sf-sql with it on) — no extra feature flag is needed below.
@@ -228,6 +297,25 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
+      # Private ADR-0040 comparison evidence only. The feature stays default-off
+      # and this gate does not admit the substrate into product execution.
+      - name: clippy (sf-sparql secure-spill-prototype)
+        run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings
+      - name: test (sf-sparql secure-spill-prototype)
+        run: cargo test --locked -p sf-sparql --features secure-spill-prototype --lib federation::global::spill
+      - name: test required-live PostgreSQL verified-generation lifecycle
+        timeout-minutes: 5
+        env:
+          # This administrator endpoint exists only inside the ephemeral CI
+          # service and provisions a unique database plus restricted reader.
+          SF_PG_GENERATION_TEST_URL: "host=127.0.0.1 port=5432 user=sftest password=sftest dbname=sftest"
+        run: |
+          set -euo pipefail
+          test_name='pg_generation::live_tests::verified_generation_lifecycle_is_coherent_and_fail_closed'
+          listed="$(cargo test --locked -p sf-serve --lib "$test_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-serve --lib "$test_name" -- \
+            --ignored --exact --test-threads=1 --nocapture
       # DuckDB backend (embedded, `bundled` feature — no external service needed).
       # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
       # crate in the dependency graph turns it on, so these tests never ran in CI
@@ -255,19 +343,51 @@ jobs:
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
       - name: replay sealed required-live PostgreSQL RDB2RDF outcome baseline
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check
+      - name: replay sealed required-live MySQL RDB2RDF outcome baseline
+        run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend mysql --check
+      - name: test required-live MySQL cancellation cleanup ownership
+        run: |
+          set -euo pipefail
+          test_name='mysql::tests::live_cancelled_run_removes_only_its_owned_scratch_database'
+          listed="$(cargo test --locked -p sf-conformance --lib "$test_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-conformance --lib "$test_name" -- \
+            --ignored --exact --test-threads=1 --nocapture
       - name: clippy deterministic evidence receipt tooling
         run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
-      # This mutable hosted runner validates only the bounded parser and receipt
-      # contract. It is not a controlled provenance builder, so CI neither captures
-      # nor publishes a current-binary observation here.
+      # This mutable hosted runner validates parser-free receipt inputs and the
+      # receipt tooling. It is not a controlled provenance builder, so CI neither
+      # captures nor publishes a current-binary observation here.
       - name: test deterministic evidence receipt tooling
-        run: cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1
+        run: cargo test --locked -p sf-conformance --features evidence-receipts --lib --bin rust-closure-receipt --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1
       - name: replay expected SQLite SPARQL query regression baseline
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check
       - name: replay expected SQLite SPARQL protocol regression baseline
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check
+      # This is a project-supported subset replay, not a W3C Query/Protocol
+      # conformance or backend-admission claim. The fixed test inventory keeps a
+      # removed replay or mutation gate from degrading into a zero-test pass.
+      - name: replay sealed SQLite supported SPARQL Query and Protocol surface
+        run: |
+          set -euo pipefail
+          listed="$(cargo test --locked -p sf-conformance --features evidence-receipts \
+            --test supported_surface_sqlite -- --list)"
+          for test_name in \
+            compiled_seals_reject_exact_inventory_mutants \
+            sealed_inventories_have_explicit_typed_outcome_totals \
+            sealed_protocol_supported_surface_matches_public_sqlite_behavior \
+            sealed_query_supported_surface_matches_public_sqlite_behavior \
+            standard_snapshots_match_capability_catalog_authority
+          do
+            test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          done
+          test "$(printf '%s\n' "$listed" | grep -Ec ': test$')" = 5
+          cargo test --locked -p sf-conformance --features evidence-receipts \
+            --test supported_surface_sqlite -- --test-threads=1
       - name: verify default sf-cli package dependency closure
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check
+      - name: verify parser-worker qualification inputs
+        run: cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check --profile parser-worker-qualification-inputs-v1
       - name: clippy controlled performance receipt tooling
         run: cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings
       - name: test controlled performance receipt tooling
@@ -285,7 +405,7 @@ jobs:
 
   required:
     name: required
-    needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, build]
+    needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, postgresql-observation-qualification, build]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     env:
@@ -294,10 +414,12 @@ jobs:
       SELECT_CODING_HARNESS: ${{ needs.changes.outputs.coding_harness }}
       SELECT_SUPERVISOR: ${{ needs.changes.outputs.supervisor }}
       SELECT_ACL_REPLAY: ${{ needs.changes.outputs.acl_replay }}
+      SELECT_PG_OBSERVATION: ${{ needs.changes.outputs.pg_observation }}
       RUST_RESULT: ${{ needs.build.result }}
       CODING_HARNESS_RESULT: ${{ needs['coding-harness'].result }}
       SUPERVISOR_RESULT: ${{ needs['supervisor-service'].result }}
       ACL_REPLAY_RESULT: ${{ needs['postgresql-public-acl-replay'].result }}
+      PG_OBSERVATION_RESULT: ${{ needs['postgresql-observation-qualification'].result }}
     steps:
       - name: require every selected gate and reject malformed selection
         shell: bash
@@ -315,10 +437,13 @@ jobs:
           }
           test "$SELECT_ACL_REPLAY" != true || test "$SELECT_SUPERVISOR" = true
           test "$SELECT_SUPERVISOR" != true || test "$SELECT_CODING_HARNESS" = true
+          test "$SELECT_PG_OBSERVATION" != true || test "$SELECT_RUST" = true
+          test "$SELECT_PG_OBSERVATION" != true || test "$SELECT_CODING_HARNESS" = true
           check "$SELECT_RUST" "$RUST_RESULT"
           check "$SELECT_CODING_HARNESS" "$CODING_HARNESS_RESULT"
           check "$SELECT_SUPERVISOR" "$SUPERVISOR_RESULT"
           check "$SELECT_ACL_REPLAY" "$ACL_REPLAY_RESULT"
+          check "$SELECT_PG_OBSERVATION" "$PG_OBSERVATION_RESULT"
 
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)

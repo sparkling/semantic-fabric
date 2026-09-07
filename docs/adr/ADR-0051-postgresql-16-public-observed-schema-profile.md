@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-02
-updated: 2026-09-03
+updated: 2026-09-06
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -12,9 +12,8 @@ implements: [ADR-0050]
 
 ## Status boundary
 
-This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2.
-The private, explicitly opt-in Rust adapter now covers one PostgreSQL 16 semantic catalogue contract and can return its
-branded, non-authorizing identity from the same repeatable-read transaction as the legacy projection. PostgreSQL 16.9
+This ADR is **accepted for observation-profile qualification only**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2.
+The private, explicitly opt-in Rust adapter now covers one PostgreSQL 16 semantic catalogue contract and can return its branded, non-authorizing identity from the same repeatable-read transaction as the legacy projection. PostgreSQL 16.9
 and 16.15 are the initial exact live qualification targets. The adapter implements the exact engine selector, profile
 finalizer, guards, bounded typed row decoding, relation/column/type/default-collation normalization, live NOT NULL
 emission, and raw PK/UNIQUE/FK adaptation. FK proof binds the ordered equality-operator arrays to the exact `conindid`
@@ -31,18 +30,20 @@ failed closed with a redacted unsupported-constraint error. No repository receip
 development diagnostics, not qualification: they did not execute the required twice-per-image networkless,
 non-owner-role, immutable-image and byte-identical protocol.
 
-The current public diagnostic still propagates a rich guard/query/decode/unsupported failure as redacted
-`sf_sql::Error::Introspection` and constructs only an available snapshot. It does not yet implement this ADR's planned
-savepoint recovery, committed `Unavailable` result, or transaction/commit fault matrix. A closed two-replay evidence
-contract binds the future receipt fields and literal non-authority/runtime-gap status, but its executor fails closed
-because the current Rust probe cannot supply the required counts and preflight evidence. Exact PostgreSQL 16.9/16.15
-qualification receipts therefore remain open. Existing legacy entry points are unchanged; `sf-serve` does not consume
-the identity and no `RuntimeBinding` carries it, so it cannot affect compilation, cache identity, readiness, reload or
-execution.
-Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
-constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
-compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
-Node and MetaHarness supply development evidence only under ADR-0048, with learning, evolution and promotion disabled.
+The public Rust diagnostic collects a complete legacy projection and publishes either the branded rich identity or one closed, identifier-free `Unavailable` reason only after the outer transaction commits.
+Clean pre-legacy mismatches remain pending unavailability; rich failures may downgrade only after successful savepoint recovery, while transaction, legacy or commit failures remain fatal.
+The evidence executor publishes an ordered receipt pair atomically only after both exact-patch replays and the cross-patch laws pass. Until that valid tracked pair exists it fails closed; a valid pair promotes only this observation profile.
+Existing legacy entry points are unchanged. For authored mappings, `sf-serve` carries the committed availability state bound to backend and `SourceId` only as a non-authorizing diagnostic.
+A distinct private Direct-Mapping foundation consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
+It marks a pool member dirty before `BEGIN`, locks the exact public-table set before the first repeatable-read snapshot, and binds the identity, complete rich tables, database, role, session and policy context.
+A primary-key-backed candidate is generated under that protection, rechecked, rolled back and stored only as an inseparable generation expectation.
+For each internal verified request, one compiler permit is reserved before source I/O, retained across lease acquisition without requeue, and used for authoritative compilation after exact reobservation. The request reserves exactly 34 source-work units from typed executable inventories; 33 rejects before pool I/O.
+Required-live evidence carries mapped SELECT, ASK and CONSTRUCT through request generation, retained-permit compilation and the same lease-owned connection. Final recheck plus acknowledged rollback is mandatory; any cancellation, error or drop that prevents rollback triggers bounded native cancel and dirty-member detachment.
+The same required-live path now rejects any runtime login that is an owner, can inherit or change roles, carries elevated or mutation privileges, or lacks the exact CONNECT, `public`-schema USAGE, mapped-table SELECT and collation-probe execution capabilities; it also proves the permitted reads and denied `SET ROLE`, DDL and DML against a disposable database.
+The PostgreSQL 16.15 gate also covers lock-before-snapshot, DDL barriers, old-generation coherence, successor drift, policy mutation, cancellation and dirty replacement.
+The identity remains forgeable content equality and does not itself grant type, constraint, mapping, cache, readiness or execution authority; compiler facts remain `Unverified`.
+Public startup still rejects every Direct Mapping selection before connector I/O. Qualification receipts do not alter startup and grant no reload lifecycle or backend admission.
+Qualification never silently extends to another patch; SQLite and MySQL remain unavailable. Product code is Rust, while Node/MetaHarness remains development evidence with learning, evolution and promotion disabled.
 
 ## Context
 
@@ -71,8 +72,9 @@ Appendix-A profile IDs:
 
 The adapter selects this triple. A caller may invoke the pure `sf-core` builder
 with the same ID bytes, but cannot select an adapter profile or construct its
-runtime-accepted brand. The profile's initial closed qualified-engine set is
-`{160009,160015}` and is admitted only after both exact receipts pass. Another
+runtime-accepted brand. The profile's initial closed candidate-engine set is
+`{160009,160015}`. It becomes the qualified observation set only after both exact
+receipts pass and this ADR's promotion is accepted. Another
 16.x patch is `Unavailable(UnqualifiedEnginePatch)` until separately qualified;
 another major is `Unavailable(ProfileNotImplemented)`. Adding a patch proven to
 have the same law does not change profile IDs; any scope or normalization change
@@ -391,37 +393,36 @@ failure. Error precedence among simultaneous defects is not normative.
 
 ### 9. Keep runtime availability closed and non-authorizing
 
-The completed Phase-2 adapter will return an opaque committed snapshot containing the complete legacy vector and either
-a branded registered whole identity or a closed unavailable reason. The closed algebra has no free-form payload: `Display` and `Debug`
-are at most 256 UTF-8 bytes, contain no identifiers, SQL, connection material,
-paths or values, and `Error::source()` is `None`.
+The Phase-2 adapter returns an opaque committed snapshot containing the complete legacy vector and either a branded
+registered whole identity or a closed unavailable reason. The closed algebra has no free-form payload: `Display` and
+`Debug` are at most 256 UTF-8 bytes, contain no identifiers, SQL, connection material, paths or values, and
+`Error::source()` is `None`.
 The top-level variants are `ProfileNotImplemented`, `UnqualifiedEnginePatch`,
 `GuardUnsupported(GuardCodeV1)`, `LegacyCoordinateMismatch`, `CatalogQuery`,
 `CatalogDecode`, `LimitExceeded(LimitCodeV1)`, `UnsupportedRelation`,
 `UnsupportedType`, `UnsupportedCollation`, `UnsupportedConstraint`, and
-`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, IdentifierLength, IndexKeyLimit,
-IntegerDatetimes, ReplicationRole, SearchPath, PublicNamespace, CurrentDatabase}`.
-`LimitCodeV1` is `{RichRelations,
-PhysicalAttributes, LiveColumns, RawConstraints, KeyMembers, Facets, TextBytes,
-CanonicalBody}`. Legacy-cap failure is fatal, outside this unavailable algebra.
+`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, ClientEncoding, IdentifierLength, IndexKeyLimit,
+IntegerDatetimes, ReplicationRole, SearchPath, PublicNamespace, CurrentDatabase}`. `LimitCodeV1` is `{RichRelations,
+PhysicalAttributes, LiveColumns, RawConstraints, KeyMembers, Facets, TextBytes, CanonicalBody}`. Legacy-cap failure is
+fatal, outside this unavailable algebra.
 Both nested code types are identifier-free enums.
 The target public snapshot API returns that opaque result. Existing legacy `sf-sql` functions `introspect_postgres`,
 `introspect_postgres_all` and `introspect_postgres_public_snapshot` preserve their signatures; public `sf-serve`
 `introspect_pg_all` preserves `Result<Vec<TableSchema>, String>`. They use the bounded legacy collector, and the first
-two retain caller-supplied transaction semantics. Current `introspect_postgres_public_observed_snapshot` invokes the
-branded adapter only as an opt-in diagnostic, returns only success, and propagates rich failure. In the completed design,
-startup calls the availability API and explicit callers may discard its observation through `into_legacy_tables`.
-The planned `sf-serve` crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
-`observation: SourceSchemaObservationV1` field. That closed private enum is either `Unavailable` or carries the whole
-`Postgres16PublicObservedSchemaV1`; unchecked, SQLite and MySQL constructors can create only `Unavailable`.
-`RuntimeBinding` gains a private `schema_observation: BoundSourceSchemaObservationV1` field holding backend kind,
+two retain caller-supplied transaction semantics. `introspect_postgres_public_observed_snapshot` now returns committed
+availability, startup calls it, and explicit callers may discard its observation through `into_legacy_tables`.
+The `sf-serve` crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
+`observation: SourceSchemaObservationV1` field. That closed private enum is either `Unavailable` (retaining an optional
+closed PostgreSQL reason) or carries the whole `Postgres16PublicObservedSchemaV1`; unchecked, compatibility, SQLite and
+MySQL constructors can create only reason-free `Unavailable`.
+`RuntimeBinding` has a private `schema_observation: BoundSourceSchemaObservationV1` field holding backend kind,
 `mapping.source_id()` and that state. `RuntimeBinding::new` binds it before consuming the mapping; no public or
-compatibility constructor accepts an identity, brand or availability argument, and `into_parts` cannot omit the state.
+compatibility constructor accepts an identity, brand or availability argument. The sole production `into_parts`
+consumer destructures and moves its fourth state; there is no identity-dropping production compatibility tuple.
 Both states continue through `CompilerSchema::from_unverified_observation`.
-Identity does not enter `CompileScope`, cache keys, admission, readiness, reload,
-Direct Mapping or execution. Equal identities in separate runtime bindings do
-not merge process-local compile scopes. Startup emits one bounded structural
-availability diagnostic; it never logs the unavailable cause's source error.
+For ordinary authored mappings, identity does not enter `CompileScope`, cache keys, admission, readiness, reload or execution. The private Direct-Mapping generation expectation retains and rechecks it as one exact fact, but authority comes only from the owned lease type-state and connection.
+That use neither upgrades `CompilerSchema` nor makes the digest a capability. Equal identities in separate runtime bindings do not merge process-local binding authority.
+Startup emits one bounded structural availability diagnostic; unavailable output contains only its closed reason and never a source error. Server-encoding mismatch remains non-authorizing unavailability; client encoding, identifier length and search path remain fatal because they can invalidate legacy decoding or name resolution.
 
 ## Required evidence
 
@@ -429,29 +430,31 @@ availability diagnostic; it never logs the unavailable cause's source error.
 
 Each qualified engine patch requires one canonical, replayable JSON receipt with
 `receiptKind=postgresql-public-observation-qualification-v1`. It binds source commit/tree and Cargo lock; ADR/profile/
-query/test/fixture/runner/protocol inputs; Rust toolchain and probe artefact; OCI repository, platform, immutable manifest
-and configuration digests; exact server version and role preflight; separate relation, attribute, NOT NULL, catalogue and
+query/test/fixture/runner/protocol inputs; the complete immutable builder manifest/configuration, Rust/Cargo outputs and probe artefact; PostgreSQL OCI repository, platform, immutable manifest and configuration digests; exact server version and role preflight; separate relation, attribute, NOT NULL, catalogue and
 combined-constraint counts; each stream's cap/polled/decoded/retained-peak/overflow/terminal state; the three identities; legacy
-comparison; closed error code plus failure phase, or both `null`; bounded output digests; distinct execution resources; cleanup; and
+relation/column-coordinate comparison; required `null` error/failure sentinels; bounded output digests; distinct execution resources; cleanup; and
 `replayStatus`. It contains no credentials, SQL payloads, OIDs, names or raw rows. Replay runs each pinned image twice in
-fresh networkless containers and requires every stable candidate byte to agree. Both 16.9 and 16.15 must pass before
-qualification or admission. Until all runtime gaps close, even a replay pass says `qualificationStatus=withheld-runtime-gaps`.
+fresh networkless containers and requires every stable candidate byte to agree. Its two axes are deliberately separate:
+`observationProfileQualification=pass` reports only this exact observation law; any failed run emits no receipt, while
+`runtimeAdmissionStatus=withheld-independent-gates`, `productionAdmission=false`, `verifiedLease=false`, `reload=false`,
+and `directMapping=false` deny every wider runtime claim. Both patches must pass, bind the same qualification-critical
+source/input closure, and agree cross-patch before the observation profile may be promoted.
 
-- exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec compatibility, qualified/unqualified-patch tests, and a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
+- exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec relation/column-coordinate compatibility, qualified/unqualified-patch tests, and a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
 - table-driven normalization/rejection for every type and exact typmod boundary: fixed `-1/other`, character 4/5/max/max+1, numeric minima/maxima/outside/noncanonical, temporal `-2/-1/0/6/7`, implicit/explicit precision-6 equality, overlong `daticurules`, each default-collation provider and each constraint state;
 - instrumented exact-cap/cap-plus-one tests proving at most one sentinel is polled and no sentinel or oversized text/array is copied; oversized caller input issues zero SQL, keys test 32/33, FK aggregation 4/5, and dropped slots consume only physical capacity;
 - transaction/redaction/kernel-call fault injection, including fatal legacy caps, failed savepoint recovery and commit;
 - a live/dropped/live matrix proving dense ordinals and PK/UNIQUE/FK remapping; reject dropped/nonzero-type, live/NULL-type, character/NULL-collation, duplicate/gapped/out-of-range `attnum`, `relnatts` mismatch and keys naming a dropped slot, while accepting NULL collation facts for live `attcollation=0`;
-- on both images, prove the comparison role is non-superuser/non-owner, cannot inherit, bypass, `SET ROLE` or DDL, and has only required CONNECT/USAGE/SELECT plus callable `pg_database_collation_actual_version(oid)`; then prove owner identity equality while role-visible legacy constraints differ;
+- on both images, prove the comparison role is non-superuser/non-owner, cannot inherit, bypass, `SET ROLE`, CREATEROLE, CREATEDB, REPLICATION or DDL, and has only required CONNECT/USAGE/SELECT plus callable `pg_database_collation_actual_version(oid)`; then prove owner identity equality while role-visible legacy constraints differ;
 - statistics/data/ACL/owner/OID/name-only noninterference, explicit blind-spot tests, and isolated mutations for each digest domain;
 - unsupported relation/type/collation/constraint and malformed-catalogue cases produce closed unavailability, never partial identity;
-- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`; carrier state and exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`; `into_parts` cannot omit state; unchecked/compatibility/SQLite/MySQL paths cannot inject it; compiler authorities remain `Unverified`; and equal identities in distinct bindings do not merge scopes;
+- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`; carrier state and exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`; no production compatibility tuple drops state; unchecked/compatibility/SQLite/MySQL paths cannot inject it; compiler authorities remain `Unverified`; and equal identities in distinct bindings do not merge scopes;
 - deterministic old-or-new DDL barriers without sleeps; and
 - two fresh, ownership-labelled, `--network none` containers for each pinned PostgreSQL 16.9 and 16.15 digest, with a fixed database, Unix-socket execution, byte-equal replay summaries and verified cleanup.
 
-Any future tracked receipt also binds toolchain, fixture/runner bytes, image configuration, preflight/result, bounded stdout/
-stderr, container/volume distinctness and cleanup. It says `test-only-non-runtime`, `productionAdmission=false`,
-`verifiedLease=false`, `reload=false`, and `directMapping=false`.
+The tracked pair also binds immutable builder/toolchain, fixture/runner bytes, image configuration, preflight/result, bounded stdout/
+stderr, container/volume distinctness and cleanup. Its authority is observation-profile qualification only; it grants no
+Direct Mapping, generation lease, reload, backend admission, production-readiness or release authority.
 
 No test may connect to, mutate or use live product-mock. Its static source and semantic-builder gold may inform fixtures
 but grant no runtime authority. Existing sealed evidence covers eleven PostgreSQL-16.9 databases and a `public` table/
@@ -493,5 +496,4 @@ learning/promotion disabled. Node remains outside the product closure.
 [ADR-0006](ADR-0006-crate-layout-and-performance-model.md),
 [ADR-0015](ADR-0015-datatype-dialect-correctness.md),
 [ADR-0038](ADR-0038-sota-application-completion-programme.md),
-[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md), and
-[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).
+[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md), and [ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).

@@ -50,10 +50,8 @@ fn write_fixed(root: &Path, relative: &str, bytes: impl AsRef<[u8]>) -> PathBuf 
     path
 }
 
-fn write_authorities(root: &Path) -> (String, String) {
-    let manifest = include_bytes!("../config/performance-scenarios-v1.tsv");
-    write_fixed(root, SCENARIOS_PATH, manifest);
-    let profile = RunnerProfile {
+fn controlled_profile() -> RunnerProfile {
+    RunnerProfile {
         profile_id: "controlled-linux-test-v1".into(),
         controlled: true,
         os: "linux".into(),
@@ -69,13 +67,22 @@ fn write_authorities(root: &Path) -> (String, String) {
         mem_total_kib: 67_108_864,
         load1_limit_milli: 250,
         build_profile: "release".into(),
-    };
-    let profile_text = render_profile(&profile).unwrap();
+    }
+}
+
+fn write_authorities_with_profile(root: &Path, profile: &RunnerProfile) -> (String, String) {
+    let manifest = include_bytes!("../config/performance-scenarios-v1.tsv");
+    write_fixed(root, SCENARIOS_PATH, manifest);
+    let profile_text = render_profile(profile).unwrap();
     write_fixed(root, PROFILE_PATH, profile_text);
     (
         profile.digest().unwrap(),
         workload_sha256(manifest).unwrap(),
     )
+}
+
+fn write_authorities(root: &Path) -> (String, String) {
+    write_authorities_with_profile(root, &controlled_profile())
 }
 
 fn run(root: &Path, command: &str) -> std::process::Output {
@@ -101,20 +108,101 @@ fn should_check_the_fixed_tracked_scenario_manifest_without_capturing() {
 }
 
 #[test]
+fn should_reject_the_tracked_probe_profile_without_capturing() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let output = run(root, "check-profile");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("runner profile is explicitly uncontrolled"));
+    assert!(!root.join(BASELINE_PATH).exists());
+}
+
+#[test]
 fn should_check_the_fixed_baseline_without_modifying_it() {
     let dir = repository_fixture();
     let (profile, workload) = write_authorities(dir.path());
     let baseline = receipt(ReceiptKind::Baseline, 100, &profile, &workload);
     let path = write_fixed(dir.path(), BASELINE_PATH, &baseline);
 
-    let output = run(dir.path(), "check-baseline");
+    let first = run(dir.path(), "check-baseline");
+    let second = run(dir.path(), "check-baseline");
 
-    assert!(output.status.success());
+    assert!(first.status.success());
+    assert!(second.status.success());
     assert_eq!(std::fs::read_to_string(path).unwrap(), baseline);
     assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(first.stdout).unwrap(),
         format!("baseline-sha256\t{}\n", receipt_sha256(&baseline))
     );
+    assert_eq!(
+        second.stdout,
+        format!("baseline-sha256\t{}\n", receipt_sha256(&baseline)).as_bytes()
+    );
+}
+
+#[test]
+fn should_reject_a_baseline_even_when_bound_to_an_uncontrolled_profile() {
+    let dir = repository_fixture();
+    let mut profile = controlled_profile();
+    profile.controlled = false;
+    let (profile_sha256, workload) = write_authorities_with_profile(dir.path(), &profile);
+    write_fixed(
+        dir.path(),
+        BASELINE_PATH,
+        receipt(ReceiptKind::Baseline, 100, &profile_sha256, &workload),
+    );
+
+    let output = run(dir.path(), "check-baseline");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("runner profile is explicitly uncontrolled"));
+}
+
+#[test]
+fn should_reject_a_baseline_bound_to_a_non_control_profile_contract() {
+    let dir = repository_fixture();
+    let mut profile = controlled_profile();
+    profile.scaling_governor = "powersave".into();
+    let (profile_sha256, workload) = write_authorities_with_profile(dir.path(), &profile);
+    write_fixed(
+        dir.path(),
+        BASELINE_PATH,
+        receipt(ReceiptKind::Baseline, 100, &profile_sha256, &workload),
+    );
+
+    let output = run(dir.path(), "check-baseline");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("controlled profile must require Linux"));
+}
+
+#[test]
+fn should_reject_a_baseline_bound_to_another_profile_digest() {
+    let dir = repository_fixture();
+    let (_profile_sha256, workload) = write_authorities(dir.path());
+    write_fixed(
+        dir.path(),
+        BASELINE_PATH,
+        receipt(ReceiptKind::Baseline, 100, DIGEST, &workload),
+    );
+
+    let output = run(dir.path(), "check-baseline");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("runner binding"));
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
+use std::str::FromStr;
 
 use super::bounded_io;
 use super::digest::sha256_hex;
@@ -78,34 +79,11 @@ impl RunnerProfile {
     }
 
     pub fn validate<P: RunnerProbe>(&self, probe: &P) -> Result<RunnerSnapshot, ProfileError> {
-        if !self.controlled {
-            return Err(ProfileError(
-                "runner profile is explicitly uncontrolled; operator review is required".into(),
-            ));
-        }
-        if self.os != "linux"
-            || self.scaling_governor != "performance"
-            || self.turbo != "disabled"
-            || self.swap_total_kib != 0
-            || self.build_profile != "release"
-        {
-            return Err(ProfileError(
-                "controlled profile must require Linux, release build, performance governor, disabled turbo, and zero swap"
-                    .into(),
-            ));
-        }
+        validate_control_contract(self)?;
         let snapshot = probe
             .probe()
             .map_err(|error| ProfileError(format!("probe runner: {error}")))?;
         compare_static(self, &snapshot)?;
-        let allowed = parse_cpu_list(&snapshot.allowed_cpus)?;
-        let isolated = parse_cpu_list(&snapshot.isolated_cpus)?;
-        let online = parse_cpu_list(&snapshot.online_cpus)?;
-        if allowed.is_empty() || !allowed.is_subset(&online) || !allowed.is_subset(&isolated) {
-            return Err(ProfileError(
-                "allowed CPU set must be non-empty, online, and wholly isolated".into(),
-            ));
-        }
         if snapshot.load1_milli > self.load1_limit_milli {
             return Err(ProfileError(format!(
                 "runner load1 {} milli exceeds profile limit {} milli",
@@ -114,6 +92,38 @@ impl RunnerProfile {
         }
         Ok(snapshot)
     }
+}
+
+pub fn validate_control_contract(profile: &RunnerProfile) -> Result<(), ProfileError> {
+    if !profile.controlled {
+        return reject_control(
+            "runner profile is explicitly uncontrolled; operator review is required",
+        );
+    }
+    if profile.profile_id == "operator-must-name-profile" {
+        return reject_control("controlled runner profile requires an operator-assigned identity");
+    }
+    if profile.os != "linux"
+        || profile.scaling_governor != "performance"
+        || profile.turbo != "disabled"
+        || profile.swap_total_kib != 0
+        || profile.build_profile != "release"
+    {
+        return reject_control(
+            "controlled profile must require Linux, release build, performance governor, disabled turbo, and zero swap",
+        );
+    }
+    let allowed = parse_cpu_list(&profile.allowed_cpus)?;
+    let isolated = parse_cpu_list(&profile.isolated_cpus)?;
+    let online = parse_cpu_list(&profile.online_cpus)?;
+    if allowed.is_empty() || !allowed.is_subset(&online) || !allowed.is_subset(&isolated) {
+        return reject_control("allowed CPU set must be non-empty, online, and wholly isolated");
+    }
+    Ok(())
+}
+
+fn reject_control(message: &str) -> Result<(), ProfileError> {
+    Err(ProfileError(message.into()))
 }
 
 pub fn render_profile(profile: &RunnerProfile) -> Result<String, ProfileError> {
@@ -480,11 +490,7 @@ fn field<'a>(lines: &'a [&str], index: usize, key: &str) -> Result<&'a str, Prof
     }
 }
 
-fn parse_field<T: std::str::FromStr>(
-    lines: &[&str],
-    index: usize,
-    key: &str,
-) -> Result<T, ProfileError> {
+fn parse_field<T: FromStr>(lines: &[&str], index: usize, key: &str) -> Result<T, ProfileError> {
     field(lines, index, key)?
         .parse()
         .map_err(|_| ProfileError(format!("invalid {key}")))

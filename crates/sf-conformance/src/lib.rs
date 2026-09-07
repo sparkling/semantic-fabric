@@ -31,6 +31,7 @@ pub mod execution_receipt;
 pub mod graph;
 pub mod inventory;
 pub mod manifest;
+pub mod mysql;
 pub mod oracle;
 pub mod pg;
 #[cfg(feature = "evidence-receipts")]
@@ -43,6 +44,8 @@ pub mod sealed_suite;
 pub mod shacl_gate;
 pub mod sqlite;
 pub mod star_decode;
+#[cfg(feature = "evidence-receipts")]
+pub mod supported_surface;
 
 pub use manifest::Kind;
 pub use shacl_gate::{validate as mapping_conforms_to_t, GateOutcome};

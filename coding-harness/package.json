@@ -6,8 +6,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "tsc && node scripts/harden-build.mjs",
+    "build": "tsc && node scripts/sync-harness-manifest.mjs && node scripts/harden-build.mjs",
     "test": "vitest run",
+    "postgres-observation-qualification": "node dist/postgres-observation-qualification-cli.js",
     "prepublishOnly": "node scripts/deny-publish.mjs"
   },
   "dependencies": {

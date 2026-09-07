@@ -30,6 +30,8 @@ fn valid_guard() -> CatalogGuardRowV1 {
 fn guard_validator_classifies_each_profile_gate() {
     let mut guard = valid_guard();
     assert!(guard.validate().is_ok());
+    guard.search_path = "pg_catalog, public, pg_temp".into();
+    assert!(guard.validate().is_ok());
     guard.server_version_num = 160_014;
     assert_eq!(
         guard.validate(),
@@ -39,6 +41,22 @@ fn guard_validator_classifies_each_profile_gate() {
     assert_eq!(
         guard.validate(),
         Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented)
+    );
+    guard = valid_guard();
+    guard.server_encoding = "LATIN1".into();
+    assert_eq!(
+        guard.validate(),
+        Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+            PostgresSchemaIdentityGuardCodeV1::ServerEncoding
+        ))
+    );
+    guard = valid_guard();
+    guard.client_encoding = "LATIN1".into();
+    assert_eq!(
+        guard.validate(),
+        Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+            PostgresSchemaIdentityGuardCodeV1::ClientEncoding
+        ))
     );
     guard = valid_guard();
     guard.max_identifier_length = 62;

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -16,11 +16,13 @@ This ADR is **accepted** by explicit maintainer direction on 2026-09-01. It
 fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
-It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050 through
-ADR-0053, claim that a complete or active Rust supervisor exists, authorize a
+It does not accept ADR-0039, ADR-0041 through ADR-0047, ADR-0052 or ADR-0053,
+claim that a complete or production-active Rust supervisor exists, authorize a
 database or deployment, or weaken any final correctness, security, performance,
 reproducibility or release gate. Existing TypeScript artefacts remain
 non-authorizing reference evidence.
+ADR-0050 is independently accepted as a lifecycle design, not as a claim that
+its incomplete runtime phases or initial PostgreSQL profile are enabled.
 
 ## Context
 
@@ -172,7 +174,7 @@ claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
 
-### 7. Implementation status (through 2026-09-05)
+### 7. Implementation status (through 2026-09-06)
 
 Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
 metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
@@ -191,6 +193,19 @@ image, build, deployment, TLS, authentication, data-provenance or release
 authority. ADR-0042 through ADR-0047 were reviewed against this boundary: their
 committed Node code remains explicitly non-deployable oracle evidence, and each
 future production implementation is assigned to a separate Rust service.
+
+Commit `a050db3` begins that separate Rust service as the independent
+`sf-capture-supervisor` crate. Its bounded transactional kernel and PostgreSQL
+store implement immutable exact replay, one lease and attempt, stable overlap
+locking with monotonic fences, the closed terminal matrix, atomic pending-outbox
+state, post-lock database time, same-primary writer/recovery binding, and
+redacted adapter errors. Deterministic in-memory crash-boundary tests and
+developer-local isolated PostgreSQL 16.15 differential/contention tests exercise
+that slice. It has no product data-plane dependency and does not make Node a
+runtime. HTTP/mTLS, principal authentication, signer/materializer, controlled
+runner, database role/RLS/operational hardening and restart recovery,
+transparency/witness publication, controlled performance, production admission,
+and release authority remain absent; ADR-0042 stays proposed.
 
 The native Ruflo reader also remains development-only. Its optional
 `SF_HARNESS_RUFLO_PACKAGE_ROOT` is a source locator, not trust: the path must be
@@ -238,9 +253,15 @@ The 2026-09-05 gold refresh seals the current 63,091-byte manifest and all 246
 transitive artifacts, keeps the 171-file source snapshot and two migration pins,
 and validates the Category-13 relational closure at 148 TriplesMaps/721
 predicate-object maps over 112 tables/598 columns. Its current Style differential
-passes in one rolled-back read-only PostgreSQL 16.9 snapshot. The separate full
-inventory gate still fails closed on the drift recorded above. Neither result
-depends on ignored `.metaharness` output or grants production authority.
+passes in one rolled-back read-only PostgreSQL 16.9 snapshot. A separate optional
+KAT sends the same exact `ORDER BY ?styleNumber ?version LIMIT 10001` query and
+sealed mapping through `sf-serve` HTTP admission, request control and PostgreSQL
+execution: the 2026-09-05 run returned `200` and all 500 typed bindings equalled
+the direct SQL rows in order. Its `LIMIT 10002` control returned redacted `501`
+before opening a deliberately unreachable PostgreSQL pool. This is a sequential
+cross-session mutable observation, not a coherent shared snapshot. The separate
+full inventory gate still fails closed on the drift recorded above. None of these
+results depends on ignored `.metaharness` output or grants production authority.
 
 Commits `9d228dd` and `67a779a` move neutral schema ownership into `sf-core` and
 centralize compiler dialect capabilities without adding Node to Cargo. Commit
@@ -263,45 +284,91 @@ Constraint-driven optimiser passes remain available to explicit frozen-schema
 translation/conformance tests, but that capability grants no serving authority.
 Duplicate safety stays conservative when keys are quarantined.
 
-Current `sf-serve` loads authored R2RML before opening the backend and does not
-generate Direct Mapping. The Direct Mapping utility and conformance runners use
-explicit frozen fixture schemas. Because PK/FK facts determine the generated
-mapping itself, any future live Direct-Mapping path must bind mapping generation
-and the entire streamed execution to one verified source generation; removing
-optimiser facts after generation would be insufficient. These changes close the
-later-DDL integrity-constraint wrong-answer path. ADR-0050's pure Phase 1 Rust
-kernel computes non-authorizing structural/type/constraint content digests, and
-the opt-in `sf-sql` PostgreSQL observed-snapshot path can now emit the private
-ADR-0051 profile after one guarded transaction. The ordinary `sf-serve`
-`IntrospectedSource` and `RuntimeBinding` still carry only the legacy schema and
-no observed identity, so compiler constraint/type authorities remain
-`Unverified`. Drift detection, atomic reload, a verified-constraint lease,
-federation, production admission and release authority remain absent; the rest
-of ADR-0050 and ADR-0051 remains proposed.
+Public `sf-serve` startup still accepts authored R2RML only: its mapping-profile
+gate rejects every Direct Mapping selection before connector I/O. Behind that
+gate, a private Rust-only PostgreSQL foundation now consumes the ADR-0051 rich
+snapshot and complete table projection from one owned transaction. It marks the
+pool member dirty before `BEGIN`, locks the exact public-table set before the
+first repeatable-read snapshot, generates only the primary-key-backed Direct
+Mapping candidate, compares its rich identity and database/role/session policy,
+then performs a final exact recheck and acknowledged rollback before packaging
+the inseparable schema, observation, mapping and request-generation expectation.
+
+For an internal verified request, semantic/resource-shape preflight first
+reserves one opaque server-wide compiler permit. The same permit remains held
+without requeue while the request acquires and revalidates its generation lease,
+then moves into the authoritative compiler worker. Typed executable inventories
+derive the exact 34-unit metadata reservation and reject 33 before pool I/O;
+required-live SELECT, ASK and CONSTRUCT use
+the lease-owned connection; completion rechecks the same generation and rolls
+back under a fixed cleanup allowance. If timeout, cancellation, error, drop or
+a retained execution view prevents acknowledged rollback, the member stays
+dirty, issues a bounded best-effort native cancel and detaches from the pool
+rather than recycling an uncertain transaction.
+
+One required-live Rust test provisions an isolated restricted-role PostgreSQL
+16.15 database and covers the pre-lock no-snapshot state, clean close,
+`ACCESS EXCLUSIVE` exclusion, compatible additive-FK old-generation coherence
+plus next-acquisition drift, local policy mutation, cancelled work and dirty
+member replacement. This is direct product evidence, not Node authority.
+Separately, the tracked exact PostgreSQL 16.9/16.15 pair passes the
+observation-profile gate after two fresh runs per patch and independent clean
+replay. Compiler type and constraint authorities remain `Unverified`; public
+Direct Mapping, no-PK identity, reload/watchers, other backend leases,
+federation, production admission and release authority remain absent. ADR-0050
+is accepted as a design but remains partially implemented; ADR-0051 is accepted
+for observation qualification only.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the
 current executable, provide a private `x86_64-unknown-linux-gnu`
-descriptor-exact launcher
-with stage-one pre-exec controls, own pidfd/process-group termination/reap and
-bound parent-pipe I/O under one spawn deadline. A hidden first-statement Rust
-dispatcher exact-matches the private two-token invocation and requires a
-raw-empty Linux environment. A feature-gated, non-default Rust evidence seam
-now completes a held-binary `Hello`/`Ready`/EOF control exchange after bounded
-GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
-of a default-kill policy candidate. It prepares and caps an owned request before
-spawn, sends only `Hello` then EOF, and reverifies request correlation after
-clean EOF, successful exit and reap. Candidate totals bind the full framing and
-keep pipe accounting separate from the file-size limit. Malformed or unprepared
-reserved invocations still exit silently with status 78; other targets remain
-fail-closed. The workspace exact-pins `spargebra =0.4.6`; private pure-Rust
-inner/request/result codecs provide canonical, fallibly reconstructed, closed
-framing. A private typed alpha comparator covers bounded structural comparison
-under a correlation-only evidence profile. This is development evidence only:
-no request/result transport, worker parser execution, paired corpus receipt,
-witness or parser-qualified final policy exists, and no UID/GID,
-group, capability or privilege-transition contract is established. Node
-supplies none of the runtime and ADR-0053 remains proposed.
+descriptor-exact launcher with stage-one pre-exec controls, own pidfd/process-
+group termination/reap and bind parent-pipe I/O under one spawn deadline. A
+hidden first-statement Rust dispatcher exact-matches private two-token
+invocations and requires a raw-empty Linux environment.
+
+Commits `c754165`, `56c2236`, `7c87fae` and `3a0199e` retain the exact normal
+control-only parser tuple and add the selector-free parser-free normal tuple
+against the same held ELF. Integrated evidence commits `e55fccd` and `ce5487e`
+add a separately feature-gated same-executable mutant peer and parent; `d103438`
+adds both modules to the Node development-harness source inventory, and
+`fa9d977` adds live request-EOF ordering. These commits evidence the Rust
+boundary, not a
+shipped or release-qualified capability.
+
+The normal exchange preserves one immutable deadline and cumulative accounting
+through `Hello`/`Ready`, parent write/close of the prepared 96-byte request plus
+source, child stack preflight, one complete request allocation/body read, exact
+stdin EOF, nonce/digest/UTF-8 validation, and the static
+128-byte-header/100-byte-`QueryV1` result. The parent
+stack-preflights and prospectively caps before one complete result allocation,
+then requires stdout EOF, pidfd waitability, group sweep, exact reap and success
+before replay, correlation, digest, decode, direct re-encode and static equality.
+Only unit escapes from either hidden evidence seam.
+
+The mutant tuple sends a closed two-byte big-endian directive before `Hello`.
+Its ten cases prove exit-zero nonce/source-digest/payload-digest/invalid-
+`QueryV1` classification only post-reap; status 78 and deadline precedence over
+wrong correlation at 412 accepted output bytes; and trailing-output rejection
+before semantics with its extra byte unaccepted. Exact-cap output accepts
+`Ready` 184 + header 128 + body 8,388,608 = 8,388,920 bytes before post-reap
+invalid-`QueryV1`; cap+1 fails prospectively at 312 bytes before body allocation.
+Request-frame allocation refusal means zero result bytes after the required
+184-byte `Ready`, followed by EOF, exact reap and raw 78. Live bad nonce, digest
+and UTF-8 requests stay alive and silent until EOF, then close output and
+raw-exit 78. Every mutant and bad-request probe permits a clean next launch.
+
+The provisional whole-life input cap remains 1,048,856 bytes: normal source
+ceiling 1,048,576 and mutant ceiling 1,048,574 after its two directive bytes.
+Output remains capped at 8,388,920 bytes, independently of the 67,108,864-byte
+`RLIMIT_FSIZE`. The default-kill policy, dependency/profile digest, parser
+syscall/randomness surface and dynamic closure remain unqualified; GNU build-ID
+comparison is correlation, not release attestation. No parser runs and no
+parser-produced wire, qualified parser profile, paired corpus, witness, cache,
+admission, serving, release or attestation exists. Parser execution and complete
+profile qualification remain next; ADR-0053 stays proposed. Every product/runtime
+component here is Rust/Cargo. Node/MetaHarness only preserves or exercises
+development evidence and adds no runtime authority or dependency.
 
 ## Consequences
 

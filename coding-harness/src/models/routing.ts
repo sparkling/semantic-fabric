@@ -5,7 +5,7 @@ import {
   type AgentSpec,
 } from '@metaharness/harness';
 import { Router } from '@metaharness/router';
-import type { NativeHost } from './types.js';
+import type { CodexReasoningEffort, NativeHost } from './types.js';
 
 export type ModelStepKind =
   | 'architecture'
@@ -24,6 +24,8 @@ const MODEL_STEP_KINDS = new Set<string>([
 
 export interface NativeModelCandidate extends AgentSpec {
   readonly host: NativeHost;
+  /** Codex-only; give each model/effort configuration its own candidate id. */
+  readonly reasoningEffort?: CodexReasoningEffort;
 }
 
 export interface RoutingTask {

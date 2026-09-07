@@ -680,22 +680,30 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
 // `for_each_solution_mysql` never checked `rust_group`, DISTINCT-over-union, or
 // ORDER-expression keys). Plus the design §5-M4 A1 guard: an INTEGER, a DATETIME,
 // and a NON-UTF-8 VARBINARY column proving `mysql_value_to_string` semantics
-// (int → "42", DATETIME → T-separated, non-UTF-8 bytes → UNBOUND, never
-// `from_utf8_lossy` replacement chars).
+// (int → "42", DATETIME → T-separated, binary bytes → typed uppercase hex,
+// never `from_utf8_lossy` replacement chars).
 // ============================================================================
 
 use mysql_async::prelude::Queryable;
 
-/// Base MySQL URL: `SF_MYSQL_URL` if set, else the `mysql_e2e` default. Includes a
-/// default database; the throwaway db is created/USE-d on the same connection.
-fn mysql_url() -> String {
-    std::env::var("SF_MYSQL_URL")
-        .unwrap_or_else(|_| "mysql://root:sftest@127.0.0.1:13306/sftest".to_owned())
-}
-
 /// Probe; `None` ⇒ graceful skip (design §5 M4; mirrors `mysql_e2e.rs`).
 async fn try_connect_mysql() -> Option<mysql_async::Conn> {
-    let opts = mysql_async::Opts::from_url(&mysql_url()).ok()?;
+    let socket = std::env::var("SF_MYSQL_SOCKET").ok();
+    let url = std::env::var("SF_MYSQL_URL").ok();
+    let opts = match (socket, url) {
+        (Some(socket), None) => mysql_async::OptsBuilder::default()
+            .user(Some(
+                std::env::var("SF_MYSQL_USER").unwrap_or_else(|_| "root".to_owned()),
+            ))
+            .pass(std::env::var("SF_MYSQL_PASSWORD").ok())
+            .db_name(Some("mysql"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into(),
+        (None, Some(url)) => mysql_async::Opts::from_url(&url).ok()?,
+        _ => return None,
+    };
     mysql_async::Conn::new(opts).await.ok()
 }
 
@@ -824,8 +832,8 @@ const A1_R2RML: &str = r#"
     rr:predicateObjectMap [ rr:predicate ex:blobval ; rr:objectMap [ rr:column "b" ] ] .
 "#;
 
-/// Anchor on the non-null INTEGER; the DATETIME and VARBINARY are OPTIONAL so the
-/// row still surfaces with the NULL-producing (non-UTF-8) blob UNBOUND.
+/// Anchor on the non-null INTEGER; DATETIME and VARBINARY remain OPTIONAL so this
+/// also guards their independently typed reconstruction.
 const A1_Q: &str = r#"
     PREFIX ex: <http://ex/>
     SELECT ?intval ?dtval ?blobval WHERE {
@@ -836,8 +844,9 @@ const A1_Q: &str = r#"
 
 /// The design §5-M4 A1 guard: exact computed values (oracle-independent), proving the
 /// adapter's `mysql_value_to_string` semantics — INTEGER→`"42"`, DATETIME→T-separated
-/// `"2021-03-04T05:06:07"`, and a NON-UTF-8 VARBINARY→UNBOUND (NOT `from_utf8_lossy`
-/// replacement chars). A recurrence of the `mysql_for_each` decode fails this.
+/// `"2021-03-04T05:06:07"`, and NON-UTF-8 VARBINARY→uppercase `xsd:hexBinary`
+/// (never `from_utf8_lossy` replacement chars). A recurrence of the old untyped
+/// decode fails this.
 ///
 /// Runs on its OWN fresh connection (not the shared one from `mysql_side`): the
 /// `MYSQL_COLUMNS_SQL` introspection statement selects `WHERE TABLE_SCHEMA =
@@ -903,10 +912,12 @@ async fn mysql_a1_typed_values() {
         Some("2021-03-04T05:06:07".to_owned()),
         "A1 DATETIME: non-midnight Date branch → T-separated"
     );
-    assert!(
-        row.get("blobval").is_none(),
-        "A1 non-UTF-8 VARBINARY must be UNBOUND (from_utf8 None), NOT from_utf8_lossy: {row:#?}"
-    );
+    let blob = row.get("blobval").expect("VARBINARY remains bound");
+    assert_eq!(term_lex(blob), "FFFE");
+    let sf_core::Term::Literal(blob) = blob else {
+        panic!("A1 VARBINARY must be a typed literal: {blob:?}");
+    };
+    assert_eq!(blob.datatype(), sf_core::vocab::xsd::HEX_BINARY);
 
     let _ = conn
         .query_drop(format!("DROP DATABASE IF EXISTS {db}"))

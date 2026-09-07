@@ -6,13 +6,7 @@ fn parse(q: &str) -> Query {
 }
 
 fn scope(dialect: Dialect, epoch: Epoch) -> CompileScope {
-    CompileScope::new(
-        CompileBindingId::mint(),
-        dialect,
-        epoch,
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    )
+    test_scope(SourceId::new(0).unwrap(), dialect, epoch)
 }
 
 #[test]
@@ -58,28 +52,9 @@ fn hash_collision_does_not_serve_the_wrong_plan() {
 #[test]
 fn epoch_bump_invalidates() {
     let q = parse("SELECT * WHERE { ?s ?p ?o }");
-    let binding = CompileBindingId::mint();
     assert_ne!(
-        plan_key(
-            &q,
-            CompileScope::new(
-                binding,
-                Dialect::Sqlite,
-                Epoch(1),
-                ConstraintAuthority::Unverified,
-                ColumnTypeAuthority::Unverified,
-            ),
-        ),
-        plan_key(
-            &q,
-            CompileScope::new(
-                binding,
-                Dialect::Sqlite,
-                Epoch(2),
-                ConstraintAuthority::Unverified,
-                ColumnTypeAuthority::Unverified,
-            ),
-        )
+        plan_key(&q, scope(Dialect::Sqlite, Epoch(1))),
+        plan_key(&q, scope(Dialect::Sqlite, Epoch(2)))
     );
 }
 
@@ -91,27 +66,14 @@ fn epoch_exhaustion_fails_instead_of_wrapping() {
 }
 
 #[test]
-fn dialect_and_binding_identity_are_part_of_the_key() {
+fn dialect_capabilities_and_source_identity_are_part_of_the_key() {
     let q = parse("SELECT * WHERE { ?s ?p ?o }");
-    let binding = CompileBindingId::mint();
-    let sqlite = CompileScope::new(
-        binding,
-        Dialect::Sqlite,
-        Epoch(0),
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    );
-    let postgres = CompileScope::new(
-        binding,
-        Dialect::Postgres,
-        Epoch(0),
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    );
-    let other_binding = scope(Dialect::Sqlite, Epoch(0));
+    let sqlite = scope(Dialect::Sqlite, Epoch(0));
+    let postgres = scope(Dialect::Postgres, Epoch(0));
+    let other_source = test_scope(SourceId::new(1).unwrap(), Dialect::Sqlite, Epoch(0));
 
     assert_ne!(plan_key(&q, sqlite), plan_key(&q, postgres));
-    assert_ne!(plan_key(&q, sqlite), plan_key(&q, other_binding));
+    assert_ne!(plan_key(&q, sqlite), plan_key(&q, other_source));
 }
 
 #[test]
@@ -168,4 +130,100 @@ fn hot_working_set_survives_cold_churn_past_capacity() {
         hit_rate > 0.5,
         "hot working set should survive cold churn past capacity, got hit_rate={hit_rate:.3}"
     );
+}
+
+#[test]
+fn uncontrolled_churn_cannot_evict_governed_entries() {
+    let caches: ProfiledPlanCaches<u32> = ProfiledPlanCaches::with_capacities(2, 2);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+    let governed = PlanKey {
+        scope,
+        profile: CompileProfileId::GovernedV1,
+        structural_hash: 7,
+        canonical: "governed".to_owned(),
+    };
+    caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .put(governed.clone(), 99);
+
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+    }
+
+    assert_eq!(
+        caches
+            .for_profile(CompileProfileId::GovernedV1)
+            .get(&governed),
+        Some(99)
+    );
+    assert!(
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .get(&governed)
+            .is_none(),
+        "a governed key cannot cross the physical cache partition"
+    );
+}
+
+#[test]
+fn explicit_profile_capacities_have_a_checked_aggregate_bound() {
+    assert_eq!(ProfiledPlanCaches::<u32>::aggregate_entry_bound(2, 3), 5);
+    let caches = ProfiledPlanCaches::with_capacities(2, 3);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+        caches.for_profile(CompileProfileId::GovernedV1).put(
+            PlanKey {
+                scope,
+                profile: CompileProfileId::GovernedV1,
+                structural_hash: id as u64,
+                canonical: format!("governed-plan-{id}"),
+            },
+            id as u32,
+        );
+    }
+
+    let raw = caches.for_profile(CompileProfileId::Uncontrolled).len();
+    let governed = caches.for_profile(CompileProfileId::GovernedV1).len();
+    assert!(raw <= 2);
+    assert!(governed <= 3);
+    assert!(raw.checked_add(governed).unwrap() <= 5);
+}
+
+#[test]
+#[should_panic(expected = "aggregate plan cache capacity overflow")]
+fn profiled_cache_rejects_an_unrepresentable_aggregate_bound() {
+    let _ = ProfiledPlanCaches::<u32>::with_capacities(usize::MAX, 1);
+}
+
+#[test]
+fn uncontrolled_only_preserves_the_binding_capacity_and_disables_governed_writes() {
+    let caches = ProfiledPlanCaches::uncontrolled_only(2);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+    }
+    let governed = PlanKey {
+        scope,
+        profile: CompileProfileId::GovernedV1,
+        structural_hash: 7,
+        canonical: "dormant-governed".to_owned(),
+    };
+    caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .put(governed.clone(), 99);
+
+    assert!(caches.for_profile(CompileProfileId::Uncontrolled).len() <= 2);
+    assert!(caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .get(&governed)
+        .is_none());
+    assert_eq!(ProfiledPlanCaches::<u32>::aggregate_entry_bound(2, 0), 2);
 }

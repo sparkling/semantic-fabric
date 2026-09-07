@@ -1,23 +1,30 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-07
 tags: [security, authorization, row-level-security, abac, multi-tenancy, sensitivity, data-sensitivity]
 supersedes: []
 depends-on:
   - ADR-0010
+  - ADR-0011
 implements:
   - ADR-0001
 ---
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-09-01): accepted, not implemented.** The public
-> endpoint has no authenticated request context, PostgreSQL `SET LOCAL` RLS,
-> portable ABAC/sensitivity enforcement, or access-decision audit path. Accepted
-> ADR-0038 milestone M5 first introduces a provider-neutral `SecurityContext` and
-> reference noninterference contract so platform identity/taxonomy details do not
-> leak into the semantic compiler.
+> **Implementation status (2026-09-07): accepted, partially implemented.**
+> `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
+> identities with explicit construction, redacted diagnostics and no default or
+> anonymous context. `a2c25ff` adds a separate private plan-cache seam requiring
+> both that context and an expected policy snapshot; mismatch rejects before
+> parsing or cache access, and exact key equality prevents cross-policy,
+> cross-subject and cross-attribute reuse even under hash collision. `e206cab`
+> adds the closed, payload-free `allow|deny|mask` event vocabulary on ADR-0011's
+> exact tracing target. All three seams are dormant and non-authorizing. The
+> public endpoint still has no authenticated request context, policy enforcement,
+> PostgreSQL `SET LOCAL` RLS, portable ABAC/sensitivity enforcement, or emitted
+> access-decision trace-and-metric audit trail; this ADR remains incomplete.
 
 ## Context and Problem Statement
 

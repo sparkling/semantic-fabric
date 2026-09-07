@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [federation, physical-plan, bounded-memory, spill, external-memory, sparql, consistency, cancellation]
 supersedes: []
 depends-on:
@@ -23,25 +23,56 @@ does not accept a spill substrate, claim federation exists, or weaken the
 exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
-`sf-core::SourceId`/`SourceMapping` and the current immutable single-source runtime
-binding now join one backend, dialect, T-box, constraint-quarantined compiler
-schema, explicit `ConstraintAuthority::Unverified` and plan cache, and reject a
-detached plan before I/O. Its cache scope includes that authority. They still
-provide no digest-addressed runtime snapshot, structural/type drift/reload
-lifecycle, verified-constraint lease, federation or `ConsistencyVector`.
+
+A 2026-09-06 implemented precursor now exists behind `sf-sparql`'s Linux-only,
+private, default-off `secure-spill-prototype` feature and a dedicated Ubuntu CI
+gate. It is only a bounded secure-frame and descriptor-relative filesystem
+comparison substrate using one pre-reserved `QueryBudget` token, authenticated
+versioned blocks, private artifacts, fail-closed validation/cancellation, and
+best-effort owned cleanup. It supplies no global operator or semantic-key
+adapter, no embedded candidate, no janitor or global disk high-water accounting,
+and no serving or production admission. It does not accept this ADR or complete
+an acceptance gate: gates 1–11 and both open maintainer decisions remain open.
+
+`sf-core::SourceId`/`SourceMapping` and the immutable runtime snapshot registry
+now bind source-keyed backends, dialects, T-box, constraint-quarantined compiler
+schemas, explicit `ConstraintAuthority::Unverified`, plan caches and request
+lifetime leases, and reject detached plans before I/O. Accepted ADR-0006 now
+also owns one implemented non-blocking cross-source exception: exactly two
+statically source-affine, one-triple BGP arms under a top-level `SELECT UNION`
+compile to two unchanged source-local plans and stream through a sequential
+`UnionAll`. It has a real two-file SQLite CLI/HTTP vertical plus exact negative,
+budget, failure-recovery and snapshot-pinning tests. This narrow slice needs no
+spill substrate and does not accept this ADR. There is still no validated
+candidate/reload builder, structural/type backend-generation lease, cross-source
+join or blocking global operator, reducer, spill, general coordinator,
+`ConsistencyVector`, PostgreSQL/MySQL federation evidence, or production
+federation admission.
 Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
 semi-join reduction and streaming merge alone cannot implement every exact N:M
 join/operator listed here. The source-pushdown and no-general-OLAP decisions
 remain; the proposed amendment admits only the irreducible, quota-bounded
 external operators below.
 
+ADR-0054 now accepts one narrower single-source precursor: a finite root
+variable-key ORDER window uses stable in-memory prefix compaction under
+independent row and retained textual-payload ceilings. Unbounded, overflowed,
+nested and expression ORDER remain fail-closed in serving. This does not provide
+federation, spill, or the external `OrderBy` node proposed here. Its controlled
+heap/RSS, independent materialized-oracle and live Product Mock `sf-serve` gates
+now pass for the finite root window. That completes this ORDER precursor's
+qualification list, not ADR-0038 M1: GROUP, solution/term DISTINCT, graph dedup,
+wider bounded operators and production backend admission remain open.
+
 ## Context and problem statement
 
-The semantic compiler currently emits a per-source `sf_sparql::Plan`: a bag of
-SQL branches plus result form, DISTINCT, slice, ordering, and optional Rust-level
-grouping. The public runtime owns one backend. Some multi-branch ORDER, GROUP,
-solution/triple dedup paths retain source-sized `Vec` or `HashSet` state, and the
-existing semi-join cost model has no production federation caller.
+The semantic compiler emits a per-source `sf_sparql::Plan`: a bag of SQL branches
+plus result form, DISTINCT, slice, ordering, and optional Rust-level grouping.
+The public runtime owns one backend in normal mode or exactly two for ADR-0006's
+sealed non-blocking `UnionAll` mode. Unbounded/nested ORDER, GROUP, and
+solution/triple dedup paths retain source-sized `Vec` or `HashSet` state.
+ADR-0054 bounds only a finite root variable-key ORDER prefix; the existing
+semi-join cost model still has no production federation caller.
 
 ADR-0006 correctly keeps relational scan/join/set work in a source database and
 rejects a general in-process OLAP mediator. ADR-0038 nevertheless retains the
@@ -129,7 +160,7 @@ The only initially admissible coordinator nodes are:
 | Node | Required behavior |
 |---|---|
 | `Fragment` | Stream one admitted per-source `Plan` under the execution's acquired snapshot and budget. |
-| `UnionAll` | Concatenate input multisets; preserve every multiplicity. |
+| `UnionAll` | Concatenate input multisets; preserve every multiplicity. The exactly-two-source, one-triple-per-arm streaming subset is already implemented under ADR-0006; this row governs its future use inside the wider algebra. |
 | `InnerJoin` | Emit every compatible merged solution, including full N:M multiplicity. |
 | `LeftJoin` | SPARQL OPTIONAL: emit all compatible extensions or exactly one unchanged left solution when none matches. |
 | `Minus` | Remove a left solution only for a compatible right solution with a non-empty shared domain; disjoint domains are a no-op. |
@@ -413,3 +444,4 @@ No aggregate readiness score can offset a failed gate.
 - Resource governance, streaming, backpressure, and cancellation: ADR-0010.
 - Differential, property, fuzz, and CI evidence: ADR-0012.
 - Parent programme and M1/M2/M6 gates: ADR-0038.
+- Single-source finite root ORDER precursor: ADR-0054.

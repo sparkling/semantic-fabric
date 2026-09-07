@@ -35,6 +35,7 @@ import {
 } from './models/native-adapters.js';
 import { TransientNativeHostError } from './models/recovery.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
+import type { CodexReasoningEffort } from './models/types.js';
 
 type NativeAdapter = CodexSubscriptionAdapter | ClaudeCodeSubscriptionAdapter;
 
@@ -73,7 +74,10 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
   }
 
   async invoke(input: Readonly<{
-    candidate: { readonly host: 'codex' | 'claude-code'; readonly model: string };
+    candidate: {
+      readonly host: 'codex' | 'claude-code'; readonly model: string;
+      readonly reasoningEffort?: CodexReasoningEffort;
+    };
     operation: ModelOperation;
     prompt: string;
     signal?: AbortSignal;
@@ -104,6 +108,7 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
       const result = await this.#adapter.invoke({
         cwd: workspaceRoot,
         model: input.candidate.model,
+        reasoningEffort: input.candidate.reasoningEffort,
         prompt: input.prompt,
         schema,
         schemaPath,

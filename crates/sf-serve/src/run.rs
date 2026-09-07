@@ -1,26 +1,18 @@
-//! The blocking `semantic-fabric serve` entry point for loading, binding, and serving a source.
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use sf_core::query_control::QueryLimits;
-use tokio_postgres::NoTls;
-
 use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
-use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
-use crate::{
-    introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
-};
+use crate::source::PreparedSource;
+use crate::{router, Backend, IntrospectedSource, ServeError, SourceRef};
 
-/// Options resolved from the `serve` CLI flags; the runner reads semantic files.
 pub struct ServeOptions {
-    /// Credential-free inline source or environment-injected source reference.
     pub source: SourceRef,
-    /// Path to the R2RML mapping document (Turtle).
-    pub mapping_path: String,
-    /// Optional ontology (Turtle) → tier-1 T-Box.
-    pub ontology_path: Option<String>,
+    pub mapping: MappingRef,
+    /// Optional second relational source and its source-local R2RML mapping.
+    pub additional_source: Option<AdditionalSourceOptions>,
+    /// Required ontology (Turtle) for semantic admission and the tier-1 T-Box.
+    pub ontology_path: String,
     /// `host:port` to bind (e.g. `127.0.0.1:7878`).
     pub bind: String,
     /// Request timeout (ADR-0010).
@@ -33,6 +25,10 @@ pub struct ServeOptions {
     pub max_source_work: u64,
     /// Inclusive semantic SELECT-row, CONSTRUCT-triple, or ASK-boolean ceiling.
     pub max_result_items: u64,
+    /// Maximum exact in-process ORDER BY window (`OFFSET + LIMIT`).
+    pub max_order_rows: usize,
+    /// Maximum textual binding payload retained by ORDER BY.
+    pub max_order_bytes: u64,
     /// Inclusive serialized response-byte ceiling per request.
     pub max_serialized_bytes: u64,
     /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
@@ -41,15 +37,59 @@ pub struct ServeOptions {
     pub pg_pool_wait: Duration,
     /// Read-only file-backed SQLite pool size (ADR-0010 status-correction part 2).
     pub sqlite_pool_size: usize,
+    /// Maximum time to drain active requests after SIGTERM or Ctrl-C.
+    pub shutdown_timeout: Duration,
+    /// Optional Prometheus renderer. `None` keeps `/metrics` absent.
+    pub metrics: Option<crate::MetricsEndpoint>,
+}
+
+/// The normal startup input for the bounded two-source UNION profile.
+pub struct AdditionalSourceOptions {
+    pub source: SourceRef,
+    pub mapping: MappingRef,
+}
+
+/// A source mapping selected for startup: authored R2RML on disk or Direct
+/// Mapping generated from the live observed schema.
+pub enum MappingRef {
+    R2rmlFile(String),
+    Direct { base_iri: String },
+}
+
+impl MappingRef {
+    pub fn r2rml_file(path: impl Into<String>) -> Self {
+        Self::R2rmlFile(path.into())
+    }
+
+    pub fn direct(base_iri: impl Into<String>) -> Self {
+        Self::Direct {
+            base_iri: base_iri.into(),
+        }
+    }
 }
 
 /// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;
-    validate_request_timeout(opts.timeout)?;
+    crate::lifecycle::validate_request_timeout(opts.timeout)?;
+    crate::lifecycle::validate_shutdown_timeout(opts.shutdown_timeout)?;
+    if opts
+        .additional_source
+        .as_ref()
+        .is_some_and(|additional| opts.source.same_reference(&additional.source))
+    {
+        return Err(ServeError::new(StartupCause::Configuration {
+            error: "the two-source profile requires distinct source references".to_owned(),
+        }));
+    }
     // Resolve and reject inline credentials before runtime or connector construction.
     let source = opts.source.resolve()?.prepare()?;
+    let additional = opts
+        .additional_source
+        .as_ref()
+        .map(|source| source.source.resolve()?.prepare())
+        .transpose()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -58,98 +98,31 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
                 error: error.to_string(),
             })
         })?;
-    rt.block_on(async move { serve_async(opts, source).await })
+    let result = rt.block_on(async move { serve_async(opts, source, additional).await });
+    rt.shutdown_timeout(Duration::ZERO);
+    result
 }
 
-fn validate_request_timeout(timeout: Duration) -> Result<(), ServeError> {
-    tokio::time::Instant::now()
-        .checked_add(timeout)
-        .map(|_| ())
-        .ok_or_else(|| {
-            ServeError::new(StartupCause::Configuration {
-                error: "request timeout exceeds the monotonic clock range".to_owned(),
-            })
-        })
-}
+async fn serve_async(
+    opts: ServeOptions,
+    source: PreparedSource,
+    additional: Option<PreparedSource>,
+) -> Result<(), ServeError> {
+    let cfg = crate::startup::build_config(&opts, source, additional).await?;
 
-async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), ServeError> {
-    let mapping_ttl = std::fs::read_to_string(&opts.mapping_path).map_err(|error| {
-        ServeError::new(StartupCause::MappingRead {
-            path: opts.mapping_path.clone(),
-            error: error.to_string(),
-        })
-    })?;
-    let source_id = sf_core::SourceId::new(0).expect("single-source slot zero is representable");
-    let mapping = sf_mapping::parse_r2rml_for_source(&mapping_ttl, source_id).map_err(|error| {
-        ServeError::new(StartupCause::MappingParse {
-            error: error.to_string(),
-        })
-    })?;
-
-    let tbox = match &opts.ontology_path {
-        Some(path) => {
-            let ttl = std::fs::read_to_string(path).map_err(|error| {
-                ServeError::new(StartupCause::OntologyRead {
-                    path: path.clone(),
-                    error: error.to_string(),
-                })
-            })?;
-            crate::tbox_from_turtle(&ttl)
-                .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))?
-        }
-        None => sf_sparql::Tbox::default(),
+    let cfg = Arc::new(cfg);
+    let app = match opts.metrics {
+        Some(metrics) => crate::router_with_metrics(cfg.clone(), metrics),
+        None => router(cfg.clone()),
     };
-
-    let source = open_backend(
-        source,
-        opts.pg_pool_size,
-        opts.pg_pool_wait,
-        opts.sqlite_pool_size,
-    )
-    .await?;
-
-    let mut cfg = ServeConfig::new(source, mapping, tbox);
-    cfg.timeout = opts.timeout;
-    cfg.set_max_query_len(opts.max_query_len)?;
-    cfg.set_max_concurrent_requests(opts.max_concurrent_requests)?;
-    cfg.query_limits = QueryLimits::new(
-        cfg.query_limits.max_compiler_work(),
-        opts.max_source_work,
-        opts.max_result_items,
-        opts.max_serialized_bytes,
-    );
-
-    let app = router(Arc::new(cfg));
-    let listener = tokio::net::TcpListener::bind(&opts.bind)
-        .await
-        .map_err(|error| {
-            ServeError::new(StartupCause::Bind {
-                bind: opts.bind.clone(),
-                error: error.to_string(),
-            })
-        })?;
-    let addr = listener.local_addr().map_err(|error| {
-        ServeError::new(StartupCause::Server {
-            error: error.to_string(),
-        })
-    })?;
-    println!("semantic-fabric: SPARQL 1.2 endpoint listening on http://{addr}/sparql");
-    axum::serve(listener, app.into_make_service())
-        .await
-        .map_err(|error| {
-            ServeError::new(StartupCause::Server {
-                error: error.to_string(),
-            })
-        })
+    crate::lifecycle::serve(&opts.bind, app, cfg, opts.shutdown_timeout).await
 }
 
-/// Open the prepared backend and pair it with the base-table schema observed
-/// through that handle. PostgreSQL catalogue reads form one coherent read-only
-/// snapshot; validated reload/drift detection remains outside this constructor.
+/// Open the prepared backend and pair it with its observed base-table schema.
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
 /// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
-async fn open_backend(
+pub(crate) async fn open_backend(
     source: PreparedSource,
     pg_pool_size: usize,
     pg_pool_wait: Duration,
@@ -169,24 +142,8 @@ async fn open_backend(
         PreparedSource::Postgres { config, label } => {
             // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
             // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
-            let manager = deadpool_postgres::Manager::from_config(
-                *config,
-                NoTls,
-                deadpool_postgres::ManagerConfig {
-                    recycling_method: deadpool_postgres::RecyclingMethod::Custom(
-                        POSTGRES_RELATION_SCOPE_RECYCLE_SQL.to_owned(),
-                    ),
-                },
-            );
-            let pool = deadpool_postgres::Pool::builder(manager)
-                .max_size(pg_pool_size)
-                .wait_timeout(Some(pg_pool_wait))
-                // The wait timeout needs an async runtime to enforce it (deadpool is
-                // runtime-agnostic by default) — without this, `pool.get()` errors
-                // `NoRuntimeSpecified` instead of ever honouring the timeout.
-                .runtime(deadpool_postgres::Runtime::Tokio1)
-                .build()
-                .map_err(|error| {
+            let pool =
+                crate::pg_pool::build(*config, pg_pool_size, pg_pool_wait).map_err(|error| {
                     ServeError::new(StartupCause::SourceConnect {
                         spec: label.to_owned(),
                         error: error.to_string(),
@@ -206,14 +163,23 @@ async fn open_backend(
                         error,
                     })
                 })?;
-            let schema = introspect_pg_all(&mut conn).await.map_err(|error| {
-                ServeError::new(StartupCause::Schema {
-                    spec: label.to_owned(),
-                    error,
-                })
-            })?;
+            let snapshot =
+                sf_sql::introspect::introspect_postgres_public_observed_snapshot(&mut conn)
+                    .await
+                    .map_err(|_| {
+                        ServeError::new(StartupCause::Schema {
+                            spec: label.to_owned(),
+                            error: "PostgreSQL source observation failed".to_owned(),
+                        })
+                    })?;
+            eprintln!(
+                "{}",
+                crate::schema_observation::postgres_startup_observation_diagnostic(
+                    snapshot.availability()
+                )
+            );
             drop(conn);
-            Ok(IntrospectedSource::observed(Backend::Pg(pool), schema))
+            Ok(IntrospectedSource::observed_postgres(pool, snapshot))
         }
         PreparedSource::Mysql { options, label } => {
             let pool = mysql_async::Pool::new(options);
@@ -237,7 +203,7 @@ async fn open_backend(
 
 /// Introspect every MySQL base table in the current database (name order) — the
 /// MySQL analogue of [`introspect_pg_all`].
-async fn introspect_mysql_all(
+pub(crate) async fn introspect_mysql_all(
     conn: &mut mysql_async::Conn,
 ) -> Result<Vec<sf_sql::TableSchema>, String> {
     use mysql_async::prelude::Queryable;
@@ -273,7 +239,8 @@ mod tests {
 
     #[test]
     fn should_reject_unrepresentable_request_timeout_before_startup_io() {
-        let error = validate_request_timeout(Duration::from_secs(u64::MAX)).unwrap_err();
+        let error =
+            crate::lifecycle::validate_request_timeout(Duration::from_secs(u64::MAX)).unwrap_err();
         assert_eq!(error.code(), "startup-configuration");
         assert!(matches!(
             error.internal_cause(),
@@ -314,7 +281,7 @@ mod tests {
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
 
-        let (backend, schema) = result.expect("valid sqlite spec should open").into_parts();
+        let (backend, schema, _, _) = result.expect("valid sqlite spec should open").into_parts();
         assert!(matches!(backend, Backend::Sqlite(_)));
         assert!(
             !schema.is_empty(),
@@ -331,7 +298,7 @@ mod tests {
         let spec = format!("sqlite:{}", path.display());
 
         let source = prepare_inline(spec).expect("valid SQLite source");
-        let (_backend, schema) = open_backend(source, 16, Duration::from_secs(5), 4)
+        let (_backend, schema, _, _) = open_backend(source, 16, Duration::from_secs(5), 4)
             .await
             .expect("valid sqlite spec should open")
             .into_parts();
@@ -450,7 +417,9 @@ mod tests {
             let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
             format!("host=localhost port=5432 user={user}")
         });
-        let Ok((_client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((_client, connection)) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await
+        else {
             eprintln!(
                 "SKIP should_configure_pg_pool_size_when_opening_a_pg_backend: \
                  no PostgreSQL on localhost:5432"
@@ -463,7 +432,7 @@ mod tests {
 
         let source = prepare_injected(format!("pg:{conn_str}"))
             .expect("environment-injected pg source should prepare");
-        let (backend, _schema) = open_backend(source, 3, Duration::from_secs(2), 4)
+        let (backend, _schema, _, _) = open_backend(source, 3, Duration::from_secs(2), 4)
             .await
             .expect("reachable pg spec should open")
             .into_parts();

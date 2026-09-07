@@ -173,6 +173,115 @@ impl BoundedWorkerIo {
         Ok(())
     }
 
+    /// Check a future fixed read against the immutable lifetime budget before
+    /// the caller allocates storage for peer-declared bytes.
+    pub(super) fn ensure_can_receive(
+        &self,
+        deadline: Instant,
+        additional: usize,
+    ) -> Result<(), SupervisorError> {
+        ensure_before_deadline(deadline)?;
+        prospective_total(self.received, additional, self.max_received)
+            .map(|_| ())
+            .ok_or(SupervisorError::InvalidState(OUTPUT_LIMIT_MESSAGE))
+    }
+
+    /// Observe a live peer producing no output until a short local deadline.
+    ///
+    /// This neither consumes nor charges bytes. The immutable lifetime
+    /// deadline still governs every later I/O and containment operation.
+    pub(super) fn observe_alive_and_silent_until(
+        &self,
+        pidfd: &OwnedFd,
+        observation_deadline: Instant,
+        lifetime_deadline: Instant,
+    ) -> Result<(), SupervisorError> {
+        if observation_deadline >= lifetime_deadline {
+            return Err(SupervisorError::InvalidState(
+                "request EOF observation does not fit the worker lifetime",
+            ));
+        }
+        ensure_before_deadline(observation_deadline)?;
+        let output = self
+            .stdout
+            .as_ref()
+            .ok_or(SupervisorError::InvalidState(
+                "parser worker stdout is closed",
+            ))?
+            .as_raw_fd();
+
+        loop {
+            let remaining = observation_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            let millis = remaining.as_millis().saturating_add(u128::from(
+                !remaining.subsec_nanos().is_multiple_of(1_000_000),
+            ));
+            let timeout = i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX);
+            let mut descriptors = [
+                libc::pollfd {
+                    fd: output,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: pidfd.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let result = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, timeout) };
+            let now = Instant::now();
+            if now >= lifetime_deadline {
+                return Err(SupervisorError::DeadlineExceeded);
+            }
+            if result == 0 {
+                if now >= observation_deadline {
+                    return Ok(());
+                }
+                continue;
+            }
+            if result < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(SupervisorError::operation(
+                    "observe parser worker before request EOF",
+                )(error));
+            }
+            if descriptors
+                .iter()
+                .any(|descriptor| descriptor.revents & libc::POLLNVAL != 0)
+            {
+                return Err(SupervisorError::InvalidState(
+                    "request EOF observation descriptor became invalid",
+                ));
+            }
+            if descriptors[0].revents & libc::POLLIN != 0 {
+                return Err(SupervisorError::InvalidState(
+                    "parser worker emitted result bytes before request EOF",
+                ));
+            }
+            if descriptors[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+                return Err(SupervisorError::InvalidState(
+                    "parser worker exited before request EOF",
+                ));
+            }
+            if descriptors[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+                return Err(SupervisorError::InvalidState(
+                    "parser worker output closed before request EOF",
+                ));
+            }
+            if descriptors.iter().any(|descriptor| descriptor.revents != 0) {
+                return Err(SupervisorError::InvalidState(
+                    "request EOF observation returned unexpected readiness",
+                ));
+            }
+        }
+    }
+
     /// Require a clean worker-output EOF without accepting a valid frame as a
     /// prefix of a longer message stream.
     pub(super) fn expect_eof(
@@ -225,12 +334,10 @@ impl BoundedWorkerIo {
         self.stdout.take();
     }
 
-    #[cfg(test)]
     pub(super) const fn sent(&self) -> u64 {
         self.sent
     }
 
-    #[cfg(test)]
     pub(super) const fn received(&self) -> u64 {
         self.received
     }
@@ -341,12 +448,32 @@ fn wait_ready(
 
 #[cfg(test)]
 mod unit_tests {
-    use super::prospective_total;
+    use std::time::{Duration, Instant};
+
+    use super::{prospective_total, BoundedWorkerIo};
 
     #[test]
     fn prospective_totals_are_checked_before_io() {
         assert_eq!(prospective_total(3, 2, 5), Some(5));
         assert_eq!(prospective_total(3, 3, 5), None);
         assert_eq!(prospective_total(u64::MAX, 1, u64::MAX), None);
+    }
+
+    #[test]
+    fn receive_budget_is_prospected_without_mutating_accounting() {
+        let io = BoundedWorkerIo {
+            stdin: None,
+            stdout: None,
+            sent: 0,
+            received: 3,
+            max_sent: 1,
+            max_received: 5,
+        };
+
+        let future = Instant::now() + Duration::from_secs(1);
+        assert!(io.ensure_can_receive(future, 2).is_ok());
+        assert!(io.ensure_can_receive(future, 3).is_err());
+        assert!(io.ensure_can_receive(Instant::now(), 0).is_err());
+        assert_eq!(io.received, 3);
     }
 }

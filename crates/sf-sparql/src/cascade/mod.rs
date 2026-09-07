@@ -2049,7 +2049,9 @@ fn wrap_col_ref(
         // still a Table and quotes this derived query's `rowid` thereafter.
         return format!("({src_alias}.ctid)::text AS rowid");
     }
-    if inner_sql.is_some_and(|sql| col_is_unquoted_alias(sql, col)) {
+    if dialect == sf_sql::Dialect::Postgres
+        && inner_sql.is_some_and(|sql| col_is_unquoted_alias(sql, col))
+    {
         return format!("{src_alias}.{col} AS {col}");
     }
     let quoted = dialect.quote_ident(col);

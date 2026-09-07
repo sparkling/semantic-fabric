@@ -339,6 +339,38 @@ impl Bindings {
     pub(super) fn iter(&self) -> impl Iterator<Item = (&str, &Term)> {
         self.0.iter().map(|(k, v)| (&**k, v))
     }
+
+    /// Exact textual payload bytes retained by this solution. Fixed container
+    /// overhead is bounded separately by the admitted row window.
+    pub(super) fn retained_payload_bytes(&self) -> Option<u64> {
+        self.0.iter().try_fold(0_u64, |total, (name, term)| {
+            total
+                .checked_add(u64::try_from(name.len()).ok()?)?
+                .checked_add(term_payload_bytes(term)?)
+        })
+    }
+}
+
+fn term_payload_bytes(term: &Term) -> Option<u64> {
+    fn length(value: &str) -> Option<u64> {
+        u64::try_from(value.len()).ok()
+    }
+    match term {
+        Term::NamedNode(node) => length(node.as_str()),
+        Term::BlankNode(node) => length(node.as_str()),
+        Term::Literal(literal) => length(literal.value())?
+            .checked_add(length(literal.datatype().as_str())?)?
+            .checked_add(length(literal.language().unwrap_or(""))?),
+        Term::Triple(triple) => {
+            let subject = match &triple.subject {
+                sf_core::NamedOrBlankNode::NamedNode(node) => length(node.as_str())?,
+                sf_core::NamedOrBlankNode::BlankNode(node) => length(node.as_str())?,
+            };
+            subject
+                .checked_add(length(triple.predicate.as_str())?)?
+                .checked_add(term_payload_bytes(&triple.object)?)
+        }
+    }
 }
 
 /// [`Bindings`]'s pairs in CANONICAL (var-name-sorted) order — see
@@ -399,63 +431,5 @@ use crate::iq::{AggKind, Branch, ColRef, R2rmlGraphScope, TermDef};
 use crate::{Error, Result};
 
 #[cfg(test)]
-mod graph_scope_tests {
-    use super::*;
-    use sf_core::ir::TermSpec;
-
-    fn blank(graph: R2rmlGraphScope, graph_value: &str) -> Term {
-        let schema = vec![ColRef::new(0, "id"), ColRef::new(0, "graph")];
-        let index = build_col_index(&schema);
-        let values = vec![Some("shared".to_owned()), Some(graph_value.to_owned())];
-        let codes = vec![None, None];
-        let raw = RawRow {
-            values: &values,
-            codes: &codes,
-            index: &index,
-        };
-        build_term(
-            &TermDef::R2rmlBlank {
-                term_map: TermMap::Column("id".into(), TermSpec::blank_node()),
-                alias: 0,
-                graph,
-            },
-            &raw,
-        )
-        .unwrap()
-        .unwrap()
-    }
-
-    #[test]
-    fn generated_labels_are_injective_over_effective_graph_and_identifier() {
-        let default = blank(R2rmlGraphScope::Default, "unused");
-        let named = blank(
-            R2rmlGraphScope::Mapped {
-                term_map: TermMap::Constant(Term::NamedNode(sf_core::NamedNode::new_unchecked(
-                    "http://ex/g1",
-                ))),
-                alias: 0,
-            },
-            "unused",
-        );
-        let dynamic_named = blank(
-            R2rmlGraphScope::Mapped {
-                term_map: TermMap::Column("graph".into(), TermSpec::iri()),
-                alias: 0,
-            },
-            "http://ex/g1",
-        );
-        let dynamic_default = blank(
-            R2rmlGraphScope::Mapped {
-                term_map: TermMap::Column("graph".into(), TermSpec::iri()),
-                alias: 0,
-            },
-            RR_DEFAULT_GRAPH,
-        );
-
-        assert_eq!(named, dynamic_named);
-        assert_eq!(default, dynamic_default);
-        assert_ne!(default, named);
-        assert!(matches!(default, Term::BlankNode(ref b) if b.as_str().starts_with("sfr1d_")));
-        assert!(matches!(named, Term::BlankNode(ref b) if b.as_str().starts_with("sfr1n_")));
-    }
-}
+#[path = "row/tests.rs"]
+mod tests;

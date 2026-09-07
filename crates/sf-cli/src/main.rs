@@ -11,9 +11,24 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
+use sf_serve::{serve_blocking, ServeOptions};
+#[cfg(test)]
 use sf_serve::{
-    serve_blocking, ServeOptions, SourceRef, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_QUERY_LIMITS,
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
+    DEFAULT_SHUTDOWN_TIMEOUT,
 };
+
+mod metrics;
+mod serve_args;
+mod telemetry;
+
+use serve_args::ServeArgs;
+#[cfg(test)]
+use serve_args::{
+    AdditionalMappingSelector, AdditionalSourceArgs, AdditionalSourceSelector, MappingArgs,
+    SourceArgs,
+};
+use telemetry::TelemetryLevel;
 
 #[derive(Parser)]
 #[command(
@@ -29,96 +44,54 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Serve the live SPARQL 1.2 Protocol endpoint over an RDBMS (ADR-0019 G8).
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Run the W3C RDB2RDF conformance suite (ADR-0005).
     Conformance,
     /// Run GTFS-Madrid OBDA benchmarks (ADR-0005).
     Bench,
 }
 
-/// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
-#[derive(clap::Args)]
-struct ServeArgs {
-    #[command(flatten)]
-    source_input: SourceArgs,
-    /// R2RML mapping document (Turtle).
-    #[arg(long)]
-    mapping: String,
-    /// Optional ontology (Turtle) → tier-1 T-Box (ADR-0008).
-    #[arg(long)]
-    ontology: Option<String>,
-    /// Address to bind.
-    #[arg(long, default_value = "127.0.0.1:7878")]
-    bind: String,
-    /// Request timeout in seconds (ADR-0010).
-    #[arg(long, default_value_t = 30)]
-    timeout_secs: u64,
-    /// Max query length in bytes (ADR-0010).
-    #[arg(long, default_value_t = 1 << 20)]
-    max_query_len: usize,
-    /// Server-wide ceiling for requests admitted into application work.
-    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
-    max_concurrent_requests: usize,
-    /// Max metadata probes, branch opens, and row-pull attempts per request.
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_source_work())]
-    max_source_work: u64,
-    /// Max semantic result items per request (rows, triples, or ASK boolean).
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_result_items())]
-    max_result_items: u64,
-    /// Max serialized response bytes per request.
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_serialized_bytes())]
-    max_serialized_bytes: u64,
-    /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
-    #[arg(long, default_value_t = 16)]
-    pg_pool_size: usize,
-    /// Max seconds to wait for a pooled PostgreSQL connection before shedding
-    /// `503` (ADR-0010 §C).
-    #[arg(long, default_value_t = 5)]
-    pg_pool_wait_secs: u64,
-    /// Read-only connection pool size for a file-backed SQLite source.
-    #[arg(long, default_value_t = 4)]
-    sqlite_pool_size: usize,
-}
-
-/// Exactly one source transport: a credential-free inline value or the name of
-/// an environment variable containing the complete source value.
-#[derive(clap::Args)]
-#[group(required = true, multiple = false)]
-struct SourceArgs {
-    /// Credential-free `sqlite:`, `pg:`, or `mysql://` source.
-    #[arg(long)]
-    source: Option<String>,
-    /// Environment variable containing the complete source (credentials allowed).
-    #[arg(long)]
-    source_env: Option<String>,
-}
-
-impl SourceArgs {
-    fn into_source_ref(self) -> SourceRef {
-        match (self.source, self.source_env) {
-            (Some(value), None) => SourceRef::inline(value),
-            (None, Some(variable)) => SourceRef::environment(variable),
-            _ => unreachable!("clap requires exactly one source argument"),
-        }
+fn main() -> ExitCode {
+    sf_sparql::dispatch_private_parser_worker_v1();
+    let command = Cli::parse().command;
+    if let Err(error) = initialize_telemetry_for(&command, telemetry::init) {
+        eprintln!("semantic-fabric: {error}");
+        return ExitCode::FAILURE;
+    }
+    match command {
+        Command::Conformance => conformance(),
+        Command::Serve(args) => serve(*args),
+        Command::Bench => bench(),
     }
 }
 
-fn main() -> ExitCode {
-    sf_sparql::dispatch_private_parser_worker_v1();
-    match Cli::parse().command {
-        Command::Conformance => conformance(),
-        Command::Serve(args) => serve(args),
-        Command::Bench => bench(),
+fn initialize_telemetry_for(
+    command: &Command,
+    initialize: impl FnOnce(TelemetryLevel) -> Result<(), telemetry::InitError>,
+) -> Result<(), telemetry::InitError> {
+    match command {
+        Command::Serve(args) => initialize(args.log_level),
+        Command::Conformance | Command::Bench => Ok(()),
     }
 }
 
 /// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
+    let metrics = match metrics::init(args.metrics) {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            eprintln!("semantic-fabric: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let source = args.source_input.into_source_ref();
+    let mapping = args.mapping_input.into_mapping_ref();
+    let additional_source = args.additional_source_input.into_options();
     let opts = ServeOptions {
         source,
-        mapping_path: args.mapping,
+        mapping,
+        additional_source,
         ontology_path: args.ontology,
         bind: args.bind,
         timeout: Duration::from_secs(args.timeout_secs),
@@ -126,15 +99,19 @@ fn serve(args: ServeArgs) -> ExitCode {
         max_concurrent_requests: args.max_concurrent_requests,
         max_source_work: args.max_source_work,
         max_result_items: args.max_result_items,
+        max_order_rows: args.max_order_rows,
+        max_order_bytes: args.max_order_bytes,
         max_serialized_bytes: args.max_serialized_bytes,
         pg_pool_size: args.pg_pool_size,
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
+        shutdown_timeout: Duration::from_secs(args.shutdown_timeout_secs),
+        metrics,
     };
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("semantic-fabric: serve failed: {e}");
+            e.record_telemetry();
             ExitCode::FAILURE
         }
     }
@@ -249,140 +226,4 @@ fn conformance_to(out_dir: &Path) -> ExitCode {
 /// exit (never panic) on bad input, since that's this crate's own responsibility
 /// as the process entry point.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn suite_root_points_at_the_vendored_w3c_suite_relative_to_the_crate() {
-        let root = suite_root();
-        // Fixed relative to CARGO_MANIFEST_DIR (compile-time constant for this
-        // crate), so the exact path is deterministic across machines/CI.
-        assert!(
-            root.ends_with("tests/w3c/rdb2rdf"),
-            "expected the path to end in tests/w3c/rdb2rdf, got {root:?}"
-        );
-        assert!(
-            root.is_absolute(),
-            "CARGO_MANIFEST_DIR-based path should be absolute, got {root:?}"
-        );
-    }
-
-    #[test]
-    fn suite_root_cases_dir_and_earl_report_paths_exist_under_the_workspace() {
-        // suite_root() itself doesn't touch the filesystem, but conformance()
-        // immediately joins "cases" and two EARL filenames onto it — confirm the
-        // real checked-in suite directory is where suite_root() says it is (a
-        // silent path-mismatch here would make every conformance() call fail
-        // with a confusing "could not read dir" rather than a clear message).
-        let root = suite_root();
-        assert!(
-            root.join("cases").is_dir(),
-            "expected {:?} to exist (the vendored W3C RDB2RDF cases)",
-            root.join("cases")
-        );
-    }
-
-    #[test]
-    fn serve_source_selector_requires_exactly_one_transport() {
-        let base = ["semantic-fabric", "serve", "--mapping", "mapping.ttl"];
-        assert!(Cli::try_parse_from(base).is_err());
-
-        let both = [
-            "semantic-fabric",
-            "serve",
-            "--mapping",
-            "mapping.ttl",
-            "--source",
-            "sqlite::memory:",
-            "--source-env",
-            "SF_SOURCE",
-        ];
-        assert!(Cli::try_parse_from(both).is_err());
-
-        for selector in [
-            ["--source", "sqlite::memory:"],
-            ["--source-env", "SF_SOURCE"],
-        ] {
-            let args = base.into_iter().chain(selector);
-            assert!(Cli::try_parse_from(args).is_ok());
-        }
-    }
-
-    #[test]
-    fn serve_request_admission_limit_has_a_finite_default_and_accepts_an_override() {
-        let base = [
-            "semantic-fabric",
-            "serve",
-            "--mapping",
-            "mapping.ttl",
-            "--source",
-            "sqlite::memory:",
-        ];
-        let defaults = Cli::try_parse_from(base).expect("default serve arguments");
-        let Command::Serve(defaults) = defaults.command else {
-            panic!("serve command")
-        };
-        assert_eq!(
-            defaults.max_concurrent_requests,
-            DEFAULT_MAX_CONCURRENT_REQUESTS
-        );
-
-        let explicit =
-            Cli::try_parse_from(base.into_iter().chain(["--max-concurrent-requests", "7"]))
-                .expect("explicit request-admission limit");
-        let Command::Serve(explicit) = explicit.command else {
-            panic!("serve command")
-        };
-        assert_eq!(explicit.max_concurrent_requests, 7);
-    }
-
-    #[test]
-    fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
-        // The one cheap, crate-local integration check on serve(): a mapping path
-        // that doesn't exist must surface as a clean ExitCode::FAILURE (via
-        // serve_blocking's Result -> the eprintln!+FAILURE arm), never a panic —
-        // that's this crate's own responsibility as the process entry point,
-        // regardless of how sf-serve itself is implemented/tested.
-        let opts = ServeArgs {
-            source_input: SourceArgs {
-                source: Some("sqlite::memory:".to_owned()),
-                source_env: None,
-            },
-            mapping: "/nonexistent/path/does-not-exist.ttl".to_owned(),
-            ontology: None,
-            bind: "127.0.0.1:0".to_owned(),
-            timeout_secs: 1,
-            max_query_len: 1024,
-            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
-            max_source_work: 1_000,
-            max_result_items: 1_000,
-            max_serialized_bytes: 1 << 20,
-            pg_pool_size: 16,
-            pg_pool_wait_secs: 5,
-            sqlite_pool_size: 4,
-        };
-        assert_eq!(serve(opts), ExitCode::FAILURE);
-    }
-
-    #[test]
-    fn conformance_returns_success_exit_code_on_the_real_suite() {
-        // Drives the real vendored W3C RDB2RDF suite (tests/w3c/rdb2rdf, checked
-        // into the repo) — no live DB or network needed. This is this crate's own
-        // responsibility per the module doc above: surface a clean SUCCESS/FAILURE
-        // exit code, not just delegate correctly. Evidence is written outside the
-        // source tree so a test run cannot mutate tracked EARL baselines.
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let out_dir = std::env::temp_dir().join(format!(
-            "sf_cli_conformance_{}_{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&out_dir).expect("create isolated evidence directory");
-        assert_eq!(conformance_to(&out_dir), ExitCode::SUCCESS);
-        assert!(out_dir.join("earl-semantic-fabric-r2rml.ttl").is_file());
-        assert!(out_dir.join("earl-semantic-fabric-direct.ttl").is_file());
-        std::fs::remove_dir_all(out_dir).expect("remove isolated evidence directory");
-    }
-}
+mod main_tests;

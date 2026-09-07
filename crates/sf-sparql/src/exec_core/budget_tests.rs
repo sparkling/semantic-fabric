@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use sf_core::ir::{LogicalSource, TermMap, TermSpec};
 use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
-use sf_core::NamedNode;
+use sf_core::{Literal, NamedNode, Term};
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
 use crate::iq::{Branch, OrderKey, RustGroup, Scan, TermDef};
 use crate::{Error, Plan, PlanForm};
 
+use super::row::Bindings;
 use super::{ask_controlled, construct_each_async_controlled, select_each_async_controlled};
 
 #[derive(Default)]
@@ -210,6 +211,57 @@ fn select_result_budget_rejects_before_over_limit_sink() {
     assert_eq!(budget.consumed(QueryCharge::ResultItems), 2);
 }
 
+#[test]
+fn ordered_retained_payload_has_an_exact_typed_high_water_limit() {
+    let mut plan = plan(
+        PlanForm::Select {
+            vars: vec!["v".to_owned()],
+        },
+        vec![column_branch(0)],
+    );
+    plan.order.push(OrderKey {
+        var: "v".to_owned(),
+        descending: false,
+        expr: None,
+    });
+    plan.limit = Some(1);
+    let mut expected = Bindings::new();
+    expected.insert(
+        Arc::from("v"),
+        Term::Literal(Literal::new_simple_literal("payload")),
+    );
+    let exact = expected.retained_payload_bytes().unwrap();
+
+    let (mut exact_backend, _) = backend(vec![vec![row("payload")]]);
+    let limits = QueryLimits::new(u64::MAX, 10, 1, u64::MAX).with_max_retained_bytes(exact);
+    let budget = QueryBudget::new(limits);
+    super::block_on(select_each_async_controlled(
+        &plan,
+        &mut exact_backend,
+        &budget,
+        |_| std::future::ready(Ok::<(), Error>(())),
+    ))
+    .unwrap();
+    assert_eq!(budget.consumed(QueryCharge::RetainedBytes), exact);
+
+    let (mut backend, _) = backend(vec![vec![row("payload")]]);
+    let limits = QueryLimits::new(u64::MAX, 10, 1, u64::MAX).with_max_retained_bytes(exact - 1);
+    let budget = QueryBudget::new(limits);
+    let error = super::block_on(select_each_async_controlled(
+        &plan,
+        &mut backend,
+        &budget,
+        |_| std::future::ready(Ok::<(), Error>(())),
+    ))
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::QueryControl(QueryControlError::RetainedBytesExceeded)
+    ));
+    assert_eq!(budget.consumed(QueryCharge::RetainedBytes), 0);
+}
+
 fn constant_triple(predicate: &str) -> TriplePattern {
     TriplePattern {
         subject: TermPattern::NamedNode(NamedNode::new_unchecked("urn:subject")),
@@ -338,7 +390,7 @@ fn ordered_ask_limit_zero_emits_no_solution() {
     let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 3, 1, u64::MAX));
 
     assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
-    assert_calls(&calls, 1, 1, 1);
+    assert_calls(&calls, 0, 0, 0);
 }
 
 #[test]

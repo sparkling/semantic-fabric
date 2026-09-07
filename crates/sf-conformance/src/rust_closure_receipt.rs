@@ -1,6 +1,7 @@
 //! Deterministic M0 dependency-resolution and current binary-closure receipt.
 
 mod authority;
+mod context_tree;
 mod controlled;
 mod features;
 mod format;
@@ -8,9 +9,16 @@ mod metadata;
 mod origin;
 mod platform;
 mod process;
+mod qualification;
+mod qualification_format;
+mod qualification_model;
+#[cfg(test)]
+mod qualification_tests;
+mod resolved_features;
 #[cfg(test)]
 mod tests;
 mod tree;
+mod workspace_manifests;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -21,6 +29,12 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 pub use controlled::{check_with_tools, ControlledCheckRequest};
+pub use qualification::{
+    check as check_parser_worker_qualification_inputs,
+    generate as generate_parser_worker_qualification_inputs, QualificationInputsReceipt,
+    PROFILE as PARSER_WORKER_QUALIFICATION_INPUTS_PROFILE,
+    RECEIPT_PATH as PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH,
+};
 
 pub const RECEIPT_PATH: &str = "tests/rust-dependency-closure.tsv";
 pub const ROOT_MANIFEST: &str = "crates/sf-cli/Cargo.toml";

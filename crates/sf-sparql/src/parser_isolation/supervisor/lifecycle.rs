@@ -31,6 +31,25 @@ impl ParserWorkerProcess {
         self.contain_io_result(result)
     }
 
+    /// Contain a peer whose declared output cannot fit the remaining
+    /// whole-worker budget, before allocating storage for that declaration.
+    pub(super) fn ensure_can_receive(&mut self, additional: usize) -> Result<(), SupervisorError> {
+        let result = self.io.ensure_can_receive(self.wall_deadline, additional);
+        self.contain_io_result(result)
+    }
+
+    pub(super) fn observe_alive_and_silent_until(
+        &mut self,
+        observation_deadline: Instant,
+    ) -> Result<(), SupervisorError> {
+        let result = self.io.observe_alive_and_silent_until(
+            &self.pidfd,
+            observation_deadline,
+            self.wall_deadline,
+        );
+        self.contain_io_result(result)
+    }
+
     pub(super) fn expect_stdout_eof_until_deadline(&mut self) -> Result<(), SupervisorError> {
         let result = self.io.expect_eof(&self.pidfd, self.wall_deadline);
         self.contain_io_result(result)
@@ -40,12 +59,10 @@ impl ParserWorkerProcess {
         self.io.close_stdin();
     }
 
-    #[cfg(test)]
     pub(super) const fn sent_bytes(&self) -> u64 {
         self.io.sent()
     }
 
-    #[cfg(test)]
     pub(super) const fn received_bytes(&self) -> u64 {
         self.io.received()
     }
@@ -151,7 +168,7 @@ impl ParserWorkerProcess {
         Ok(status)
     }
 
-    fn contain_live_failure(&mut self, primary: SupervisorError) -> SupervisorError {
+    pub(super) fn contain_live_failure(&mut self, primary: SupervisorError) -> SupervisorError {
         match self.terminate_and_reap() {
             Ok(_) => primary,
             Err(containment) => containment,

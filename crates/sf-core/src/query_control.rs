@@ -1,24 +1,23 @@
-//! Runtime-neutral query-governance port and atomic accounting spine.
-//!
-//! [`QueryBudget`] owns no clock, async runtime, database, or HTTP policy. A
-//! runtime adapter supplies deadline observation and wake-up semantics while the
-//! executor and serializers share this exact accounting identity.
+//! Runtime-neutral query-governance port and atomic accounting spine. Adapters
+//! supply time while every phase shares one [`QueryBudget`] identity.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+mod reservation;
+
+pub use reservation::{ReservationError, ReservationShape, ReservationToken};
 
 /// A governed unit charged by an observable execution boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum QueryCharge {
-    /// One bounded unit of query compilation work.
     CompilerWork,
-    /// One metadata probe, branch open, or row-pull attempt.
     SourceWork,
-    /// One semantic SELECT row, CONSTRUCT triple, or ASK boolean.
     ResultItems,
-    /// Bytes offered to the response serializer's bounded writer.
     SerializedBytes,
+    /// Positive growth in a retained-memory high-water mark.
+    RetainedBytes,
 }
 
 /// Immutable inclusive limits for one request.
@@ -28,9 +27,76 @@ pub struct QueryLimits {
     max_source_work: u64,
     max_result_items: u64,
     max_serialized_bytes: u64,
+    reservation: ReservationLimits,
+}
+
+/// Inclusive per-query limits for resources that must be acquired before use.
+///
+/// The default is deliberately unbounded so existing [`QueryLimits::new`]
+/// callers retain their original behavior until they opt into this prototype.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReservationLimits {
+    max_retained_bytes: u64,
+    max_spill_bytes: u64,
+    max_spill_files: u64,
+    max_file_descriptors: u64,
+    max_operator_tasks: u64,
+}
+
+impl ReservationLimits {
+    pub const UNBOUNDED: Self = Self::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX);
+
+    pub const fn new(
+        max_retained_bytes: u64,
+        max_spill_bytes: u64,
+        max_spill_files: u64,
+        max_file_descriptors: u64,
+        max_operator_tasks: u64,
+    ) -> Self {
+        Self {
+            max_retained_bytes,
+            max_spill_bytes,
+            max_spill_files,
+            max_file_descriptors,
+            max_operator_tasks,
+        }
+    }
+
+    pub const fn max_retained_bytes(self) -> u64 {
+        self.max_retained_bytes
+    }
+
+    pub const fn max_spill_bytes(self) -> u64 {
+        self.max_spill_bytes
+    }
+
+    pub const fn max_spill_files(self) -> u64 {
+        self.max_spill_files
+    }
+
+    pub const fn max_file_descriptors(self) -> u64 {
+        self.max_file_descriptors
+    }
+
+    pub const fn max_operator_tasks(self) -> u64 {
+        self.max_operator_tasks
+    }
+
+    const fn with_max_retained_bytes(mut self, maximum: u64) -> Self {
+        self.max_retained_bytes = maximum;
+        self
+    }
+}
+
+impl Default for ReservationLimits {
+    fn default() -> Self {
+        Self::UNBOUNDED
+    }
 }
 
 impl QueryLimits {
+    /// Construct the original cumulative limits. Retained bytes remain
+    /// unbounded until [`Self::with_max_retained_bytes`] is called; serving does so.
     pub const fn new(
         max_compiler_work: u64,
         max_source_work: u64,
@@ -42,7 +108,19 @@ impl QueryLimits {
             max_source_work,
             max_result_items,
             max_serialized_bytes,
+            reservation: ReservationLimits::UNBOUNDED,
         }
+    }
+
+    pub const fn with_max_retained_bytes(mut self, maximum: u64) -> Self {
+        self.reservation = self.reservation.with_max_retained_bytes(maximum);
+        self
+    }
+
+    /// Replace every reserve-before-allocate limit in one coherent value.
+    pub const fn with_reservation_limits(mut self, limits: ReservationLimits) -> Self {
+        self.reservation = limits;
+        self
     }
 
     pub const fn max_compiler_work(self) -> u64 {
@@ -61,12 +139,21 @@ impl QueryLimits {
         self.max_serialized_bytes
     }
 
+    pub const fn max_retained_bytes(self) -> u64 {
+        self.reservation.max_retained_bytes()
+    }
+
+    pub const fn reservation_limits(self) -> ReservationLimits {
+        self.reservation
+    }
+
     const fn limit(self, charge: QueryCharge) -> u64 {
         match charge {
             QueryCharge::CompilerWork => self.max_compiler_work,
             QueryCharge::SourceWork => self.max_source_work,
             QueryCharge::ResultItems => self.max_result_items,
             QueryCharge::SerializedBytes => self.max_serialized_bytes,
+            QueryCharge::RetainedBytes => self.reservation.max_retained_bytes(),
         }
     }
 }
@@ -98,6 +185,7 @@ define_query_control_error! {
     SourceWorkExceeded => "query source-work budget exceeded",
     ResultItemsExceeded => "query result-item budget exceeded",
     SerializedBytesExceeded => "query serialized-byte budget exceeded",
+    RetainedBytesExceeded => "query retained-byte budget exceeded",
     AccountingOverflow => "query budget accounting overflow",
 }
 
@@ -108,25 +196,22 @@ impl QueryControlError {
             QueryCharge::SourceWork => Self::SourceWorkExceeded,
             QueryCharge::ResultItems => Self::ResultItemsExceeded,
             QueryCharge::SerializedBytes => Self::SerializedBytesExceeded,
+            QueryCharge::RetainedBytes => Self::RetainedBytesExceeded,
         }
     }
 }
 
 /// The executor-facing governance contract.
 ///
-/// Implementations must keep one control identity for a query. `consume` is an
-/// inclusive checked charge: reaching a limit succeeds; the next unit fails.
-/// Stateful implementations must return their sticky first terminal cause;
-/// stateless controls must return the supplied reason unchanged.
+/// `consume` is inclusive: reaching a limit succeeds and the next unit fails.
+/// Stateful implementations return their sticky first terminal cause.
 pub trait QueryControl: Send + Sync {
     fn checkpoint(&self) -> Result<(), QueryControlError>;
     fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError>;
     fn terminate(&self, reason: QueryControlError) -> QueryControlError;
 }
 
-/// Explicit control for raw, diagnostic, and conformance APIs.
-///
-/// Production serving must supply a real request budget instead.
+/// Explicit control for raw/diagnostic APIs; production supplies a real budget.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UncontrolledQueryControl;
 
@@ -151,6 +236,10 @@ struct BudgetState {
     source_work: AtomicU64,
     result_items: AtomicU64,
     serialized_bytes: AtomicU64,
+    retained_bytes: AtomicU64,
+    // Operations needing both locks always take `terminal` read first and this
+    // mutex second. Token Drop takes only this mutex and never terminal.
+    reservations: Mutex<reservation::ReservationLedger>,
     terminal: RwLock<Option<QueryControlError>>,
 }
 
@@ -166,6 +255,8 @@ impl QueryBudget {
             source_work: AtomicU64::new(0),
             result_items: AtomicU64::new(0),
             serialized_bytes: AtomicU64::new(0),
+            retained_bytes: AtomicU64::new(0),
+            reservations: Mutex::new(reservation::ReservationLedger::default()),
             terminal: RwLock::new(None),
         }))
     }
@@ -202,6 +293,7 @@ impl QueryBudget {
             QueryCharge::SourceWork => &self.0.source_work,
             QueryCharge::ResultItems => &self.0.result_items,
             QueryCharge::SerializedBytes => &self.0.serialized_bytes,
+            QueryCharge::RetainedBytes => &self.0.retained_bytes,
         }
     }
 }
@@ -243,6 +335,36 @@ impl QueryBudget {
         }
         before_commit();
 
+        if charge == QueryCharge::RetainedBytes {
+            // Cumulative retained-memory high-water charges and live retained
+            // reservations share one limit. The reservation lock is their
+            // linearization point, so neither path can independently admit the
+            // full capacity.
+            let reservations = self
+                .0
+                .reservations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = self.0.retained_bytes.load(Ordering::Acquire);
+            let Some(next) = current.checked_add(amount) else {
+                drop(reservations);
+                drop(terminal);
+                return Err(self.terminate(QueryControlError::AccountingOverflow));
+            };
+            let Some(combined) = next.checked_add(reservations.used().retained_bytes()) else {
+                drop(reservations);
+                drop(terminal);
+                return Err(self.terminate(QueryControlError::AccountingOverflow));
+            };
+            if combined > self.0.limits.max_retained_bytes() {
+                drop(reservations);
+                drop(terminal);
+                return Err(self.terminate(QueryControlError::RetainedBytesExceeded));
+            }
+            self.0.retained_bytes.store(next, Ordering::Release);
+            return Ok(());
+        }
+
         let counter = self.counter(charge);
         let limit = self.0.limits.limit(charge);
         let mut current = counter.load(Ordering::Acquire);
@@ -265,219 +387,8 @@ impl QueryBudget {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compiler_work_limit_is_exposed_and_has_an_exact_sticky_boundary() {
-        let limits = QueryLimits::new(3, 4, 5, 6);
-        assert_eq!(limits.max_compiler_work(), 3);
-
-        let budget = QueryBudget::new(limits);
-        budget.consume(QueryCharge::CompilerWork, 3).unwrap();
-        assert_eq!(budget.consumed(QueryCharge::CompilerWork), 3);
-        assert_eq!(
-            budget.consume(QueryCharge::CompilerWork, 1),
-            Err(QueryControlError::CompilerWorkExceeded)
-        );
-        assert_eq!(
-            budget.consume(QueryCharge::SourceWork, 1),
-            Err(QueryControlError::CompilerWorkExceeded)
-        );
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
-    }
-
-    #[test]
-    fn compiler_work_arithmetic_overflow_fails_closed() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 1, 1, 1));
-        budget.consume(QueryCharge::CompilerWork, u64::MAX).unwrap();
-
-        assert_eq!(
-            budget.consume(QueryCharge::CompilerWork, 1),
-            Err(QueryControlError::AccountingOverflow)
-        );
-        assert_eq!(budget.consumed(QueryCharge::CompilerWork), u64::MAX);
-        assert_eq!(
-            budget.consume(QueryCharge::ResultItems, 1),
-            Err(QueryControlError::AccountingOverflow)
-        );
-    }
-
-    #[test]
-    fn concurrent_compiler_consumers_cannot_overshoot() {
-        let budget = QueryBudget::new(QueryLimits::new(10_000, 1, 1, 1));
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                let budget = budget.clone();
-                scope.spawn(
-                    move || {
-                        while budget.consume(QueryCharge::CompilerWork, 1).is_ok() {}
-                    },
-                );
-            }
-        });
-
-        assert_eq!(budget.consumed(QueryCharge::CompilerWork), 10_000);
-        assert_eq!(
-            budget.checkpoint(),
-            Err(QueryControlError::CompilerWorkExceeded)
-        );
-    }
-
-    #[test]
-    fn inclusive_limit_succeeds_then_first_failure_is_sticky() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 3, 2, 5));
-        budget.consume(QueryCharge::SourceWork, 3).unwrap();
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), 3);
-        assert_eq!(
-            budget.consume(QueryCharge::SourceWork, 1),
-            Err(QueryControlError::SourceWorkExceeded)
-        );
-        assert_eq!(
-            budget.consume(QueryCharge::ResultItems, 1),
-            Err(QueryControlError::SourceWorkExceeded)
-        );
-        assert_eq!(budget.consumed(QueryCharge::ResultItems), 0);
-    }
-
-    #[test]
-    fn every_dimension_has_an_exact_typed_boundary() {
-        for (charge, expected) in [
-            (
-                QueryCharge::CompilerWork,
-                QueryControlError::CompilerWorkExceeded,
-            ),
-            (
-                QueryCharge::SourceWork,
-                QueryControlError::SourceWorkExceeded,
-            ),
-            (
-                QueryCharge::ResultItems,
-                QueryControlError::ResultItemsExceeded,
-            ),
-            (
-                QueryCharge::SerializedBytes,
-                QueryControlError::SerializedBytesExceeded,
-            ),
-        ] {
-            let budget = QueryBudget::new(QueryLimits::new(1, 1, 1, 1));
-            budget.consume(charge, 1).unwrap();
-            assert_eq!(budget.consume(charge, 1), Err(expected));
-        }
-    }
-
-    #[test]
-    fn arithmetic_overflow_fails_closed() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, 1, 1));
-        budget.consume(QueryCharge::SourceWork, u64::MAX).unwrap();
-        assert_eq!(
-            budget.consume(QueryCharge::SourceWork, 1),
-            Err(QueryControlError::AccountingOverflow)
-        );
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), u64::MAX);
-    }
-
-    #[test]
-    fn concurrent_consumers_cannot_overshoot() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10_000, 1, 1));
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                let budget = budget.clone();
-                scope.spawn(
-                    move || {
-                        while budget.consume(QueryCharge::SourceWork, 1).is_ok() {}
-                    },
-                );
-            }
-        });
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), 10_000);
-        assert_eq!(
-            budget.checkpoint(),
-            Err(QueryControlError::SourceWorkExceeded)
-        );
-    }
-
-    #[test]
-    fn cancellation_wins_and_remains_the_terminal_reason() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 10, 10));
-        assert_eq!(
-            budget.terminate(QueryControlError::Cancelled),
-            QueryControlError::Cancelled
-        );
-        assert_eq!(
-            budget.terminate(QueryControlError::DeadlineExceeded),
-            QueryControlError::Cancelled
-        );
-        assert_eq!(budget.checkpoint(), Err(QueryControlError::Cancelled));
-    }
-
-    #[test]
-    fn trait_object_termination_reuses_the_budget_first_cause() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 10, 10));
-        let control: &dyn QueryControl = &budget;
-
-        assert_eq!(
-            control.terminate(QueryControlError::CompilerWorkExceeded),
-            QueryControlError::CompilerWorkExceeded
-        );
-        assert_eq!(
-            control.terminate(QueryControlError::Cancelled),
-            QueryControlError::CompilerWorkExceeded
-        );
-        assert_eq!(
-            control.checkpoint(),
-            Err(QueryControlError::CompilerWorkExceeded)
-        );
-        assert_eq!(
-            <UncontrolledQueryControl as QueryControl>::terminate(
-                &UncontrolledQueryControl,
-                QueryControlError::Cancelled,
-            ),
-            QueryControlError::Cancelled
-        );
-    }
-
-    #[test]
-    fn an_in_flight_charge_linearizes_before_termination() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 1, 1, 1));
-        let entered = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
-
-        std::thread::scope(|scope| {
-            let charge_budget = budget.clone();
-            let charge_entered = entered.clone();
-            let charge_release = release.clone();
-            let charge = scope.spawn(move || {
-                charge_budget.consume_with_hook(QueryCharge::SourceWork, 1, || {
-                    charge_entered.wait();
-                    charge_release.wait();
-                })
-            });
-            entered.wait();
-            let terminate_budget = budget.clone();
-            let terminate =
-                scope.spawn(move || terminate_budget.terminate(QueryControlError::Cancelled));
-            release.wait();
-
-            assert_eq!(charge.join().unwrap(), Ok(()));
-            assert_eq!(terminate.join().unwrap(), QueryControlError::Cancelled);
-        });
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), 1);
-        assert_eq!(budget.checkpoint(), Err(QueryControlError::Cancelled));
-    }
-
-    #[test]
-    fn a_charge_rejected_after_termination_changes_no_counter() {
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 1, 1, 1));
-        budget.terminate(QueryControlError::Cancelled);
-
-        assert_eq!(
-            budget.consume(QueryCharge::SourceWork, 1),
-            Err(QueryControlError::Cancelled)
-        );
-        assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
-    }
-}
+#[path = "query_control/tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "query_control/envelope_tests.rs"]

@@ -90,8 +90,33 @@ fn tracked_inventory_seals_exact_corpus_and_backend_policy() {
     );
     let sqlite = outcome_counts(&sealed.cases, |case| case.sqlite);
     let postgres = outcome_counts(&sealed.cases, |case| case.postgres);
+    let mysql = outcome_counts(&sealed.cases, |case| case.mysql);
     assert_eq!(sqlite, (81, 1, 5));
     assert_eq!(postgres, (80, 1, 6));
+    assert_eq!(mysql, (74, 1, 12));
+    let mysql_unsupported: Vec<_> = sealed
+        .cases
+        .iter()
+        .filter(|case| case.mysql == AllowedOutcome::Skip)
+        .map(|case| case.identifier.as_str())
+        .collect();
+    assert_eq!(
+        mysql_unsupported,
+        [
+            "DirectGraphTC0000",
+            "DirectGraphTC0001",
+            "DirectGraphTC0002",
+            "DirectGraphTC0003",
+            "DirectGraphTC0004",
+            "DirectGraphTC0005",
+            "DirectGraphTC0012",
+            "DirectGraphTC0014",
+            "DirectGraphTC0017",
+            "DirectGraphTC0018",
+            "DirectGraphTC0022",
+            "DirectGraphTC0025",
+        ]
+    );
 }
 
 #[test]
@@ -195,6 +220,24 @@ fn count_neutral_status_substitution_fails_closed() {
 }
 
 #[test]
+fn mysql_unsupported_set_reclassification_fails_closed() {
+    let suite = TempSuite::copy();
+    let text = fs::read_to_string(suite.inventory()).expect("read inventory");
+    let mut changed = Vec::new();
+    for line in text.lines() {
+        let mut fields: Vec<_> = line.split('\t').collect();
+        if fields.first() == Some(&"case") && fields.get(1) == Some(&"DirectGraphTC0025") {
+            fields[9] = "pass";
+        }
+        changed.push(fields.join("\t"));
+    }
+    fs::write(suite.inventory(), format!("{}\n", changed.join("\n")))
+        .expect("write reclassified inventory");
+    let error = check_temp(&suite);
+    assert!(error.contains("pinned backend policy"), "{error}");
+}
+
+#[test]
 fn duplicate_inventory_identifier_fails_closed() {
     let suite = TempSuite::copy();
     replace_once(&suite.inventory(), "DirectGraphTC0002", "DirectGraphTC0001");
@@ -207,7 +250,7 @@ fn malformed_inventory_fails_closed() {
     let suite = TempSuite::copy();
     fs::write(
         suite.inventory(),
-        b"semantic-fabric-rdb2rdf-inventory-v1\nmalformed\n",
+        b"semantic-fabric-rdb2rdf-inventory-v2\nmalformed\n",
     )
     .expect("write malformed inventory");
     let error = check_temp(&suite);

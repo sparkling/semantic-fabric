@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-28
+updated: 2026-09-06
 tags: [conformance, benchmarks, w3c, rdb2rdf, earl, gtfs-madrid, obda-oracle, ontop, m-join-t, shacl, fitness-function]
 supersedes: []
 depends-on:
@@ -13,17 +13,25 @@ implements:
 
 # Conformance & benchmark harness — the correctness gate and the fitness function
 
-> **Implementation status (2026-08-28): partially implemented.** The canonical
+> **Implementation status (2026-09-06): partially implemented.** The canonical
 > RDB2RDF input authority now seals 1 suite manifest, 26 scenarios, 87 exact
-> cases, and 189 case-tree files. SQLite and PostgreSQL runners consume that
-> authority in canonical order. Backend-aware v3 receipts bind the inventory and
-> all 87 ordered identity/kind/status/cause records: SQLite records 81 pass, one
-> documented deviation, and five skips; required-live PostgreSQL records 80 pass,
-> one documented deviation, and six skips. PostgreSQL provider absence is fatal
-> on receipt replay. The current seal contains no per-DBMS fork files; any future
-> fork must enter the canonical inventory before execution. MySQL mapping, complete
-> `M ⋈ T`, and the M0 performance/release envelope remain open. Mapping evidence
-> does not establish SPARQL Query, Protocol, or production-backend admission.
+> cases, and 189 case-tree files. SQLite, PostgreSQL, and MySQL runners consume
+> that authority in canonical order. Backend-aware v5 receipts bind the inventory,
+> execution type profile, and all 87 ordered identity/kind/status/cause records:
+> SQLite records 81 pass, one documented deviation, and five skips; required-live
+> PostgreSQL records 80 pass, one documented deviation, and six skips; required-live
+> MySQL records 74 pass, the documented `R2RMLTC0002f` deviation, and 12 exact
+> typed Direct Mapping unsupported outcomes under `RequirePrimaryKey`. PostgreSQL
+> or MySQL provider absence is fatal on required-live replay. MySQL's
+> `mysql-w3c-sql-2008-v1` type profile is conformance-only; native product MySQL
+> conservatively treats ambiguous `TINYINT(1)`/`BOOL` as integer unless explicit
+> `rr:datatype` supplies authority. Receipt provider image/toolchain provenance is
+> explicitly unbound. Exact-image CI/live runs are mapping evidence, not production
+> admission or full Query/Protocol conformance. The current seal contains no
+> per-DBMS fork files; any future fork must enter the inventory before execution.
+> Mandatory sealed `M ⋈ T` admission and the exact static Product Mock closure pass;
+> wider Direct Mapping, backend admission, and M0 performance/release qualification
+> remain open.
 
 ## Context and Problem Statement
 
@@ -36,12 +44,12 @@ ADR-0001 commits the engine to a standardised correctness gate and SOTA performa
 * Materialisation benchmarks (KROWN) — rejected: do not apply, since the engine has no materialiser.
 * Differential oracle via native in-memory (Oxigraph) evaluation — chosen: zero-JVM, validates property paths directly.
 * Ontop as a CI dependency for the differential oracle — rejected as a CI dependency; retained only as an optional, offline cross-check (and tier-2 OWL-QL oracle, ADR-0008).
-* SHACL runner = rudof's `shacl` crate in `ShaclValidationMode::Native` — chosen for the cross-project `M ⋈ T` gate (pure Rust, oxrdf-native, no second RDF stack; rationale in `docs/research/shacl-engine-selection.md`).
+* SHACL runner = rudof's `shacl` crate in `ShaclValidationMode::Native` for the three Core shapes, plus one global execution of the exact parsed sealed datatype `sh:select` — chosen for the cross-project `M ⋈ T` gate (pure Rust, oxrdf-native, no second RDF stack; rationale in `docs/research/shacl-engine-selection.md`).
 
 ## Decision Outcome
 
 ### Correctness gate — W3C RDB2RDF test cases (via CONSTRUCT)
-Vendor the suite into `tests/w3c/rdb2rdf/` (~49–63 named cases across D000–D025, positive **and** error cases; the W3C document licence permits redistribution). Base IRI fixed at `http://example.com/base/`. The engine has no materialiser, so each case runs as a **`CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` through the rewriter**, streaming the produced triples. Comparison is **graph isomorphism** (blank-node aware, via `oxrdf`) against the case's expected output (R2RML cases → N-Quads/Turtle; Direct Mapping cases → the auto-generated-R2RML path). Execute against embedded **SQLite** for fast per-push CI and **PostgreSQL** for the full run; **per-DBMS forked fixtures** capture dialect-specific expected output (ADR-0015). Emit `earl-semantic-fabric-{r2rml,direct}.ttl` (the first Rust entry in the implementation report).
+Vendor the suite into `tests/w3c/rdb2rdf/` (~49–63 named cases across D000–D025, positive **and** error cases; the W3C document licence permits redistribution). Base IRI fixed at `http://example.com/base/`. The engine has no materialiser, so each case runs as a **`CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` through the rewriter**, streaming the produced triples. Comparison is **graph isomorphism** (blank-node aware, via `oxrdf`) against the case's expected output (R2RML cases → N-Quads/Turtle; Direct Mapping cases → the auto-generated-R2RML path). Execute against embedded **SQLite** for fast per-push CI and required-live **PostgreSQL** and **MySQL** for full mapping runs; **per-DBMS forked fixtures** capture dialect-specific expected output (ADR-0015). Emit `earl-semantic-fabric-{r2rml,direct}.ttl` (the first Rust entry in the implementation report).
 
 ### Performance benchmark — GTFS-Madrid-Bench (OBDA track)
 The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting track** (scale factors 1×–1000×): match or beat **Ontop** query latency, and — the differentiator — hold **constant engine memory and bounded first-result latency under growing source data** (the streaming invariant, ADR-0006 / ADR-0010). Materialisation benchmarks (KROWN) do not apply. Driven by `criterion`; results feed the Path-B objective.
@@ -50,7 +58,7 @@ The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting tr
 Ground truth for an OBDA answer: load the case's **expected RDF graph into an in-memory store and evaluate the same SPARQL** (`spareval`, ADR-0004), diffed against the virtualiser's live-SQL answer. This tests rewriter correctness directly, keeps CI **zero-JVM**, and — since the in-memory evaluator handles property paths — validates `P+`/`P*`. **Ontop** is retained as an *optional, offline* cross-check on a shared R2RML set (and the tier-2 OWL-QL oracle, ADR-0008), never a CI dependency.
 
 ### Cross-project `M ⋈ T` gate
-Evaluate the upstream modelling project's mapping-output validation (shapes) — `mf:MappingClassConformanceShape`, `mf:MappingPredicateConformanceShape`, `mf:MappingDatatypeConformanceShape`, `mf:EntitySubjectGroundingShape` (the upstream mapping-conformance requirements) — over the `M ⋈ T` closure for the virtualised path. **SHACL runner = rudof's `shacl` crate** (pin `shacl = "0.3"` + `oxrdf = "0.3"`), `ShaclValidationMode::Native` (pure Rust; its `sparql` feature is on by default, so Native is pinned explicitly — ADR-0019). Its in-memory graph is oxrdf-native (via `rudof_rdf`), so no second RDF stack enters the engine; the four shapes use only SHACL Core constraints (`sh:class`, `sh:datatype`, `sh:nodeKind`, `sh:property`, cardinality, `sh:in`/`sh:hasValue`), which `shacl` fully covers (engine rationale: `docs/research/shacl-engine-selection.md`).
+Evaluate the upstream modelling project's four mapping-output shapes over the `M ⋈ T` closure. `sf-validation` runs the three Core shapes through rudof 0.3.14 `ShaclValidationMode::Native`, but extracts the exact digest-pinned datatype `sh:select` from its parsed sealed component and executes it once globally; the datatype shape is deactivated only on the Native branch. Policy v2 binds the exact shape/query bytes, topology, evaluator/parser versions and features, four numeric limits, preflight revision and fail-closed blank-POM-focus policy into the semantic receipt. Results preserve violation/warning counts but deliberately discard details; raw blank POM focus returns redacted `ValidationFailed`, while the product's projection is IRI-skolemised. The oxrdf-native graph remains single-stack. This gate does not admit live Direct Mapping or a backend to production.
 
 ### Consequences
 * Good, because objective, standardised SOTA measurement from day one; a real fitness function (pass-rate gate + OBDA latency/memory objectives) for the Path-B loop; the cross-project `M ⋈ T` obligation becomes executable, not prose.
@@ -58,8 +66,10 @@ Evaluate the upstream modelling project's mapping-output validation (shapes) —
 
 ### Confirmation
 * `cargo test -p sf-conformance` drives the vendored W3C suite via CONSTRUCT (red until engine logic lands) and writes an EARL report.
+* `rdb2rdf-execution-receipt --check` replays SQLite; `--backend postgresql --check` and `--backend mysql --check` are required-live, fail closed when their configured provider is absent, and verify every sealed typed outcome.
 * `cargo bench -p sf-bench` compiles the GTFS-Madrid OBDA-track driver.
-* The `M ⋈ T` hook wires rudof `shacl` (Native) over the four shape IRIs.
+* The `M ⋈ T` hook runs three Core shapes through rudof Native and the parsed sealed datatype query once globally; differential, mutation, cardinality and policy-digest KATs guard the split.
+* The ignored exact static replay uses `SF_PRODUCT_MOCK_GOLD_ROOT=/home/claude/src/hm/semantic-builder/docs/reviews/semantic-product-mock-gold-candidate-v0.1.0/artifacts SF_PRODUCT_MOCK_SOURCE_ROOT=/home/claude/src/hm/semantic-product-mock-worktrees/ontology-gap-repair cargo test -p sf-conformance --test product_mock_gold_vertical --locked exact_external_product_mock_gold_and_source_are_admitted -- --ignored --nocapture`. Uncontrolled validation-only observations of about 1.3–1.9 s are diagnostic, not a benchmark, SLO, or admission claim.
 
 ## More Information
 * **Scope:** ADR-0002. **Architecture:** ADR-0003. **Substrate (in-memory oracle):** ADR-0004. **Execution:** ADR-0006. **Datatype correctness + per-DBMS fixtures:** ADR-0015. **Inner test layers:** ADR-0012. **Reasoning oracle:** ADR-0008. **SHACL / 1.2:** ADR-0019.

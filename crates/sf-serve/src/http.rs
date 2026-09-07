@@ -8,58 +8,88 @@ use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use deadpool_postgres::PoolError;
 use sf_core::query_control::{QueryCharge, QueryControl};
-use sf_sparql::{exec, exec_mysql, exec_pg, Plan, PlanForm};
+use sf_sparql::{exec, exec_mysql, Plan, PlanForm};
 use sparesults::QueryResultsFormat;
 
+use crate::activation::RuntimeSnapshotLease;
 use crate::admission;
-use crate::backend::{Backend, PgConn};
-use crate::binding::BoundPlan;
+use crate::backend::Backend;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
-use crate::deadline::{self, CompilerRunError, JoinedTaskError};
+use crate::deadline::{self, JoinedTaskError};
+use crate::metrics::MetricsEndpoint;
+use crate::pg_generation::VerifiedPostgresGenerationLease;
 use crate::problem::{self, ProblemCode};
+use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
 use crate::sqlite_admission;
 use crate::stream::{self, RdfFormat};
+use crate::telemetry::{
+    execute as traced_execute, in_stage as traced, in_stage_sync as traced_sync, Stage,
+};
 
 #[cfg(test)]
 #[path = "http_tests.rs"]
 mod tests;
 
-/// Build the governed request service exposing `GET`/`POST /sparql` over `cfg`.
+/// Build the governed query service plus fixed discovery and health controls.
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
-    let inner = Router::new()
+    build_router(cfg, None)
+}
+
+/// Build the query service with an explicitly enabled Prometheus control route.
+pub fn router_with_metrics(
+    cfg: Arc<ServeConfig>,
+    endpoint: MetricsEndpoint,
+) -> RequestDeadlineService {
+    build_router(cfg, Some(endpoint))
+}
+
+fn build_router(cfg: Arc<ServeConfig>, metrics: Option<MetricsEndpoint>) -> RequestDeadlineService {
+    let metrics_enabled = metrics.is_some();
+    let mut inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
+        .route("/livez", get(crate::health::live))
+        .route("/readyz", get(crate::health::ready))
         .fallback(problem::not_found)
-        .method_not_allowed_fallback(problem::method_not_allowed)
-        .with_state(cfg.clone());
-    RequestDeadlineService::new(inner, cfg)
+        .method_not_allowed_fallback(problem::method_not_allowed);
+    if let Some(endpoint) = metrics {
+        inner = inner.route(
+            "/metrics",
+            get(move || {
+                let endpoint = endpoint.clone();
+                async move { endpoint.response() }
+            }),
+        );
+    }
+    RequestDeadlineService::new(inner.with_state(cfg.clone()), cfg, metrics_enabled)
 }
 
 /// `GET /sparql?query=...` for the strict, single-query Protocol subset.
 async fn handle_get(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
+    Extension(snapshot): Extension<RuntimeSnapshotLease>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let query = match raw.as_deref() {
+    let decoded = traced_sync(Stage::Decode, || match raw.as_deref() {
         Some(encoded) => {
-            match crate::post_body::unique_query_param(encoded.as_bytes(), cfg.max_query_len()) {
-                Ok(query) => query,
-                Err(crate::post_body::QueryParamError::Invalid) => {
-                    return problem::response(ProblemCode::InvalidRequest)
-                }
-                Err(crate::post_body::QueryParamError::TooLong) => {
-                    return problem::response(ProblemCode::PayloadTooLarge)
-                }
-            }
+            crate::post_body::unique_query_param(encoded.as_bytes(), cfg.max_query_len()).map_err(
+                |error| match error {
+                    crate::post_body::QueryParamError::Invalid => ProblemCode::InvalidRequest,
+                    crate::post_body::QueryParamError::TooLong => ProblemCode::PayloadTooLarge,
+                },
+            )
         }
-        None => return problem::response(ProblemCode::InvalidRequest),
+        None => Err(ProblemCode::InvalidRequest),
+    });
+    let query = match decoded {
+        Ok(query) => query,
+        Err(code) => return problem::response(code),
     };
-    process(cfg, query, accept(&headers), budget).await
+    process(cfg, snapshot, query, accept(&headers), budget).await
 }
 
 /// `POST /sparql` — either a strict single-query urlencoded form or a bounded
@@ -67,6 +97,7 @@ async fn handle_get(
 async fn handle_post(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
+    Extension(snapshot): Extension<RuntimeSnapshotLease>,
     request: Request<Body>,
 ) -> Response {
     if request.uri().query().is_some() {
@@ -74,23 +105,27 @@ async fn handle_post(
     }
     let (parts, body) = request.into_parts();
     let accepted = accept(&parts.headers);
-    let query = match crate::post_body::query(
-        &parts.headers,
-        body,
-        cfg.max_query_len(),
-        cfg.max_form_body_len(),
+    let query = match traced(
+        Stage::Decode,
+        crate::post_body::query(
+            &parts.headers,
+            body,
+            cfg.max_query_len(),
+            cfg.max_form_body_len(),
+        ),
     )
     .await
     {
         Ok(query) => query,
         Err(code) => return problem::response(code),
     };
-    process(cfg, query, accepted, budget).await
+    process(cfg, snapshot, query, accepted, budget).await
 }
 
 /// The shared request pipeline: cap → compile → dispatch by query form → stream.
 async fn process(
     cfg: Arc<ServeConfig>,
+    snapshot: RuntimeSnapshotLease,
     query: String,
     accept: Option<String>,
     budget: RequestBudget,
@@ -99,50 +134,111 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let bound = match compile(cfg.clone(), query, budget.clone()).await {
+    let generation_admission = match traced(
+        Stage::GenerationLease,
+        crate::request_generation::acquire(cfg.clone(), &snapshot, &query, &budget),
+    )
+    .await
+    {
+        Ok(admission) => admission,
+        Err(response) => return response,
+    };
+    let (mut generations, compiler) = generation_admission.into_parts();
+    let bound = match traced(
+        Stage::Compile,
+        crate::request_compile::compile(
+            cfg.clone(),
+            snapshot.clone(),
+            query,
+            budget.clone(),
+            compiler,
+        ),
+    )
+    .await
+    {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(response) => {
+            let _ = generations.finish().await;
+            return response;
+        }
     };
-    if let Err(error) = admission::admit(bound.plan()) {
-        let _internal_state = error.state();
-        return problem::response(ProblemCode::UnsupportedQuery);
-    }
-    let execution = match cfg.prepare_execution(bound) {
-        Ok(execution) => execution,
-        Err(_) => return problem::response(ProblemCode::Internal),
-    };
-    let (backend, plan) = execution.into_parts();
     let accept = accept.as_deref();
 
-    match &plan.form {
-        PlanForm::Select { .. } => respond_select(backend, plan, accept, budget).await,
-        PlanForm::Ask => respond_ask(backend, plan, accept, budget).await,
-        PlanForm::Construct { .. } => respond_construct(backend, plan, accept, budget).await,
-    }
-}
-
-/// Compile (parse + rewrite) off the async runtime (ADR-0006); map errors to status.
-/// Uses the per-config plan cache (ADR-0007): repeated queries at the same epoch
-/// skip the full rewrite and return a shared cached plan handle. Timeout stops
-/// the request waiter, not CPU work already running; the owned admission permit
-/// stays charged until that detached blocking closure actually returns.
-async fn compile(
-    cfg: Arc<ServeConfig>,
-    query: String,
-    budget: RequestBudget,
-) -> Result<BoundPlan, Response> {
-    let permits = cfg.compiler_permits();
-    let compiled = deadline::run_compiler(budget, permits, move |worker_budget| {
-        cfg.compile(&query, &worker_budget)
-    })
-    .await;
-    match compiled {
-        Err(CompilerRunError::Control(error)) => Err(problem::response_for_control(error)),
-        Err(CompilerRunError::AdmissionClosed | CompilerRunError::Join(_)) => {
-            Err(problem::response(ProblemCode::Internal))
+    match bound {
+        BoundQuery::Single(bound) => {
+            let admitted = traced_sync(Stage::ShapeAdmission, || {
+                admission::admit(bound.plan(), cfg.max_order_rows())
+            });
+            if let Err(error) = admitted {
+                let _internal_reason = error.reason();
+                let _ = generations.finish().await;
+                return problem::response(ProblemCode::UnsupportedQuery);
+            }
+            let execution =
+                match traced_sync(Stage::BindExecution, || snapshot.prepare_execution(*bound)) {
+                    Ok(execution) => execution,
+                    Err(_) => {
+                        let _ = generations.finish().await;
+                        return problem::response(ProblemCode::Internal);
+                    }
+                };
+            let (source_id, binding_identity, backend, verified_generation, plan) =
+                execution.into_parts();
+            if !generations.matches(source_id, &binding_identity, verified_generation) {
+                let _ = generations.finish().await;
+                return problem::response(ProblemCode::Internal);
+            }
+            let generation = generations.take(source_id, &binding_identity);
+            if !generations.is_empty() {
+                let _ = generations.finish().await;
+                return problem::response(ProblemCode::Internal);
+            }
+            match &plan.form {
+                PlanForm::Select { .. } => {
+                    traced_execute(respond_select(backend, plan, generation, accept, budget)).await
+                }
+                PlanForm::Ask => {
+                    traced_execute(respond_ask(backend, plan, generation, accept, budget)).await
+                }
+                PlanForm::Construct { .. } => {
+                    traced_execute(respond_construct(backend, plan, generation, accept, budget))
+                        .await
+                }
+            }
         }
-        Ok(Err(e)) => Err(problem::response_for_sparql(&e)),
-        Ok(Ok(plan)) => Ok(plan),
+        BoundQuery::Federated(bound) => {
+            for fragment in bound.plan().fragments() {
+                let admitted = traced_sync(Stage::ShapeAdmission, || {
+                    admission::admit(fragment.plan(), cfg.max_order_rows())
+                });
+                if let Err(error) = admitted {
+                    let _internal_reason = error.reason();
+                    let _ = generations.finish().await;
+                    return problem::response(ProblemCode::UnsupportedQuery);
+                }
+            }
+            let execution = match traced_sync(Stage::BindExecution, || {
+                snapshot.prepare_federated_execution(*bound)
+            }) {
+                Ok(execution) => execution,
+                Err(_) => {
+                    let _ = generations.finish().await;
+                    return problem::response(ProblemCode::Internal);
+                }
+            };
+            let format = negotiate_results(accept);
+            match traced_execute(crate::federation::select_union_body(
+                execution,
+                generations,
+                format,
+                budget,
+            ))
+            .await
+            {
+                Ok(body) => ok_stream(format.media_type(), body),
+                Err(response) => response,
+            }
+        }
     }
 }
 
@@ -154,6 +250,7 @@ async fn compile(
 async fn respond_select(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -164,6 +261,9 @@ async fn respond_select(
     let vars = vars.clone();
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
@@ -187,24 +287,16 @@ async fn respond_select(
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            let drive_budget = budget.clone();
-            stream::select_body_streaming_controlled(
-                move |sink| {
-                    Box::pin(async move {
-                        exec_pg::select_each_pg_controlled(&plan, conn, &drive_budget, sink).await
-                    })
-                },
-                fmt,
-                vars,
-                budget,
-            )
+            match crate::pg_response::select(pool, plan, generation, fmt, vars, budget).await {
+                Ok(body) => body,
+                Err(response) => return response,
+            }
         }
         Backend::Mysql(pool) => {
-            let conn = match acquire_mysql(&pool, &budget).await {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
@@ -228,6 +320,7 @@ async fn respond_select(
 async fn respond_ask(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -237,13 +330,15 @@ async fn respond_ask(
     let fmt = negotiate_results(accept);
     let value = match backend {
         Backend::Sqlite(pool) => {
-            // The concrete adapter future proves the `Send` obligation.
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
             };
             let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
-            let run = tokio::spawn(async move {
+            let run = deadline::spawn_request_task(async move {
                 exec::ask_sqlite_owned_interruptible_leased(&plan, lease, task_control).await
             });
             match deadline::join_task(budget.clone(), run).await {
@@ -255,33 +350,28 @@ async fn respond_ask(
             }
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            match budget
-                .run(exec_pg::ask_pg_controlled(&plan, conn, &budget))
-                .await
-            {
-                Err(error) => return problem::response_for_control(error),
+            match crate::pg_response::ask(pool, plan, generation, budget.clone()).await {
                 Ok(result) => result,
+                Err(response) => return response,
             }
         }
         Backend::Mysql(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             // ASK collects (a single boolean). Unlike PG (whose `PgRowStream` is
             // `'static`), MySQL's branch cursor BORROWS the connection, so awaiting
             // `ask_mysql` inline in this handler future leaves the borrowing stream
             // held across an await — an HRTB `Send` obligation axum's handler future
-            // cannot discharge. `tokio::spawn` checks `Send` on the concrete
-            // owned-`Conn` task future directly (provable), and gives the dedicated
-            // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
-            // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` join handling.
-            let conn = match acquire_mysql(&pool, &budget).await {
+            // cannot discharge. `spawn_request_task` proves `Send` on the concrete
+            // owned-`Conn` task, dropped/disposed after the run (§4.2), mirroring
+            // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` handling.
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
             let task_budget = budget.clone();
-            let run = tokio::spawn(async move {
+            let run = deadline::spawn_request_task(async move {
                 exec_mysql::ask_each_mysql_controlled(&plan, conn, &task_budget).await
             });
             match deadline::join_task(budget.clone(), run).await {
@@ -298,7 +388,7 @@ async fn respond_ask(
             if let Err(error) = budget.checkpoint() {
                 return problem::response_for_control(error);
             }
-            match stream::serialize_boolean(b, fmt) {
+            match traced_sync(Stage::Serialize, || stream::serialize_boolean(b, fmt)) {
                 Ok(bytes) => {
                     let Ok(amount) = u64::try_from(bytes.len()) else {
                         return problem::response(ProblemCode::Internal);
@@ -323,12 +413,16 @@ async fn respond_ask(
 async fn respond_construct(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
     let fmt = negotiate_rdf(accept);
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
@@ -351,24 +445,16 @@ async fn respond_construct(
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            let drive_budget = budget.clone();
-            stream::construct_body_streaming_controlled(
-                move |sink| {
-                    Box::pin(async move {
-                        exec_pg::construct_each_pg_controlled(&plan, conn, &drive_budget, sink)
-                            .await
-                    })
-                },
-                fmt,
-                budget,
-            )
+            match crate::pg_response::construct(pool, plan, generation, fmt, budget).await {
+                Ok(body) => body,
+                Err(response) => return response,
+            }
         }
         Backend::Mysql(pool) => {
-            let conn = match acquire_mysql(&pool, &budget).await {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
@@ -391,52 +477,6 @@ async fn respond_construct(
         }
     };
     ok_stream(fmt.media_type(), body)
-}
-
-async fn acquire_mysql(
-    pool: &mysql_async::Pool,
-    budget: &RequestBudget,
-) -> Result<mysql_async::Conn, Response> {
-    match budget.run(pool.get_conn()).await {
-        Err(error) => Err(problem::response_for_control(error)),
-        Ok(Err(_)) => Err(problem::response(ProblemCode::SourceUnavailable)),
-        Ok(Ok(conn)) => Ok(conn),
-    }
-}
-
-/// Acquire a pooled PostgreSQL connection (ADR-0010 §C stream-lane pool, ADR-0027;
-/// M4 wave-2 finding 2). Pool exhaustion (no free connection within the
-/// configured `--pg-pool-wait-secs`) is shed as a fast, honest `503` +
-/// `Retry-After` rather than queued indefinitely or reported as a generic `500`
-/// — the ADR-0010 "shed overflow" clause this pass implements.
-async fn acquire_pg(
-    pool: &deadpool_postgres::Pool,
-    budget: RequestBudget,
-) -> Result<PgConn, Response> {
-    let acquired = match budget.run(pool.get()).await {
-        Ok(result) => result,
-        Err(error) => return Err(problem::response_for_control(error)),
-    };
-    let conn = acquired.map_err(|e| match e {
-        // Fixed at 1s rather than derived from pool pressure/wait-time — a
-        // pressure-aware value is future work (ADR-0010 status correction part
-        // 2's second open refinement).
-        PoolError::Timeout(_) => problem::response_with_retry_after(ProblemCode::SourceUnavailable),
-        _ => problem::response(ProblemCode::Internal),
-    })?;
-    match budget.run(PgConn::checked(conn)).await {
-        Err(error) => Err(problem::response_for_control(error)),
-        Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
-        Ok(Ok(conn)) => Ok(conn),
-    }
-}
-
-/// The sole decoded `query` field, rejecting duplicates and every other key.
-#[cfg(test)]
-fn form_param(encoded: &str, key: &str) -> Option<String> {
-    (key == "query")
-        .then(|| crate::post_body::unique_query_param(encoded.as_bytes(), usize::MAX).ok())
-        .flatten()
 }
 
 fn accept(headers: &HeaderMap) -> Option<String> {

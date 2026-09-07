@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use super::{AllowedOutcome, CaseEntry, CaseKind, FileEntry, Inventory};
 
-const HEADER: &str = "semantic-fabric-rdb2rdf-inventory-v1";
+const HEADER: &str = "semantic-fabric-rdb2rdf-inventory-v2";
 const METADATA: &[(&str, &str)] = &[
     ("snapshot-provenance", "local-vendored-copy"),
     (
@@ -43,7 +43,7 @@ pub(super) fn render(inventory: &Inventory) -> String {
     for case in &inventory.cases {
         writeln!(
             output,
-            "case\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "case\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             case.identifier,
             kind_name(case.kind),
             case.scenario,
@@ -52,6 +52,7 @@ pub(super) fn render(inventory: &Inventory) -> String {
             case.expected_error,
             outcome_name(case.sqlite),
             outcome_name(case.postgres),
+            outcome_name(case.mysql),
         )
         .expect("String writes cannot fail");
     }
@@ -100,7 +101,7 @@ pub(super) fn parse(input: &str) -> Result<Inventory, String> {
                     return Err(format!("line {number}: duplicate suite manifest record"));
                 }
             }
-            ["case", id, kind, scenario, mapping, output, error, sqlite, postgres] => {
+            ["case", id, kind, scenario, mapping, output, error, sqlite, postgres, mysql] => {
                 cases.push(CaseEntry {
                     identifier: (*id).to_owned(),
                     kind: parse_kind(kind, number)?,
@@ -110,6 +111,7 @@ pub(super) fn parse(input: &str) -> Result<Inventory, String> {
                     expected_error: parse_bool(error, number)?,
                     sqlite: parse_outcome(sqlite, number)?,
                     postgres: parse_outcome(postgres, number)?,
+                    mysql: parse_outcome(mysql, number)?,
                 });
             }
             ["file", path, digest] => files.push(FileEntry {

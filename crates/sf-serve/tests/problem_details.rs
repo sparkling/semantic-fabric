@@ -5,9 +5,10 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, IntrospectedSource, ServeConfig};
 use tower::ServiceExt;
+
+mod support;
 
 const SECRET: &str = "sf_secret_NEVER_EXPOSE_7f42";
 const SECRET_COLUMN: &str = "sf_secret_NEVER_EXPOSE_7f42_column";
@@ -41,10 +42,19 @@ fn config_after_schema_change(change: &str) -> ServeConfig {
          INSERT INTO \"{SECRET_TABLE}\" VALUES (1, 'value');"
     ))
     .expect("seed fixture");
-    let schema = introspect_sqlite_all(&conn).expect("snapshot schema");
-    let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
-    conn.execute_batch(change).expect("drift live schema");
-    ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema)
+    let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse fixture mapping");
+    let ontology = support::ontology_for_mapping(&mapping);
+    let source = IntrospectedSource::observe_sqlite(Backend::sqlite(conn))
+        .expect("observe fixture before drift");
+    let pool = source.sqlite_pool().expect("fixture uses SQLite");
+    let config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
+        .expect("admit fixture before drift");
+    pool.pick()
+        .lock()
+        .expect("lock fixture connection")
+        .execute_batch(change)
+        .expect("drift live schema");
+    config
 }
 
 fn request(query: &str, content_type: &str) -> Request<Body> {
@@ -96,7 +106,7 @@ async fn assert_problem_response(
         .expect("ASCII correlation id")
         .to_owned();
     assert!(correlation.starts_with("sf-"));
-    assert!(correlation.len() <= 32, "correlation={correlation:?}");
+    assert_eq!(correlation.len(), 36, "correlation={correlation:?}");
     assert!(
         correlation
             .bytes()
@@ -126,6 +136,32 @@ async fn assert_problem_response(
     assert!(json["title"].as_str().is_some_and(|s| !s.is_empty()));
     assert!(json["detail"].as_str().is_some_and(|s| !s.is_empty()));
     body
+}
+
+#[tokio::test]
+async fn inbound_correlation_is_ignored_by_the_full_request_boundary() {
+    let response = router(Arc::new(config_with_stale_schema()))
+        .oneshot(
+            Request::builder()
+                .uri("/missing")
+                .header("x-correlation-id", SECRET)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let correlation = response.headers()["x-correlation-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(correlation, SECRET);
+    assert_eq!(correlation.len(), 36);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(problem["correlationId"], correlation);
+    assert!(!body
+        .windows(SECRET.len())
+        .any(|window| window == SECRET.as_bytes()));
 }
 
 fn assert_secret_absent(body: &[u8]) {

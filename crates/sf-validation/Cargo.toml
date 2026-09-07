@@ -1,0 +1,16 @@
+[package]
+name = "sf-validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded semantic admission for semantic-fabric M⋈T inputs"
+
+[dependencies]
+oxrdf.workspace = true
+oxttl.workspace = true
+rudof_rdf.workspace = true
+shacl.workspace = true
+sparql_service.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

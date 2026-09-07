@@ -1713,7 +1713,9 @@ pub(crate) fn render_immediate_source_column(
     if dialect == Dialect::Postgres && column == "rowid" && inner_sql.is_none() {
         return format!("({alias}.ctid)::text");
     }
-    if inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, column)) {
+    if dialect == Dialect::Postgres
+        && inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, column))
+    {
         format!("{alias}.{column}")
     } else {
         format!("{alias}.{}", dialect.quote_ident(column))
@@ -1870,26 +1872,31 @@ END, '' ORDER BY n\
 /// re-interprets an in-flight (possibly standalone-invalid) byte as text,
 /// and the FINAL aggregated result is converted back to `utf8mb4` once, at
 /// the very end (mirrors the SQLite per-byte-cast pattern: only the fully
-/// reassembled result needs to be valid UTF-8, confirmed live). The
-/// `SET_VAR` optimizer hint raises two session limits for THIS query only
-/// (no separate `SET SESSION` statement, so no change to connection
-/// setup elsewhere in the codebase): `group_concat_max_len` (MySQL's
-/// default of 1024 bytes SILENTLY truncates a longer `GROUP_CONCAT` result
-/// with no error — confirmed live — which is exactly the unsound-truncation
-/// class this whole fix exists to close, so it cannot be left at the
-/// default) and `cte_max_recursion_depth` (default 1000; exceeding it is a
-/// query ERROR, not a silent truncation — sound but incomplete for a very
-/// long column value — raised anyway for headroom, confirmed live up to a
-/// 2000-character input).
+/// reassembled result needs to be valid UTF-8, confirmed live).
+///
+/// `JSON_TABLE(... FOR ORDINALITY)` supplies a row per byte. This is
+/// deliberately not a correlated recursive CTE: MySQL 8.4 materializes such
+/// a CTE using one outer row's length when the expression is projected for
+/// several rows, which silently truncates/pads other values. `JSON_TABLE` is
+/// implicitly lateral in MySQL and evaluates its document per outer row.
+/// The `SET_VAR` optimizer hint requests `group_concat_max_len = 1,000,000`
+/// for this query only; MySQL's 1024-byte default otherwise silently truncates
+/// the result. The input guard does not trust the hint: it takes the minimum of
+/// the hard 333,333-byte profile bound, the statement-observed
+/// `@@SESSION.group_concat_max_len / 3`, and the statement-observed
+/// `(@@SESSION.max_allowed_packet - 4096) / 3`. One source byte can expand to
+/// three output bytes, and the 4-KiB packet reserve covers protocol/query
+/// framing. Above that conservative dynamic bound the JSON document is
+/// deliberately invalid, so execution fails before `GROUP_CONCAT` can return a
+/// truncated IRI.
+const MYSQL_GROUP_CONCAT_MAX_LEN: usize = 1_000_000;
+const MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES: usize = MYSQL_GROUP_CONCAT_MAX_LEN / 3;
+const MYSQL_PACKET_RESERVE_BYTES: usize = 4_096;
+
 fn percent_encode_col_mysql(col: &str) -> String {
     format!(
-        "(WITH RECURSIVE seq AS (\
-SELECT 1 AS n WHERE LENGTH(CAST({col} AS BINARY)) > 0 \
-UNION ALL \
-SELECT n + 1 FROM seq WHERE n < LENGTH(CAST({col} AS BINARY))\
-) \
-SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
-SELECT /*+ SET_VAR(group_concat_max_len = 1000000) SET_VAR(cte_max_recursion_depth = 100000) */ \
+        "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
+SELECT /*+ SET_VAR(group_concat_max_len = {group_limit}) */ \
 CONVERT(CAST(GROUP_CONCAT(\
 CASE \
 WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
@@ -1901,8 +1908,21 @@ THEN SUBSTRING(CAST({col} AS BINARY), n, 1) \
 ELSE CAST(CONCAT('%', HEX(SUBSTRING(CAST({col} AS BINARY), n, 1))) AS BINARY) \
 END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
-FROM seq\
-), '') END)"
+FROM JSON_TABLE(\
+CASE WHEN LENGTH(CAST({col} AS BINARY)) = 0 THEN '[]' \
+WHEN LENGTH(CAST({col} AS BINARY)) > LEAST(\
+{max_input}, \
+GREATEST(CAST(@@SESSION.group_concat_max_len AS SIGNED), 0) DIV 3, \
+GREATEST(CAST(@@SESSION.max_allowed_packet AS SIGNED) - {packet_reserve}, 0) DIV 3\
+) \
+THEN 'semantic-fabric-percent-encoding-input-limit' \
+ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
+'$[*]' COLUMNS (n FOR ORDINALITY)\
+) AS sfpe\
+), '') END)",
+        group_limit = MYSQL_GROUP_CONCAT_MAX_LEN,
+        max_input = MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
+        packet_reserve = MYSQL_PACKET_RESERVE_BYTES,
     )
 }
 
@@ -2208,8 +2228,7 @@ mod tests {
     /// [`percent_encode_col_mysql`]'s own doc comments for the
     /// dialect-specific bugs their first drafts had (a PG NULL/empty
     /// conflation; a MySQL `LENGTH`-vs-`SUBSTRING` byte/character unit
-    /// mismatch; a MySQL `group_concat_max_len`/`cte_max_recursion_depth`
-    /// silent-truncation exposure).
+    /// mismatch; and MySQL `group_concat_max_len` silent truncation).
     #[test]
     fn percent_encode_col_sqlite_matches_reference_iri_encoding() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -2246,6 +2265,123 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
+    #[test]
+    fn mysql_percent_encoder_round_trips_through_the_ast_boundary() {
+        let expression =
+            percent_encode_col("sfs0.`value`", Dialect::MySql).expect("MySQL is supported");
+        let skeleton = format!("SELECT {expression} FROM `source` sfs0");
+        let emitted = Dialect::MySql
+            .emit_via_ast(&skeleton)
+            .expect("MySQL JSON_TABLE encoder must pass the SQL AST boundary");
+        assert!(emitted.contains("JSON_TABLE"), "{emitted}");
+        assert!(emitted.contains("FOR ORDINALITY"), "{emitted}");
+        assert!(
+            emitted.contains("group_concat_max_len = 1000000"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("LEAST(333333"), "{emitted}");
+        assert!(
+            emitted.contains("@@SESSION.group_concat_max_len"),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains("@@SESSION.max_allowed_packet"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("- 4096"), "{emitted}");
+        assert!(
+            emitted.contains("semantic-fabric-percent-encoding-input-limit"),
+            "{emitted}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a purpose-created isolated MySQL provider"]
+    async fn mysql_percent_encoder_limit_fails_instead_of_truncating() {
+        use mysql_async::prelude::Queryable;
+
+        let socket = std::env::var("SF_MYSQL_SOCKET")
+            .expect("required-live MySQL socket must be configured");
+        let opts: mysql_async::Opts = mysql_async::OptsBuilder::default()
+            .user(Some("root"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into();
+        let mut conn = mysql_async::Conn::new(opts)
+            .await
+            .unwrap_or_else(|_| panic!("connect to isolated MySQL provider failed"));
+        let expression = percent_encode_col_mysql("source_value.value");
+        let oversized_query = format!(
+            "SELECT {expression} FROM \
+             (SELECT REPEAT(' ', {}) AS value) AS source_value",
+            MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES + 1
+        );
+        let result: mysql_async::Result<Option<String>> = conn.query_first(oversized_query).await;
+        assert!(result.is_err(), "oversized encoding must fail closed");
+        let constrained = expression.replacen(
+            "SET_VAR(group_concat_max_len = 1000000)",
+            "SET_VAR(group_concat_max_len = 9)",
+            1,
+        );
+        let constrained_query = format!(
+            "SELECT {constrained} FROM \
+             (SELECT REPEAT(' ', 4) AS value) AS source_value"
+        );
+        let result: mysql_async::Result<Option<String>> = conn.query_first(constrained_query).await;
+        assert!(
+            result.is_err(),
+            "statement-observed aggregate ceiling must fail closed"
+        );
+        conn.disconnect()
+            .await
+            .unwrap_or_else(|_| panic!("close isolated MySQL connection failed"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a purpose-created MySQL provider pinned to an 8192-byte packet ceiling"]
+    async fn mysql_percent_encoder_packet_ceiling_fails_instead_of_truncating() {
+        use mysql_async::prelude::Queryable;
+
+        let socket = std::env::var("SF_MYSQL_SOCKET")
+            .expect("required-live MySQL socket must be configured");
+        let opts: mysql_async::Opts = mysql_async::OptsBuilder::default()
+            .user(Some("root"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into();
+        let mut limited = mysql_async::Conn::new(opts)
+            .await
+            .unwrap_or_else(|_| panic!("connect to packet-bounded MySQL provider failed"));
+        let observed_packet: u64 = limited
+            .query_first("SELECT @@SESSION.max_allowed_packet")
+            .await
+            .unwrap_or_else(|_| panic!("read constrained MySQL packet ceiling failed"))
+            .unwrap_or_else(|| panic!("constrained MySQL packet ceiling is absent"));
+        assert_eq!(
+            observed_packet, 8192,
+            "packet-bound evidence requires the exact isolated provider profile"
+        );
+        let packet_bound = (observed_packet.saturating_sub(MYSQL_PACKET_RESERVE_BYTES as u64)) / 3;
+        let expression = percent_encode_col_mysql("source_value.value");
+        let packet_query = format!(
+            "SELECT {expression} FROM \
+             (SELECT REPEAT(' ', {}) AS value) AS source_value",
+            packet_bound + 1
+        );
+        let packet_result: mysql_async::Result<Option<String>> =
+            limited.query_first(packet_query).await;
+        limited
+            .disconnect()
+            .await
+            .unwrap_or_else(|_| panic!("close constrained MySQL connection failed"));
+        assert!(
+            packet_result.is_err(),
+            "statement-observed packet ceiling must fail closed"
+        );
     }
 
     /// A dialect this module does not implement encoding for (Oracle, picked

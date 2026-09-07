@@ -8,9 +8,19 @@
 //! formulation / heterogeneous-source generality (ADR-0002).
 
 pub mod direct_mapping;
+mod projection;
 pub mod r2rml;
 
-pub use direct_mapping::direct_mapping;
+pub use direct_mapping::{
+    direct_mapping, direct_mapping_with_row_identity, validate_direct_mapping_base,
+    DirectMappingRowIdentity, MAX_DIRECT_MAPPING_BASE_IRI_BYTES_V1,
+    MAX_DIRECT_MAPPING_GENERATED_UTF8_BYTES_V1, MAX_DIRECT_MAPPING_WORK_UNITS_V1,
+};
+pub use projection::{
+    project_static_to_rdf, project_to_rdf, ProjectionError, MAPPING_PROJECTION_NODE_PREFIX,
+    MAX_MAPPING_PROJECTION_BYTES, MAX_MAPPING_PROJECTION_OCCURRENCES,
+    MAX_MAPPING_PROJECTION_TRIPLES,
+};
 pub use r2rml::parse_r2rml;
 
 use sf_core::{Result, SourceId, SourceMapping, TableSchema};
@@ -27,6 +37,18 @@ pub fn direct_mapping_for_source(
     source_id: SourceId,
 ) -> Result<SourceMapping> {
     direct_mapping(tables, base_iri).map(|maps| SourceMapping::new(source_id, maps))
+}
+
+/// Generate source-associated Direct Mapping IR under an explicit backend row-
+/// identity policy.
+pub fn direct_mapping_for_source_with_row_identity(
+    tables: &[TableSchema],
+    base_iri: &str,
+    source_id: SourceId,
+    row_identity: DirectMappingRowIdentity,
+) -> Result<SourceMapping> {
+    direct_mapping_with_row_identity(tables, base_iri, row_identity)
+        .map(|maps| SourceMapping::new(source_id, maps))
 }
 
 #[cfg(test)]

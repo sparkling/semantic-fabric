@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-02
+updated: 2026-09-06
 tags: [crate-layout, cargo-workspace, execution, performance, push-down, semi-join, semi-join-cost, term-generation, cost-driven, streaming, bounded-memory, rayon, tokio]
 supersedes: []
 depends-on:
@@ -37,19 +37,20 @@ The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped run
 | `sf-mapping` | R2RML/Direct-Mapping parser (Turtle → IR), including Direct Mapping from neutral core schema DTOs | `oxttl`, `sf-core` |
 | `sf-sparql` | The virtualizer: SPARQL 1.2 → SQL rewriting + cascade (ADR-0007); streaming result serialization | `spargebra`, `sparesults`, `oxjsonld`, `sqlparser`, `quick_cache`, `sf-*` |
 | `sf-serve` | HTTP/SPARQL Protocol boundary, source selection, backend pools and streamed responses | `axum`, `tokio`, native database drivers, `sf-*` |
-| `sf-conformance` | W3C RDB2RDF harness (via CONSTRUCT), EARL, graph-iso, in-memory oracle, `M ⋈ T` hook (ADR-0005) | `oxrdf`, `oxttl`, `shacl`, `sf-*` |
+| `sf-validation` | Product-owned bounded sealed `M ⋈ T` gate; three Core shapes via rudof Native, one parsed sealed datatype query executed globally, policy-v2 receipt identity, and count-only redacted outcome | `oxrdf`, `oxttl`, `shacl`, `rudof_rdf`, `sparql_service` |
+| `sf-conformance` | W3C RDB2RDF harness (via CONSTRUCT), EARL, graph-iso, in-memory oracle, and consumer of the product `M ⋈ T` gate (ADR-0005) | `oxrdf`, `oxttl`, `sf-validation`, `sf-*` |
 | `sf-bench` | GTFS-Madrid OBDA-track driver | `criterion`, `sf-*` |
 | `sf-cli` | Single binary: `serve · conformance · bench` | all `sf-*` |
 
-The product flow is **core → {mapping, SQL/source} → virtualizer → serve → cli**; conformance and bench are sibling development consumers. The neutral schema DTO now lives in `sf-core`, `sf-sql` re-exports it for compatibility, and `sf-mapping` no longer depends on `sf-sql`. `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer or serving frontends (checkable via `cargo tree`).
+The product flow is **core → {mapping, SQL/source} → virtualizer → validation/serve → cli**; conformance and bench are sibling development consumers. The neutral schema DTO now lives in `sf-core`, `sf-sql` re-exports it for compatibility, and `sf-mapping` no longer depends on `sf-sql`. `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer or serving frontends (checkable via `cargo tree`).
 
 ### Relational execution — push down to the source, stream back
 
 * **Single-source (the common case): push the work into the source SQL.** For admitted, fully pushed-down shapes, the rewriter (ADR-0007) emits one `SELECT … FROM … [JOIN …] [WHERE …] [GROUP BY …] [ORDER BY …]` and runs it via the source's **native driver** (`rusqlite`, `tokio-postgres` + `deadpool`, or `mysql_async`). The source does scan + join + DISTINCT + aggregation + sort + spill + parallelism; the engine streams rows, generates terms (`sf-core`), and serialises. This dissolves the multi-join / N:M cliff (the source has indexes and a real optimizer).
-* **Current binding boundary.** One immutable `CompilerBinding` owns its `SourceMapping`, dialect, T-box, compiler-safe schema and private plan cache; `sf-serve` pairs it with one backend and verifies the bound plan before backend selection or I/O. Commit `24a0e20` makes the serving constructor convert the raw observation to `CompilerSchema` with `ConstraintAuthority::Unverified`: it retains table/column names, SQL types and estimates, but removes PK, UNIQUE, FK, functional-dependency and NOT-NULL claims. The authority is part of `CompileScope`, so cache hits and misses share the same policy. Constructing a new runtime binding creates a fresh cache namespace; there is no in-place schema mutation, live epoch bump or automatic replacement path. This prevents cross-binding cache/backend reuse and stale integrity facts from authorizing serving rewrites, but it is not the proposed digest-addressed `RuntimeSnapshot`: the pure Phase 1 content-digest kernel is not adapter-emitted or carried by a runtime binding, and drift detection, atomic reload, registry and federation remain open.
+* **Current binding boundary.** One immutable `CompilerBinding` owns its `SourceMapping`, dialect, T-box, compiler-safe schema and private plan cache; `sf-serve` pairs it with one backend and verifies the bound plan before backend selection or I/O. Commit `24a0e20` makes the serving constructor convert the raw observation to `CompilerSchema` with `ConstraintAuthority::Unverified`: it retains table/column names, SQL types and estimates, but removes PK, UNIQUE, FK, functional-dependency and NOT-NULL claims. The authority is part of `CompileScope`, so cache hits and misses share the same policy. A `SourceRegistry` validates every source with the sealed split `M ⋈ T` evaluator before assembling those bindings into one deterministic, digest-addressed immutable `RuntimeSnapshot`; admission/cache identity includes validation policy v2 and its count-only warning policy. `RuntimeManager` atomically replaces complete generations, exposes readiness, and pins the selected generation through response-body lifetime. Constructing a new runtime binding still creates a fresh cache namespace and there is no in-place schema mutation. `ServeConfig` and the CLI now support the established single-source mode plus one deliberately sealed two-source mode: paired source/mapping inputs may execute only a top-level `SELECT` whose `UNION` has exactly two one-triple BGP arms, each statically owned by exactly one distinct `SourceId`. The activation primitive remains private until a general off-path reload candidate lifecycle exists; live Direct Mapping, backend admission, automatic drift/reload and general multi-source planning remain open.
 * **PostgreSQL relation scope.** Introspection and unqualified `rr:tableName` resolution are explicitly `public`-only. Startup observes one read-only repeatable-read catalogue snapshot; pool creation/recycle pins `search_path=pg_catalog,public,pg_temp`, every request verifies it, and cross-schema foreign keys or `public` relation names shadowed by the earlier `pg_catalog` scope fail closed because the neutral DTO cannot represent qualified identity. Trusted raw `rr:sqlQuery` text is emitted verbatim and can name a qualified relation; neither `search_path` nor this guard confines it. This is coherent startup identity for catalogued base tables, not later-DDL detection, an SQL-query sandbox, or arbitrary-schema support. Captured integrity facts remain useful as observation evidence, but never enter the current serving compiler as proof.
 * **Direct Mapping lifecycle.** Current `sf-serve` consumes authored R2RML and does not generate Direct Mapping. The Direct Mapping utility and conformance runners may generate mappings from an explicit frozen fixture schema and may pass those same facts to raw translation APIs. That is test/development authority, not serving authority. A future live Direct-Mapping path must bind its PK/FK-dependent generated mapping to a verified source generation through the complete streamed execution; quarantining optimiser facts after generating the mapping would not protect its semantics.
-* **Cross-source (rare; tables in *different* relational databases): bounded semi-join reduction for admitted reducible shapes.** Ship a bounded representation of one side's join keys as a fixed-size Bloom filter or bounded `IN`-list/temp-table batch, then use a proven bounded merge. This is a reducer, not a general N:M join answer. Shapes needing an unimplemented global operator reject before I/O; accepting ADR-0040 would replace only this semi-join/merge-only clause with its quota-bounded external layer.
+* **Cross-source (rare; tables in *different* relational databases).** Non-blocking `UnionAll` is now implemented for the sealed exactly-two-source shape above: both source-local plans retain their immutable bindings, both source leases are acquired before success is committed, one request budget and serializer span both fragments, and the bags stream sequentially without global buffering. Every other cross-source shape remains governed by the original baseline: an admitted reducible join must ship a bounded representation of one side's keys as a fixed-size Bloom filter or bounded `IN`-list/temp-table batch and use a proven bounded merge. That reducer is not a general N:M join answer. Shapes needing an unimplemented blocking global operator reject before I/O; accepting proposed ADR-0040 would replace only this semi-join/merge-only clause with its quota-bounded external layer. The streaming `UnionAll` slice neither depends on nor accepts ADR-0040.
 * **No columnar/OLAP engine on the relational path.** DataFusion, `connector_arrow`, and DuckDB are **not** used to mediate between the rewriter and relational sources: a columnar engine in-process would buffer instance data and break the bounded-memory invariant; only the source DB does blocking set-work (it spills natively). Relational execution = native drivers + push-down + bounded semi-join reduction.
 
 ### Cross-source semi-join cost
@@ -209,18 +210,22 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 
 * `cargo build --workspace` succeeds; `cargo tree` shows native drivers and **no `datafusion` / `connector_arrow` / `duckdb` / `librocksdb-sys`** on the relational crates.
 * `sf-cli --help` lists `serve · conformance · bench` (no `materialize`).
+* Required compiler, serving and real-process HTTP tests prove the sealed two-source `UnionAll` shape over two file-backed SQLite sources, including bag duplicates, UNBOUND domains, pre-I/O rejection, shared `0/N/N+1` budgets, second-source acquisition failure/recovery and request-lifetime snapshot pinning.
 * GTFS-Madrid OBDA-track scenarios complete with **constant engine memory** under growing scale factor, measured via `sf-bench` (ADR-0005).
 * Term generation emits constants by reference and writes via `generate_into` — an allocation-count test over a fixed result size shows no per-row owned `Term` on the CONSTRUCT path.
 * For admitted reducible shapes, the cross-source semi-join planner selects side, reducer form, and skip-vs-reduce from catalog/sketch estimates — unit-tested against synthetic cardinalities (small, large, and ≈ 1-reduction).
 
-> **Implementation reconciliation (2026-09-01).** The last confirmation item is
+> **Implementation reconciliation (2026-09-05).** The last confirmation item is
 > unit-tested design, not a production execution path: the public server has one
-> backend and `plan_semijoin` has no non-test caller. The universal bounded-memory
-> wording is also ahead of the implementation for global ORDER BY, Rust grouping,
-> multi-branch solution dedup, and some CONSTRUCT dedup paths, which retain
-> source-sized collections in `exec_core.rs`. Accepted ADR-0038 keeps this
+> bounded two-source `UnionAll` path, but `plan_semijoin` has no non-test caller
+> and no cross-source join is admitted. The universal bounded-memory
+> wording is also ahead of the implementation for Rust grouping, multi-branch
+> solution dedup, and some CONSTRUCT dedup paths, which retain source-sized
+> collections in `exec_core.rs`. Finite root `ORDER BY … OFFSET … LIMIT` windows
+> now use a bounded stable heap and have semantic-oracle plus fresh-process RSS
+> qualification; wider ORDER shapes still reject. Accepted ADR-0038 keeps this
 > architecture but requires composite SQL or a bounded coordinator operator—and
-> an explicit unsupported result until each shape has that proof.
+> an explicit unsupported result until each remaining shape has that proof.
 
 ## More Information
 * **Architecture:** ADR-0003. **Substrate:** ADR-0004. **Rewriting + cascade:** ADR-0007. **Datatype/dialect:** ADR-0015. **Reasoning:** ADR-0008. **Conformance/bench/oracle:** ADR-0005. **Governance + streaming:** ADR-0010. **Test strategy:** ADR-0012.

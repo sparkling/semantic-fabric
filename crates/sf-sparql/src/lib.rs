@@ -46,7 +46,7 @@
 //!
 //! ## Wave-E / M4 additions (2026-06-29)
 //!
-//! - **DESCRIBE** → Concise Bounded Description CONSTRUCT (CBD, SPARQL §10.4).
+//! - **DESCRIBE** → one-target, one-hop outgoing-description CONSTRUCT.
 //! - **ORDER BY with arbitrary expressions** — evaluated at exec time via
 //!   `exec::eval_expr` (STRLEN, arithmetic, IF, BOUND, comparisons, COALESCE, …).
 //! - **OPTIONAL with UNION/multi-branch right** — sound ISWC-2018 decomposition:
@@ -59,7 +59,6 @@ use std::sync::Arc;
 use sf_core::ir::TriplesMap;
 use sf_sql::{Dialect, TableSchema};
 use spargebra::algebra::GraphPattern;
-use spargebra::term::Variable;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 use spargebra::Query;
 
@@ -71,12 +70,15 @@ mod compile_envelope;
 #[allow(dead_code)] // Internal primitives; compiler pipeline wiring is a later slice.
 mod compiler_control;
 mod compiler_schema;
+mod compiler_telemetry;
+mod describe;
 pub mod dump;
 pub mod emit;
 pub mod exec;
 pub mod exec_core;
 pub mod exec_mysql;
 pub mod exec_pg;
+pub mod federation;
 mod graph_map;
 pub mod iq;
 pub mod leftjoin;
@@ -86,6 +88,7 @@ pub mod path;
 #[allow(dead_code)] // Staged clone/envelope primitive; cache wiring is a later slice.
 mod plan_measure;
 pub mod resource_profile;
+mod runtime_identity;
 pub mod saturate;
 pub mod star;
 pub mod unfold;
@@ -107,6 +110,8 @@ mod compiler_control_normalize_join_tests;
 #[cfg(test)]
 #[path = "compiler_control/pipeline_tests.rs"]
 mod compiler_control_pipeline_tests;
+#[cfg(test)]
+mod runtime_identity_tests;
 
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
 pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
@@ -121,6 +126,46 @@ pub use parser_isolation::dispatch_private_parser_worker_v1;
 ))]
 #[doc(hidden)]
 pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+#[doc(hidden)]
+pub use parser_isolation::QueryV1TransportMutant;
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::{
+    exercise_private_parser_observation_corpus_for_evidence,
+    exercise_private_parser_query_v1_corpus_for_evidence, ParserObservationSummaryV1,
+};
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::{
+    exercise_synthetic_query_v1_malformed_directives_for_evidence,
+    exercise_synthetic_query_v1_mutant_matrix_for_evidence,
+    exercise_synthetic_query_v1_request_eof_order_for_evidence,
+    exercise_synthetic_query_v1_transport_mutant_for_evidence,
+};
+pub use runtime_identity::{
+    CapabilityDigest, CompileDigests, ConstraintPolicyDigest, MappingDigest, OntologyDigest,
+    SchemaDigest, SemanticAdmissionDigest, SemanticIdentity, StructuralSchemaDigest,
+    TypeSchemaDigest,
+};
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as
@@ -178,6 +223,7 @@ pub(crate) struct DedupScope {
 pub struct Plan {
     pub branches: Vec<Branch>,
     pub form: PlanForm,
+    /// Root solution-set DISTINCT.
     pub distinct: bool,
     pub limit: Option<usize>,
     pub offset: usize,
@@ -196,15 +242,11 @@ pub struct Plan {
     /// proves ownership and key preservation through pure unary wrappers.
     /// An empty vector is the common no-group case.
     pub(crate) dedup_scopes: Vec<Option<DedupScope>>,
-    /// ADR-0034 item 3 (Run 5): `true` when SOME `PlanForm::Construct` branch's
-    /// ORIGINAL (pre-narrowing) bindings bound a variable the CONSTRUCT
-    /// template does not use — captured by `dedup_construct_template_
-    /// projected_vars` (lib.rs) at the ONE point that information exists,
-    /// before its own narrowing pass overwrites `Branch::bindings` to match
-    /// the template exactly (`exec_core::construct_may_need_cross_branch_
-    /// dedup`'s doc comment has the full reasoning for why this can't be
-    /// recomputed later from `branches` alone). Always `false` for a
-    /// non-`Construct` plan.
+    /// Cross-branch graph-set dedup is still required. For ordinary CONSTRUCT,
+    /// ADR-0034 sets this when pre-narrowing bindings contain a variable the
+    /// template drops. For DESCRIBE, lowering overwrites it with the exact
+    /// post-narrowing result: two or more output-triple branches are not proved
+    /// pairwise disjoint. Always `false` for a non-`Construct` plan.
     pub(crate) construct_drops_some_branch_var: bool,
 }
 
@@ -331,7 +373,10 @@ fn translate_inner_flat(
     // determined to be triple-term-valued (ADR-0032 D3 item 2); consulted below
     // to pre-substitute the CONSTRUCT template and, once `branches` is
     // otherwise finalized, to install the native projection (D2).
-    let (query, star_env) = star::rewrite_query(query)?;
+    let (query, star_env) =
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+            star::rewrite_query(query)
+        })?;
     let query = &query;
     // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
     // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
@@ -339,84 +384,50 @@ fn translate_inner_flat(
     let (saturated_maps, uf_tbox) = if tbox.is_empty() {
         (std::borrow::Cow::Borrowed(maps), tbox)
     } else {
-        let expanded = saturate::saturate_maps(maps, tbox);
+        let expanded =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Saturate, || {
+                saturate::saturate_maps(maps, tbox)
+            });
         (expanded, &empty_tbox)
     };
     let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect, schema);
-    let (trans, form) = match query {
-        Query::Select { pattern, .. } => {
-            let t = uf.translate_pattern(pattern)?;
-            let vars = t
-                .project
-                .clone()
-                .unwrap_or_else(|| visible_vars(&t.branches));
-            (t, PlanForm::Select { vars })
-        }
-        Query::Construct {
-            template, pattern, ..
-        } => {
-            // ADR-0032 D2: the old ADR-0031 rule-9 501 guard is superseded —
-            // real instantiation now happens (`exec_core::instantiate`'s
-            // recursive `TermPattern::Triple` arm) — but the template must
-            // first be pre-substituted so an env-composed variable becomes an
-            // explicit `TermPattern::Triple` over its component vars
-            // (`star::substitute_construct_template`'s doc comment).
-            let template = star::substitute_construct_template(template, &star_env);
-            let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Construct { template })
-        }
-        Query::Ask { pattern, .. } => {
-            let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Ask)
-        }
-        Query::Describe { pattern, .. } => {
-            // Concise Bounded Description (CBD): for each described resource r,
-            // CONSTRUCT { r ?__sf_p ?__sf_o } WHERE { <original WHERE> . r ?__sf_p ?__sf_o }.
-            // The `pattern` field encodes the DESCRIBE targets as a Project over the
-            // WHERE clause (the parser wraps literal resources in BIND expressions).
-            let (describe_vars, inner_pat) = match pattern {
-                GraphPattern::Project { variables, inner } => {
-                    (variables.clone(), inner.as_ref().clone())
+    let (trans, form, describe_form) = compiler_telemetry::in_stage(
+        compiler_telemetry::CompilerStage::Unfold,
+        || -> Result<_> {
+            match query {
+                Query::Select { pattern, .. } => {
+                    let t = uf.translate_pattern(pattern)?;
+                    let vars = t
+                        .project
+                        .clone()
+                        .unwrap_or_else(|| visible_vars(&t.branches));
+                    Ok((t, PlanForm::Select { vars }, false))
                 }
-                other => (Vec::new(), other.clone()),
-            };
-            if describe_vars.is_empty() {
-                return Err(Error::Unsupported(
-                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
-                ));
+                Query::Construct {
+                    template, pattern, ..
+                } => {
+                    // ADR-0032 D2: the old ADR-0031 rule-9 501 guard is superseded —
+                    // real instantiation now happens (`exec_core::instantiate`'s
+                    // recursive `TermPattern::Triple` arm) — but the template must
+                    // first be pre-substituted so an env-composed variable becomes an
+                    // explicit `TermPattern::Triple` over its component vars
+                    // (`star::substitute_construct_template`'s doc comment).
+                    let template = star::substitute_construct_template(template, &star_env);
+                    let t = uf.translate_pattern(pattern)?;
+                    Ok((t, PlanForm::Construct { template }, false))
+                }
+                Query::Ask { pattern, .. } => {
+                    let t = uf.translate_pattern(pattern)?;
+                    Ok((t, PlanForm::Ask, false))
+                }
+                Query::Describe { pattern, .. } => {
+                    let (description_pattern, template) = describe::rewrite(pattern)?;
+                    let t = uf.translate_pattern(&description_pattern)?;
+                    Ok((t, PlanForm::Construct { template }, true))
+                }
             }
-            // Fresh synthetic variables for the CBD predicate and object
-            // (double-underscore prefix avoids collision with user variables).
-            let var_p = Variable::new_unchecked("__sf_describe_p");
-            let var_o = Variable::new_unchecked("__sf_describe_o");
-            // Build the CBD WHERE: join the original WHERE with `?v ?__sf_p ?__sf_o`
-            // for each described variable. Multiple DESCRIBE targets each add their own
-            // CBD triple, returning triples for all described resources in one plan.
-            let mut cbd_pattern = inner_pat;
-            for v in &describe_vars {
-                cbd_pattern = GraphPattern::Join {
-                    left: Box::new(cbd_pattern),
-                    right: Box::new(GraphPattern::Bgp {
-                        patterns: vec![TriplePattern {
-                            subject: TermPattern::Variable(v.clone()),
-                            predicate: NamedNodePattern::Variable(var_p.clone()),
-                            object: TermPattern::Variable(var_o.clone()),
-                        }],
-                    }),
-                };
-            }
-            let template = describe_vars
-                .iter()
-                .map(|v| TriplePattern {
-                    subject: TermPattern::Variable(v.clone()),
-                    predicate: NamedNodePattern::Variable(var_p.clone()),
-                    object: TermPattern::Variable(var_o.clone()),
-                })
-                .collect();
-            let t = uf.translate_pattern(&cbd_pattern)?;
-            (t, PlanForm::Construct { template })
-        }
-    };
+        },
+    )?;
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
     // a DISTINCT redundant; SELECT carries an explicit projection, CONSTRUCT/ASK
     // project every binding (`None`). ADR-0032 D3 item 2: expanded with any
@@ -433,7 +444,9 @@ fn translate_inner_flat(
             distinct: trans.distinct,
             project: project_vars.as_deref(),
         };
-        cascade::run(trans.branches, schema, &ctx)
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
+            cascade::run(trans.branches, schema, &ctx)
+        })
     } else {
         // `cascade::run` is skipped here by design — this is the NoREC unoptimized
         // baseline (ADR-0007: "none of the order-sensitive cascade rewrites"). D1
@@ -454,7 +467,9 @@ fn translate_inner_flat(
     // branch's `distinct`, and reading the flag any earlier would capture a
     // stale `false` that `Plan::prepared_branches` would blindly write back at
     // emission, silently undoing the fix.
-    let construct_drops_some_branch_var = if let PlanForm::Construct { template } = &form {
+    let construct_drops_some_branch_var = if describe_form {
+        enforce_describe_graph_set(&mut branches, &form)?
+    } else if let PlanForm::Construct { template } = &form {
         dedup_construct_template_projected_vars(&mut branches, template)
     } else {
         false
@@ -498,8 +513,8 @@ fn translate_inner_flat(
 /// [`translate_with`] both route here. It drives the four-stage tree pipeline —
 /// [`build::build_tree`] → [`iq::resolve::resolve`]
 /// → [`iq::normalize::normalize`] → [`iq::lower::lower`] — for the same per-`Query`-form
-/// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK / DESCRIBE
-/// CBD), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
+/// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK /
+/// one-hop DESCRIBE), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
 /// cascade** ([`cascade::run`]) is reused on the lowered branches (ADR-0023 M4 wave 1),
 /// giving the tree the within-leaf-CQ rewrites (self-join / FK elimination, filter
 /// pushdown, distinct removal, …) for free. The cascade is `=_bag`-preserving, so the
@@ -607,7 +622,10 @@ fn translate_tree_with_column_type_use(
     // `cascade`'s pass 7, so it needs to know which columns a LATER stage will
     // still need — see `lower`'s own doc comment for why. `star_env` — see the
     // identical note in `translate_inner_flat`.
-    let (query, star_env) = star::rewrite_query(query)?;
+    let (query, star_env) =
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+            star::rewrite_query(query)
+        })?;
     let query = &query;
     let mut cx = iq::resolve::ResolveCx::new_with_column_type_use(
         maps,
@@ -619,14 +637,25 @@ fn translate_tree_with_column_type_use(
     let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
-    // (e.g. DESCRIBE's CBD join) keeps disjoint aliases across them.
+    // (e.g. DESCRIBE's outgoing-triple join) keeps disjoint aliases across them.
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
-        let built = build::build_tree(pattern, None)?;
-        let resolved = iq::resolve::resolve(built, &mut cx)?;
-        let normalized = iq::normalize::normalize_with_work_mode(resolved, work_mode)?;
-        iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
+        let built = compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Build, || {
+            build::build_tree(pattern, None)
+        })?;
+        let resolved =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Resolve, || {
+                iq::resolve::resolve(built, &mut cx)
+            })?;
+        let normalized =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Normalize, || {
+                iq::normalize::normalize_with_work_mode(resolved, work_mode)
+            })?;
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Lower, || {
+            iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
+        })
     };
 
+    let describe_form = matches!(query, Query::Describe { .. });
     let mut plan = match query {
         // SELECT — `lower` already produced the projected-variable `PlanForm::Select`
         // from the tree's outermost `Construction.project` (the SELECT scope).
@@ -648,46 +677,14 @@ fn translate_tree_with_column_type_use(
             plan.form = PlanForm::Ask;
             plan
         }
-        // DESCRIBE — Concise Bounded Description, replicated from the flat core: wrap
-        // the WHERE in a CBD `?v ?__sf_p ?__sf_o` join per described resource and emit
-        // a CONSTRUCT over the synthetic predicate/object (M3 design §7 "same template/
-        // cbd/current_graph wrapping the flat core uses").
+        // DESCRIBE uses the same hygienic one-target outgoing-description rewrite
+        // as the flat compiler before this tree path is lowered.
         Query::Describe { pattern, .. } => {
-            let (describe_vars, inner_pat) = match pattern {
-                GraphPattern::Project { variables, inner } => {
-                    (variables.clone(), inner.as_ref().clone())
-                }
-                other => (Vec::new(), other.clone()),
-            };
-            if describe_vars.is_empty() {
-                return Err(Error::Unsupported(
-                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
-                ));
-            }
-            let var_p = Variable::new_unchecked("__sf_describe_p");
-            let var_o = Variable::new_unchecked("__sf_describe_o");
-            let mut cbd_pattern = inner_pat;
-            for v in &describe_vars {
-                cbd_pattern = GraphPattern::Join {
-                    left: Box::new(cbd_pattern),
-                    right: Box::new(GraphPattern::Bgp {
-                        patterns: vec![TriplePattern {
-                            subject: TermPattern::Variable(v.clone()),
-                            predicate: NamedNodePattern::Variable(var_p.clone()),
-                            object: TermPattern::Variable(var_o.clone()),
-                        }],
-                    }),
-                };
-            }
-            let template = describe_vars
-                .iter()
-                .map(|v| TriplePattern {
-                    subject: TermPattern::Variable(v.clone()),
-                    predicate: NamedNodePattern::Variable(var_p.clone()),
-                    object: TermPattern::Variable(var_o.clone()),
-                })
-                .collect();
-            let mut plan = compile(&cbd_pattern)?;
+            let (description_pattern, template) =
+                compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+                    describe::rewrite(pattern)
+                })?;
+            let mut plan = compile(&description_pattern)?;
             plan.form = PlanForm::Construct { template };
             plan
         }
@@ -716,27 +713,37 @@ fn translate_tree_with_column_type_use(
         distinct: plan.distinct,
         project: project_vars.as_deref(),
     };
-    plan.branches = cascade::run(plan.branches, schema, &ctx);
-    // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
-    // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
-    // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
-    // them (it only walks `plan.branches`), so self-join elimination and the rest of
-    // the cascade would silently never fire on a pooled/nested arm otherwise. Recurse
-    // into every SubPlan the SAME way: `project: None` (mirrors the `rust_group`
-    // guard above — a nested arm's raw columns feed its outer union/aggregation BY
-    // NAME, so they must never be shrunk away).
-    for b in &mut plan.branches {
-        cascade_subplans(b, schema, work_mode)?;
-    }
-    // ADR-0034: dedup below GROUP BY (see the identical note in
-    // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
-    // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
-    // applies it per pattern, before this tree's own aggregation lowering
-    // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
-    cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+    compiler_telemetry::in_stage(
+        compiler_telemetry::CompilerStage::Cascade,
+        || -> Result<()> {
+            let branches = std::mem::take(&mut plan.branches);
+            plan.branches = cascade::run(branches, schema, &ctx);
+            // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
+            // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
+            // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
+            // them (it only walks `plan.branches`), so self-join elimination and the rest of
+            // the cascade would silently never fire on a pooled/nested arm otherwise. Recurse
+            // into every SubPlan the SAME way: `project: None` (mirrors the `rust_group`
+            // guard above — a nested arm's raw columns feed its outer union/aggregation BY
+            // NAME, so they must never be shrunk away).
+            for b in &mut plan.branches {
+                cascade_subplans(b, schema, work_mode)?;
+            }
+            // ADR-0034: dedup below GROUP BY (see the identical note in
+            // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
+            // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
+            // applies it per pattern, before this tree's own aggregation lowering
+            // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
+            cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+            Ok(())
+        },
+    )?;
     // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
     // `translate_inner_flat`): MUST run before the `distinct` capture below.
-    if let PlanForm::Construct { template } = &plan.form {
+    if describe_form {
+        plan.construct_drops_some_branch_var =
+            enforce_describe_graph_set(&mut plan.branches, &plan.form)?;
+    } else if let PlanForm::Construct { template } = &plan.form {
         plan.construct_drops_some_branch_var =
             dedup_construct_template_projected_vars(&mut plan.branches, template);
     }
@@ -864,17 +871,21 @@ pub fn parse_and_translate_cached_shared(
     sparql: &str,
     binding: &CompilerBinding,
 ) -> Result<Arc<Plan>> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_cached_shared(&query, binding)
+}
+
+fn parse_query(sparql: &str) -> Result<Query> {
+    compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Parse, || {
+        spargebra::SparqlParser::new()
+            .parse_query(sparql)
+            .map_err(|error| Error::Parse(error.to_string()))
+    })
 }
 
 /// Parse `sparql` and translate it (convenience over [`translate`]).
 pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate(&query, maps, dialect)
 }
 
@@ -889,9 +900,7 @@ pub fn parse_and_translate_tree_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_tree(&query, maps, tbox, dialect, schema)
 }
 
@@ -907,9 +916,7 @@ pub fn parse_and_translate_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with(&query, maps, dialect, tbox, schema)
 }
 
@@ -925,9 +932,7 @@ pub fn parse_and_translate_flat_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with_flat(&query, maps, dialect, tbox, schema)
 }
 
@@ -1031,6 +1036,57 @@ fn dedup_construct_template_projected_vars(
     drops_some_var
 }
 
+/// Make the admitted DESCRIBE profile a graph rather than a bag. Each branch
+/// projects only the outgoing triple terms and performs `DISTINCT` in SQL. The
+/// return value says that separate branches are not provably disjoint and need
+/// the existing cross-branch CONSTRUCT set fallback; serving admission rejects
+/// that source-sized state before I/O, while raw/oracle execution stays exact.
+fn enforce_describe_graph_set(branches: &mut [Branch], form: &PlanForm) -> Result<bool> {
+    let PlanForm::Construct { template } = form else {
+        return Err(Error::Unsupported(
+            "DESCRIBE lowering did not produce a construct plan".to_owned(),
+        ));
+    };
+    let [triple] = template.as_slice() else {
+        return Err(Error::Unsupported(
+            "DESCRIBE graph-set proof requires exactly one outgoing triple template".to_owned(),
+        ));
+    };
+    let subject_supported = matches!(
+        &triple.subject,
+        TermPattern::NamedNode(_) | TermPattern::Variable(_)
+    );
+    if !subject_supported
+        || !matches!(&triple.predicate, NamedNodePattern::Variable(_))
+        || !matches!(&triple.object, TermPattern::Variable(_))
+    {
+        return Err(Error::Unsupported(
+            "DESCRIBE graph-set proof requires the one-hop outgoing template".to_owned(),
+        ));
+    }
+    let template_vars = template_variables(template);
+    for branch in &mut *branches {
+        if branch.path.is_some()
+            || branch.agg.is_some()
+            || !branch.order.is_empty()
+            || branch.limit.is_some()
+            || branch.offset != 0
+            || !template_vars
+                .iter()
+                .all(|variable| branch.bindings.contains_key(variable.as_str()))
+        {
+            return Err(Error::Unsupported(
+                "DESCRIBE graph-set projection is not proved for this plan shape".to_owned(),
+            ));
+        }
+        branch
+            .bindings
+            .retain(|variable, _| template_vars.contains(variable.as_str()));
+        branch.distinct = true;
+    }
+    Ok(branches.len() > 1 && !unfold::all_pairwise_disjoint(branches))
+}
+
 /// Every variable named anywhere in a CONSTRUCT template (subject/predicate/
 /// object of every triple pattern, recursing into an RDF-star quoted-triple
 /// term — ADR-0032 D2).
@@ -1084,7 +1140,7 @@ mod tests {
 
     #[test]
     fn describe_iri_produces_construct_plan() {
-        // DESCRIBE <r> translates to a CBD CONSTRUCT — should succeed, not 501.
+        // One target translates to the admitted outgoing-description CONSTRUCT.
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE <http://ex/x>")
             .unwrap();
@@ -1101,22 +1157,14 @@ mod tests {
     }
 
     #[test]
-    fn describe_wildcard_produces_construct_plan() {
-        // DESCRIBE * WHERE { P } expands `*` to all in-scope variables, each of which
-        // becomes a CBD target — should succeed and produce a CONSTRUCT plan.
+    fn describe_wildcard_with_multiple_targets_is_explicitly_unsupported() {
+        // The wildcard expands to all three in-scope variables. Their exact graph
+        // union remains closed until cross-target set semantics are bounded.
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE * WHERE { ?s ?p ?o }")
             .unwrap();
         let result = translate(&q, &[], Dialect::Sqlite);
-        assert!(
-            result.is_ok(),
-            "DESCRIBE * should translate successfully, got: {:?}",
-            result
-        );
-        assert!(
-            matches!(result.unwrap().form, PlanForm::Construct { .. }),
-            "DESCRIBE * should produce a Construct form"
-        );
+        assert!(matches!(result, Err(Error::Unsupported(_))));
     }
 
     #[test]

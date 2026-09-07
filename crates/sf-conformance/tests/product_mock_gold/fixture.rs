@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::{
-    pin, sha256, Pin, SealPolicy, CATEGORY_MAPPING_PATH, CATEGORY_SHARD_PREFIX, COVERAGE_PATH,
-    FK_MIGRATION, INITIAL_MIGRATION, SNAPSHOT_PATH, SOURCE_REVISION, STYLE_CLASS, STYLE_MAP,
-    STYLE_NUMBER_PREDICATE, VERSION_PREDICATE,
+    ontology::CATEGORY_SPECS, pin, sha256, Pin, SealPolicy, CATEGORY_MAPPING_PATH,
+    CATEGORY_SHARD_PREFIX, COVERAGE_PATH, FK_MIGRATION, INITIAL_MIGRATION, SNAPSHOT_PATH,
+    SOURCE_REVISION, STYLE_CLASS, STYLE_MAP, STYLE_NUMBER_PREDICATE, VERSION_PREDICATE,
 };
 
 #[derive(Clone, Debug)]
@@ -68,6 +68,7 @@ impl SyntheticFixture {
             (COVERAGE_PATH.to_owned(), synthetic_coverage()),
             (CATEGORY_MAPPING_PATH.to_owned(), category),
         ]);
+        artifacts.extend(synthetic_ontology_artifacts());
         artifacts.extend(mapping_shards);
         let artifact_pins: Vec<_> = artifacts
             .iter()
@@ -77,7 +78,7 @@ impl SyntheticFixture {
             "purpose": "development",
             "source": {"pinnedRevision": SOURCE_REVISION, "admittedView": "exact-committed-tree", "mutableHeadAndWorkingTreeExcluded": true},
             "categoryCount": 14,
-            "categories": [{"category": 13, "stats": category_stats()}],
+            "categories": synthetic_category_claims(),
             "applicability": {"productionAuthority": false},
             "operationalQualification": {"productionAuthority": false},
             "artifactFiles": artifact_pins.iter().map(pin_json).collect::<Vec<_>>()
@@ -130,6 +131,60 @@ impl SyntheticFixture {
 
 fn pin_json(entry: &Pin) -> serde_json::Value {
     json!({"path": entry.path, "bytes": entry.bytes, "digest": entry.digest})
+}
+
+fn synthetic_category_claims() -> Vec<Value> {
+    CATEGORY_SPECS
+        .iter()
+        .map(|category| {
+            let stats = if category.number == 13 {
+                category_stats()
+            } else {
+                json!({})
+            };
+            json!({
+                "category": category.number,
+                "concern": category.concern,
+                "coverageStatus": category.coverage,
+                "stats": stats
+            })
+        })
+        .collect()
+}
+
+fn synthetic_ontology_artifacts() -> BTreeMap<String, Vec<u8>> {
+    let mut artifacts = BTreeMap::new();
+    for category in CATEGORY_SPECS
+        .iter()
+        .copied()
+        .filter(|category| category.in_ontology)
+    {
+        let shard_path = category.shard_path(1);
+        let concern = serde_json::to_string(category.concern).expect("static concern serializes");
+        let shard = format!(
+            "<https://example.invalid/ontology/category/{:02}> \
+             <https://example.invalid/ontology/concern> {concern} .\n",
+            category.number
+        )
+        .into_bytes();
+        let category_manifest = serde_json::to_vec(&json!({
+            "category": category.number,
+            "concern": category.concern,
+            "coverageStatus": category.coverage,
+            "stats": {},
+            "shards": [{
+                "path": shard_path,
+                "digest": sha256(&shard),
+                "bytes": shard.len(),
+                "lines": shard.iter().filter(|byte| **byte == b'\n').count()
+                    + usize::from(!shard.is_empty())
+            }]
+        }))
+        .expect("synthetic ontology category manifest serializes");
+        artifacts.insert(shard_path, shard);
+        artifacts.insert(category.manifest_path(), category_manifest);
+    }
+    artifacts
 }
 
 fn synthetic_coverage() -> Vec<u8> {

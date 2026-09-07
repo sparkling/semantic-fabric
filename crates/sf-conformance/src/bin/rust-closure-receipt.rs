@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use sf_conformance::rust_closure_receipt::{self, RECEIPT_PATH};
+use sf_conformance::rust_closure_receipt::{
+    self, PARSER_WORKER_QUALIFICATION_INPUTS_PROFILE,
+    PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH, RECEIPT_PATH,
+};
 
 const TEMP_ATTEMPTS: usize = 128;
 static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
@@ -14,6 +17,39 @@ static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
 enum Mode {
     Check,
     Generate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    DefaultCliV1,
+    ParserWorkerQualificationInputsV1,
+}
+
+impl Profile {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "default-cli-v1" => Ok(Self::DefaultCliV1),
+            PARSER_WORKER_QUALIFICATION_INPUTS_PROFILE => {
+                Ok(Self::ParserWorkerQualificationInputsV1)
+            }
+            _ => Err(format!("unknown closure profile {value:?}")),
+        }
+    }
+
+    fn receipt_path(self) -> &'static str {
+        match self {
+            Self::DefaultCliV1 => RECEIPT_PATH,
+            Self::ParserWorkerQualificationInputsV1 => {
+                PARSER_WORKER_QUALIFICATION_INPUTS_RECEIPT_PATH
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Options {
+    mode: Mode,
+    profile: Profile,
 }
 
 fn main() -> ExitCode {
@@ -27,38 +63,66 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let Some(mode) = parse_args(env::args().skip(1))? else {
-        println!("Usage: rust-closure-receipt (--check | --generate)");
+    let Some(options) = parse_args(env::args().skip(1))? else {
+        println!(
+            "Usage: rust-closure-receipt (--check | --generate) [--profile default-cli-v1|parser-worker-qualification-inputs-v1]"
+        );
         return Ok(());
     };
     let root = repository_root()?;
-    let target = root.join(RECEIPT_PATH);
-    match mode {
-        Mode::Check => {
-            let receipt = rust_closure_receipt::check(&root, &target)?;
+    let target = root.join(options.profile.receipt_path());
+    match (options.mode, options.profile) {
+        (Mode::Check, Profile::DefaultCliV1) => {
+            report_default(rust_closure_receipt::check(&root, &target)?);
+        }
+        (Mode::Check, Profile::ParserWorkerQualificationInputsV1) => {
+            let receipt =
+                rust_closure_receipt::check_parser_worker_qualification_inputs(&root, &target)?;
             println!(
-                "verified default sf-cli package closure: {} packages, {} features and {} normal/build edges; lock-sha256={}; closure-sha256={}; artifact-provenance=not-attested; production-admission=not-attested",
+                "verified parser-worker qualification inputs: {} packages, {} target/host contexts and {} context edges; closure-sha256={}; qualification-inputs-sha256={}; parser-execution=not-run; qualification=not-attested; production-admission=not-attested",
                 receipt.package_count(),
-                receipt.feature_count(),
+                receipt.context_count(),
                 receipt.edge_count(),
-                receipt.cargo_lock_sha256(),
                 receipt.closure_sha256(),
+                receipt.qualification_inputs_sha256(),
             );
         }
-        Mode::Generate => {
-            let target = validate_generation_target(&root, &target)?;
-            let rendered = rust_closure_receipt::generate(&root)?;
+        (Mode::Generate, profile) => {
+            let target = validate_generation_target(&root, &target, profile.receipt_path())?;
+            let rendered = match profile {
+                Profile::DefaultCliV1 => rust_closure_receipt::generate(&root)?,
+                Profile::ParserWorkerQualificationInputsV1 => {
+                    rust_closure_receipt::generate_parser_worker_qualification_inputs(&root)?
+                }
+            };
             atomic_replace(&target, rendered.as_bytes())?;
-            println!(
-                "generated {} (binary/build/link/system provenance and production admission not attested)",
-                target.display()
-            );
+            match profile {
+                Profile::DefaultCliV1 => println!(
+                    "generated {} (binary/build/link/system provenance and production admission not attested)",
+                    target.display()
+                ),
+                Profile::ParserWorkerQualificationInputsV1 => println!(
+                    "generated {} (parser execution, binary/runtime/syscall provenance, qualification and production admission not attested)",
+                    target.display()
+                ),
+            }
         }
     }
     Ok(())
 }
 
-fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Mode>, String> {
+fn report_default(receipt: rust_closure_receipt::Receipt) {
+    println!(
+        "verified default sf-cli package closure: {} packages, {} features and {} normal/build edges; lock-sha256={}; closure-sha256={}; artifact-provenance=not-attested; production-admission=not-attested",
+        receipt.package_count(),
+        receipt.feature_count(),
+        receipt.edge_count(),
+        receipt.cargo_lock_sha256(),
+        receipt.closure_sha256(),
+    );
+}
+
+fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
     let arguments: Vec<_> = arguments.into_iter().collect();
     if matches!(arguments.as_slice(), [argument] if argument == "--help" || argument == "-h") {
         return Ok(None);
@@ -70,18 +134,31 @@ fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Mode
         return Err("--help cannot be combined with --check or --generate".to_owned());
     }
     let mut mode = None;
-    for argument in arguments {
-        match argument.as_str() {
+    let mut profile = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
             "--check" if mode.is_none() => mode = Some(Mode::Check),
             "--generate" if mode.is_none() => mode = Some(Mode::Generate),
             "--check" | "--generate" => {
                 return Err("choose exactly one of --check or --generate".to_owned())
             }
-            _ => return Err(format!("unknown argument {argument:?}")),
+            "--profile" if profile.is_none() => {
+                index += 1;
+                let value = arguments
+                    .get(index)
+                    .ok_or_else(|| "--profile requires one value".to_owned())?;
+                profile = Some(Profile::parse(value)?);
+            }
+            "--profile" => return Err("--profile may be supplied only once".to_owned()),
+            argument => return Err(format!("unknown argument {argument:?}")),
         }
+        index += 1;
     }
-    mode.map(Some)
-        .ok_or_else(|| "choose exactly one of --check or --generate".to_owned())
+    Ok(Some(Options {
+        mode: mode.ok_or_else(|| "choose exactly one of --check or --generate".to_owned())?,
+        profile: profile.unwrap_or(Profile::DefaultCliV1),
+    }))
 }
 
 fn repository_root() -> Result<PathBuf, String> {
@@ -90,10 +167,14 @@ fn repository_root() -> Result<PathBuf, String> {
         .map_err(|error| format!("canonicalize repository root {}: {error}", root.display()))
 }
 
-fn validate_generation_target(root: &Path, target: &Path) -> Result<PathBuf, String> {
+fn validate_generation_target(
+    root: &Path,
+    target: &Path,
+    receipt_path: &str,
+) -> Result<PathBuf, String> {
     let canonical_root =
         fs::canonicalize(root).map_err(|error| format!("canonicalize repository root: {error}"))?;
-    let expected = canonical_root.join(RECEIPT_PATH);
+    let expected = canonical_root.join(receipt_path);
     if target != expected {
         return Err("--generate target is not the canonical receipt path".to_owned());
     }
@@ -120,7 +201,11 @@ where
     let parent = target
         .parent()
         .ok_or_else(|| format!("atomic target {} has no parent", target.display()))?;
-    let (temporary, mut file) = create_temporary(parent)?;
+    let target_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "atomic target file name is not UTF-8".to_owned())?;
+    let (temporary, mut file) = create_temporary(parent, target_name)?;
     let result = (|| {
         file.write_all(bytes)
             .map_err(|error| format!("write {}: {error}", temporary.display()))?;
@@ -144,11 +229,11 @@ where
     result
 }
 
-fn create_temporary(parent: &Path) -> Result<(PathBuf, File), String> {
+fn create_temporary(parent: &Path, target_name: &str) -> Result<(PathBuf, File), String> {
     for _ in 0..TEMP_ATTEMPTS {
         let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path = parent.join(format!(
-            ".rust-dependency-closure.tsv.tmp-{}-{serial}",
+            ".{target_name}.tmp-{}-{serial}",
             std::process::id()
         ));
         let mut options = OpenOptions::new();
@@ -217,15 +302,43 @@ mod tests {
     fn requires_exactly_one_fixed_mode() {
         assert_eq!(
             parse_args(strings(&["--check"])).unwrap(),
-            Some(Mode::Check)
+            Some(Options {
+                mode: Mode::Check,
+                profile: Profile::DefaultCliV1,
+            })
         );
         assert_eq!(
             parse_args(strings(&["--generate"])).unwrap(),
-            Some(Mode::Generate)
+            Some(Options {
+                mode: Mode::Generate,
+                profile: Profile::DefaultCliV1,
+            })
+        );
+        assert_eq!(
+            parse_args(strings(&[
+                "--profile",
+                PARSER_WORKER_QUALIFICATION_INPUTS_PROFILE,
+                "--check",
+            ]))
+            .unwrap(),
+            Some(Options {
+                mode: Mode::Check,
+                profile: Profile::ParserWorkerQualificationInputsV1,
+            })
         );
         assert!(parse_args(Vec::<String>::new()).is_err());
         assert!(parse_args(strings(&["--check", "--generate"])).is_err());
         assert!(parse_args(strings(&["--output", "elsewhere"])).is_err());
+        assert!(parse_args(strings(&["--check", "--profile"])).is_err());
+        assert!(parse_args(strings(&["--check", "--profile", "unknown"])).is_err());
+        assert!(parse_args(strings(&[
+            "--check",
+            "--profile",
+            "default-cli-v1",
+            "--profile",
+            "default-cli-v1",
+        ]))
+        .is_err());
         assert!(parse_args(strings(&["--help", "--check"]))
             .unwrap_err()
             .contains("cannot be combined"));

@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-02
-updated: 2026-09-03
+updated: 2026-09-06
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
@@ -10,30 +10,81 @@ implements: [ADR-0038]
 
 # Verified source-generation leases, schema identity, and atomic runtime activation
 
-## Status boundary
+## Decision status
 
-This ADR remains **proposed** for lifecycle phases 2 through 6. Its Phase 1 pure
-`sf-core` Observed Schema Identity V1 kernel is implemented as a non-authorizing
-content-identity utility. [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md)
-now proposes the first closed production-shaped profile. Its private, opt-in
-`sf-sql` diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after
-bounded rich observation, but its two-version operator observations are
-untracked and its evidence runner explicitly withholds qualification. The
-planned committed-unavailability path is incomplete, and no serving binding
-carries the digests.
-This does not accept the remaining design or claim that a runtime snapshot
-manager, reload, drift detection, a backend-generation lease, or live Direct
-Mapping exists.
+This ADR is **accepted as architecture**. Acceptance binds Decision sections
+1–7, Rules R1–R9, and the two normative appendices. It does not claim that every
+phase is implemented, enable a backend profile, or grant production admission.
 
-The current Rust serving path safely owns one startup mapping, ontology,
-constraint/type-quarantined schema observation, backend and plan cache inside a
-single `RuntimeBinding`. Its process-local compile scope prevents detached-plan
-reuse. PostgreSQL catalogue reads use one read-only repeatable-read startup
-transaction. Those are sound precursors, not a mutable-schema authority: the
-transaction ends before compilation and streamed execution, later requests may
-use another pooled connection, and there is no adapter-emitted runtime
-authority, serving digest propagation, watcher, readiness transition or atomic
-replacement path.
+### Implementation status (non-normative)
+
+The Phase 1 pure `sf-core` Observed Schema Identity V1 kernel is implemented as
+a non-authorizing content-identity utility.
+[ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md) now accepts
+the first production-shaped profile for observation qualification only. Its
+private, opt-in `sf-sql` diagnostic can emit a branded identity for PostgreSQL
+16.9/16.15 after bounded rich observation. The tracked pair receipt binds two
+fresh generation runs per exact patch and independent clean replay, and passes
+only that observation-profile gate. Ordinary authored
+mapping carries the whole identity or one closed unavailable reason only as a
+non-authorizing backend/`SourceId`-bound diagnostic. The private Direct-Mapping
+foundation may retain the identity with the complete rich table and session
+expectations checked by an unforgeable lease; the digest itself still grants no
+compiler, cache, readiness, mapping or execution authority.
+
+The 2026-09-05 Phase 5 foundation is implemented in Rust: `RuntimeSnapshot` owns
+a source-keyed immutable registry and deterministic compile identities; one
+`RuntimeManager` state linearizes readiness and whole-snapshot replacement;
+each ready request acquires exactly one application-snapshot lease before body
+polling and retains it through response EOF, error, cancellation, or drop; and
+generation-bound not-ready state rejects new requests as a redacted pre-I/O
+`503`. Checked activation identities prevent ABA, complete expected-readiness
+comparison rejects ready-to-not-ready and slow-candidate races, and stale
+watchers cannot mark a newer activation unavailable. An opaque checked state
+revision now advances on activation and every accepted not-ready observation,
+including same-cause repeats. Request-generation failures remain request-scoped;
+only the private lifecycle coordinator may fence after a completed control
+observation. Shutdown atomically fences the current
+state after closing transitions, so it cannot leave a racing activation ready, and a transition
+losing that race reports `ShuttingDown` rather than a misleading stale state. Deterministic tests
+cover these races, old/new HTTP results, failed construction, response lifetime,
+and last-pin release. Checked revision exhaustion terminalizes readiness with a
+closed `StateRevisionExhausted` cause before reporting the counter error.
+
+The publication primitive is crate-private and deliberately non-authorizing.
+The construction path requires bounded sealed `M ⋈ T` validation before a
+binding, and its policy-v2 receipt partitions compile/cache identity. The
+all-or-nothing registry validates every source before constructing any binding.
+The closed `PgDirectLifecycleV1` path now has an off-path candidate builder and
+one automatic coordinator, but there is still no general reload builder, public
+reload surface or admitted backend profile.
+
+A private PostgreSQL candidate/request foundation now implements the essential
+verified-generation ownership law. One pool member is marked dirty before
+`BEGIN`; the exact public-table set is relation-locked before the first
+repeatable-read snapshot; bounded rich identity, complete table facts, database,
+role, session and policy context are captured on that connection. Candidate
+primary-key-backed Direct Mapping is generated while it is protected, then
+rechecked and rolled back cleanly before its inseparable expectation is stored.
+For each internal request, a non-cache-authorizing preflight reserves the exact
+compiler permit before source I/O; the permit remains held without requeue while
+the request acquires and revalidates the lease, then moves into authoritative
+compilation. Typed executable inventories derive a 34-unit metadata reservation,
+with 33 rejected before pool I/O. Required-live SELECT, ASK and CONSTRUCT execute
+through the lease-owned connection before final recheck and acknowledged rollback.
+
+A fixed cleanup allowance is independent of the expired user deadline. If
+timeout, cancellation, error, drop or a retained execution view prevents
+acknowledged rollback, the member remains dirty, attempts one bounded native
+cancel and detaches the pool object instead of recycling uncertain state. Isolated disposable PostgreSQL 16.9 and 16.15
+live gates exercise lock-before-snapshot, clean close, incompatible DDL
+exclusion, compatible additive-FK old-generation coherence followed by
+next-acquisition drift, policy mutation, cancellation and dirty-member
+replacement. Public startup nevertheless rejects every Direct Mapping selection
+before connector I/O. Capability promotion, general reload/drift/source
+health, no-PK identity, other backend
+leases and production admission remain open. Canonical commit `c701352` adds the dormant
+closed-profile lifecycle described below; this is not general Phase 5 or Phase 6 completion.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -157,14 +208,18 @@ lossy `DATA_TYPE`, but remains observational until independently qualified.
 Candidate construction performs every source observation, validation,
 `M ⋈ T` check, capability check, Direct-Mapping generation, cache creation or
 warmup, and readiness calculation off-path. All fallible work precedes one final
-allocation-free compare-and-swap. An expected-generation mismatch rejects and
-drops the candidate without partial publication; every other failure also drops
-candidate resources and leaves the active state byte-for-byte unchanged.
+allocation-free compare-and-publish linearization. A checked replacement under
+one state-cell lock and a lock-free compare-and-swap are semantically
+equivalent here: readers may observe only a complete old or complete new state.
+An expected-state mismatch rejects and drops the candidate without partial
+publication; every other failure also drops candidate resources and leaves the
+active state byte-for-byte unchanged.
 
 One atomic state cell exposes either `Ready(snapshot)` or a generation-bound
 `NotReady { activation_id, cause }`; readiness has no second owner inside the
-snapshot. Publication compares against the expected active activation. A slow
-older candidate or watcher cannot overwrite or heal a newer generation.
+snapshot. Publication compares against an opaque state revision that changes on
+every semantically relevant readiness transition. A slow older candidate or
+watcher cannot overwrite or heal a newer state.
 
 `ActivationId` is checked-monotonic and distinct from repeatable content
 digests. This prevents A-to-B-to-A ABA. A reload is a no-op only while the state
@@ -180,6 +235,32 @@ generation coherence through completion is claimed only for an admitted verified
 backend profile; observational profiles retain no such claim. After detected
 relevant drift, new requests fail readiness until a validated candidate
 activates. Old pools/caches drop only after their last request lease ends.
+
+#### Sealed semantic admission is a separate authority
+
+Before `RuntimeBinding` or its cache exists, executable mapping IR is projected
+to a bounded ground RDF graph containing only the class, predicate, object-map,
+and effective datatype facts consumed by the four sealed shapes. The product-
+owned `sf-validation` crate runs a deterministic workload/cardinality preflight,
+three Core shapes through rudof Native, and the datatype component's exact
+parsed sealed `sh:select` once globally over `M ⋈ T`; violations fail the whole
+candidate. Blank POM focus preserves the prior redacted fail-closed behavior.
+
+Projection structural nodes are named only below
+`urn:semantic-fabric:mjoin-t:v1:`. An ontology using that reserved prefix as an
+asserted named subject, predicate, or named object is rejected before merge, so
+T cannot forge facts about M's structural nodes. A private `ValidatedMapping`
+receipt owns the mapping and binds its origin, exact ontology document digest,
+canonical projection, count-only redacted outcome, warning policy and validation
+policy v2. That policy covers shape/query bytes, Native/global topology, exact
+evaluator/parser versions and features, limits, preflight revision and blank-focus policy. The ontology
+and source-effective projection are recomputed before receipt consumption, and
+their digests enter compile/cache identity.
+
+This receipt binds semantic compatibility, not the physical database,
+connection, source generation, or DDL lifetime. It cannot construct an
+`ObservedSchemaIdentity`, `RuntimeSnapshotLease`, or `VerifiedGenerationLease`;
+the latter authority problems remain governed independently by this ADR.
 
 ### 5. Qualify backend-generation leases separately
 
@@ -198,10 +279,13 @@ unsupported user-defined types or collations, and every unresolved dependency.
 RLS admission requires the later `SecurityContext` and policy-dependency
 contract; recording `row_security` alone does not authorize it.
 
-Compilation occurs only after the lease is established. All statements and
-branches execute inside it; a pool checkout, transaction, lock or generation
-mismatch rejects before semantic response commitment. A digest precheck on one
-connection followed by execution on another is not verified mode.
+A non-cache-authorizing semantic/resource-shape preflight may run before source
+I/O only while retaining the exact compiler permit. Authoritative compilation
+occurs after the lease is established without requeue. All statements and
+branches execute inside it; a pool checkout, transaction, lock, binding or
+generation mismatch rejects before semantic response commitment. A digest
+precheck on one connection followed by execution on another is not verified
+mode.
 
 Raw `rr:sqlQuery` is rejected in verified mode unless a future design extracts,
 validates and holds its complete relation/view/function/result-type dependency
@@ -238,6 +322,42 @@ identity proves same-row blank-node stability across every branch and concurrent
 update/vacuum. Row identities and blank-node labels never enter telemetry or
 persist across generations.
 
+#### Initial PostgreSQL lifecycle profile
+
+`PgDirectLifecycleV1` is the only initial live Direct-Mapping profile. Its
+complete private builder and coordinator passed independent code review, but it
+remains disabled pending explicit promotion and admission evidence. It admits exactly one PostgreSQL source using
+ADR-0051's qualified `Postgres16PublicBaseV1` observation profile, permanent
+`public` base tables, a primary key for every mapped table, one immutable
+ontology, one validated absolute base IRI and one immutable resolved source
+configuration. Authored-plus-Direct mapping mixtures, RLS, raw SQL, no-PK
+tables, federation, additional sources and other backends reject.
+
+The profile has three closed source-failure classes. Connection, checkout,
+query, statement-timeout, cancellation and row-decode failures before a
+complete context is decoded are `SourceUnavailable`. A held verified lease that
+successfully reobserves a different expected generation is `SchemaDrift`. A
+complete decoded database, role, session or policy context that differs from
+the expectation is `CapabilityDrift`. All three return the same redacted
+request-scoped `503`; a request never changes application readiness directly.
+
+Until a complete candidate builder and recovery coordinator are enabled, no
+source-failure path may arm a global drift fence. Once enabled, exactly one
+serialized coordinator owns source-readiness transitions. It uses a dedicated
+bounded control connection, never a request-pool member; skips missed polling
+ticks; permits at most one probe/build at a time; and compares the complete
+opaque runtime-state revision before fencing or activation. A completed failed
+control observation fences the source. While not ready, the coordinator keeps
+retrying under fixed deadlines; only a completely validated successor candidate
+may recover readiness through the atomic activation primitive. Unexpected
+coordinator termination fails the source closed.
+
+For this single-source profile, source readiness determines application
+readiness. `/readyz` only projects that immutable state and never polls the
+database. Digest equality, request traffic and caller-provided identifiers
+cannot trigger or heal a transition. This profile adds no public administrative
+reload and no hot reload of source credentials, files or configuration.
+
 ### 7. Deliver in authority-preserving phases
 
 1. **Pure Observed Schema Identity V1 kernel (implemented 2026-09-02):** neutral
@@ -253,12 +373,21 @@ persist across generations.
    activation/content inputs while retaining fresh per-snapshot caches. This
    cannot replace process-unique binding identity until every cache-semantic
    mapping, ontology, capability and policy digest has a canonical contract.
-4. **PostgreSQL verified lease:** bind one owned protected transaction through
-   revalidation, compilation and complete streaming.
-5. **Atomic activation and drift:** add candidate construction, CAS publication,
-   readiness, stale-watcher rejection and body-lifetime snapshot leases.
-6. **Typed row identity and Direct Mapping:** validate/generate from the leased
-   schema and admit backend profiles one at a time.
+4. **PostgreSQL verified lease (private foundation implemented 2026-09-06):**
+   retain one compiler permit across preflight and lease acquisition, then bind
+   one dirty, protected transaction through authoritative compilation and mapped
+   SELECT/ASK/CONSTRUCT, final recheck and acknowledged rollback. Public profile
+   qualification and version receipts remain open.
+5. **Atomic activation and drift (closed profile implemented 2026-09-06):** the
+   immutable registry, opaque validated-candidate publication, body-lifetime
+   leases and full-state CAS are joined to one serialized `PgDirectLifecycleV1`
+   coordinator. It skips missed ticks, fences only completed control failures,
+   retries while not ready, heals only from a completely rebuilt candidate and
+   fails closed on abnormal worker exit. General/public reload remains open.
+6. **Typed row identity and Direct Mapping (private PK-backed foundation
+   implemented 2026-09-06):** validate/generate the PostgreSQL candidate from
+   its leased schema and reacquire the exact expectation for each request.
+   Startup admission, no-PK identity and per-backend promotion remain open.
 
 Phases 1 and 2 do not add reload, verified authority or live Direct Mapping.
 Phase 1 completion therefore grants no source, compiler, serving, cache or
@@ -266,9 +395,10 @@ activation authority. Each later phase requires its own executable evidence
 before capability promotion.
 
 Crate ownership follows ADR-0006: `sf-core` owns neutral validated values and
-pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-serve` owns
-activation and readiness; and `sf-mapping` remains pure validated-schema-to-
-mapping generation.
+pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-mapping`
+owns pure validated-schema-to-mapping generation and its ground admission
+projection; `sf-validation` owns the sealed bounded Native/global split; and
+`sf-serve` owns semantic receipts, activation, and readiness.
 
 ## Required evidence
 
@@ -292,9 +422,13 @@ mapping generation.
   concurrent update/vacuum and blank-node stability tests.
 
 Live tests use project-owned isolated databases and never the product-mock
-instance. Adversarial redaction tests seed public errors, debug output,
-readiness and metrics with credentials, paths, raw SQL, names and values and
-require that none escape.
+instance. The PostgreSQL 16.15 lifecycle gate closes the listed lock ordering,
+same-generation execution, final-recheck, cancellation and dirty-cleanup
+foundations. The separate exact 16.9/16.15 pair receipt closes only the
+observation-profile qualification gate; neither evidence closes reload, public
+Direct Mapping, backend admission or production admission. Adversarial redaction tests seed public
+errors, debug output, readiness and metrics with credentials, paths, raw SQL,
+names and values and require that none escape.
 
 ## Consequences
 
@@ -335,8 +469,8 @@ require that none escape.
   are distinct types; none promotes another.
 - **R2** — raw catalogue input is bounded and validated before hashing or mapping
   generation; planning statistics are not semantic identity.
-- **R3** — an activated generation is immutable and published as one CAS-protected
-  state after all fallible work succeeds.
+- **R3** — an activated generation is immutable and published as one
+  compare-and-publish-protected state after all fallible work succeeds.
 - **R4** — every request pins one snapshot through response termination; verified
   source authority, where supported, spans compilation and the complete stream.
 - **R5** — drift/readiness and rollback are activation-ID bound and ABA-safe.
@@ -345,6 +479,9 @@ require that none escape.
 - **R7** — backend qualification is per profile; observation never implies
   production admission.
 - **R8** — product implementation is Rust; Node remains evidence-only.
+- **R9** — requests never own readiness transitions; a source-failure fence is
+  enabled only with its bounded recovery coordinator and complete validated
+  candidate path.
 
 ## Links
 

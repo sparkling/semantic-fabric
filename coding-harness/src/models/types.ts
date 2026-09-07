@@ -60,6 +60,9 @@ export interface NativePreflightRequest {
 
 export type WorkspaceAccess = 'read' | 'write';
 
+/** Explicit native Codex effort; omission preserves the native model default. */
+export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+
 interface NativeInvocationBase {
   readonly cwd: string;
   readonly model: string;
@@ -72,6 +75,7 @@ interface NativeInvocationBase {
 }
 
 export interface CodexInvocationRequest extends NativeInvocationBase {
+  readonly reasoningEffort?: CodexReasoningEffort;
   readonly schemaPath: string;
   readonly outputPath: string;
 }

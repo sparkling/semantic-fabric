@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde_json::Value;
+use sf_sql::{Column, ForeignKey, TableSchema};
 
 use super::{array, boolean, string, strings};
 
@@ -205,4 +206,24 @@ pub(super) fn parse_style_schema(style: &Value) -> Result<StyleSchema, &'static 
         primary_key,
         foreign_keys,
     })
+}
+
+pub fn style_table_schema(style: &StyleSchema) -> TableSchema {
+    let mut table = TableSchema::new("style");
+    table.columns = style
+        .columns
+        .iter()
+        .map(|column| Column::new(&column.name, &column.store_type, !column.nullable))
+        .collect();
+    table.primary_key = style.primary_key.clone();
+    table.foreign_keys = style
+        .foreign_keys
+        .iter()
+        .map(|key| ForeignKey {
+            columns: key.child_columns.clone(),
+            parent_table: key.parent_table.clone(),
+            parent_columns: key.parent_columns.clone(),
+        })
+        .collect();
+    table
 }

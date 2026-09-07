@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "fixture.rs"]
 mod fixture;
+#[path = "ontology.rs"]
+mod ontology;
 #[path = "r2rml.rs"]
 mod r2rml;
 #[path = "schema.rs"]
@@ -19,14 +21,23 @@ pub use fixture::SyntheticFixture;
 pub use r2rml::extract_relational_r2rml;
 #[allow(unused_imports)]
 pub use schema::{
-    RelationSchema, RelationalColumn, RelationalInventory, StoreSchema, StyleColumn,
-    StyleForeignKey, StyleSchema,
+    style_table_schema, RelationSchema, RelationalColumn, RelationalInventory, StoreSchema,
+    StyleColumn, StyleForeignKey, StyleSchema,
 };
 
 pub const GOLD_ROOT_ENV: &str = "SF_PRODUCT_MOCK_GOLD_ROOT";
 pub const SOURCE_ROOT_ENV: &str = "SF_PRODUCT_MOCK_SOURCE_ROOT";
 pub const PG_URL_ENV: &str = "SF_PRODUCT_MOCK_PG_URL";
 pub const SOURCE_REVISION: &str = "7c45292fccb8b88afe263e18de6806667ae18573";
+pub const STYLE_WINDOW_LIMIT: usize = 10_001;
+pub const STYLE_DIRECT_SQL: &str = "SELECT style_number, version FROM public.style \
+    ORDER BY style_number ASC, version ASC LIMIT 10001";
+pub const STYLE_SPARQL_QUERY: &str = r#"SELECT ?styleNumber ?version WHERE {
+  ?style <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?styleNumber ;
+         <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ?version .
+}
+ORDER BY ?styleNumber ?version
+LIMIT 10001"#;
 pub const MANIFEST_PATH: &str = "candidate-manifest.json";
 pub const SNAPSHOT_PATH: &str = "source-snapshot.json";
 pub const COVERAGE_PATH: &str = "relational-schema-coverage.json";
@@ -65,6 +76,7 @@ pub struct SealPolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldVertical {
+    pub ontology_turtle: String,
     pub r2rml: String,
     pub inventory: RelationalInventory,
     pub style: StyleSchema,
@@ -192,6 +204,8 @@ where
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;
     let mut selected = BTreeMap::new();
+    let mut ontology_shards = 0_usize;
+    let mut ontology_bytes = 0_u64;
     for entry in files {
         let path = string(entry, "/path")?;
         let bytes = unsigned(entry, "/bytes")?;
@@ -202,12 +216,13 @@ where
         total = total
             .checked_add(bytes)
             .ok_or("transitive artifact byte count overflow")?;
+        ontology::account_descriptor(path, bytes, &mut ontology_shards, &mut ontology_bytes)?;
         let value = artifact(path)?;
         if value.len() as u64 != bytes || sha256(&value) != digest {
             return Err("transitive artifact seal mismatch");
         }
-        if [SNAPSHOT_PATH, COVERAGE_PATH, CATEGORY_MAPPING_PATH].contains(&path)
-            || path.starts_with(CATEGORY_SHARD_PREFIX) && path.ends_with(".ttl")
+        if [SNAPSHOT_PATH, COVERAGE_PATH].contains(&path)
+            || ontology::is_canonical_category_artifact(path)
         {
             selected.insert(path.to_owned(), value);
         }
@@ -223,11 +238,13 @@ where
         .remove(COVERAGE_PATH)
         .ok_or("relational coverage artifact is missing")?;
     let (inventory, style) = validate_coverage(&coverage)?;
+    let ontology_turtle = ontology::assemble(&manifest, &mut selected)?;
     let category = selected
         .remove(CATEGORY_MAPPING_PATH)
         .ok_or("source-mapping category manifest is missing")?;
     let r2rml = r2rml::validate_mapping(&category, &selected)?;
     Ok(GoldVertical {
+        ontology_turtle,
         r2rml,
         inventory,
         style,

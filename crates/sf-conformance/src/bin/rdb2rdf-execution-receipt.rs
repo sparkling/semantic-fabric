@@ -11,6 +11,7 @@ use sf_conformance::sealed_suite::Backend;
 
 const SQLITE_RECEIPT_NAME: &str = "sqlite-execution-receipt.tsv";
 const POSTGRES_RECEIPT_NAME: &str = "postgresql-execution-receipt.tsv";
+const MYSQL_RECEIPT_NAME: &str = "mysql-execution-receipt.tsv";
 const TEMP_ATTEMPTS: usize = 128;
 static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -42,7 +43,7 @@ fn run() -> Result<(), String> {
     let Some(options) = parse_args(env::args().skip(1))? else {
         println!(
             "Usage: rdb2rdf-execution-receipt (--check | --generate) \
-             [--backend sqlite|postgresql] [--suite PATH] [--receipt PATH]"
+             [--backend sqlite|postgresql|mysql] [--suite PATH] [--receipt PATH]"
         );
         return Ok(());
     };
@@ -91,7 +92,7 @@ fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Opti
                     .next()
                     .ok_or_else(|| "--backend requires a value".to_owned())?;
                 backend = Backend::from_name(&value).ok_or_else(|| {
-                    format!("invalid backend {value:?}; expected sqlite or postgresql")
+                    format!("invalid backend {value:?}; expected sqlite, postgresql, or mysql")
                 })?;
             }
             "--suite" => {
@@ -124,6 +125,7 @@ fn receipt_name(backend: Backend) -> &'static str {
     match backend {
         Backend::Sqlite => SQLITE_RECEIPT_NAME,
         Backend::Postgres => POSTGRES_RECEIPT_NAME,
+        Backend::MySql => MYSQL_RECEIPT_NAME,
     }
 }
 
@@ -345,7 +347,7 @@ mod tests {
             .contains("--backend requires"));
         assert!(parse_args(strings(&["--check", "--backend", "postgres"]))
             .unwrap_err()
-            .contains("expected sqlite or postgresql"));
+            .contains("expected sqlite, postgresql, or mysql"));
         assert!(parse_args(strings(&["--unknown"]))
             .unwrap_err()
             .contains("unknown argument"));
@@ -374,6 +376,9 @@ mod tests {
         let pg = suite.join(POSTGRES_RECEIPT_NAME);
         validate_generation_target(&suite, &pg, Backend::Postgres)
             .expect("PostgreSQL target has its own canonical name");
+        let mysql = suite.join(MYSQL_RECEIPT_NAME);
+        validate_generation_target(&suite, &mysql, Backend::MySql)
+            .expect("MySQL target has its own canonical name");
     }
 
     #[cfg(unix)]

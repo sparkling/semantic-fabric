@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-18
-updated: 2026-07-18
+updated: 2026-09-05
 tags: [rdf-star, sparql-star, query-rewrite, algebra, obda, virtualization]
 supersedes: []
 depends-on:
@@ -58,8 +58,8 @@ variables bind **native `Term::Triple`** values, object-side nesting / VALUES /
 the five functions / CONSTRUCT production are implemented, and subject-position
 triple-term patterns return the spec-mandated **empty** instead of matching the
 encoding. The algebra-level pre-pass architecture (R1, R3), the fresh-variable
-discipline, and the CBD-precedent placement all stand. Read this ADR as the v1
-historical design; `ADR-0032` D3 is the current query semantics.
+discipline, and the shared DESCRIBE-prepass placement all stand. Read this ADR
+as the v1 historical design; `ADR-0032` D3 is the current query semantics.
 
 ## Context and Problem Statement
 
@@ -110,11 +110,12 @@ The reifies wrapper must be recognized and elided, not translated.
   A shared pre-pass keeps them byte-equivalent (`iq/resolve.rs` reuses the
   flat `Unfolder` verbatim, so post-rewrite resolution is identical by
   construction).
-* **Existing precedent.** The DESCRIBE→CBD rewrite already does exactly this
-  shape of work at the top of both `translate_tree` (`lib.rs:422-460`) and
-  `translate_inner_flat` (`lib.rs:280-325`): a recursive `GraphPattern`
-  rebuild minting `__sf_`-prefixed synthetic variables via
-  `Variable::new_unchecked` (unwritable in real query text → collision-proof).
+* **Existing precedent.** The bounded one-hop DESCRIBE rewrite already does
+  this shape of work at the top of both `translate_tree` and
+  `translate_inner_flat`: a recursive `GraphPattern` rebuild with generated
+  variables. Leading `__` is legal in authored SPARQL variable names, so both
+  rewrites reserve the complete authored-variable inventory before minting;
+  the prefix by itself is not collision protection.
 * **Scope bookkeeping is a real trap.** `iq/node.rs` `triple_pattern_vars`
   counts only `TermPattern::Variable` — a surviving `Triple` contributes zero
   variables and silently under-reports scope. Rewriting before `build_tree`
@@ -140,9 +141,10 @@ The reifies wrapper must be recognized and elided, not translated.
 ## Decision Outcome
 
 One recursive `GraphPattern → GraphPattern` rewrite, applied at the top of
-both `translate_tree` and `translate_inner_flat` (shared function, CBD
-precedent), with a whole-query fresh-variable counter minting
-`__sf_star_{n}` via `Variable::new_unchecked`.
+both `translate_tree` and `translate_inner_flat` (shared function, DESCRIBE
+pre-pass precedent), with whole-query generated-variable state that reserves
+every authored graph-pattern, expression and CONSTRUCT-template variable before
+minting collision-free `__sf_star_{n}` candidates.
 
 ### Rewrite rules (per triple pattern, order matters)
 
@@ -192,7 +194,7 @@ precedent), with a whole-query fresh-variable counter minting
 ### Semantics (the ADR-0029 divergence, carried through honestly)
 
 A reifier/identity variable (explicit `?r rdf:reifies <<( … )>>`, or a
-projected `__sf_star` position a user can't actually write) binds to the
+generated `__sf_star` position kept disjoint from authored variables) binds to the
 **synthetic proposition-form IRI** (`urn:sf-star:…`), never to a native
 triple term. `isTRIPLE` on it is therefore not `true` — v1 501s the function
 rather than answering `false` misleadingly. An ordinary `rdf:reifies` pattern
@@ -273,7 +275,8 @@ in query-authoring docs wherever RDF-star support is described.
 * **R2** — `X rdf:reifies <<( s p o )>>` is elided into the 4 basic-encoding
   patterns on `X`; the reifies triple itself is never unfolded.
 * **R3** — Fresh identity variables use the `__sf_star_{n}` namespace with a
-  single whole-query counter.
+  single whole-query counter after reserving every variable already present in
+  the parsed query, including expression and CONSTRUCT-template-only variables.
 * **R4** — Nested quoted-triple patterns, ground quoted triples in VALUES,
   the five triple-term functions, and quoted terms in CONSTRUCT templates
   are explicit 501s in v1 — never silent empties, never silent wrong values.

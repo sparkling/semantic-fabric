@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-29
-updated: 2026-09-01
+updated: 2026-09-06
 tags: [metaharness, evidence, supervisor, transparency, witness, lease, runner, security]
 supersedes: []
 depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0041, ADR-0048]
@@ -12,10 +12,9 @@ implements: [ADR-0041]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines ADR-0041's authority protocol and bounded-context boundaries; it does not claim that an authority service, transparency log, witness, project principal, controlled runner, lease, attempt, or measurement exists.
-A maintainer may accept the design after architectural review without activating
-it. Operational activation and authoritative positive transitions additionally
-require the live qualification gates below; qualification remains nonauthorizing.
+This ADR remains **proposed**. As of **2026-09-06**, commit `a050db3` implements a separately packaged Rust transactional authority-state kernel: bounded canonical inputs, one immutable request slot, one lease and attempt, overlap-set locking with monotonic fences, a closed terminal matrix, exact committed-byte replay, atomic pending-outbox insertion, post-lock database time, same-primary writer/recovery binding, and redacted database errors. Deterministic in-memory tests cover four transaction boundaries; developer-local opt-in differential and contention tests passed against a fresh isolated PostgreSQL 16.15 instance. This is implementation evidence for the kernel only; it neither accepts this ADR nor constitutes an operational authority service.
+HTTP/mTLS and principal mapping, a production signer/materializer, controlled runner, PostgreSQL role/RLS/operational hardening and process/storage restart recovery, transparency publication, witness quorums, controlled performance, release, and production authority remain absent. Every activation gate below remains open.
+A maintainer may accept the design after architectural review without activating it. Operational activation and authoritative positive transitions additionally require the live qualification gates below; qualification remains nonauthorizing.
 The full profile gates authoritative capture and M7, not M1–M6 implementation.
 
 The committed V1 registration, checkpoint, Merkle-proof, rooted-claim, and
@@ -38,7 +37,7 @@ unchanged. With no writer, signer, network, or database, it remains nonauthorizi
 ## Context and threat model
 
 ADR-0041 requires one controlled observational capture, with no retry or result
-selection. The current controller has exact task, input, claim, private-source,
+selection. The current Node controller has exact task, input, claim, private-source,
 negative-host, state, signature, checkpoint, and RFC 9162 proof seams. It does
 not have a writer, signer, network service, linearizable lease store, positive
 host authority, runner, or launch capability.

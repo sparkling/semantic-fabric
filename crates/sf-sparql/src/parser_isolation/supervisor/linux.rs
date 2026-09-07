@@ -13,6 +13,19 @@ use super::seccomp::StageOnePolicy;
 use super::SupervisorError;
 use crate::parser_isolation::profile::V1_CANDIDATE_RLIMIT_FSIZE_BYTES;
 use crate::parser_isolation::protocol::ParserWorkerLimits;
+#[cfg(feature = "parser-worker-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_PARSER_OBSERVATION_MODE, PRIVATE_PARSER_OBSERVATION_NAME, PRIVATE_PARSER_QUERY_V1_MODE,
+    PRIVATE_PARSER_QUERY_V1_NAME,
+};
+#[cfg(feature = "query-v1-transport-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_QUERY_V1_TRANSPORT_MODE, PRIVATE_QUERY_V1_TRANSPORT_NAME,
+};
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE, PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+};
 use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
 const MIN_DYNAMIC_LOADER_FDS: u64 = 16;
@@ -93,6 +106,66 @@ pub(super) fn spawn_private(
         &[
             PRIVATE_WORKER_NAME.as_bytes(),
             PRIVATE_WORKER_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn spawn_parser_observation(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_PARSER_OBSERVATION_NAME.as_bytes(),
+            PRIVATE_PARSER_OBSERVATION_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn spawn_parser_query_v1(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_PARSER_QUERY_V1_NAME.as_bytes(),
+            PRIVATE_PARSER_QUERY_V1_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
+pub(super) fn spawn_query_v1_transport(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_QUERY_V1_TRANSPORT_NAME.as_bytes(),
+            PRIVATE_QUERY_V1_TRANSPORT_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn spawn_query_v1_transport_mutant(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME.as_bytes(),
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE.as_bytes(),
         ],
     )
 }

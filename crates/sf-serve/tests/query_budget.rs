@@ -6,9 +6,10 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::query_control::QueryLimits;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, ServeConfig};
 use tower::ServiceExt;
+
+mod support;
 
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -29,10 +30,7 @@ fn config(limits: QueryLimits) -> ServeConfig {
          INSERT INTO items VALUES (1, 'one'), (2, 'two');",
     )
     .expect("seed fixture");
-    let schema = introspect_sqlite_all(&conn).expect("introspect fixture");
-    let mapping = sf_mapping::parse_r2rml(MAPPING).expect("parse mapping");
-    let mut config =
-        ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema);
+    let mut config = support::serve_config(Backend::sqlite(conn), MAPPING);
     config.query_limits = limits;
     config
 }

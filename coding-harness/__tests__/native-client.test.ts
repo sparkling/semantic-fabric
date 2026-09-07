@@ -61,6 +61,7 @@ describe('native adapter structured client', () => {
     const evidenceRoot = root('coding-harness-native-evidence-');
     const workspaceRoot = root('coding-harness-native-workspace-');
     const schemas: Record<string, unknown>[] = [];
+    const invocations: Array<readonly string[]> = [];
     const runner = new FakeRunner((request) => {
       const schemaIndex = request.args.indexOf('--output-schema');
       const outputIndex = request.args.indexOf('--output-last-message');
@@ -68,6 +69,7 @@ describe('native adapter structured client', () => {
         readFileSync(request.args[schemaIndex + 1], 'utf8'),
       ) as Record<string, unknown>;
       schemas.push(schema);
+      invocations.push(request.args);
       const properties = schema.properties as Record<string, unknown>;
       const output = 'patch' in properties
         ? { patch: validPatch() }
@@ -98,12 +100,12 @@ describe('native adapter structured client', () => {
     });
 
     await client.invoke({
-      candidate: { host: 'codex', model: 'gpt-5.6' },
+      candidate: { host: 'codex', model: 'gpt-6-astra', reasoningEffort: 'ultra' },
       operation: 'architecture',
       prompt: 'return a bounded architecture',
     });
     await client.invoke({
-      candidate: { host: 'codex', model: 'gpt-5.6' },
+      candidate: { host: 'codex', model: 'gpt-6-astra', reasoningEffort: 'max' },
       operation: 'implementation',
       prompt: 'return a bounded patch',
     });
@@ -113,6 +115,9 @@ describe('native adapter structured client', () => {
       prompt: 'return a bounded review',
     });
 
+    expect(invocations[0]).toContain('model_reasoning_effort="ultra"');
+    expect(invocations[1]).toContain('model_reasoning_effort="max"');
+    expect(invocations[2].some((arg) => arg.startsWith('model_reasoning_effort='))).toBe(false);
     expect(schemas[0]).toMatchObject({
       properties: {
         proposal: {

@@ -57,12 +57,13 @@ impl Stream for CountingBody {
 
 fn config(capacity: usize, timeout: Duration) -> Arc<ServeConfig> {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new_unchecked(
+    let mut cfg = ServeConfig::new_with_unverified_source(
         Backend::sqlite(conn),
         Vec::new(),
-        sf_sparql::Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     cfg.timeout = timeout;
     cfg.set_max_concurrent_requests(capacity)
         .expect("valid request capacity");

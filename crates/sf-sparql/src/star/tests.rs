@@ -117,7 +117,7 @@ fn reifies_wrapper_is_kept_pointing_at_a_fresh_pf_var() {
             object: var("src"),
         },
     ]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten =
         rewrite_pattern(&gp, &mut n, &mut env).expect("no-elision rewrite must succeed");
@@ -142,7 +142,7 @@ fn reifies_wrapper_is_kept_pointing_at_a_fresh_pf_var() {
     assert_eq!(patterns[5].object, var("src"));
     // One fresh var was needed for `?pf` (unlike v1, where the identity was
     // the existing `_:b` and the wrapper was dropped).
-    assert_eq!(n, 1);
+    assert_eq!(n.next_ordinal(), 1);
 }
 
 #[test]
@@ -161,11 +161,11 @@ fn subject_position_triple_term_rewrites_to_empty_values() {
         predicate: pred("http://example.com/assertedBy"),
         object: var("src"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed, never error");
     assert_empty(&rewritten);
-    assert_eq!(n, 1, "one empty-marker var minted");
+    assert_eq!(n.next_ordinal(), 1, "one empty-marker var minted");
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn object_substitution_is_symmetric_with_subject() {
         predicate: pred("http://example.com/hasQuote"),
         object: TermPattern::Triple(Box::new(quoted)),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten =
         rewrite_pattern(&gp, &mut n, &mut env).expect("object substitution must succeed");
@@ -220,7 +220,7 @@ fn object_side_nesting_recurses_bottom_up() {
         predicate: pred("http://example.com/hasQuote"),
         object: TermPattern::Triple(Box::new(outer_quoted)),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten =
         rewrite_pattern(&gp, &mut n, &mut env).expect("object-side nesting must succeed");
@@ -251,7 +251,11 @@ fn object_side_nesting_recurses_bottom_up() {
     assert_eq!(patterns[8].subject, var("x"));
     assert_eq!(patterns[8].predicate, pred("http://example.com/hasQuote"));
     assert_eq!(patterns[8].object, outer_id);
-    assert_eq!(n, 2, "two identities minted, one per nesting level");
+    assert_eq!(
+        n.next_ordinal(),
+        2,
+        "two identities minted, one per nesting level"
+    );
 }
 
 #[test]
@@ -278,7 +282,7 @@ fn object_chain_nested_subject_side_triple_term_is_empty() {
         predicate: pred(RDF_REIFIES),
         object: TermPattern::Triple(Box::new(mid)),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed, never error");
     assert_empty(&rewritten);
@@ -314,7 +318,7 @@ fn counter_does_not_collide_across_bgp_and_exists_body() {
             object: TermPattern::Triple(Box::new(quoted_outer)),
         }])),
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let GraphPattern::Filter { expr, inner } = rewritten else {
@@ -350,7 +354,7 @@ fn counter_does_not_collide_across_bgp_and_exists_body() {
         var("__sf_star_1"),
         "the EXISTS body must continue the SAME counter, not restart at 0"
     );
-    assert_eq!(n, 2);
+    assert_eq!(n.next_ordinal(), 2);
 }
 
 #[test]
@@ -361,11 +365,11 @@ fn values_is_untouched() {
             Literal::new_simple_literal("x"),
         ))]],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("Values must pass through");
     assert_eq!(rewritten, gp);
-    assert_eq!(n, 0);
+    assert_eq!(n.next_ordinal(), 0);
 }
 
 // ============================================================================
@@ -388,7 +392,7 @@ fn reifies_bare_variable_object_composes_t_and_keeps_the_pattern() {
         predicate: pred(RDF_REIFIES),
         object: var("t"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let GraphPattern::Bgp { patterns } = rewritten else {
@@ -435,7 +439,7 @@ fn reifies_bare_variable_env_lookup_reuses_component_vars_across_occurrences() {
             object: var("t"),
         },
     ]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     assert_eq!(env.len(), 1, "only ONE env entry for the shared ?t");
@@ -455,7 +459,7 @@ fn values_decomposes_a_ground_triple_column() {
         variables: vec![Variable::new_unchecked("t")],
         bindings: vec![vec![Some(GroundTerm::Triple(Box::new(quoted)))]],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must decompose");
     let GraphPattern::Values {
@@ -511,7 +515,7 @@ fn values_decomposes_nested_ground_triples_recursively() {
         variables: vec![Variable::new_unchecked("t")],
         bindings: vec![vec![Some(GroundTerm::Triple(Box::new(outer)))]],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&gp, &mut n, &mut env).expect("must decompose recursively");
     let GraphPattern::Values { variables, .. } = rewritten else {
@@ -553,7 +557,7 @@ fn values_mixed_triple_and_plain_cells_is_unsupported() {
             )))],
         ],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_pattern(&gp, &mut n, &mut env);
     assert!(
@@ -579,7 +583,7 @@ fn is_triple_resolves_statically_to_a_boolean_literal() {
         ),
         inner: Box::new(composed_gp),
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&filter, &mut n, &mut env).expect("must succeed");
     let GraphPattern::Filter { expr, .. } = rewritten else {
@@ -587,7 +591,7 @@ fn is_triple_resolves_statically_to_a_boolean_literal() {
     };
     assert_eq!(expr, bool_literal_expr(true));
 
-    let mut n2 = 0;
+    let mut n2 = FreshVars::default();
     let mut env2 = StarEnv::new();
     let non_composed = Expression::FunctionCall(
         Function::IsTriple,
@@ -605,7 +609,7 @@ fn subject_predicate_object_on_composed_var_resolve_to_component_vars() {
         predicate: pred(RDF_REIFIES),
         object: var("t"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&composed_gp, &mut n, &mut env).expect("must succeed");
     let info = env
@@ -632,7 +636,7 @@ fn subject_on_non_composed_var_resolves_to_the_error_marker() {
     // holds a triple term at runtime — SUBJECT/PREDICATE/OBJECT on it is the
     // §17.4.6 error, represented uniformly (see `error_marker_expr`'s doc
     // comment) as `CONCAT(<urn:sf-star:error-marker>)`.
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let call = Expression::FunctionCall(
         Function::Subject,
@@ -662,7 +666,7 @@ fn triple_bind_target_marks_the_var_composed_via_synthetic_extends() {
             vec![a.clone(), p.clone(), c.clone()],
         ),
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let rewritten = rewrite_pattern(&bind, &mut n, &mut env).expect("must succeed");
     let t = Variable::new_unchecked("t");
@@ -716,7 +720,7 @@ fn equality_both_composed_is_a_componentwise_conjunction() {
             object: var("t2"),
         },
     ]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let info1 = env.get(&Variable::new_unchecked("t1")).unwrap().clone();
@@ -753,7 +757,7 @@ fn equality_exactly_one_composed_is_constant_false() {
         predicate: pred(RDF_REIFIES),
         object: var("t"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
 
@@ -790,7 +794,7 @@ fn union_arms_agreeing_on_composed_ness_succeeds() {
         left: Box::new(arm("r1")),
         right: Box::new(arm("r2")),
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_pattern(&gp, &mut n, &mut env);
     assert!(result.is_ok(), "got {result:?}");
@@ -817,7 +821,7 @@ fn union_arms_disagreeing_on_composed_ness_is_unsupported() {
         left: Box::new(left),
         right: Box::new(right),
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_pattern(&gp, &mut n, &mut env);
     assert!(
@@ -852,7 +856,7 @@ fn top_level_union_disagreement_is_allowed_for_bare_projection() {
         }),
         variables: vec![Variable::new_unchecked("t")],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
     assert!(result.is_ok(), "got {result:?}");
@@ -893,7 +897,7 @@ fn top_level_union_disagreement_wrapped_in_filter_now_resolves_per_arm() {
         }),
         variables: vec![Variable::new_unchecked("t")],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must now succeed");
     let GraphPattern::Project { inner, .. } = result else {
@@ -955,7 +959,7 @@ fn top_level_mixed_values_column_is_allowed_for_bare_projection() {
         inner: Box::new(values),
         variables: vec![Variable::new_unchecked("t")],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let GraphPattern::Project { inner, .. } = result else {
@@ -1000,7 +1004,7 @@ fn top_level_mixed_values_wrapped_in_filter_now_resolves_per_arm() {
         }),
         variables: vec![Variable::new_unchecked("t")],
     };
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must now succeed");
     let GraphPattern::Project { inner, .. } = result else {
@@ -1053,13 +1057,98 @@ fn rewrite_query_select_routes_a_top_level_union_through_the_relaxation() {
 }
 
 #[test]
+fn rewrite_query_does_not_capture_an_authored_internal_prefix_variable() {
+    // Leading underscores are legal in a SPARQL variable name. The authored
+    // subject must therefore remain distinct from the identity introduced for
+    // the quoted object, even though it uses this module's generated prefix.
+    let query = spargebra::SparqlParser::new()
+        .parse_query(
+            "PREFIX ex: <http://example.com/> \
+             SELECT ?__sf_star_0 ?p ?o WHERE { \
+               ?__sf_star_0 ex:hasQuote <<( ?p ex:value ?o )>> \
+             }",
+        )
+        .expect("an authored variable beginning with '__' is legal SPARQL");
+
+    let (rewritten, _) = rewrite_query(&query).expect("rewrite must succeed");
+    let spargebra::Query::Select { pattern, .. } = rewritten else {
+        panic!("expected SELECT");
+    };
+    let variables = super::collect_pattern_vars(&pattern);
+    assert!(
+        variables.contains(&Variable::new_unchecked("__sf_star_0")),
+        "the authored variable must survive"
+    );
+    assert!(
+        variables.contains(&Variable::new_unchecked("__sf_star_1")),
+        "the generated identity must skip the reserved authored name"
+    );
+}
+
+#[test]
+fn rewrite_query_reserves_construct_template_only_variables() {
+    // A template-only variable is intentionally unbound. Capturing its name
+    // with a generated WHERE binding would spuriously make it bound and alter
+    // the constructed graph, so the reservation inventory includes templates.
+    let query = spargebra::SparqlParser::new()
+        .parse_query(
+            "PREFIX ex: <http://example.com/> \
+             CONSTRUCT { ?__sf_star_0 ex:output ?x } \
+             WHERE { ?x ex:hasQuote <<( ?s ex:value ?o )>> }",
+        )
+        .expect("query parses");
+
+    let (rewritten, _) = rewrite_query(&query).expect("rewrite must succeed");
+    let spargebra::Query::Construct {
+        template, pattern, ..
+    } = rewritten
+    else {
+        panic!("expected CONSTRUCT");
+    };
+    assert_eq!(template[0].subject, var("__sf_star_0"));
+    let pattern_variables = super::collect_pattern_vars(&pattern);
+    assert!(
+        !pattern_variables.contains(&Variable::new_unchecked("__sf_star_0")),
+        "a template-only variable must remain unbound by the WHERE pattern"
+    );
+    assert!(
+        pattern_variables.contains(&Variable::new_unchecked("__sf_star_1")),
+        "the generated identity must skip the template-only authored name"
+    );
+}
+
+#[test]
+fn rewrite_query_does_not_capture_an_authored_empty_marker_prefix_variable() {
+    let query = spargebra::SparqlParser::new()
+        .parse_query(
+            "PREFIX ex: <http://example.com/> \
+             ASK { <<( ?s ex:value ?o )>> ex:source ?__sf_star_empty_0 }",
+        )
+        .expect("query parses");
+
+    let (rewritten, _) = rewrite_query(&query).expect("rewrite must succeed");
+    let spargebra::Query::Ask { pattern, .. } = rewritten else {
+        panic!("expected ASK");
+    };
+    let variables = super::collect_pattern_vars(&pattern);
+    assert!(
+        variables.contains(&Variable::new_unchecked("__sf_star_empty_0")),
+        "the authored variable must survive the enclosing projection"
+    );
+    assert!(
+        variables.contains(&Variable::new_unchecked("__sf_star_empty_1")),
+        "the generated empty marker must skip the reserved authored name"
+    );
+}
+
+#[test]
 fn construct_template_substitutes_a_composed_variable_recursively() {
     let gp = bgp_of(vec![TriplePattern {
         subject: var("r"),
         predicate: pred(RDF_REIFIES),
         object: var("t"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let info = env.get(&Variable::new_unchecked("t")).unwrap().clone();
@@ -1100,7 +1189,7 @@ fn reifies_env_and_info() -> (StarEnv, ComposedInfo) {
         predicate: pred(RDF_REIFIES),
         object: var("t"),
     }]);
-    let mut n = 0;
+    let mut n = FreshVars::default();
     let mut env = StarEnv::new();
     rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
     let info = env.get(&Variable::new_unchecked("t")).unwrap().clone();

@@ -17,7 +17,7 @@ use spargebra::term::{Literal, NamedNode};
 use crate::{Error, Result};
 
 use super::env::StarEnv;
-use super::util::{ERROR_MARKER_IRI, XSD_BOOLEAN};
+use super::util::{FreshVars, ERROR_MARKER_IRI, XSD_BOOLEAN};
 
 /// Rule R5a: recurse through an expression tree looking for `EXISTS`/`NOT
 /// EXISTS` bodies (the only `Expression` variant carrying a `GraphPattern`) —
@@ -29,7 +29,7 @@ use super::util::{ERROR_MARKER_IRI, XSD_BOOLEAN};
 /// ordinary structural recursion.
 pub(super) fn rewrite_expr(
     expr: &Expression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<Expression> {
     use Expression::*;
@@ -124,7 +124,7 @@ pub(super) fn rewrite_expr(
 fn rewrite_function_call(
     f: &Function,
     args: &[Expression],
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<Expression> {
     match (f, args) {
@@ -192,7 +192,7 @@ fn rewrite_function_call(
 fn rewrite_equality(
     a: &Expression,
     b: &Expression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
     same_term: bool,
 ) -> Result<Expression> {
@@ -237,7 +237,7 @@ type ComposedComponents = (Expression, Expression, Expression);
 /// Unsupported through any OTHER path — see [`rewrite_function_call`]).
 fn rewrite_and_check_composed(
     arg: &Expression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<(Expression, Option<ComposedComponents>)> {
     if let Expression::FunctionCall(Function::Triple, parts) = arg {
@@ -333,7 +333,7 @@ pub(super) fn bool_literal_expr(v: bool) -> Expression {
 
 pub(super) fn rewrite_order_expr(
     oe: &OrderExpression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<OrderExpression> {
     Ok(match oe {
@@ -344,7 +344,7 @@ pub(super) fn rewrite_order_expr(
 
 pub(super) fn rewrite_agg_expr(
     ae: &AggregateExpression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<AggregateExpression> {
     Ok(match ae {

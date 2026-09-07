@@ -1,5 +1,16 @@
 //! SPARQL term ordering and precomputed ORDER BY keys.
 
+use std::cmp::Ordering;
+
+use sf_core::Term;
+
+use crate::iq::OrderKey;
+
+use super::literal_order::{cmp_literal, cmp_literal_keys, literal_sort_key, LiteralSortKey};
+use super::row::Bindings;
+
+pub(super) use super::literal_order::numeric_value;
+
 /// SPARQL term order extended to a total order for sorting: blank node < IRI <
 /// literal; within a kind by value.
 pub(super) fn cmp_term(a: &Term, b: &Term) -> Ordering {
@@ -43,14 +54,13 @@ fn term_rank(t: &Term) -> u8 {
 /// A [`Term`]'s [`cmp_term`]-relevant shape, precomputed ONCE per term rather than
 /// re-derived on every comparison a sort makes (Schwartzian transform, ADR-0024/M4
 /// perf). `BlankNode`/`NamedNode` borrow their `&str`; `Literal` borrows the whole
-/// literal (its own comparison, `cmp_literal`, is already allocation-free). `Other`
-/// (any kind besides those three — currently only a quoted triple, RDF-star) is the
-/// ONLY variant that allocates, and does so HERE, once, instead of inside
-/// `cmp_term`'s wildcard tie-break on every comparison it participates in.
+/// literal (whose value key is parsed once). `Other` (currently only a quoted
+/// triple, RDF-star) is the only variant that allocates, once, instead of inside
+/// `cmp_term`'s wildcard tie-break on every comparison.
 pub(super) enum TermSortKey<'a> {
     BlankNode(&'a str),
     NamedNode(&'a str),
-    Literal(&'a Literal),
+    Literal(LiteralSortKey<'a>),
     Other(String),
 }
 
@@ -60,7 +70,7 @@ pub(super) fn term_sort_key(t: &Term) -> TermSortKey<'_> {
     match t {
         Term::BlankNode(n) => TermSortKey::BlankNode(n.as_str()),
         Term::NamedNode(n) => TermSortKey::NamedNode(n.as_str()),
-        Term::Literal(l) => TermSortKey::Literal(l),
+        Term::Literal(literal) => TermSortKey::Literal(literal_sort_key(literal)),
         other => TermSortKey::Other(other.to_string()),
     }
 }
@@ -84,7 +94,7 @@ pub(super) fn cmp_sort_key(a: &TermSortKey, b: &TermSortKey) -> Ordering {
     match (a, b) {
         (TermSortKey::BlankNode(x), TermSortKey::BlankNode(y)) => x.cmp(y),
         (TermSortKey::NamedNode(x), TermSortKey::NamedNode(y)) => x.cmp(y),
-        (TermSortKey::Literal(x), TermSortKey::Literal(y)) => cmp_literal(x, y),
+        (TermSortKey::Literal(x), TermSortKey::Literal(y)) => cmp_literal_keys(x, y),
         _ => rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
             (TermSortKey::Other(x), TermSortKey::Other(y)) => x.cmp(y),
             // Same rank implies the same variant among Blank/Named/Literal/Other
@@ -155,52 +165,41 @@ pub(super) fn order_cmp_precomputed(
     Ordering::Equal
 }
 
-/// Compare two literals: numerically when both carry a numeric XSD datatype, else
-/// by lexical value, then datatype IRI, then language tag.
-fn cmp_literal(x: &Literal, y: &Literal) -> Ordering {
-    if let (Some(nx), Some(ny)) = (numeric_value(x), numeric_value(y)) {
-        return nx.partial_cmp(&ny).unwrap_or(Ordering::Equal);
-    }
-    x.value()
-        .cmp(y.value())
-        .then_with(|| x.datatype().as_str().cmp(y.datatype().as_str()))
-        .then_with(|| x.language().unwrap_or("").cmp(y.language().unwrap_or("")))
+/// Indices of `buffer` in the engine's exact SPARQL order. Sorting indices keeps
+/// the precomputed keys borrowed from the immutable rows and preserves arrival
+/// order for comparator ties through Rust's stable slice sort.
+pub(super) fn sorted_indices(buffer: &[(usize, Bindings)], order: &[OrderKey]) -> Vec<usize> {
+    let keys: Vec<Vec<Option<TermSortKey>>> = buffer
+        .iter()
+        .map(|(_, bindings)| precompute_order_keys(order, bindings))
+        .collect();
+    let mut indices: Vec<usize> = (0..buffer.len()).collect();
+    indices.sort_by(|&left, &right| order_cmp_precomputed(order, &keys[left], &keys[right]));
+    indices
 }
 
-/// The `f64` value of a numeric-XSD-typed literal, else `None` (a non-numeric
-/// datatype is ordered lexically, never coerced).
-pub(super) fn numeric_value(l: &Literal) -> Option<f64> {
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-    let local = l.datatype().as_str().strip_prefix(XSD)?;
-    let numeric = matches!(
-        local,
-        "integer"
-            | "decimal"
-            | "double"
-            | "float"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "nonNegativeInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "positiveInteger"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-    );
-    if numeric {
-        l.value().parse::<f64>().ok()
-    } else {
-        None
+/// Retain exactly the first `window` rows of a stable full sort without cloning
+/// their bindings.
+///
+/// After each call, equal-key rows remain in arrival order. New rows are appended
+/// after them, so the next stable sort has the same tie order as one stable sort
+/// over the entire input. Rows beyond `window` can never survive the final
+/// OFFSET/LIMIT and are therefore safe to discard.
+pub(super) fn compact_to_window(
+    buffer: &mut Vec<(usize, Bindings)>,
+    order: &[OrderKey],
+    window: usize,
+) {
+    if buffer.len() <= window {
+        return;
     }
+    let indices = sorted_indices(buffer, order);
+    let mut slots: Vec<Option<(usize, Bindings)>> =
+        std::mem::take(buffer).into_iter().map(Some).collect();
+    buffer.reserve(window);
+    buffer.extend(indices.into_iter().take(window).map(|index| {
+        slots[index]
+            .take()
+            .expect("sorted index is unique and in bounds")
+    }));
 }
-use std::cmp::Ordering;
-
-use sf_core::{Literal, Term};
-
-use crate::iq::OrderKey;
-
-use super::row::Bindings;

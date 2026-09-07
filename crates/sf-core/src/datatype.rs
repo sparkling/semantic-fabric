@@ -57,26 +57,30 @@ impl XsdTypeCode {
 
 /// The R2RML §10 *natural mapping* of an SQL column type to its RDF datatype.
 ///
-/// Covers the SQL-standard names of §10 plus their ubiquitous aliases. `INTERVAL`
-/// is left *undefined* by §10 and unknown types are unmapped — both return
-/// `None`, and the caller falls back to a plain literal. Dialect-specific names
-/// (`int4`, `float8`, `tinyint(1)`, `timestamptz`, …) are resolved by `sf-sql`'s
-/// per-dialect `DbTypeMap` from catalog metadata (ADR-0015), not here.
+/// Covers the SQL-standard names of §10 plus the exact PostgreSQL catalogue and
+/// driver aliases supported by the runtime adapter. `INTERVAL` is undefined by
+/// §10 and unknown types are unmapped. Keeping these aliases here lets semantic
+/// admission and row reconstruction share one type law instead of drifting.
 pub fn natural_xsd(sql_type: &str) -> Option<XsdTypeCode> {
     use XsdTypeCode::*;
     match normalize_sql_type(sql_type).as_str() {
         "CHARACTER" | "CHARACTER VARYING" | "CHAR" | "VARCHAR" | "CLOB" | "NCHAR"
-        | "NCHAR VARYING" | "NVARCHAR" | "NCLOB" | "TEXT" => Some(String),
-        "BINARY" | "BINARY VARYING" | "VARBINARY" | "BINARY LARGE OBJECT" | "BLOB" => {
+        | "NCHAR VARYING" | "NVARCHAR" | "NCLOB" | "TEXT" | "BPCHAR" | "NAME" | "UNKNOWN" => {
+            Some(String)
+        }
+        "BINARY" | "BINARY VARYING" | "VARBINARY" | "BINARY LARGE OBJECT" | "BLOB" | "BYTEA" => {
             Some(HexBinary)
         }
         "NUMERIC" | "DECIMAL" | "DEC" => Some(Decimal),
-        "SMALLINT" | "INTEGER" | "INT" | "BIGINT" => Some(Integer),
-        "FLOAT" | "REAL" | "DOUBLE PRECISION" | "DOUBLE" => Some(Double),
+        "SMALLINT" | "INTEGER" | "INT" | "BIGINT" | "INT2" | "INT4" | "INT8" => Some(Integer),
+        "FLOAT" | "REAL" | "DOUBLE PRECISION" | "DOUBLE" | "FLOAT4" | "FLOAT8" => Some(Double),
         "BOOLEAN" | "BOOL" => Some(Boolean),
         "DATE" => Some(Date),
-        "TIME" => Some(Time),
-        "TIMESTAMP" => Some(DateTime),
+        "TIME" | "TIME WITHOUT TIME ZONE" | "TIME WITH TIME ZONE" | "TIMETZ" => Some(Time),
+        "TIMESTAMP"
+        | "TIMESTAMP WITHOUT TIME ZONE"
+        | "TIMESTAMP WITH TIME ZONE"
+        | "TIMESTAMPTZ" => Some(DateTime),
         _ => None, // INTERVAL (§10 undefined) and anything unrecognised
     }
 }
@@ -221,11 +225,47 @@ mod tests {
     }
 
     #[test]
+    fn natural_xsd_does_not_absorb_mysql_only_type_spelling() {
+        for name in [
+            "bit(8)",
+            "tinyblob",
+            "mediumblob",
+            "longblob",
+            "tinyint(1)",
+            "mediumint",
+            "year",
+            "datetime(6)",
+            "int unsigned",
+        ] {
+            assert_eq!(natural_xsd(name), None, "{name}");
+        }
+        assert_eq!(natural_xsd("varbinary(200)"), Some(XsdTypeCode::HexBinary));
+    }
+
+    #[test]
     fn natural_xsd_is_case_and_size_insensitive() {
         assert_eq!(natural_xsd("varchar(255)"), Some(XsdTypeCode::String));
         assert_eq!(natural_xsd("  Numeric(10, 2) "), Some(XsdTypeCode::Decimal));
         assert_eq!(natural_xsd("double precision"), Some(XsdTypeCode::Double));
         assert_eq!(natural_xsd("Int"), Some(XsdTypeCode::Integer));
+    }
+
+    #[test]
+    fn natural_xsd_covers_supported_postgres_catalog_and_driver_names() {
+        for name in ["int2", "int4", "int8"] {
+            assert_eq!(natural_xsd(name), Some(XsdTypeCode::Integer), "{name}");
+        }
+        for name in ["float4", "float8"] {
+            assert_eq!(natural_xsd(name), Some(XsdTypeCode::Double), "{name}");
+        }
+        assert_eq!(natural_xsd("bytea"), Some(XsdTypeCode::HexBinary));
+        assert_eq!(natural_xsd("bpchar"), Some(XsdTypeCode::String));
+        assert_eq!(natural_xsd("time with time zone"), Some(XsdTypeCode::Time));
+        assert_eq!(
+            natural_xsd("timestamp without time zone"),
+            Some(XsdTypeCode::DateTime)
+        );
+        assert_eq!(natural_xsd("timestamptz"), Some(XsdTypeCode::DateTime));
     }
 
     #[test]

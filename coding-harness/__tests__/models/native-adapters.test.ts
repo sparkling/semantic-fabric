@@ -173,7 +173,7 @@ describe('native subscription adapters', () => {
       ]),
     );
     expect(codexRequest?.args.join(' ')).toContain('model_provider="openai"');
-    expect(codexRequest?.args.join(' ')).toContain('model_reasoning_effort="low"');
+    expect(codexRequest?.args.join(' ')).not.toContain('model_reasoning_effort=');
     expect(codexRequest?.args.join(' ')).toContain('analytics.enabled=false');
     expect(codexRequest?.args.join(' ')).toContain('otel.metrics_exporter="none"');
     expect(claudeRequest?.args).toEqual(
@@ -191,9 +191,7 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.signal).toBe(controller.signal);
     expect(codexRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
     expect(claudeRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1');
-    for (const [operation, effort] of [
-      ['architecture', 'low'], ['implementation', 'high'], ['repair', 'high'], ['review', 'low'],
-    ] as const) {
+    for (const operation of ['architecture', 'implementation', 'repair', 'review'] as const) {
       const request = codex.buildInvocation({
         cwd: root,
         model: 'gpt-5.6-sol',
@@ -206,7 +204,7 @@ describe('native subscription adapters', () => {
         operation,
       });
       expect(request.args.filter((value) => value.startsWith('model_reasoning_effort=')))
-        .toEqual([`model_reasoning_effort="${effort}"`]);
+        .toEqual([]);
     }
     expect(() => codex.buildInvocation({
       cwd: root,
@@ -219,6 +217,34 @@ describe('native subscription adapters', () => {
       timeoutMs: 1_000,
       operation: 'review',
     })).toThrow('HARNESS_NATIVE_OUTPUT_PATH_OUTSIDE_CWD');
+  });
+
+  it('forwards every explicit Astra effort unchanged for every operation, including max and ultra', () => {
+    const root = mkdtempSync(join(tmpdir(), 'coding-harness-effort-'));
+    roots.push(root);
+    const schemaPath = join(root, 'response.schema.json');
+    writeFileSync(schemaPath, '{}');
+    const adapter = new CodexSubscriptionAdapter({
+      executable: '/tools/codex', runner: new FakeRunner(() => ok('{}')),
+      sourceEnvironment: { HOME: '/home/tester' }, evidenceRoot: root,
+    });
+    const base = {
+      cwd: root, model: 'gpt-6-astra', prompt: 'bounded task', schema: {}, schemaPath,
+      outputPath: join(root, 'response.json'), workspaceAccess: 'read' as const, timeoutMs: 1_000,
+    };
+    for (const operation of ['architecture', 'implementation', 'repair', 'review'] as const) {
+      for (const reasoningEffort of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const) {
+        const request = adapter.buildInvocation({ ...base, operation, reasoningEffort });
+        expect(request.args.filter(value => value.startsWith('model_reasoning_effort=')))
+          .toEqual([`model_reasoning_effort="${reasoningEffort}"`]);
+        expect(request.model).toBe('gpt-6-astra');
+      }
+    }
+    for (const reasoningEffort of ['', 'invalid', 'ultra"', null, 0]) {
+      expect(() => adapter.buildInvocation({
+        ...base, operation: 'review', reasoningEffort,
+      } as never)).toThrow('HARNESS_NATIVE_REASONING_EFFORT_INVALID');
+    }
   });
 
   it('rejects Claude auth evidence backed by an API key', async () => {

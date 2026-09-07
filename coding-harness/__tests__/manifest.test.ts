@@ -221,6 +221,15 @@ describe('canonical harness manifest', () => {
     expect(parsed.evolution).toMatchObject({ eligible: false, suiteFile: null });
   });
 
+  it('keeps the generated manifest deterministic and below the repository line limit', () => {
+    const check = spawnSync(process.execPath, [
+      resolve(root, 'scripts/sync-harness-manifest.mjs'), '--check',
+    ], { cwd: root, encoding: 'utf8' });
+    expect(check.status, check.stderr).toBe(0);
+    expect(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8').split('\n').length - 1)
+      .toBeLessThan(500);
+  });
+
   it('rejects a reduced protected set or synthetic clean diagnostic', () => {
     expect(() => parseHarnessManifest({
       ...(manifest as object),

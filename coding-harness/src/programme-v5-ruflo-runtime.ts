@@ -14,7 +14,12 @@ import {
 } from './programme-v5-ruflo-schema-v2-materialization.js';
 import { systemNativeRuntimeLibraryMounts } from './native-system-filesystem.js';
 
-const DEFAULT_PACKAGE_ROOT = '/home/claude/.npm-global/lib/node_modules/@claude-flow/cli';
+const RUNTIME_PARENT = '/home/claude/.cache/semantic-fabric-harness';
+// This is an attested locally patched installed-tree closure, not a clean-npm-install recipe.
+// Absence must remain explicit until a separately reviewed portable supply-chain authority exists.
+export const PROGRAMME_V5_RUFLO_DEFAULT_PACKAGE_ROOT = join(
+  RUNTIME_PARENT, `ruflo-package-${PROGRAMME_V5_RUFLO_CLI_IDENTITY.packageSourceDigest}`,
+);
 const PACKAGE_ROOT_ENV = 'SF_HARNESS_RUFLO_PACKAGE_ROOT';
 const MANIFEST_DIGEST = '633b4446e2574f0863ba53ab5918fb663d55a8d1c5195e7811cd5a10e67320b8';
 const BIN_DIGEST = '17479c2c2ee3143942738bff57fbddc959ec97decf62425b0c98045004d2a771';
@@ -25,7 +30,6 @@ const BCRYPT_DIGEST = '5a3298560aabac5f100308256dc74316a511e8ece4b3de039ef0f5d20
 const ZOD_DIGEST = '9605ce9ccc2d0fe5f8d87cde90fb4ce9d9c8e8c8515ce9857825a54eab568e2d';
 const PASSWD_DIGEST = '1673047aafa580b5f9b444ab097e43fcca2df7418d71e579f059abd9b4c2a738';
 const GROUP_DIGEST = 'ef41ce1d713e984f66052cc15402503708ecfeadd7762068ef5b90d18e7361bf';
-const RUNTIME_PARENT = '/home/claude/.cache/semantic-fabric-harness';
 const MAX_LEDGER_FILE_BYTES = 32 * 1024 * 1024;
 
 export interface ProgrammeV5RufloPrivateRuntime {
@@ -169,8 +173,16 @@ export function createProgrammeV5RufloPrivateRuntime(
 
 export function resolveProgrammeV5RufloPackageRoot(): string {
   const configured = process.env[PACKAGE_ROOT_ENV];
-  return canonicalDirectory(configured === undefined ? DEFAULT_PACKAGE_ROOT : configured,
-    'PACKAGE_ROOT');
+  const candidate = configured === undefined
+    ? PROGRAMME_V5_RUFLO_DEFAULT_PACKAGE_ROOT : configured;
+  try {
+    return canonicalDirectory(candidate, 'PACKAGE_ROOT');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      throw new Error(`HARNESS_PROGRAMME_V5_RUFLO_PINNED_PACKAGE_MISSING: ${candidate}`);
+    }
+    throw error;
+  }
 }
 
 function assertPackageSource(runtime: ReturnType<typeof createImmutablePrivateRuntime>): void {

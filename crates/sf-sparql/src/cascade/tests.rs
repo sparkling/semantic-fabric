@@ -56,6 +56,24 @@ fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
 }
 
 #[test]
+fn mysql_d1_quotes_an_unquoted_reserved_output_alias() {
+    let cols = vec![Box::<str>::from("ROLE")];
+    let query_scan = crate::iq::Scan {
+        alias: 0,
+        source: LogicalSource::Query("SELECT 'worker' AS ROLE".to_owned()),
+    };
+    let mut branch = Branch::single(query_scan);
+    wrap_scan_distinct(&mut branch, 0, &cols, sf_sql::Dialect::MySql);
+    let LogicalSource::Query(sql) = &branch.core[0].source else {
+        panic!("D1 must preserve a query source as a nested query")
+    };
+    assert!(
+        sql.contains("sfs0.`ROLE` AS `ROLE`"),
+        "MySQL reserved output aliases require dialect quoting: {sql}"
+    );
+}
+
+#[test]
 fn prune_drops_contradictory_equalities() {
     let mut b = Branch::single(scan(0, "emp"));
     b.where_conds

@@ -10,6 +10,7 @@ use crate::iq::{Branch, OrderKey, Scan, TermDef};
 use crate::{Plan, PlanForm};
 
 use super::batch::TERM_GEN_BATCH_SIZE;
+use super::driver::parallel_term_gen_for;
 use super::select;
 
 struct MockBackend {
@@ -110,4 +111,63 @@ fn order_by_spans_multiple_batches_correctly() {
         actual, expected,
         "ORDER BY must span every batch, not just within one"
     );
+}
+
+#[test]
+fn finite_order_window_compacts_across_multiple_batches_without_changing_slice() {
+    let n = 3 * TERM_GEN_BATCH_SIZE + 137;
+    let mut branch = Branch::single(Scan {
+        alias: 0,
+        source: LogicalSource::Table("t".to_owned()),
+    });
+    branch.bindings.insert(
+        "v".to_owned(),
+        TermDef::Derived {
+            term_map: TermMap::Column("val".into(), TermSpec::plain_literal()),
+            alias: 0,
+        },
+    );
+    let plan = Plan {
+        branches: vec![branch],
+        form: PlanForm::Select {
+            vars: vec!["v".to_owned()],
+        },
+        distinct: false,
+        limit: Some(7),
+        offset: 5,
+        order: vec![OrderKey {
+            var: "v".to_owned(),
+            descending: false,
+            expr: None,
+        }],
+        rust_group: None,
+        dialect: Dialect::Sqlite,
+        dedup_scopes: Vec::new(),
+        construct_drops_some_branch_var: false,
+    };
+    assert!(
+        !parallel_term_gen_for(&plan),
+        "finite ORDER reconstruction must stay sequential for its RSS bound"
+    );
+    let rows = (0..n)
+        .map(|index| RawTuple {
+            values: vec![Some(format!("{:07}", n - 1 - index))],
+            codes: vec![None],
+        })
+        .collect();
+    let mut backend = MockBackend { rows };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let solutions = runtime.block_on(select(&plan, &mut backend)).unwrap();
+    let actual: Vec<&str> = solutions
+        .rows
+        .iter()
+        .map(|row| match &row[0] {
+            Some(Term::Literal(literal)) => literal.value(),
+            other => panic!("expected literal, got {other:?}"),
+        })
+        .collect();
+    let expected: Vec<String> = (5..12).map(|index| format!("{index:07}")).collect();
+    assert_eq!(actual, expected);
 }

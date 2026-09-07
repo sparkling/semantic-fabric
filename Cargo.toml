@@ -1,14 +1,16 @@
 # semantic-fabric — Rust data-fabric workspace (ADR-0001).
-# Shared core + the virtualiser frontend (ADR-0003), realised as 8 crates (ADR-0006).
+# Shared core + the virtualiser frontend (ADR-0003), realised as 9 crates (ADR-0006).
 [workspace]
 resolver = "2"
 members = [
     "crates/sf-core",
     "crates/sf-sql",
     "crates/sf-mapping",
+    "crates/sf-validation",
     "crates/sf-sparql",
     "crates/sf-conformance",
     "crates/sf-bench",
+    "crates/sf-capture-supervisor",
     "crates/sf-serve",
     "crates/sf-cli",
 ]
@@ -29,19 +31,30 @@ oxjsonld = { version = "0.2.5", features = ["rdf-12"] }
 spargebra = { version = "=0.4.6", features = ["sparql-12", "sep-0002", "sep-0006", "standard-unicode-escaping"] }
 sparesults = { version = "0.3.3", features = ["sparql-12"] }
 oxsdatatypes = "0.2.2"
+bigdecimal = "0.4.10"
 # --- errors / CLI ---
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 sha2 = "=0.10.9"
+subtle = "=2.6.1"
 libc = "0.2"
 cargo-platform = "=0.3.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+# --- sealed native M⋈T validation substrate (ADR-0005 / ADR-0019) ---
+shacl = "=0.3.14"
+rudof_rdf = "=0.3.14"
+sparql_service = "=0.3.14"
 # --- internal crates ---
 sf-core = { path = "crates/sf-core" }
 sf-sql = { path = "crates/sf-sql" }
 sf-mapping = { path = "crates/sf-mapping" }
+sf-validation = { path = "crates/sf-validation" }
 sf-sparql = { path = "crates/sf-sparql" }
 sf-conformance = { path = "crates/sf-conformance" }
 sf-bench = { path = "crates/sf-bench" }

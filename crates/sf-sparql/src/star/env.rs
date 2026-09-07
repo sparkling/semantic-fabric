@@ -18,7 +18,7 @@ use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 use crate::iq::{collect_cond_cols, Branch, ColRef, TermDef};
 use crate::Plan;
 
-use super::util::fresh_component_var;
+use super::util::{fresh_component_var, FreshVars};
 
 /// ADR-0032 D3 §17.4.6 — the components of one composed (triple-term-valued)
 /// SPARQL variable. Every field is a variable bound directly by a real query
@@ -55,7 +55,11 @@ pub type StarEnv = BTreeMap<Variable, ComposedInfo>;
 /// vars on a first sighting (lookup-before-mint, see [`StarEnv`]'s doc
 /// comment for why reuse — not fresh minting per occurrence — is required
 /// here).
-pub(super) fn composed_info_for(var: &Variable, n: &mut usize, env: &mut StarEnv) -> ComposedInfo {
+pub(super) fn composed_info_for(
+    var: &Variable,
+    n: &mut FreshVars,
+    env: &mut StarEnv,
+) -> ComposedInfo {
     env.entry(var.clone())
         .or_insert_with(|| ComposedInfo {
             s_var: fresh_component_var(n),

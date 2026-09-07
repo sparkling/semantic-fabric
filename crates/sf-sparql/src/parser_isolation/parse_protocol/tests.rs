@@ -6,6 +6,7 @@ use super::*;
 mod golden;
 mod limits;
 mod mutations;
+mod primitives;
 
 pub(super) const SAMPLE_SOURCE: &str = "ASK {}";
 

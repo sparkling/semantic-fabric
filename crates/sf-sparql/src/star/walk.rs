@@ -22,8 +22,8 @@ use super::expr::{rewrite_agg_expr, rewrite_expr, rewrite_order_expr};
 use super::top_level::rewrite_union;
 use super::util::{
     empty_pattern, fresh_var, has_subject_position_triple_term, is_reifies,
-    named_node_pattern_to_term_pattern, RDF_PROPOSITION_FORM, RDF_PROPOSITION_FORM_OBJECT,
-    RDF_PROPOSITION_FORM_PREDICATE, RDF_PROPOSITION_FORM_SUBJECT,
+    named_node_pattern_to_term_pattern, FreshVars, RDF_PROPOSITION_FORM,
+    RDF_PROPOSITION_FORM_OBJECT, RDF_PROPOSITION_FORM_PREDICATE, RDF_PROPOSITION_FORM_SUBJECT,
 };
 
 /// Recurse through every `GraphPattern` container (rule R5), rewriting BGP
@@ -36,7 +36,7 @@ use super::util::{
 /// ([`super::top_level::rewrite_union`]).
 pub(super) fn rewrite_pattern(
     gp: &GraphPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     Ok(match gp {
@@ -158,7 +158,7 @@ pub(super) fn rewrite_pattern(
 /// rather than building a `Bgp` at all.
 fn rewrite_bgp(
     patterns: &[TriplePattern],
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     let mut out = Vec::with_capacity(patterns.len());
@@ -177,7 +177,7 @@ fn rewrite_bgp(
 /// [`rewrite_bgp`]); `Ok(true)` otherwise.
 fn rewrite_triple(
     tp: &TriplePattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
     out: &mut Vec<TriplePattern>,
 ) -> Result<bool> {
@@ -295,7 +295,7 @@ fn emit_component_patterns(
 /// substitution (R5b — see [`rewrite_path`]'s own handling of `None`).
 pub(super) fn substitute_triple(
     t: &TermPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     out: &mut Vec<TriplePattern>,
 ) -> Result<Option<TermPattern>> {
     match t {
@@ -324,7 +324,7 @@ pub(super) fn substitute_triple(
 pub(super) fn emit_basic_encoding(
     identity: &TermPattern,
     tp: &TriplePattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     out: &mut Vec<TriplePattern>,
 ) -> Result<()> {
     debug_assert!(
@@ -371,7 +371,7 @@ pub(super) fn emit_basic_encoding(
 /// Rule R5b: a property-path endpoint that is itself a quoted-triple pattern
 /// substitutes a fresh identity var ([`substitute_triple`]), with its
 /// basic-encoding patterns joined alongside the path node — the same
-/// `GraphPattern::Join` injection the DESCRIBE→CBD rewrite uses (`lib.rs`).
+/// `GraphPattern::Join` injection the DESCRIBE pre-pass uses (`lib.rs`).
 /// Neither endpoint quoted ⇒ no extra patterns ⇒ the path node is returned
 /// unchanged (the common, unaffected case). Either endpoint R1-statically-
 /// empty propagates to [`super::util::empty_pattern`], consistent with
@@ -382,7 +382,7 @@ fn rewrite_path(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
 ) -> Result<GraphPattern> {
     let mut extra = Vec::new();
     let Some(subject) = substitute_triple(subject, n, &mut extra)? else {

@@ -40,6 +40,18 @@ fn source_receipt() -> PathBuf {
     source_suite().join("sqlite-execution-receipt.tsv")
 }
 
+#[test]
+fn every_tracked_backend_receipt_has_a_self_consistent_profile_bound_digest() {
+    for name in [
+        "sqlite-execution-receipt.tsv",
+        "postgresql-execution-receipt.tsv",
+        "mysql-execution-receipt.tsv",
+    ] {
+        let text = fs::read_to_string(source_suite().join(name)).expect("read tracked receipt");
+        format::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+}
+
 fn never_run<'a>(
     called: &'a Cell<bool>,
 ) -> impl FnOnce(&SealedSuite) -> Result<ClassifiedReport, String> + 'a {

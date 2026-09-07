@@ -7,14 +7,20 @@ import { pathToFileURL } from 'node:url';
 import { TextDecoder } from 'node:util';
 
 export const GATE_NAMES = Object.freeze([
-  'rust', 'coding_harness', 'supervisor', 'acl_replay',
+  'rust', 'coding_harness', 'supervisor', 'acl_replay', 'pg_observation',
 ]);
 const MAX_DIFF_BYTES = 1_048_576;
 const MAX_MANIFEST_BYTES = 2_097_152;
+const MAX_QUALIFICATION_INVENTORY_BYTES = 1_048_576;
 const MAX_PATHS = 20_000;
 const MAX_PATH_BYTES = 4_096;
 const SHA = /^[0-9a-f]{40}$/;
 const decoder = new TextDecoder('utf-8', { fatal: true });
+const QUALIFICATION_INVENTORY_PATH =
+  'tests/postgresql/observation-qualification-inputs-v1.tsv';
+const QUALIFICATION_CATEGORIES = new Set([
+  'adr', 'profile', 'queries', 'tests', 'fixture', 'runner', 'protocol',
+]);
 
 const FULL_AUTHORITY_PATHS = new Set([
   '.gitignore',
@@ -37,6 +43,28 @@ const HARNESS_ROOT_PATHS = new Set([
   '.mcp.json', 'AGENTS.md', 'BENCHMARKS.md', 'CLAUDE.md', 'COMPARISON.md',
   'harness-plan.json', 'repo-profile.json',
 ]);
+const PG_OBSERVATION_AUTHORITY_PATHS = new Set([
+  'Cargo.lock',
+  'Cargo.toml',
+  'coding-harness/package-lock.json',
+  'coding-harness/package.json',
+  'coding-harness/tsconfig.json',
+  'crates/sf-conformance/Cargo.toml',
+  'crates/sf-sql/Cargo.toml',
+  'crates/sf-sql/src/introspect.rs',
+  'crates/sf-sql/src/introspect/postgres.rs',
+  'crates/sf-sql/src/lib.rs',
+  'docs/adr/ADR-0051-postgresql-16-public-observed-schema-profile.md',
+  'rust-toolchain.toml',
+  'tests/postgresql/postgresql-16-observation-qualification-receipt-pair-v1.json',
+]);
+const PG_OBSERVATION_AUTHORITY_PREFIXES = [
+  'coding-harness/__tests__/postgres-observation-qualification',
+  'coding-harness/src/postgres-observation-qualification',
+  'crates/sf-conformance/src/bin/postgres-observation-qualification',
+  'crates/sf-sql/src/introspect/postgres/',
+  'tests/postgresql/observation-qualification',
+];
 const RUST_HARNESS_PREFIXES = [
   '.cargo/',
   'crates/sf-bench/src/performance/',
@@ -70,22 +98,25 @@ function noGates() {
   return Object.fromEntries(GATE_NAMES.map((gate) => [gate, false]));
 }
 
-export function selectForPaths(paths, protectedPaths = []) {
+export function selectForPaths(paths, protectedPaths = [], qualificationPaths = []) {
   try {
     const changed = checkedPathList(paths, false);
-    return selectForChanges(changed.map((path) => ({ status: 'M', path })), protectedPaths);
+    return selectForChanges(
+      changed.map((path) => ({ status: 'M', path })), protectedPaths, qualificationPaths,
+    );
   } catch {
     return allGates();
   }
 }
 
-export function selectForChanges(changes, protectedPaths = []) {
+export function selectForChanges(changes, protectedPaths = [], qualificationPaths = []) {
   try {
     const changed = checkedChangeList(changes);
     const protectedSet = new Set(checkedPathList(protectedPaths, true));
+    const qualificationSet = new Set(checkedPathList(qualificationPaths, true));
     const selected = noGates();
     for (const { status, path } of changed) {
-      const classification = classify(path, protectedSet);
+      const classification = classify(path, protectedSet, qualificationSet);
       if (classification === null) return allGates();
       for (const gate of classification) selected[gate] = true;
       if ((status === 'A' || status === 'D' || status === 'T')
@@ -96,6 +127,10 @@ export function selectForChanges(changes, protectedPaths = []) {
     }
     if (selected.acl_replay) selected.supervisor = true;
     if (selected.supervisor) selected.coding_harness = true;
+    if (selected.pg_observation) {
+      selected.rust = true;
+      selected.coding_harness = true;
+    }
     return Object.freeze(selected);
   } catch {
     return allGates();
@@ -119,8 +154,12 @@ function checkedChangeList(value) {
   return checkedPaths.map((path, index) => ({ status: value[index].status, path }));
 }
 
-function classify(path, protectedPaths) {
+function classify(path, protectedPaths, qualificationPaths) {
   if (path.startsWith('.github/') || FULL_AUTHORITY_PATHS.has(path)) return GATE_NAMES;
+  if (qualificationPaths.has(path) || PG_OBSERVATION_AUTHORITY_PATHS.has(path)
+    || PG_OBSERVATION_AUTHORITY_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return ['pg_observation'];
+  }
   if (path.startsWith('coding-harness/supervisor-service/')) {
     return ['coding_harness', 'supervisor', 'acl_replay'];
   }
@@ -219,13 +258,50 @@ export function readProtectedPaths(manifestPath) {
   return checkedPathList(parsed.protectedPaths, false);
 }
 
-export function selectFromGit({ eventName, repository, baseSha, headSha, manifestPath }) {
+export function readQualificationPaths(inventoryPath) {
+  const bytes = readFileSync(inventoryPath);
+  if (bytes.length === 0 || bytes.length > MAX_QUALIFICATION_INVENTORY_BYTES) {
+    throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+  }
+  const text = decoder.decode(bytes);
+  if (!text.endsWith('\n') || text.includes('\r') || text.includes('\0')) {
+    throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+  }
+  const lines = text.slice(0, -1).split('\n');
+  if (lines.shift() !== 'category\tpath' || lines.length === 0) {
+    throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+  }
+  let previous = null;
+  const paths = lines.map((line) => {
+    const fields = line.split('\t');
+    if (fields.length !== 2 || !QUALIFICATION_CATEGORIES.has(fields[0])) {
+      throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+    }
+    const key = `${fields[0]}\0${fields[1]}`;
+    if (previous !== null && key <= previous) {
+      throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+    }
+    previous = key;
+    return fields[1];
+  });
+  const checked = checkedPathList(paths, false);
+  if (!checked.includes(QUALIFICATION_INVENTORY_PATH)) {
+    throw new TypeError('CI_SELECTOR_QUALIFICATION_INVENTORY_INVALID');
+  }
+  return checked;
+}
+
+export function selectFromGit({
+  eventName, repository, baseSha, headSha, manifestPath, qualificationInventoryPath,
+}) {
   if (eventName !== 'pull_request') return allGates();
   try {
     const protectedPaths = readProtectedPaths(manifestPath);
+    const qualificationPaths = readQualificationPaths(qualificationInventoryPath);
     return selectForChanges(
       readChangedChanges({ repository, baseSha, headSha }),
       protectedPaths,
+      qualificationPaths,
     );
   } catch {
     return allGates();
@@ -241,7 +317,9 @@ export function formatOutputs(gates) {
 }
 
 function parseArguments(argv) {
-  const allowed = new Set(['--event', '--repository', '--base', '--head', '--manifest']);
+  const allowed = new Set([
+    '--event', '--repository', '--base', '--head', '--manifest', '--qualification-inventory',
+  ]);
   if (argv.length % 2 !== 0) throw new TypeError('CI_SELECTOR_ARGUMENT_INVALID');
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -256,6 +334,7 @@ function parseArguments(argv) {
     eventName: values.get('--event'), repository: values.get('--repository'),
     baseSha: values.get('--base'), headSha: values.get('--head'),
     manifestPath: values.get('--manifest'),
+    qualificationInventoryPath: values.get('--qualification-inventory'),
   };
 }
 

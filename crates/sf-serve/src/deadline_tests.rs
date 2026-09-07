@@ -11,7 +11,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower::{Service, ServiceExt};
 
 use crate::budget::RequestBudget;
-use crate::deadline::{join_task, run_compiler, run_compiler_observed, CompilerRunError};
+use crate::deadline::{
+    join_task, run_compiler, run_compiler_observed, run_compiler_retaining, run_reserved_compiler,
+    CompilerRunError,
+};
 use crate::{router, Backend, ServeConfig};
 
 fn request_budget(timeout: Duration) -> RequestBudget {
@@ -24,12 +27,13 @@ fn request_budget(timeout: Duration) -> RequestBudget {
 #[tokio::test(start_paused = true)]
 async fn time_before_inner_router_dispatch_counts_toward_the_request_deadline() {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new_unchecked(
+    let mut cfg = ServeConfig::new_with_unverified_source(
         Backend::sqlite(conn),
         Vec::new(),
-        sf_sparql::Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     cfg.timeout = Duration::from_secs(15);
 
     let request = axum::http::Request::builder()
@@ -59,12 +63,13 @@ async fn time_before_inner_router_dispatch_counts_toward_the_request_deadline() 
 #[tokio::test(start_paused = true)]
 async fn request_clock_starts_before_body_extraction() {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new_unchecked(
+    let mut cfg = ServeConfig::new_with_unverified_source(
         Backend::sqlite(conn),
         Vec::new(),
-        sf_sparql::Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     cfg.timeout = Duration::from_secs(15);
 
     let (_body_tx, body_rx) =
@@ -268,6 +273,26 @@ async fn compiler_receives_the_same_request_accounting_identity() {
 
     assert_eq!(value, 7);
     assert_eq!(observer.consumed(QueryCharge::CompilerWork), 3);
+}
+
+#[tokio::test]
+async fn retained_compiler_slot_never_requeues_after_source_acquisition() {
+    let permits = Arc::new(Semaphore::new(1));
+    let budget = request_budget(Duration::from_secs(60));
+    let (preflight, reservation) =
+        run_compiler_retaining(budget.clone(), permits.clone(), |_worker_budget| 7usize)
+            .await
+            .expect("preflight reserves the compiler slot");
+    assert_eq!(preflight, 7);
+    assert_eq!(permits.available_permits(), 0);
+
+    // Closing the semaphore makes any second acquisition fail. A retained
+    // reservation still authorizes the later compile without another wait.
+    permits.close();
+    let compiled = run_reserved_compiler(budget, reservation, |_worker_budget| 11usize)
+        .await
+        .expect("authoritative compile reuses the retained slot");
+    assert_eq!(compiled, 11);
 }
 
 #[tokio::test(start_paused = true)]

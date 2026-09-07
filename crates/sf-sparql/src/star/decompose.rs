@@ -17,6 +17,7 @@ use crate::{Error, Result};
 
 use super::env::{composed_info_for, StarEnv};
 use super::expr::rewrite_expr;
+use super::util::FreshVars;
 use super::walk::rewrite_pattern;
 
 /// `BIND(expr AS ?v)` (rule R5a's Extend case, plus ADR-0032 D3 item 3's
@@ -27,7 +28,7 @@ pub(super) fn rewrite_extend(
     inner: &GraphPattern,
     variable: &Variable,
     expression: &Expression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     let rewritten_inner = rewrite_pattern(inner, n, env)?;
@@ -57,7 +58,7 @@ pub(super) fn rewrite_extend_inner(
     rewritten_inner: GraphPattern,
     variable: &Variable,
     expression: &Expression,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     if let Expression::FunctionCall(Function::Triple, parts) = expression {
@@ -93,7 +94,7 @@ pub(super) fn rewrite_extend_inner(
 pub(super) fn rewrite_values(
     variables: &[Variable],
     bindings: &[Vec<Option<GroundTerm>>],
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     let n_rows = bindings.len();
@@ -131,7 +132,7 @@ pub(super) fn rewrite_values(
 pub(super) fn decompose_column(
     var: Variable,
     cells: Vec<Option<GroundTerm>>,
-    n: &mut usize,
+    n: &mut FreshVars,
     out: &mut Vec<(Variable, Vec<Option<GroundTerm>>)>,
     env: &mut StarEnv,
 ) -> Result<()> {

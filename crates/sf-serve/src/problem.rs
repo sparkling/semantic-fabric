@@ -1,7 +1,4 @@
-//! Closed public-error vocabulary and the sole response redaction boundary.
-
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
@@ -12,12 +9,14 @@ use sf_core::query_control::QueryControlError::{
 };
 use sf_sparql::Error as SparqlError;
 
-static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+use crate::telemetry::{self, CorrelationId, FailureKind, StartupFailure};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProblemCode {
     InvalidRequest,
     NotFound,
     MethodNotAllowed,
+    NotAcceptable,
     UnsupportedMediaType,
     PayloadTooLarge,
     UnsupportedQuery,
@@ -51,6 +50,10 @@ const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlErro
         QueryControlError::SerializedBytesExceeded,
         ProblemCode::QueryBudgetExceeded,
     ),
+    (
+        QueryControlError::RetainedBytesExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
     (QueryControlError::AccountingOverflow, ProblemCode::Internal),
 ];
 impl ProblemCode {
@@ -75,6 +78,7 @@ impl ProblemCode {
             Self::InvalidRequest => "invalid-request",
             Self::NotFound => "not-found",
             Self::MethodNotAllowed => "method-not-allowed",
+            Self::NotAcceptable => "not-acceptable",
             Self::UnsupportedMediaType => "unsupported-media-type",
             Self::PayloadTooLarge => "payload-too-large",
             Self::UnsupportedQuery => "unsupported-query",
@@ -91,6 +95,7 @@ impl ProblemCode {
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            Self::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedQuery => StatusCode::NOT_IMPLEMENTED,
@@ -112,6 +117,7 @@ impl ProblemCode {
             Self::InvalidRequest => "The request is invalid.",
             Self::NotFound => "The requested resource was not found.",
             Self::MethodNotAllowed => "The request method is not supported for this resource.",
+            Self::NotAcceptable => "The requested response representation is not available.",
             Self::UnsupportedMediaType => "The request Content-Type is not supported.",
             Self::PayloadTooLarge => "The request body or query exceeds the configured byte limit.",
             Self::UnsupportedQuery => "The requested query or execution shape is not supported.",
@@ -120,6 +126,25 @@ impl ProblemCode {
             Self::ServiceOverloaded => "The service is temporarily overloaded.",
             Self::SourceUnavailable => "The source is temporarily unavailable.",
             Self::Internal => "The request could not be completed.",
+        }
+    }
+}
+
+impl From<ProblemCode> for FailureKind {
+    fn from(code: ProblemCode) -> Self {
+        match code {
+            ProblemCode::InvalidRequest => Self::InvalidRequest,
+            ProblemCode::NotFound => Self::NotFound,
+            ProblemCode::MethodNotAllowed => Self::MethodNotAllowed,
+            ProblemCode::NotAcceptable => Self::NotAcceptable,
+            ProblemCode::UnsupportedMediaType => Self::UnsupportedMediaType,
+            ProblemCode::PayloadTooLarge => Self::PayloadTooLarge,
+            ProblemCode::UnsupportedQuery => Self::UnsupportedQuery,
+            ProblemCode::RequestTimeout => Self::RequestTimeout,
+            ProblemCode::QueryBudgetExceeded => Self::QueryBudgetExceeded,
+            ProblemCode::ServiceOverloaded => Self::ServiceOverloaded,
+            ProblemCode::SourceUnavailable => Self::SourceUnavailable,
+            ProblemCode::Internal => Self::Internal,
         }
     }
 }
@@ -134,41 +159,80 @@ struct ProblemDetails {
     instance: String,
     code: &'static str,
     #[serde(rename = "correlationId")]
-    correlation_id: String,
+    correlation_id: CorrelationId,
 }
 
 impl ProblemDetails {
-    fn new(code: ProblemCode) -> Self {
-        let correlation_id = generated_correlation_id();
+    fn new(code: ProblemCode, correlation_id: &CorrelationId) -> Self {
         Self {
             kind: format!("urn:semantic-fabric:problem:{}", code.value()),
             title: code.title(),
             status: code.status().as_u16(),
             detail: code.detail(),
-            instance: format!("urn:semantic-fabric:problem-instance:{correlation_id}"),
+            instance: format!(
+                "urn:semantic-fabric:problem-instance:{}",
+                correlation_id.as_str()
+            ),
             code: code.value(),
-            correlation_id,
+            correlation_id: correlation_id.clone(),
         }
     }
 }
 
-fn generated_correlation_id() -> String {
-    let sequence = NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed);
-    format!("sf-{:08x}-{sequence:016x}", std::process::id())
+fn generated_correlation_id() -> CorrelationId {
+    CorrelationId::generate()
 }
 
+#[derive(Clone, Copy)]
+struct PendingProblem {
+    code: ProblemCode,
+    include_body: bool,
+}
+
+/// Build a typed pending problem. The outer request coordinator materializes it
+/// only after deadline arbitration, using the sole request correlation identity.
 pub(crate) fn response(code: ProblemCode) -> Response {
-    let details = ProblemDetails::new(code);
-    let correlation_id = details.correlation_id.clone();
-    let body = serde_json::to_vec(&details).expect("fixed problem details must serialize");
-    Response::builder()
+    pending_response(code, true)
+}
+
+pub(crate) fn response_without_body(code: ProblemCode) -> Response {
+    pending_response(code, false)
+}
+
+fn pending_response(code: ProblemCode, include_body: bool) -> Response {
+    let mut response = Response::builder()
         .status(code.status())
         .header(header::CONTENT_TYPE, "application/problem+json")
         .header(header::CACHE_CONTROL, "no-store")
         .header("x-content-type-options", "nosniff")
-        .header("x-correlation-id", correlation_id)
-        .body(Body::from(body))
-        .expect("static problem response builder")
+        .body(Body::empty())
+        .expect("static pending problem response builder");
+    response
+        .extensions_mut()
+        .insert(PendingProblem { code, include_body });
+    response
+}
+
+/// Materialize a pending problem at the outer winning-response boundary.
+pub(crate) fn finalize(
+    response: &mut Response,
+    correlation_id: &CorrelationId,
+) -> Option<FailureKind> {
+    let pending = response.extensions_mut().remove::<PendingProblem>()?;
+    debug_assert_eq!(response.status(), pending.code.status());
+    *response.body_mut() = if pending.include_body {
+        let details = ProblemDetails::new(pending.code, correlation_id);
+        let body = serde_json::to_vec(&details).expect("fixed problem details must serialize");
+        Body::from(body)
+    } else {
+        Body::empty()
+    };
+    response.headers_mut().insert(
+        "x-correlation-id",
+        HeaderValue::from_str(correlation_id.as_str())
+            .expect("generated correlation is an ASCII header value"),
+    );
+    Some(pending.code.into())
 }
 
 /// Build a temporary-unavailability response with the shared fixed retry hint.
@@ -202,6 +266,16 @@ enum StartupCode {
     Configuration,
     Source,
     Runtime,
+}
+
+impl From<StartupCode> for StartupFailure {
+    fn from(code: StartupCode) -> Self {
+        match code {
+            StartupCode::Configuration => Self::Configuration,
+            StartupCode::Source => Self::Source,
+            StartupCode::Runtime => Self::Runtime,
+        }
+    }
 }
 
 impl StartupCode {
@@ -285,7 +359,7 @@ impl fmt::Display for StartupCause {
 /// inside `sf-serve` for a future internal tracing sink.
 pub struct ServeError {
     code: StartupCode,
-    correlation_id: String,
+    correlation_id: CorrelationId,
     cause: StartupCause,
 }
 
@@ -305,7 +379,13 @@ impl ServeError {
 
     /// Bounded generated identifier suitable for support correlation.
     pub fn correlation_id(&self) -> &str {
-        &self.correlation_id
+        self.correlation_id.as_str()
+    }
+
+    /// Emit the safe startup failure vocabulary after the executable installs
+    /// its structured subscriber. The retained typed cause is never recorded.
+    pub fn record_telemetry(&self) {
+        telemetry::record_startup_failure(self.code.into(), &self.correlation_id);
     }
 
     #[allow(dead_code)]
@@ -321,7 +401,7 @@ impl fmt::Display for ServeError {
             "{}: {} (correlation {})",
             self.code.value(),
             self.code.detail(),
-            self.correlation_id
+            self.correlation_id.as_str()
         )
     }
 }
@@ -331,7 +411,7 @@ impl fmt::Debug for ServeError {
         formatter
             .debug_struct("ServeError")
             .field("code", &self.code.value())
-            .field("correlation_id", &self.correlation_id)
+            .field("correlation_id", &self.correlation_id.as_str())
             .field("cause", &"<redacted>")
             .finish()
     }
@@ -340,160 +420,5 @@ impl fmt::Debug for ServeError {
 impl std::error::Error for ServeError {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generated_ids_are_bounded_ascii_and_distinct() {
-        let first = generated_correlation_id();
-        let second = generated_correlation_id();
-        assert_ne!(first, second);
-        for id in [first, second] {
-            assert!(id.len() <= 32, "id={id:?}");
-            assert!(id.starts_with("sf-"));
-            assert!(id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
-        }
-    }
-
-    #[test]
-    fn sparql_mapping_borrows_and_does_not_discard_the_typed_cause() {
-        let sentinel = "typed_secret_cause";
-        let error = SparqlError::Sql(sentinel.to_owned());
-        assert_eq!(ProblemCode::from_sparql(&error), ProblemCode::Internal);
-        assert!(error.to_string().contains(sentinel));
-    }
-
-    #[test]
-    fn every_control_error_has_an_explicit_public_mapping() {
-        for error in QueryControlError::VARIANTS {
-            let mut mappings = CONTROL_PROBLEM_CODES
-                .iter()
-                .filter(|(candidate, _)| *candidate == error);
-            let (_, code) = mappings.next().expect("variant has a public mapping");
-            assert!(mappings.next().is_none(), "variant has one public mapping");
-            assert_eq!(ProblemCode::from_control(error), *code);
-        }
-    }
-
-    #[test]
-    fn every_problem_code_has_one_stable_status_and_public_value() {
-        let cases = [
-            (
-                ProblemCode::InvalidRequest,
-                StatusCode::BAD_REQUEST,
-                "invalid-request",
-            ),
-            (ProblemCode::NotFound, StatusCode::NOT_FOUND, "not-found"),
-            (
-                ProblemCode::MethodNotAllowed,
-                StatusCode::METHOD_NOT_ALLOWED,
-                "method-not-allowed",
-            ),
-            (
-                ProblemCode::UnsupportedMediaType,
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "unsupported-media-type",
-            ),
-            (
-                ProblemCode::PayloadTooLarge,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "payload-too-large",
-            ),
-            (
-                ProblemCode::UnsupportedQuery,
-                StatusCode::NOT_IMPLEMENTED,
-                "unsupported-query",
-            ),
-            (
-                ProblemCode::RequestTimeout,
-                StatusCode::GATEWAY_TIMEOUT,
-                "request-timeout",
-            ),
-            (
-                ProblemCode::QueryBudgetExceeded,
-                StatusCode::TOO_MANY_REQUESTS,
-                "query-budget-exceeded",
-            ),
-            (
-                ProblemCode::ServiceOverloaded,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "service-overloaded",
-            ),
-            (
-                ProblemCode::SourceUnavailable,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "source-unavailable",
-            ),
-            (
-                ProblemCode::Internal,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal-error",
-            ),
-        ];
-
-        for (code, status, value) in cases {
-            assert_eq!(code.status(), status);
-            assert_eq!(code.value(), value);
-            let details = ProblemDetails::new(code);
-            assert_eq!(details.status, status.as_u16());
-            assert_eq!(details.code, value);
-            assert!(!details.title.is_empty());
-            assert!(!details.detail.is_empty());
-        }
-        assert_eq!(
-            ProblemCode::ServiceOverloaded.detail(),
-            "The service is temporarily overloaded."
-        );
-    }
-
-    #[test]
-    fn temporary_unavailability_uses_one_fixed_retry_hint() {
-        for code in [
-            ProblemCode::ServiceOverloaded,
-            ProblemCode::SourceUnavailable,
-        ] {
-            let response = response_with_retry_after(code);
-            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-            assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "1");
-        }
-    }
-
-    #[test]
-    fn startup_public_formats_redact_the_retained_typed_cause() {
-        let sentinel = "startup_secret_cause";
-        let error = ServeError::new(StartupCause::SourceSpec {
-            spec: format!("mysql://user:{sentinel}@host/db"),
-            error: "invalid URL".to_owned(),
-        });
-        assert!(error.internal_cause().to_string().contains(sentinel));
-        assert_eq!(error.code(), "startup-source");
-        assert!(!error.to_string().contains(sentinel));
-        assert!(!format!("{error:?}").contains(sentinel));
-    }
-
-    #[test]
-    fn public_http_call_sites_cannot_accept_raw_error_strings() {
-        let http_source = include_str!("http.rs");
-        let request_deadline_source = include_str!("request_deadline.rs");
-        for (name, source) in [
-            ("http.rs", http_source),
-            ("request_deadline.rs", request_deadline_source),
-        ] {
-            assert!(!source.contains("err_text("), "source={name}");
-            assert!(!source.contains("response_for_status("), "source={name}");
-            assert!(!source.contains("Body::from("), "source={name}");
-        }
-        assert_eq!(
-            http_source.matches("Response::builder()").count(),
-            1,
-            "only the success response builder belongs in http.rs"
-        );
-        assert_eq!(
-            request_deadline_source
-                .matches("Response::builder()")
-                .count(),
-            0,
-            "request_deadline.rs must use the closed problem vocabulary"
-        );
-    }
-}
+#[path = "problem_tests.rs"]
+mod tests;

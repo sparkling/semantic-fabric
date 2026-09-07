@@ -4,7 +4,7 @@ use crate::schema::TableSchema;
 
 use super::{Postgres16NormalizedRelationsV1, PostgresSchemaIdentityUnavailableV1};
 
-pub(super) fn compare_postgres16_legacy_coordinates_v1(
+pub(in crate::introspect::postgres::observation) fn compare_postgres16_legacy_coordinates_v1(
     legacy: &[TableSchema],
     rich: &Postgres16NormalizedRelationsV1,
 ) -> Result<(), PostgresSchemaIdentityUnavailableV1> {

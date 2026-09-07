@@ -8,9 +8,10 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, IntrospectedSource, ServeConfig, SqlitePool};
 use tower::ServiceExt;
+
+mod support;
 
 const CREATE_SQL: &str = r#"
 CREATE TABLE "People" ("id" INTEGER PRIMARY KEY, "name" TEXT, "age" INTEGER);
@@ -34,17 +35,12 @@ fn sqlite_config() -> ServeConfig {
 fn sqlite_config_with_pool() -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(CREATE_SQL).unwrap();
-    let schema = introspect_sqlite_all(&conn).unwrap();
-    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
     let backend = Backend::sqlite(conn);
     let Backend::Sqlite(pool) = &backend else {
         unreachable!("fixture is SQLite")
     };
     let pool = pool.clone();
-    (
-        ServeConfig::new_unchecked(backend, maps, Tbox::default(), schema),
-        pool,
-    )
+    (support::serve_config(backend, MAPPING_TTL), pool)
 }
 
 /// A fixture with `n` generated People rows, for exercising the bounded-memory
@@ -57,9 +53,7 @@ fn big_sqlite_config(n: usize) -> ServeConfig {
          INSERT INTO \"People\" SELECT x, 'Person' || x, x % 100 FROM c;"
     ))
     .unwrap();
-    let schema = introspect_sqlite_all(&conn).unwrap();
-    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
-    ServeConfig::new_unchecked(Backend::sqlite(conn), maps, Tbox::default(), schema)
+    support::serve_config(Backend::sqlite(conn), MAPPING_TTL)
 }
 
 /// POST a raw `application/sparql-query` body, asking for `accept`.
@@ -320,7 +314,9 @@ async fn missing_query_param_returns_400() {
     let cfg = Arc::new(sqlite_config());
     let req = Request::builder()
         .method("GET")
-        .uri("/sparql")
+        // A truly query-less GET is W3C Service Description discovery. A query
+        // string which omits the required `query` field remains invalid.
+        .uri("/sparql?default-graph-uri=https%3A%2F%2Fexample.test%2Fgraph")
         .body(Body::empty())
         .unwrap();
     let (status, _ctype, _body) = send(cfg, req).await;
@@ -380,7 +376,7 @@ mod pg {
         // A plain admin connection drives DDL/seed/cleanup; the endpoint itself is
         // exercised over a real pool (`Backend::Pg` is a `deadpool_postgres::Pool`,
         // not a single shared client).
-        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!("SKIP pg_select_and_construct: no PostgreSQL on localhost:5432");
             return;
         };
@@ -413,7 +409,7 @@ mod pg {
 "#
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
+        let ontology = support::ontology_for_mapping(&maps);
         // Same conninfo as the admin connection (no dbname override) so the pool's
         // connections see the table the admin connection just created.
         let pool = pg_pool_sized(&conn_str, 1);
@@ -429,12 +425,9 @@ mod pg {
                 .await
                 .expect("seed same-name temporary shadow relation");
         }
-        let cfg = Arc::new(ServeConfig::new_unchecked(
-            Backend::Pg(pool),
-            maps,
-            Tbox::default(),
-            schema,
-        ));
+        let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
+        let cfg =
+            Arc::new(ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap());
 
         let (s_sel, _c, body) = send(
             cfg.clone(),
@@ -483,7 +476,7 @@ mod pg {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn pg_pool_concurrency_receipt() {
         let conn_str = base_conn();
-        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!("SKIP pg_pool_concurrency_receipt: no PostgreSQL on localhost:5432");
             return;
         };
@@ -513,26 +506,21 @@ mod pg {
   rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
 "#
         );
-        let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
-
         const N: usize = 16;
 
         /// Fire `n` concurrent SELECTs at a fresh endpoint over `pool`, asserting
         /// every response is a complete `200`, and return the wall-clock elapsed.
         async fn run_concurrent(
             pool: deadpool_postgres::Pool,
-            maps: Vec<sf_core::ir::TriplesMap>,
-            schema: Vec<sf_sql::TableSchema>,
+            mapping_ttl: &str,
             n: usize,
             rows: i64,
         ) -> std::time::Duration {
-            let cfg = Arc::new(ServeConfig::new_unchecked(
-                Backend::Pg(pool),
-                maps,
-                Tbox::default(),
-                schema,
-            ));
+            let maps = sf_mapping::parse_r2rml(mapping_ttl).unwrap();
+            let ontology = support::ontology_for_mapping(&maps);
+            let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
+            let cfg =
+                Arc::new(ServeConfig::from_authored_r2rml(source, mapping_ttl, ontology).unwrap());
             let start = std::time::Instant::now();
             let mut handles = Vec::with_capacity(n);
             for _ in 0..n {
@@ -562,11 +550,10 @@ mod pg {
         }
 
         let pool1 = pg_pool_sized(&conn_str, 1);
-        let single_conn_elapsed =
-            run_concurrent(pool1, maps.clone(), schema.clone(), N, ROWS).await;
+        let single_conn_elapsed = run_concurrent(pool1, &mapping_ttl, N, ROWS).await;
 
         let pool16 = pg_pool_sized(&conn_str, 16);
-        let pooled_elapsed = run_concurrent(pool16, maps, schema, N, ROWS).await;
+        let pooled_elapsed = run_concurrent(pool16, &mapping_ttl, N, ROWS).await;
 
         eprintln!(
             "PG pool concurrency ({N} concurrent SELECTs, {ROWS} rows each): \
@@ -591,7 +578,7 @@ mod pg {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pg_pool_exhaustion_sheds_503_with_retry_after() {
         let conn_str = base_conn();
-        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!(
                 "SKIP pg_pool_exhaustion_sheds_503_with_retry_after: \
                  no PostgreSQL on localhost:5432"
@@ -625,20 +612,19 @@ mod pg {
 "#
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
+        let ontology = support::ontology_for_mapping(&maps);
 
         // Hold the correctly configured pool's only connection explicitly.
         // This proves the exhaustion mapping without racing a first request's
         // compiler and stream startup against an arbitrary sleep.
         let pool =
             pg_pool_sized_with_wait(&conn_str, 1, Some(std::time::Duration::from_millis(50)));
+        let source = IntrospectedSource::observe_postgres(pool.clone())
+            .await
+            .unwrap();
+        let cfg =
+            Arc::new(ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap());
         let held = pool.get().await.expect("hold the sole PG pool connection");
-        let cfg = Arc::new(ServeConfig::new_unchecked(
-            Backend::Pg(pool),
-            maps,
-            Tbox::default(),
-            schema,
-        ));
 
         let resp2 = router(cfg.clone())
             .oneshot(post_query(
@@ -765,15 +751,9 @@ async fn sqlite_pool_concurrency_receipt() {
         n: usize,
         rows: usize,
     ) -> std::time::Duration {
-        let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
-        let (backend, schema) = Backend::sqlite_pool_from_path(path.to_str().unwrap(), pool_size)
+        let (backend, _schema) = Backend::sqlite_pool_from_path(path.to_str().unwrap(), pool_size)
             .expect("open sqlite pool");
-        let cfg = Arc::new(ServeConfig::new_unchecked(
-            backend,
-            maps,
-            Tbox::default(),
-            schema,
-        ));
+        let cfg = Arc::new(support::serve_config(backend, MAPPING_TTL));
         let start = std::time::Instant::now();
         let mut handles = Vec::with_capacity(n);
         for _ in 0..n {

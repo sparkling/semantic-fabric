@@ -47,6 +47,7 @@ fn snapshot_contract_is_public(_: &Postgres16PublicObservedSnapshotV1) {}
 fn guard_code_is_exhaustive(code: PostgresSchemaIdentityGuardCodeV1) {
     match code {
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding
+        | PostgresSchemaIdentityGuardCodeV1::ClientEncoding
         | PostgresSchemaIdentityGuardCodeV1::IdentifierLength
         | PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit
         | PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes
@@ -91,6 +92,7 @@ fn unavailable_reason_is_exhaustive(reason: PostgresSchemaIdentityUnavailableV1)
 fn unavailable_algebra_is_closed_redacted_and_source_free() {
     let guard_codes = [
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding,
+        PostgresSchemaIdentityGuardCodeV1::ClientEncoding,
         PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit,
         PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes,
         PostgresSchemaIdentityGuardCodeV1::ReplicationRole,

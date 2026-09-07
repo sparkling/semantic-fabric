@@ -16,6 +16,7 @@ use super::{PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailable
 use self::accounting::{add_semantic_text, add_source_type_text, validate_raw_text_accounting};
 mod accounting;
 mod legacy;
+pub(super) use legacy::compare_postgres16_legacy_coordinates_v1;
 pub(super) const MAX_PHYSICAL_ATTRIBUTES_PER_RELATION_PG16_V1: usize = 1_600;
 pub(super) const MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1: usize = MAX_COLUMNS_TOTAL_V1;
 

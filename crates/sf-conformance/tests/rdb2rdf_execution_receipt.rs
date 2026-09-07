@@ -22,8 +22,16 @@ fn postgres_receipt() -> PathBuf {
     source_suite().join("postgresql-execution-receipt.tsv")
 }
 
+fn mysql_receipt() -> PathBuf {
+    source_suite().join("mysql-execution-receipt.tsv")
+}
+
 fn live_postgres_is_configured() -> bool {
     std::env::var_os("SF_PG_URL").is_some()
+}
+
+fn live_mysql_is_configured() -> bool {
+    std::env::var_os("SF_MYSQL_SOCKET").is_some() || std::env::var_os("SF_MYSQL_URL").is_some()
 }
 
 struct TempDir(PathBuf);
@@ -116,7 +124,13 @@ fn make_metadata_self_consistent(path: &Path) {
         outcome_records.push_str(line);
         outcome_records.push('\n');
     }
-    let outcomes_sha256 = format!("{:x}", Sha256::digest(outcome_records.as_bytes()));
+    let backend = metadata_value(path, "backend");
+    let type_profile = metadata_value(path, "execution-type-profile");
+    let outcome_identity = format!(
+        "semantic-fabric-rdb2rdf-outcomes-v2\nbackend\t{backend}\n\
+         execution-type-profile\t{type_profile}\n{outcome_records}"
+    );
+    let outcomes_sha256 = format!("{:x}", Sha256::digest(outcome_identity.as_bytes()));
     let replacements = [
         ("case-count", case_count.to_string()),
         ("r2rml-count", r2rml_count.to_string()),
@@ -197,12 +211,12 @@ fn production_check_replays_exact_outcomes_and_is_whole_suite_neutral() {
 }
 
 #[test]
-fn legacy_v2_header_is_not_reinterpreted_as_backend_aware() {
+fn legacy_v4_header_is_not_reinterpreted_as_current() {
     let receipt = TempReceipt::copy();
     replace_once(
         &receipt.path,
-        "semantic-fabric-rdb2rdf-execution-receipt-v3",
-        "semantic-fabric-rdb2rdf-execution-receipt-v2",
+        "semantic-fabric-rdb2rdf-execution-receipt-v5",
+        "semantic-fabric-rdb2rdf-execution-receipt-v4",
     );
 
     let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
@@ -210,6 +224,44 @@ fn legacy_v2_header_is_not_reinterpreted_as_backend_aware() {
         error.contains("invalid execution receipt header"),
         "{error}"
     );
+}
+
+#[test]
+fn execution_type_profile_mutation_is_rejected() {
+    let receipt = TempReceipt::copy();
+    replace_once(
+        &receipt.path,
+        "meta\texecution-type-profile\tsqlite-declared-or-storage-v1",
+        "meta\texecution-type-profile\tmysql-w3c-sql-2008-v1",
+    );
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
+    assert!(error.contains("execution-type-profile"), "{error}");
+}
+
+#[test]
+fn outcome_receipts_explicitly_decline_provider_identity_attestation() {
+    for path in [source_receipt(), postgres_receipt(), mysql_receipt()] {
+        assert_eq!(metadata_value(&path, "provider-version"), "unbound");
+        assert_eq!(metadata_value(&path, "provider-image-digest"), "unbound");
+    }
+}
+
+#[test]
+fn mysql_receipt_replays_exact_required_live_outcomes_when_configured() {
+    if !live_mysql_is_configured() {
+        eprintln!("UNTESTED: configure an isolated MySQL provider to replay the receipt");
+        return;
+    }
+    let before = suite_snapshot(&source_suite());
+    let receipt = execution_receipt::check_for(&source_suite(), &mysql_receipt(), Backend::MySql)
+        .expect("required-live MySQL outcomes match the tracked receipt");
+
+    assert_eq!(receipt.backend(), Backend::MySql);
+    assert_eq!(receipt.cases().len(), 87);
+    assert_eq!(receipt.count(Status::Passed), 74);
+    assert_eq!(receipt.count(Status::Failed), 1);
+    assert_eq!(receipt.count(Status::Skipped), 12);
+    assert_eq!(suite_snapshot(&source_suite()), before);
 }
 
 #[test]

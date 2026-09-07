@@ -21,9 +21,10 @@ use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts};
-use sf_serve::{router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, IntrospectedSource, ServeConfig};
 use tower::ServiceExt;
+
+mod support;
 
 /// Base MySQL URL: `SF_MYSQL_URL` if set, else the `mysql_e2e` container default.
 /// Includes a default database; the throwaway db is created/USE-d over it.
@@ -97,10 +98,6 @@ async fn mysql_stream_releases_connection_on_early_drop() {
         .await
         .expect("insert rows");
 
-    let schema = vec![sf_sql::introspect::introspect_mysql(&mut admin, "People")
-        .await
-        .expect("introspect People")];
-    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
     drop(admin);
 
     // A size-1 pool scoped to the throwaway db: the whole pool is exactly ONE
@@ -112,12 +109,15 @@ async fn mysql_stream_releases_connection_on_early_drop() {
         .into();
     let pool = Pool::new(db_opts);
 
-    let cfg = Arc::new(ServeConfig::new_unchecked(
-        Backend::Mysql(pool.clone()),
-        maps,
-        Tbox::default(),
-        schema,
-    ));
+    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
+    let ontology = support::ontology_for_mapping(&maps);
+    let source = IntrospectedSource::observe_mysql(pool.clone())
+        .await
+        .expect("observe serving source");
+    let cfg = Arc::new(
+        ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
+            .expect("admit authored mapping"),
+    );
 
     // Fire a large streaming SELECT at the endpoint (draws the pool's one conn).
     let req = Request::builder()

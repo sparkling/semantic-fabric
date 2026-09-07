@@ -11,6 +11,7 @@ sf-core.workspace = true
 sf-sql.workspace = true
 sf-sparql.workspace = true
 sf-mapping.workspace = true
+sf-validation.workspace = true
 # RDF/result serialisers reused from the Oxigraph substrate (ADR-0004/0019).
 oxrdf.workspace = true
 oxttl.workspace = true
@@ -23,17 +24,25 @@ tokio.workspace = true
 tokio-stream.workspace = true
 form_urlencoded.workspace = true
 http-body-util = "0.1"
+http-body = "1"
 # Source drivers (held in the server backend; ADR-0006).
 rusqlite = { workspace = true, features = ["bundled"] }
 tokio-postgres = "0.7"
 deadpool-postgres = "0.14" # PG connection pool for the serve lane (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding 2) — was a single shared Client, serialising all PG HTTP requests
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] } # MySQL serve backend (ADR-0024 M4, §4.2 dedicated-conn lane)
 thiserror.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+metrics.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 form_urlencoded.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 rusqlite = { workspace = true, features = ["bundled", "functions"] }
+spargebra.workspace = true
+spareval = { version = "0.2.6", features = ["sparql-12", "sep-0002", "sep-0006"] }
+tracing-subscriber.workspace = true
+metrics-exporter-prometheus.workspace = true
