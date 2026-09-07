@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-02
-updated: 2026-09-06
+updated: 2026-09-07
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -422,7 +422,7 @@ consumer destructures and moves its fourth state; there is no identity-dropping 
 Both states continue through `CompilerSchema::from_unverified_observation`.
 For ordinary authored mappings, identity does not enter `CompileScope`, cache keys, admission, readiness, reload or execution. The private Direct-Mapping generation expectation retains and rechecks it as one exact fact, but authority comes only from the owned lease type-state and connection.
 That use neither upgrades `CompilerSchema` nor makes the digest a capability. Equal identities in separate runtime bindings do not merge process-local binding authority.
-Startup emits one bounded structural availability diagnostic; unavailable output contains only its closed reason and never a source error. Server-encoding mismatch remains non-authorizing unavailability; client encoding, identifier length and search path remain fatal because they can invalidate legacy decoding or name resolution.
+Startup emits one bounded structural availability diagnostic through ADR-0011's product JSON subscriber and configured INFO ceiling; unavailable output contains only its closed reason and never a source error. Server-encoding mismatch remains non-authorizing unavailability; client encoding, identifier length and search path remain fatal because they can invalidate legacy decoding or name resolution.
 
 ## Required evidence
 

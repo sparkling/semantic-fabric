@@ -199,9 +199,11 @@ async fn open_backend_inner(
                             error: "PostgreSQL source observation failed".to_owned(),
                         })
                     })?;
-            eprintln!(
-                "{}",
-                crate::schema_observation::postgres_startup_observation_diagnostic(
+            tracing::info!(
+                target: sf_core::TELEMETRY_TARGET,
+                schema = crate::telemetry::SCHEMA,
+                event = "source.schema_observation",
+                availability = %crate::schema_observation::postgres_startup_observation_diagnostic(
                     snapshot.availability()
                 )
             );

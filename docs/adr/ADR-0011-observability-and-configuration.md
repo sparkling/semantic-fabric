@@ -83,15 +83,22 @@ implements:
 > PostgreSQL cancellation, no plaintext downgrade and stalled-handshake rejection.
 > A fresh MySQL process proves explicit crypto-provider initialization. CLI tests
 > prove unsafe settings and trust-reference errors reject before file/network I/O.
-> Live encrypted backend and release-artifact qualification remain open; this
-> does not add inbound HTTP TLS or a direct external secret-store protocol.
+> Required native CLI qualification now covers digest-pinned PostgreSQL 16.15
+> and MySQL 8.4.11: authenticated exact single-source queries and mixed UNION,
+> server-observed encrypted sessions, separate private CAs, wrong CA/name rejection
+> and a swapped second-source CA failure. Fixtures own their local Docker IDs,
+> random credentials and temporary data; no external database endpoint is accepted.
+> This exposed a bare PostgreSQL availability diagnostic, now routed through the
+> product JSON subscriber at INFO with its unchanged closed, non-authorizing text.
+> Exact-release-artifact qualification remains open; this does not add inbound
+> HTTP TLS or a direct external secret-store protocol.
 >
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
 > but there is no distinct `emit_sql` span and no adapter-internal span propagation
 > into blocking `sf-sql` bridges. **R4 is partial:** the exactly-once sticky
 > governance winner emits both a bounded trace event and the closed counter, but
 > the complete ADR-0010 action set is not yet covered. The remaining ten metric
-> families, OTLP, separate control-listener/authentication policy, live TLS qualification,
+> families, OTLP, separate control-listener/authentication policy, release-artifact TLS qualification,
 > and measured instrumentation-overhead evidence remain
 > pending.
 >
@@ -157,7 +164,7 @@ implements:
 > consumes no request body, runtime lease, deadline, or application-work permit,
 > including while saturated, not ready, or draining. The complete ADR-0011
 > control plane still requires the remaining ten metric families, OTLP,
-> live encrypted-source qualification, source polling/failure policy, and SLO
+> release-artifact qualification, source polling/failure policy, and SLO
 > qualification named above.
 
 ## Context and Problem Statement

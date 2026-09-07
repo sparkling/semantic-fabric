@@ -264,7 +264,7 @@ jobs:
         ports:
           - 11433:1433
     env:
-      SF_PG_URL: "host=localhost port=5432 user=sftest password=sftest dbname=sftest"
+      SF_PG_URL: "host=127.0.0.1 port=5432 user=sftest password=sftest dbname=sftest"
       SF_MYSQL_URL: "mysql://root:sftest@127.0.0.1:13306/sftest"
       SF_MSSQL_URL: "server=tcp:localhost,11433;user id=SA;password=SfTest123!"
     steps:
@@ -297,6 +297,13 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
+      - name: test required-live authenticated PostgreSQL/MySQL source TLS
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          test_name='authenticated_public_queries_require_verified_source_tls'
+          cargo test --locked -p sf-cli --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+          cargo test --locked -p sf-cli --test source_tls_live -- --ignored --exact "$test_name" --nocapture
       # Private ADR-0040 comparison evidence only. The feature stays default-off
       # and this gate does not admit the substrate into product execution.
       - name: clippy (sf-sparql secure-spill-prototype)
