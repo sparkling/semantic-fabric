@@ -39,6 +39,10 @@
 //! HTTP round trip, and by then the query has already succeeded. A deadline
 //! overrun *before* `StartQueryExecution` returns leaves nothing to stop because
 //! there is no `QueryExecutionId` yet, so the execution may still run at AWS.
+//! Cancelling the `open_branch` or `column_names` future after
+//! `StartQueryExecution` returns also prevents this library from awaiting
+//! `StopQueryExecution`; cancellation-safe serving integration remains an
+//! admission gate.
 //!
 //! # Verification tier
 //!
@@ -49,6 +53,8 @@ mod client;
 mod config;
 mod credentials;
 mod params;
+#[cfg(test)]
+mod robustness_tests;
 mod sign;
 mod stream;
 mod wire;

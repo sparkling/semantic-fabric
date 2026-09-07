@@ -6,7 +6,7 @@
 //! bound. Credentials live in
 //! [`AthenaCredentials`](super::credentials::AthenaCredentials).
 
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
@@ -29,6 +29,8 @@ const MAX_RETRIES_LIMIT: u32 = 10;
 const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_TOTAL_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RESPONSE_BYTES_LIMIT: usize = 256 * 1024 * 1024;
 
 pub(super) fn cfg_err(msg: impl Into<String>) -> Error {
     Error::Marshal(format!("athena config: {}", msg.into()))
@@ -49,6 +51,7 @@ pub struct AthenaConfig {
     pub(crate) max_retries: u32,
     pub(crate) retry_backoff: Duration,
     pub(crate) page_size: u32,
+    pub(crate) max_response_bytes: usize,
 }
 
 impl AthenaConfig {
@@ -70,6 +73,7 @@ impl AthenaConfig {
             max_retries: 3,
             retry_backoff: Duration::from_millis(100),
             page_size: MAX_PAGE_SIZE,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         })
     }
 
@@ -204,6 +208,22 @@ impl AthenaConfig {
         Ok(self)
     }
 
+    /// Maximum bytes accepted for one AWS JSON response body.
+    ///
+    /// The default is 64 MiB, large enough for Athena's maximum-size row plus
+    /// JSON framing while preventing an endpoint from forcing unbounded
+    /// buffering. Values may be configured up to 256 MiB.
+    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Result<Self> {
+        if max_response_bytes == 0 || max_response_bytes > MAX_RESPONSE_BYTES_LIMIT {
+            return Err(cfg_err(format!(
+                "max response bytes must be in 1..={MAX_RESPONSE_BYTES_LIMIT}, \
+                 got {max_response_bytes}"
+            )));
+        }
+        self.max_response_bytes = max_response_bytes;
+        Ok(self)
+    }
+
     /// The signing region.
     pub fn region(&self) -> &str {
         &self.region
@@ -276,67 +296,39 @@ fn validate_endpoint(raw: &str) -> Result<String> {
     {
         return Err(cfg_err("endpoint must not contain whitespace"));
     }
-    let (scheme, rest) = match endpoint.split_once("://") {
-        Some(("https", rest)) => ("https", rest),
-        Some(("http", rest)) => ("http", rest),
-        _ => return Err(cfg_err("endpoint must start with http:// or https://")),
-    };
-    if rest.contains('?') || rest.contains('#') {
+    let mut url = reqwest::Url::parse(endpoint)
+        .map_err(|e| cfg_err(format!("endpoint is not a valid URL: {e}")))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(cfg_err("endpoint must start with http:// or https://"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
         return Err(cfg_err("endpoint must not carry a query or fragment"));
     }
-    let (authority, path) = match rest.find('/') {
-        Some(i) => rest.split_at(i),
-        None => (rest, ""),
-    };
-    if !(path.is_empty() || path == "/") {
+    if url.path() != "/" {
         return Err(cfg_err("endpoint must not carry a path"));
     }
-    if authority.contains('@') {
+    if !url.username().is_empty() || url.password().is_some() {
         return Err(cfg_err("endpoint must not carry URL userinfo"));
     }
-    let host = endpoint_host(authority)?;
-    if scheme == "http" && !is_loopback(&host) {
+    let host = url
+        .host_str()
+        .ok_or_else(|| cfg_err("endpoint must have a host"))?;
+    if url.scheme() == "http" && !is_loopback(host) {
         return Err(cfg_err(
             "plain http endpoints are only allowed for loopback hosts",
         ));
     }
-    Ok(format!("{scheme}://{authority}"))
-}
-
-/// Split `host[:port]` (or `[v6]:port`) and validate both halves.
-fn endpoint_host(authority: &str) -> Result<String> {
-    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let (host, tail) = rest
-            .split_once(']')
-            .ok_or_else(|| cfg_err("endpoint has an unterminated IPv6 host"))?;
-        let port = match tail.strip_prefix(':') {
-            Some(p) => Some(p),
-            None if tail.is_empty() => None,
-            None => return Err(cfg_err("endpoint has a malformed IPv6 authority")),
-        };
-        (host, port)
-    } else {
-        match authority.split_once(':') {
-            Some((host, port)) => (host, Some(port)),
-            None => (authority, None),
-        }
-    };
-    if host.is_empty() {
-        return Err(cfg_err("endpoint must have a host"));
-    }
-    if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
-            return Err(cfg_err("endpoint has a malformed port"));
-        }
-    }
-    Ok(host.to_ascii_lowercase())
+    // `Url` canonicalizes the scheme, host casing, IPv6 notation, and port.
+    // Store that exact authority so SigV4 and reqwest cannot disagree.
+    url.set_path("");
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 fn is_loopback(host: &str) -> bool {
-    host == "localhost"
-        || host == "::1"
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
         || host
-            .parse::<Ipv4Addr>()
+            .parse::<IpAddr>()
             .map(|addr| addr.is_loopback())
             .unwrap_or(false)
 }
@@ -406,10 +398,26 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_is_normalized_once_for_signing_and_transport() {
+        let cfg = AthenaConfig::new("us-east-1")
+            .unwrap()
+            .with_endpoint("HTTPS://ATHENA.US-EAST-1.AMAZONAWS.COM:443/")
+            .unwrap();
+        assert_eq!(cfg.endpoint(), "https://athena.us-east-1.amazonaws.com");
+        assert_eq!(cfg.request_url(), "https://athena.us-east-1.amazonaws.com/");
+    }
+
+    #[test]
     fn bounds_are_validated() {
         let cfg = AthenaConfig::new("us-east-1").unwrap();
         assert!(cfg.clone().with_page_size(0).is_err());
         assert!(cfg.clone().with_page_size(1001).is_err());
+        assert!(cfg.clone().with_max_response_bytes(0).is_err());
+        assert!(cfg
+            .clone()
+            .with_max_response_bytes(256 * 1024 * 1024 + 1)
+            .is_err());
+        assert!(cfg.clone().with_max_response_bytes(1024).is_ok());
         assert!(cfg.clone().with_page_size(1).is_ok());
         assert!(cfg.clone().with_page_size(1000).is_ok());
         assert!(cfg.clone().with_max_retries(11).is_err());

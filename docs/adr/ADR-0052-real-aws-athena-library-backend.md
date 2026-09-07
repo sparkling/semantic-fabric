@@ -70,6 +70,9 @@ AWS throttling shapes. Redirects are disabled because signatures are
 host-bound and request headers can contain a session token. Result tokens are
 treated as opaque, length-bounded values sent only to the fixed validated
 endpoint. Constant-memory cycle detection rejects repeated token chains.
+Every success or error response is read incrementally under a configurable
+byte ceiling before JSON decoding, including responses without a
+`Content-Length` header.
 
 First-page `ColumnInfo` establishes the result schema. Later metadata must
 match it exactly or the response is rejected. Rows preserve nulls and are
@@ -124,6 +127,10 @@ Athena remains unavailable through `sf-serve`. Admission still requires:
 `GetQueryResults` also requires S3 `GetObject` permission for the selected
 result location. Running `column_names` executes a billed Athena query.
 Dropping a stream after query success does not undo that execution.
+Cancelling an `open_branch` or `column_names` future after Athena has returned
+an execution ID likewise prevents the future from awaiting
+`StopQueryExecution`; cancellation-safe ownership belongs to the deferred
+serving-admission work.
 
 ## References
 

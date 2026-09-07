@@ -145,6 +145,9 @@ pub(crate) fn parse_result_page(
     let result_set = response
         .get("ResultSet")
         .ok_or_else(|| "GetQueryResults response has no ResultSet".to_owned())?;
+    if !result_set.is_object() {
+        return Err("GetQueryResults ResultSet is not an object".to_owned());
+    }
 
     let declared = parse_column_names(result_set)?;
     let columns = match (established, declared) {
@@ -180,10 +183,13 @@ pub(crate) fn parse_result_page(
 }
 
 fn parse_column_names(result_set: &Value) -> WireResult<Option<Vec<String>>> {
-    let Some(column_info) = result_set
-        .get("ResultSetMetadata")
-        .and_then(|m| m.get("ColumnInfo"))
-    else {
+    let Some(metadata) = result_set.get("ResultSetMetadata") else {
+        return Ok(None);
+    };
+    let metadata = metadata
+        .as_object()
+        .ok_or_else(|| "GetQueryResults ResultSetMetadata is not an object".to_owned())?;
+    let Some(column_info) = metadata.get("ColumnInfo") else {
         return Ok(None);
     };
     let column_info = column_info
@@ -205,12 +211,18 @@ fn parse_column_names(result_set: &Value) -> WireResult<Option<Vec<String>>> {
 }
 
 fn parse_row(raw_row: &Value, ncols: usize) -> WireResult<RawTuple> {
+    let raw_row = raw_row
+        .as_object()
+        .ok_or_else(|| "GetQueryResults Row is not an object".to_owned())?;
     let mut values: Vec<Option<String>> = Vec::with_capacity(ncols);
     if let Some(data) = raw_row.get("Data") {
         let data = data
             .as_array()
             .ok_or_else(|| "GetQueryResults Row.Data is not an array".to_owned())?;
         for cell in data {
+            let cell = cell
+                .as_object()
+                .ok_or_else(|| "GetQueryResults Datum is not an object".to_owned())?;
             match cell.get("VarCharValue") {
                 // Athena signals SQL NULL by omitting VarCharValue entirely.
                 None | Some(Value::Null) => values.push(None),

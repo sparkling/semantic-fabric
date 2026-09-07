@@ -8,7 +8,7 @@
 
 use std::time::{Instant, SystemTime};
 
-use reqwest::{Client, RequestBuilder, StatusCode};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -124,7 +124,7 @@ impl AthenaSession {
         request: RequestBuilder,
         operation: &str,
     ) -> std::result::Result<Value, Attempt> {
-        let response = request.send().await.map_err(|e| Attempt {
+        let mut response = request.send().await.map_err(|e| Attempt {
             retryable: true,
             error: self.err(format!("athena {operation}: transport failure: {e}")),
         })?;
@@ -134,12 +134,7 @@ impl AthenaSession {
             .get("x-amzn-errortype")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let text = response.text().await.map_err(|e| Attempt {
-            retryable: true,
-            error: self.err(format!(
-                "athena {operation}: response body read failed: {e}"
-            )),
-        })?;
+        let text = self.read_body(&mut response, operation).await?;
 
         if status.is_success() {
             if text.trim().is_empty() {
@@ -152,6 +147,50 @@ impl AthenaSession {
             });
         }
         Err(self.classify(operation, status, error_type.as_deref(), &text))
+    }
+
+    async fn read_body(
+        &self,
+        response: &mut Response,
+        operation: &str,
+    ) -> std::result::Result<String, Attempt> {
+        let limit = self.config.max_response_bytes;
+        if response
+            .content_length()
+            .is_some_and(|length| usize::try_from(length).map_or(true, |length| length > limit))
+        {
+            return Err(Attempt {
+                retryable: false,
+                error: self.err(format!(
+                    "athena {operation}: response body exceeds the configured \
+                     {limit}-byte limit"
+                )),
+            });
+        }
+
+        let capacity = response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0);
+        let mut body = Vec::with_capacity(capacity);
+        while let Some(chunk) = response.chunk().await.map_err(|e| Attempt {
+            retryable: true,
+            error: self.err(format!(
+                "athena {operation}: response body read failed: {e}"
+            )),
+        })? {
+            if body.len().saturating_add(chunk.len()) > limit {
+                return Err(Attempt {
+                    retryable: false,
+                    error: self.err(format!(
+                        "athena {operation}: response body exceeds the configured \
+                         {limit}-byte limit"
+                    )),
+                });
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
     fn classify(
@@ -382,5 +421,38 @@ mod tests {
         assert!(error.contains("HTTP 307"), "{error}");
         source.verify().await;
         destination.verify().await;
+    }
+
+    #[tokio::test]
+    async fn response_bodies_are_bounded_before_json_parsing() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 65]))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let config = AthenaConfig::new("us-east-1")
+            .unwrap()
+            .with_endpoint(server.uri())
+            .unwrap()
+            .with_max_response_bytes(64)
+            .unwrap()
+            .with_max_retries(0)
+            .unwrap();
+        let session =
+            AthenaSession::new(config, AthenaCredentials::new("AKID", "secret").unwrap()).unwrap();
+        let error = session
+            .call(
+                "GetQueryResults",
+                &json!({"QueryExecutionId": "q-1"}),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("64-byte limit"), "{error}");
+        server.verify().await;
     }
 }

@@ -14,8 +14,9 @@ use super::wire::{self, ResultPage};
 /// A bounded pull cursor over one Athena query's result set.
 ///
 /// At most ONE page is buffered: the next `GetQueryResults` call is issued only
-/// after the current page's rows have been fully drained, so memory stays
-/// proportional to `AthenaConfig::with_page_size`, not to the result set.
+/// after the current page's rows have been fully drained. The response-byte
+/// ceiling and `AthenaConfig::with_page_size` keep memory bounded independently
+/// of total result-set size.
 ///
 /// The `NextToken` is opaque and is only ever sent as a JSON body field to the
 /// same fixed, signed endpoint — it never becomes part of a URL, so a hostile
@@ -38,6 +39,7 @@ pub struct AthenaStream {
 
 /// Brent cycle detection over the token sequence. This catches cycles of any
 /// length while retaining one token rather than every page token.
+#[derive(Clone)]
 struct TokenCycleDetector {
     anchor: Option<String>,
     power: u64,
@@ -106,12 +108,13 @@ impl AthenaStream {
 
     /// Fetch exactly one further page. Returns `false` once paging is done.
     async fn fetch_next_page(&mut self) -> Result<bool> {
-        let Some(token) = self.next_token.take() else {
+        let Some(token) = self.next_token.as_deref() else {
             return Ok(false);
         };
+        let mut next_cycle = self.token_cycle.clone();
         // A repeated token means the service is not making progress; following
         // it would loop forever inside `next_row`.
-        if self.token_cycle.observe(&token) {
+        if next_cycle.observe(token) {
             return Err(self.session.err(format!(
                 "athena GetQueryResults: query {} returned a cyclic NextToken; \
                  refusing to page in a loop",
@@ -121,7 +124,7 @@ impl AthenaStream {
         let body = wire::get_query_results_body(
             &self.query_execution_id,
             self.session.config.page_size,
-            Some(&token),
+            Some(token),
         );
         let response = self
             .session
@@ -129,6 +132,10 @@ impl AthenaStream {
             .await?;
         let page = wire::parse_result_page(&response, Some(&self.columns))
             .map_err(|m| self.session.err(format!("athena {m}")))?;
+        // Commit pagination state only after the request and response parsing
+        // complete. If this future is cancelled at an await, the same token can
+        // be retried instead of being lost and misreported as end-of-stream.
+        self.token_cycle = next_cycle;
         self.next_token = page.next_token;
         self.rows.extend(page.rows);
         Ok(true)
