@@ -18,8 +18,20 @@ hana-backend = ["dep:hdbconnect"]
 odbc-backend = ["dep:odbc-api"]
 ## Enable the Oracle backend (oracle crate, requires OCI client libraries).
 oracle-backend = ["dep:oracle"]
-## Enable REST backends (Snowflake/BigQuery/Athena/Databricks via reqwest).
-rest-backends = ["dep:reqwest", "dep:serde_json"]
+## Enable the existing REST backends (Snowflake/BigQuery/Databricks/Trino via reqwest).
+rest-backends = [
+    "dep:reqwest",
+    "dep:serde_json",
+]
+## Enable the AWS Athena JSON 1.1 backend and its SigV4 signing dependencies.
+athena-backend = [
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:aws-sigv4",
+    "dep:aws-credential-types",
+    "dep:sha2",
+    "tokio/time",
+]
 
 [dependencies]
 sf-core.workspace = true
@@ -45,13 +57,20 @@ hdbconnect = { version = "0.32", optional = true }
 odbc-api = { version = "28", optional = true }
 # Oracle backend — requires OCI client libraries (oracle crate).
 oracle = { version = "0.6", optional = true }
-# REST backends — Snowflake / BigQuery / Athena / Databricks via HTTP.
+# REST backends — Snowflake / BigQuery / Databricks / Trino via HTTP.
 reqwest = { version = "0.12", features = ["json"], optional = true }
 serde_json = { version = "1", optional = true }
+# AWS Athena backend — AWS JSON 1.1 protocol over SigV4-signed POSTs. The
+# official AWS signer is used rather than a hand-rolled one; `http1` matches
+# reqwest 0.12's `http` 1.x types, `sign-http` is the HTTP-request signer.
+aws-sigv4 = { version = "1.5.1", default-features = false, features = ["sign-http", "http1"], optional = true }
+aws-credential-types = { version = "1.3", optional = true }
+sha2 = { workspace = true, optional = true }        # ClientRequestToken derivation (time/pid/counter digest)
 
 [dev-dependencies]
-# Mocked HTTP server for the rest-backends test suite (Snowflake/Athena/Databricks/
-# Trino execute_sql + presto_execute pagination) — these backends take an arbitrary
+# Mocked HTTP server for REST and Athena backend tests (Snowflake/Databricks/
+# Trino execute_sql + presto_execute pagination, plus AWS JSON 1.1 contracts).
+# These backends take an arbitrary
 # base_url already, so a local mock server exercises the real request/response path
 # without needing live cloud credentials.
 wiremock = "0.6"

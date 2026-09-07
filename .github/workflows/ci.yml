@@ -228,6 +228,14 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
+      # Athena is isolated from the aggregate `rest-backends` feature so unrelated
+      # HTTP providers do not acquire its AWS SigV4 dependency closure. Exercise
+      # the provider explicitly so its signing, redaction, and wire-contract code
+      # cannot disappear from the required workspace gates through feature unification.
+      - name: clippy (sf-sql athena-backend)
+        run: cargo clippy --locked -p sf-sql --features athena-backend --all-targets -- -D warnings
+      - name: test (sf-sql athena-backend)
+        run: cargo test --locked -p sf-sql --features athena-backend
       # DuckDB backend (embedded, `bundled` feature — no external service needed).
       # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
       # crate in the dependency graph turns it on, so these tests never ran in CI
