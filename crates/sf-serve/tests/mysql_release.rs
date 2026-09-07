@@ -114,10 +114,10 @@ async fn mysql_stream_releases_connection_on_early_drop() {
     let source = IntrospectedSource::observe_mysql(pool.clone())
         .await
         .expect("observe serving source");
-    let cfg = Arc::new(
-        ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
-            .expect("admit authored mapping"),
-    );
+    let mut cfg = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
+        .expect("admit authored mapping");
+    cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    let cfg = Arc::new(cfg);
 
     // Fire a large streaming SELECT at the endpoint (draws the pool's one conn).
     let req = Request::builder()

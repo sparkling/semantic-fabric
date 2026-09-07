@@ -93,6 +93,78 @@ fn source_and_source_env_are_required_and_mutually_exclusive() {
 }
 
 #[test]
+fn query_authentication_options_are_mutually_exclusive() {
+    let mut command = serve_command(&missing_mapping());
+    command.args([
+        "--source",
+        "sqlite::memory:",
+        "--auth-token-env",
+        "SF_TEST_QUERY_AUTH",
+        "--allow-unauthenticated",
+    ]);
+    assert_eq!(run(command).status.code(), Some(2));
+}
+
+#[test]
+fn bad_query_credential_reference_fails_before_source_or_file_io_and_is_redacted() {
+    for value in [
+        None,
+        Some("".to_owned()),
+        Some(SECRET.to_owned()),
+        Some("x".repeat(1025)),
+        Some(format!("{SECRET} with spaces")),
+    ] {
+        let mut command = serve_command(&missing_mapping());
+        command.args([
+            "--source-env",
+            "SF_SOURCE_MUST_NOT_BE_READ",
+            "--auth-token-env",
+            "SF_QUERY_AUTH_TEST",
+        ]);
+        command
+            .env_remove("SF_SOURCE_MUST_NOT_BE_READ")
+            .env_remove("SF_QUERY_AUTH_TEST");
+        if let Some(value) = value {
+            command.env("SF_QUERY_AUTH_TEST", value);
+        }
+        let output = run(command);
+        assert_eq!(output.status.code(), Some(1));
+        assert_absent(&output, SECRET);
+        assert_absent(&output, "SF_QUERY_AUTH_TEST");
+        assert_absent(&output, "SF_SOURCE_MUST_NOT_BE_READ");
+        assert_structured_startup_failure(
+            &String::from_utf8(output.stderr).unwrap(),
+            "startup-configuration",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_query_credential_is_a_redacted_configuration_failure() {
+    use std::os::unix::ffi::OsStringExt;
+    let mut command = serve_command(&missing_mapping());
+    command
+        .args([
+            "--source",
+            "sqlite::memory:",
+            "--auth-token-env",
+            "SF_QUERY_AUTH_TEST",
+        ])
+        .env(
+            "SF_QUERY_AUTH_TEST",
+            std::ffi::OsString::from_vec(vec![0xff; 40]),
+        );
+    let output = run(command);
+    assert_eq!(output.status.code(), Some(1));
+    assert_absent(&output, "SF_QUERY_AUTH_TEST");
+    assert_structured_startup_failure(
+        &String::from_utf8(output.stderr).unwrap(),
+        "startup-configuration",
+    );
+}
+
+#[test]
 fn invalid_missing_empty_and_oversized_environment_values_fail_at_startup() {
     let mapping = missing_mapping();
 

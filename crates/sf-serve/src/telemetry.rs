@@ -117,6 +117,8 @@ impl Stage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FailureKind {
+    Unauthenticated,
+    AccessDenied,
     InvalidRequest,
     NotFound,
     MethodNotAllowed,
@@ -134,6 +136,8 @@ pub(crate) enum FailureKind {
 impl FailureKind {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::AccessDenied => "access_denied",
             Self::InvalidRequest => "invalid_request",
             Self::NotFound => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",

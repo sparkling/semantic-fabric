@@ -1,4 +1,6 @@
 use super::*;
+use crate::stream::RdfFormat;
+use sparesults::QueryResultsFormat;
 
 // --- form_param ---------------------------------------------------------------
 

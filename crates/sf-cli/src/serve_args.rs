@@ -10,6 +10,14 @@ use crate::telemetry::TelemetryLevel;
 
 #[derive(clap::Args)]
 pub(super) struct ServeArgs {
+    /// Environment variable containing a random query bearer token (32–1024 bytes).
+    /// Its holder may read all mapped data; use TLS at the deployment edge.
+    #[arg(long, conflicts_with = "allow_unauthenticated")]
+    pub(super) auth_token_env: Option<String>,
+    /// Explicitly allow anyone to query all mapped data (development only).
+    /// Without this or --auth-token-env, all query requests are denied.
+    #[arg(long, default_value_t = false)]
+    pub(super) allow_unauthenticated: bool,
     #[command(flatten)]
     pub(super) source_input: SourceArgs,
     #[command(flatten)]

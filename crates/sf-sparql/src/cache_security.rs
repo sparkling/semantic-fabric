@@ -1,9 +1,8 @@
-//! Private, non-authorizing security partition for compiled plans (ADR-0018).
+//! Security partition for compiled plans (ADR-0018); authentication is the caller's job.
 //!
-//! This is deliberately additive: the existing product cache remains
-//! unchanged, while this seam requires an explicit request context, expected
-//! policy snapshot, and distinct cache. Nothing in this module authenticates,
-//! authorizes, or activates a serving endpoint.
+//! Protected serving uses this distinct cache with an explicit context and
+//! expected policy. This module itself does not authenticate or authorize;
+//! callers must perform admission before compiling or executing a plan.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -18,7 +17,7 @@ use crate::Plan;
 
 /// A security-scoped compilation failure carrying no identity material.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SecurityCompileError {
+pub enum SecurityCompileError {
     #[error("request security context does not match the expected policy snapshot")]
     PolicyMismatch,
     #[error("security cache entry does not match the compiler scope")]
@@ -140,7 +139,7 @@ impl fmt::Debug for SecurityCachedPlan {
 ///
 /// It has no `Default`; zero capacity is unrepresentable, and it never aliases
 /// the existing product cache.
-pub(crate) struct SecurityPlanCache {
+pub struct SecurityPlanCache {
     inner: quick_cache::sync::Cache<SecurityPlanKey, SecurityCachedPlan>,
     #[cfg(test)]
     reads: std::sync::atomic::AtomicUsize,
@@ -149,7 +148,7 @@ pub(crate) struct SecurityPlanCache {
 }
 
 impl SecurityPlanCache {
-    pub(crate) fn new(capacity: NonZeroUsize) -> Self {
+    pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
             inner: quick_cache::sync::Cache::new(capacity.get()),
             #[cfg(test)]
@@ -200,14 +199,14 @@ impl fmt::Debug for SecurityPlanCache {
 }
 
 /// Compiler view pinned to one snapshot-owned policy and one explicit cache.
-pub(crate) struct SecurityScopedCompiler<'a> {
+pub struct SecurityScopedCompiler<'a> {
     binding: &'a CompilerBinding,
     expected_policy: PolicySnapshotId,
     cache: &'a SecurityPlanCache,
 }
 
 impl CompilerBinding {
-    pub(crate) fn for_security_policy<'a>(
+    pub fn for_security_policy<'a>(
         &'a self,
         expected_policy: PolicySnapshotId,
         cache: &'a SecurityPlanCache,
@@ -221,7 +220,7 @@ impl CompilerBinding {
 }
 
 impl SecurityScopedCompiler<'_> {
-    pub(crate) fn compile_shared(
+    pub fn compile_shared(
         &self,
         context: &SecurityContext,
         sparql: &str,

@@ -7,6 +7,8 @@ use crate::source::PreparedSource;
 use crate::{router, Backend, IntrospectedSource, ServeError, SourceRef};
 
 pub struct ServeOptions {
+    /// Explicit service-lifetime access policy; resolve credentials before source I/O.
+    pub query_admission: crate::QueryAdmission,
     pub source: SourceRef,
     pub mapping: MappingRef,
     /// Optional second relational source and its source-local R2RML mapping.

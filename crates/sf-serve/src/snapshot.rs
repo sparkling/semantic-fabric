@@ -302,6 +302,40 @@ impl RuntimeSnapshot {
             .preflight_compile(sparql, control)
     }
 
+    pub(crate) fn compile_secured(
+        &self,
+        source_id: SourceId,
+        query: &str,
+        budget: &crate::budget::RequestBudget,
+        policy: sf_core::security_context::PolicySnapshotId,
+    ) -> sf_sparql::Result<BoundPlan> {
+        self.registry
+            .binding(source_id)
+            .ok_or_else(|| sf_sparql::Error::Mapping("source is not registered".into()))?
+            .compile_secured(query, budget, policy)
+    }
+
+    pub(crate) fn compile_federated_secured(
+        &self,
+        source_ids: [SourceId; 2],
+        query: &str,
+        budget: &crate::budget::RequestBudget,
+        policy: sf_core::security_context::PolicySnapshotId,
+    ) -> sf_sparql::Result<BoundFederatedPlan> {
+        let context = budget
+            .security_context()
+            .filter(|context| context.matches_policy_snapshot(policy))
+            .ok_or_else(|| sf_sparql::Error::Mapping("security partition mismatch".into()))?;
+        // Authoritative compilation under the generation lease, with NO raw cache
+        // access. Both fragments execute under this same admitted budget/context.
+        let plan = self.preflight_federated_union(source_ids, query, budget)?;
+        let bindings =
+            source_ids.map(|id| self.registry.binding(id).expect("compiled source exists"));
+        let mut bound = BoundFederatedPlan::new(plan, bindings);
+        bound.security = Some(context);
+        Ok(bound)
+    }
+
     pub(crate) fn prepare_execution(
         &self,
         bound: BoundPlan,

@@ -78,6 +78,17 @@ fn initialize_telemetry_for(
 /// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
+    let query_admission = match args.auth_token_env.as_deref() {
+        Some(name) => match sf_serve::BearerQueryAdmission::from_env(name) {
+            Ok(profile) => sf_serve::QueryAdmission::Bearer(profile),
+            Err(error) => {
+                error.record_telemetry();
+                return ExitCode::FAILURE;
+            }
+        },
+        None if args.allow_unauthenticated => sf_serve::QueryAdmission::UnrestrictedDevelopment,
+        None => sf_serve::QueryAdmission::Deny,
+    };
     let metrics = match metrics::init(args.metrics) {
         Ok(metrics) => metrics,
         Err(error) => {
@@ -89,6 +100,7 @@ fn serve(args: ServeArgs) -> ExitCode {
     let mapping = args.mapping_input.into_mapping_ref();
     let additional_source = args.additional_source_input.into_options();
     let opts = ServeOptions {
+        query_admission,
         source,
         mapping,
         additional_source,

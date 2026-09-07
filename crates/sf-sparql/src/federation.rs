@@ -201,8 +201,9 @@ pub fn compile_source_affine_union(
 }
 
 /// Compile the exact two-arm profile without reading or populating either
-/// source cache. Serving uses this only as a non-authorizing, pre-I/O preflight;
-/// the returned value must be discarded before generation-lease acquisition.
+/// source cache. Serving discards preflight results before generation admission,
+/// then may invoke this again for authoritative protected UNION compilation
+/// under the admitted generation lease and security context.
 pub fn compile_source_affine_union_uncached(
     sparql: &str,
     bindings: [&CompilerBinding; 2],

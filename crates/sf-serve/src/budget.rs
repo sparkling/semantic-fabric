@@ -16,6 +16,7 @@ use crate::lifecycle::ShutdownPhase;
 use crate::telemetry::{self, CorrelationId};
 
 struct RequestBudgetState {
+    security: Option<sf_core::security_context::SecurityContext>,
     accounting: QueryBudget,
     deadline: Option<Instant>,
     deadline_representable: bool,
@@ -66,6 +67,7 @@ impl RequestBudget {
         let (terminal, _) = watch::channel(None);
         let deadline = now.checked_add(timeout);
         let request = Self(Arc::new(RequestBudgetState {
+            security: None,
             accounting: QueryBudget::new(limits),
             deadline: Some(deadline.unwrap_or(now)),
             deadline_representable: deadline.is_some(),
@@ -91,6 +93,7 @@ impl RequestBudget {
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {
         let (terminal, _) = watch::channel(None);
         Self(Arc::new(RequestBudgetState {
+            security: None,
             accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
@@ -118,6 +121,22 @@ impl RequestBudget {
         }
         state.admission = Some(permit);
         Ok(())
+    }
+
+    pub(crate) fn retain_security(
+        &mut self,
+        context: sf_core::security_context::SecurityContext,
+    ) -> Result<(), ()> {
+        let state = Arc::get_mut(&mut self.0).ok_or(())?;
+        if state.security.is_some() {
+            return Err(());
+        }
+        state.security = Some(context);
+        Ok(())
+    }
+
+    pub(crate) fn security_context(&self) -> Option<sf_core::security_context::SecurityContext> {
+        self.0.security
     }
 
     /// Await a phase without refreshing the original absolute deadline.

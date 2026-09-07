@@ -18,8 +18,10 @@ pub fn serve_config(backend: Backend, mapping_turtle: &str) -> ServeConfig {
     let mapping = sf_mapping::parse_r2rml(mapping_turtle).expect("parse test mapping");
     let ontology = ontology_for_mapping(&mapping);
     let source = IntrospectedSource::observe_sqlite(backend).expect("observe SQLite test source");
-    ServeConfig::from_authored_r2rml(source, mapping_turtle, ontology)
-        .expect("test mapping has matching test-only ontology declarations")
+    let mut cfg = ServeConfig::from_authored_r2rml(source, mapping_turtle, ontology)
+        .expect("test mapping has matching test-only ontology declarations");
+    cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    cfg
 }
 
 pub fn ontology_for_mapping(mapping: &[TriplesMap]) -> SemanticOntology {

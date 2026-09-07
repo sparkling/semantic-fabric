@@ -30,6 +30,9 @@ pub(crate) async fn acquire(
     query: &str,
     budget: &RequestBudget,
 ) -> Result<RequestGenerationAdmission, Response> {
+    cfg.query_admission
+        .validate(budget)
+        .map_err(problem::response)?;
     let source_ids = cfg.query_mode().source_ids().into_iter().flatten();
     let requirements = snapshot
         .generation_requirements(source_ids)

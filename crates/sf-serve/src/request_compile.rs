@@ -25,6 +25,9 @@ pub(crate) async fn preflight(
     query: String,
     budget: RequestBudget,
 ) -> Result<CompilerReservation, Response> {
+    cfg.query_admission
+        .validate(&budget)
+        .map_err(problem::response)?;
     let mode = cfg.query_mode();
     let max_order_rows = cfg.max_order_rows();
     let permits = cfg.compiler_permits();
@@ -66,9 +69,21 @@ pub(crate) async fn compile(
     budget: RequestBudget,
     reservation: Option<CompilerReservation>,
 ) -> Result<BoundQuery, Response> {
+    cfg.query_admission
+        .validate(&budget)
+        .map_err(problem::response)?;
     let mode = cfg.query_mode();
     let permits = cfg.compiler_permits();
+    let policy = cfg.query_admission.policy();
     let work = move |worker_budget: RequestBudget| match mode {
+        QueryMode::Single(source_id) if policy.is_some() => snapshot
+            .compile_secured(source_id, &query, &worker_budget, policy.unwrap())
+            .map(Box::new)
+            .map(BoundQuery::Single),
+        QueryMode::SourceAffineUnion(source_ids) if policy.is_some() => snapshot
+            .compile_federated_secured(source_ids, &query, &worker_budget, policy.unwrap())
+            .map(Box::new)
+            .map(BoundQuery::Federated),
         QueryMode::Single(source_id) => snapshot
             .compile(source_id, &query, &worker_budget)
             .map(Box::new)

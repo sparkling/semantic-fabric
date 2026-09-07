@@ -72,6 +72,7 @@ impl QueryMode {
 /// source or the exact bounded two-source UNION profile; only request-governance
 /// knobs remain configurable.
 pub struct ServeConfig {
+    pub(crate) query_admission: crate::QueryAdmission,
     runtime: Arc<RuntimeManager>,
     query_mode: QueryMode,
     pub timeout: Duration,
@@ -103,7 +104,9 @@ impl ServeConfig {
             ontology,
             RuntimeSource::new(source, mapping),
         )?;
-        Ok(Self::from_snapshot(QueryMode::Single(source_id), snapshot))
+        let mut cfg = Self::from_snapshot(QueryMode::Single(source_id), snapshot);
+        cfg.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
+        Ok(cfg)
     }
 
     /// Build the bounded two-source serving profile. This mode accepts only the
@@ -157,6 +160,7 @@ impl ServeConfig {
             .expect("default query length has a representable form-body limit");
         let (shutdown, _) = watch::channel(ShutdownPhase::Running);
         Self {
+            query_admission: crate::QueryAdmission::Deny,
             runtime: Arc::new(RuntimeManager::new(snapshot)),
             query_mode,
             timeout: DEFAULT_TIMEOUT,
@@ -214,6 +218,12 @@ impl ServeConfig {
                 error: error.to_string(),
             })
         })
+    }
+
+    /// Select access policy before sharing this config. Changes require a new
+    /// server; this service-lifetime policy stays pinned across runtime leases.
+    pub fn set_query_admission(&mut self, admission: crate::QueryAdmission) {
+        self.query_admission = admission;
     }
 
     /// Unit-test construction over an explicitly fabricated observation.

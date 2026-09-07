@@ -34,7 +34,7 @@ pub mod run;
 pub mod source;
 pub mod stream;
 
-#[allow(dead_code)] // ADR-0018 vocabulary; no enforcement call site exists yet.
+#[allow(dead_code)] // Mask vocabulary reserved; query admission emits allow/deny.
 mod access_telemetry;
 mod activation;
 mod admission;
@@ -57,6 +57,7 @@ mod pg_pool;
 mod pg_response;
 mod post_body;
 mod problem;
+mod query_security;
 mod request_compile;
 mod request_deadline;
 mod request_generation;
@@ -121,6 +122,7 @@ pub use metrics::{
 pub use observed_source::IntrospectedSource;
 pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use problem::ServeError;
+pub use query_security::{BearerQueryAdmission, QueryAdmission};
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
 pub use run::{serve_blocking, AdditionalSourceOptions, MappingRef, ServeOptions};
 pub use semantic_admission::SemanticAdmissionError;

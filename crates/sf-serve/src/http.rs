@@ -10,7 +10,6 @@ use axum::routing::get;
 use axum::Router;
 use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_sparql::{exec, exec_mysql, Plan, PlanForm};
-use sparesults::QueryResultsFormat;
 
 use crate::activation::RuntimeSnapshotLease;
 use crate::admission;
@@ -24,14 +23,17 @@ use crate::problem::{self, ProblemCode};
 use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
 use crate::sqlite_admission;
-use crate::stream::{self, RdfFormat};
+use crate::stream;
 use crate::telemetry::{
     execute as traced_execute, in_stage as traced, in_stage_sync as traced_sync, Stage,
 };
 
+#[path = "http_negotiation.rs"]
+mod negotiation;
 #[cfg(test)]
 #[path = "http_tests.rs"]
 mod tests;
+use negotiation::{negotiate_rdf, negotiate_results};
 
 /// Build the governed query service plus fixed discovery and health controls.
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
@@ -174,14 +176,15 @@ async fn process(
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::UnsupportedQuery);
             }
-            let execution =
-                match traced_sync(Stage::BindExecution, || snapshot.prepare_execution(*bound)) {
-                    Ok(execution) => execution,
-                    Err(_) => {
-                        let _ = generations.finish().await;
-                        return problem::response(ProblemCode::Internal);
-                    }
-                };
+            let execution = match traced_sync(Stage::BindExecution, || {
+                snapshot.prepare_request_execution(*bound, &budget)
+            }) {
+                Ok(execution) => execution,
+                Err(_) => {
+                    let _ = generations.finish().await;
+                    return problem::response(ProblemCode::Internal);
+                }
+            };
             let (source_id, binding_identity, backend, verified_generation, plan) =
                 execution.into_parts();
             if !generations.matches(source_id, &binding_identity, verified_generation) {
@@ -218,7 +221,7 @@ async fn process(
                 }
             }
             let execution = match traced_sync(Stage::BindExecution, || {
-                snapshot.prepare_federated_execution(*bound)
+                snapshot.prepare_federated_request_execution(*bound, &budget)
             }) {
                 Ok(execution) => execution,
                 Err(_) => {
@@ -484,32 +487,6 @@ fn accept(headers: &HeaderMap) -> Option<String> {
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
-}
-
-/// Negotiate the SELECT/ASK results format from `Accept` (default: Results JSON).
-fn negotiate_results(accept: Option<&str>) -> QueryResultsFormat {
-    let a = accept.unwrap_or("").to_ascii_lowercase();
-    if a.contains("sparql-results+xml") || a.contains("application/xml") || a.contains("text/xml") {
-        QueryResultsFormat::Xml
-    } else if a.contains("text/tab-separated-values") {
-        QueryResultsFormat::Tsv
-    } else if a.contains("text/csv") {
-        QueryResultsFormat::Csv
-    } else {
-        QueryResultsFormat::Json
-    }
-}
-
-/// Negotiate the CONSTRUCT/DESCRIBE RDF format from `Accept` (default: Turtle).
-fn negotiate_rdf(accept: Option<&str>) -> RdfFormat {
-    let a = accept.unwrap_or("").to_ascii_lowercase();
-    if a.contains("application/ld+json") {
-        RdfFormat::JsonLd
-    } else if a.contains("application/n-triples") {
-        RdfFormat::NTriples
-    } else {
-        RdfFormat::Turtle
-    }
 }
 
 fn ok_stream(content_type: &str, body: Body) -> Response {

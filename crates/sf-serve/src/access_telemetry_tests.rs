@@ -46,6 +46,63 @@ fn adopted_access_decision_labels_are_stable() {
 }
 
 #[test]
+fn real_request_admission_emits_one_redacted_decision_per_attempt() {
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use tower::ServiceExt;
+    const TOKEN: &str = "test-only-audit-principal-0123456789";
+    let capture = Capture::default();
+    let dispatch = Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish(),
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tracing::dispatcher::with_default(&dispatch, || {
+        runtime.block_on(async {
+            let mut config = crate::ServeConfig::new_with_unverified_source(
+                crate::Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
+                vec![],
+                crate::test_support::empty_ontology(),
+                vec![],
+            )
+            .unwrap();
+            config.set_query_admission(crate::QueryAdmission::Bearer(
+                crate::BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+            ));
+            let app = crate::router(Arc::new(config));
+            for token in ["wrong", TOKEN] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::post("/sparql")
+                            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                drop(response);
+            }
+        })
+    });
+    let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    assert!(!output.contains(TOKEN) && !output.contains("Bearer") && !output.contains("wrong"));
+    let decisions: Vec<Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["event"] == "security.access_decision")
+        .map(|event| event["decision"].clone())
+        .collect();
+    assert_eq!(decisions, vec![Value::from("deny"), Value::from("allow")]);
+}
+
+#[test]
 fn access_decisions_emit_only_closed_payload_free_fields_on_the_m3_target() {
     let capture = Capture::default();
     let subscriber = tracing_subscriber::fmt()

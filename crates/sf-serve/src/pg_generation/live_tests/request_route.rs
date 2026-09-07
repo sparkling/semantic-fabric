@@ -27,10 +27,10 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
         .expect("admit request-route Direct Mapping");
     let source = RuntimeSource::admitted(source, mapping)
         .expect("bind request-route mapping to verified generation");
-    let cfg = Arc::new(
-        ServeConfig::from_runtime_source(source, ontology)
-            .expect("build private request-route runtime"),
-    );
+    let mut cfg = ServeConfig::from_runtime_source(source, ontology)
+        .expect("build private request-route runtime");
+    cfg.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
+    let cfg = Arc::new(cfg);
     exercise_config(fixture, &cfg).await;
 }
 

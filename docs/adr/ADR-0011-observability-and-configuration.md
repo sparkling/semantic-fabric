@@ -44,6 +44,12 @@ implements:
 > terminals record exactly once. A real `sf-cli` child proves both the disabled
 > default and enabled endpoint.
 >
+> ADR-0018's public bearer query-admission profile now emits the existing
+> payload-free `security.access_decision` allow/deny trace once per attempt;
+> credential material never enters its fields. A real-request capture test
+> verifies the path. Mask enforcement and paired access-decision metrics remain
+> open; the three-family Prometheus contract is unchanged.
+>
 > **R1 is partial:** the root and current request/compiler boundaries are traced,
 > but there is no distinct `emit_sql` span and no adapter-internal span propagation
 > into blocking `sf-sql` bridges. **R4 is partial:** the exactly-once sticky

@@ -13,6 +13,8 @@ use crate::telemetry::{self, CorrelationId, FailureKind, StartupFailure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProblemCode {
+    Unauthenticated,
+    AccessDenied,
     InvalidRequest,
     NotFound,
     MethodNotAllowed,
@@ -75,6 +77,8 @@ impl ProblemCode {
 
     fn value(self) -> &'static str {
         match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::AccessDenied => "access-denied",
             Self::InvalidRequest => "invalid-request",
             Self::NotFound => "not-found",
             Self::MethodNotAllowed => "method-not-allowed",
@@ -92,6 +96,8 @@ impl ProblemCode {
 
     fn status(self) -> StatusCode {
         match self {
+            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::AccessDenied => StatusCode::FORBIDDEN,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
@@ -114,6 +120,8 @@ impl ProblemCode {
 
     fn detail(self) -> &'static str {
         match self {
+            Self::Unauthenticated => "Valid authentication is required.",
+            Self::AccessDenied => "The request is not permitted.",
             Self::InvalidRequest => "The request is invalid.",
             Self::NotFound => "The requested resource was not found.",
             Self::MethodNotAllowed => "The request method is not supported for this resource.",
@@ -133,6 +141,8 @@ impl ProblemCode {
 impl From<ProblemCode> for FailureKind {
     fn from(code: ProblemCode) -> Self {
         match code {
+            ProblemCode::Unauthenticated => Self::Unauthenticated,
+            ProblemCode::AccessDenied => Self::AccessDenied,
             ProblemCode::InvalidRequest => Self::InvalidRequest,
             ProblemCode::NotFound => Self::NotFound,
             ProblemCode::MethodNotAllowed => Self::MethodNotAllowed,
@@ -207,6 +217,11 @@ fn pending_response(code: ProblemCode, include_body: bool) -> Response {
         .header("x-content-type-options", "nosniff")
         .body(Body::empty())
         .expect("static pending problem response builder");
+    if code == ProblemCode::Unauthenticated {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    }
     response
         .extensions_mut()
         .insert(PendingProblem { code, include_body });

@@ -16,15 +16,45 @@ implements:
 > **Implementation status (2026-09-07): accepted, partially implemented.**
 > `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
 > identities with explicit construction, redacted diagnostics and no default or
-> anonymous context. `a2c25ff` adds a separate private plan-cache seam requiring
+> anonymous context. `a2c25ff` adds a separate plan-cache seam requiring
 > both that context and an expected policy snapshot; mismatch rejects before
 > parsing or cache access, and exact key equality prevents cross-policy,
 > cross-subject and cross-attribute reuse even under hash collision. `e206cab`
 > adds the closed, payload-free `allow|deny|mask` event vocabulary on ADR-0011's
-> exact tracing target. All three seams are dormant and non-authorizing. The
-> public endpoint still has no authenticated request context, policy enforcement,
-> PostgreSQL `SET LOCAL` RLS, portable ABAC/sensitivity enforcement, or emitted
-> access-decision trace-and-metric audit trail; this ADR remains incomplete.
+> exact tracing target. Public Rust/CLI serving now wires an explicit bearer
+> service-principal profile: deny by default, bounded credential reference,
+> query admission before body/source work, context-bound execution, partitioned
+> single-source caching and uncached protected UNION. Real allow/deny traces emit.
+> This permits its authenticated principal to read **all mapped data**, not
+> individual end-user/tenant rows. PostgreSQL `SET LOCAL` RLS, portable ABAC,
+> sensitivity enforcement, policy-aware hot reload and paired access-decision
+> metrics remain open; this ADR remains incomplete.
+
+### Implemented reference admission profile (2026-09-07)
+
+`serve --auth-token-env SF_QUERY_BEARER` resolves a 32–1024-byte random bearer
+credential before source or file I/O. Only a SHA-256 digest is retained by the
+profile, compared in constant time. `Authorization: Bearer …` is the only
+credential transport; duplicate/malformed/oversized headers reject with a
+redacted `401` and `WWW-Authenticate: Bearer`. No mode selected means `403`;
+`--allow-unauthenticated` explicitly selects unrestricted development access.
+Public embeddings must select `QueryAdmission`; they also default to deny.
+
+The policy is immutable for a server's lifetime and applies to all its mapped
+sources. Rotation requires a new server. The existing `RequestBudget` retains
+the context across workers, generation leases and streams; execution checks
+that the compiled plan has the same identity. Source snapshots can change only
+under that fixed read-all policy, not independently rotate it. General atomic
+policy/snapshot reload remains required work, not a capability of this profile.
+Fixed health, service description and explicitly enabled bounded metrics remain
+public control metadata. Use loopback behind a trusted TLS edge; never expose
+this plaintext listener directly with real credentials. Bearer transport follows
+the [RFC 6750 header pattern and transport warning](https://www.rfc-editor.org/rfc/rfc6750#section-2.1), not an OAuth issuance/introspection implementation.
+
+Evidence: `sf-serve` public `query_security` tests, internal security-context/cache
+and protected-federation tests, and `sf-cli` real-child bearer/federation and
+secret-redaction tests. Astra and native-subscription Claude Sonnet performed
+independent read-only code reviews; tests, not their agreement, establish behaviour.
 
 ## Context and Problem Statement
 

@@ -426,8 +426,9 @@ mod pg {
                 .expect("seed same-name temporary shadow relation");
         }
         let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
-        let cfg =
-            Arc::new(ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap());
+        let mut cfg = ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap();
+        cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+        let cfg = Arc::new(cfg);
 
         let (s_sel, _c, body) = send(
             cfg.clone(),
@@ -519,8 +520,9 @@ mod pg {
             let maps = sf_mapping::parse_r2rml(mapping_ttl).unwrap();
             let ontology = support::ontology_for_mapping(&maps);
             let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
-            let cfg =
-                Arc::new(ServeConfig::from_authored_r2rml(source, mapping_ttl, ontology).unwrap());
+            let mut cfg = ServeConfig::from_authored_r2rml(source, mapping_ttl, ontology).unwrap();
+            cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+            let cfg = Arc::new(cfg);
             let start = std::time::Instant::now();
             let mut handles = Vec::with_capacity(n);
             for _ in 0..n {
@@ -622,8 +624,9 @@ mod pg {
         let source = IntrospectedSource::observe_postgres(pool.clone())
             .await
             .unwrap();
-        let cfg =
-            Arc::new(ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap());
+        let mut cfg = ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap();
+        cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+        let cfg = Arc::new(cfg);
         let held = pool.get().await.expect("hold the sole PG pool connection");
 
         let resp2 = router(cfg.clone())

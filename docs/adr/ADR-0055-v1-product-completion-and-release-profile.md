@@ -283,9 +283,13 @@ optional and individually updated; malformed/failed recall cannot block delivery
 
 The v1 profile is accepted and **not complete** on 2026-09-07. Existing code has
 exact-path, request-admission, immutable-snapshot, bounded-shutdown, partial
-tracing, mapping-evidence, private security-context/cache, and narrow
+tracing, mapping-evidence, public bearer query admission/security-partitioned cache, and narrow
 multi-source UNION foundations. Default-off three-family Prometheus metrics are
-integrated with their public CLI/HTTP tests. Public authorization, general reload/drift,
+integrated with their public CLI/HTTP tests. ADR-0018's explicit bearer profile
+now defaults closed, authenticates before body/source work, preserves context
+through execution, and isolates single-source caches; protected UNION is uncached.
+This is service-principal read-all-mapped-data admission, not tenant/row policies.
+Row-level authorization/sensitivity and policy-aware reload, general reload/drift,
 complete total governance, verified TLS/layered configuration/OTLP, the full
 metric catalogue, useful cross-source join execution, production packaging,
 backend admission, and the minimum release bundle remain open.

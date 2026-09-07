@@ -25,6 +25,8 @@ const UNION_REVERSED: &str = "SELECT ?s ?left ?right WHERE { \
     { ?s <http://example.test/right> ?right } UNION \
     { ?s <http://example.test/left> ?left } }";
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+#[path = "federated_security_tests.rs"]
+mod security_tests;
 
 struct DbFile(PathBuf);
 
@@ -117,11 +119,12 @@ fn config(
 ) -> (ServeConfig, [SqlitePool; 2], [DbFile; 2]) {
     let (left, left_pool, left_file) = runtime_source(0, predicates[0], values[0]);
     let (right, right_pool, right_file) = runtime_source(1, predicates[1], values[1]);
-    let config = ServeConfig::new_federated(
+    let mut config = ServeConfig::new_federated(
         [left, right],
         crate::test_support::ontology(&[], &predicates),
     )
     .unwrap();
+    config.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
     (config, [left_pool, right_pool], [left_file, right_file])
 }
 

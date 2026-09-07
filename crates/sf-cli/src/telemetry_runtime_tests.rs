@@ -184,5 +184,7 @@ fn config() -> ServeConfig {
          <http://example.test/value> a rdf:Property .",
     )
     .unwrap();
-    ServeConfig::from_authored_r2rml(source, MAPPING, ontology).unwrap()
+    let mut config = ServeConfig::from_authored_r2rml(source, MAPPING, ontology).unwrap();
+    config.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    config
 }

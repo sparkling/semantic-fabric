@@ -30,9 +30,9 @@ use crate::{federation::SourceAffineUnionArm, Plan, Result, Tbox};
 mod profile;
 use profile::ProfiledPlanCaches;
 
-#[allow(dead_code)] // Private ADR-0018 seam; request enforcement is a later slice.
 #[path = "cache_security.rs"]
 mod security;
+pub use security::{SecurityCompileError, SecurityPlanCache, SecurityScopedCompiler};
 
 /// Closed compiler-governance profile used to partition cache authority.
 ///
@@ -279,8 +279,8 @@ impl CompilerBinding {
         crate::translate_cached_shared(arm.query(), self)
     }
 
-    /// Uncached counterpart used only by the non-authorizing federation
-    /// preflight. No result from this method may enter execution or a cache.
+    /// Uncached arm for preflight or authoritative protected federation under
+    /// admitted generation/security leases. Never populates either plan cache.
     pub(crate) fn compile_union_arm_uncached_shared(
         &self,
         arm: &SourceAffineUnionArm,

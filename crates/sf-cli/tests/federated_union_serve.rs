@@ -98,17 +98,24 @@ fn available_address() -> SocketAddr {
 }
 
 fn request(address: SocketAddr) -> Option<String> {
+    request_with_token(address, None).filter(|response| response.starts_with("HTTP/1.1 200"))
+}
+
+fn request_with_token(address: SocketAddr, token: Option<&str>) -> Option<String> {
+    let auth = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     write!(
         stream,
-        "POST /sparql HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{QUERY}",
+        "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{QUERY}",
         QUERY.len()
     )
     .ok()?;
     let mut response = String::new();
     stream.read_to_string(&mut response).ok()?;
-    response.starts_with("HTTP/1.1 200").then_some(response)
+    Some(response)
 }
 
 fn metrics(address: SocketAddr) -> Option<String> {
@@ -125,6 +132,10 @@ fn metrics(address: SocketAddr) -> Option<String> {
 }
 
 fn start_server(enable_metrics: bool) -> (Fixture, SocketAddr, Server) {
+    start_with_token(enable_metrics, None)
+}
+
+fn start_with_token(enable_metrics: bool, token: Option<&str>) -> (Fixture, SocketAddr, Server) {
     let mut fixture = Fixture::new();
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
@@ -160,6 +171,13 @@ fn start_server(enable_metrics: bool) -> (Fixture, SocketAddr, Server) {
         "--bind",
         &address.to_string(),
     ]);
+    if let Some(token) = token {
+        command
+            .args(["--auth-token-env", "SF_TEST_QUERY_BEARER"])
+            .env("SF_TEST_QUERY_BEARER", token);
+    } else {
+        command.arg("--allow-unauthenticated");
+    }
     if enable_metrics {
         command.arg("--metrics");
     }
@@ -191,6 +209,31 @@ fn cli_serves_the_two_source_union_vertical() {
     let response = wait_for_query(address, &mut server);
     let body = response.split_once("\r\n\r\n").unwrap().1;
     assert_eq!(body.matches("\"value\":\"same\"").count(), 2, "{body}");
+}
+
+#[test]
+fn cli_bearer_reference_protects_real_two_source_queries() {
+    const TOKEN: &str = "test-only-native-cli-token-0123456789";
+    let (_fixture, address, mut server) = start_with_token(false, Some(TOKEN));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let denied = loop {
+        if let Some(response) = request_with_token(address, None) {
+            break response;
+        }
+        assert!(server.0.try_wait().unwrap().is_none());
+        assert!(
+            Instant::now() < deadline,
+            "protected server startup timed out"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert!(denied.starts_with("HTTP/1.1 401"));
+    let allowed = request_with_token(address, Some(TOKEN)).unwrap();
+    assert!(allowed.starts_with("HTTP/1.1 200"));
+    assert_eq!(allowed.matches("\"value\":\"same\"").count(), 2);
+    let wrong = request_with_token(address, Some("wrong")).unwrap();
+    assert!(wrong.starts_with("HTTP/1.1 401"));
+    assert!(!wrong.contains(TOKEN));
 }
 
 #[test]

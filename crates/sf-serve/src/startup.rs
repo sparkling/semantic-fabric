@@ -55,6 +55,7 @@ pub(crate) async fn build_config(
     .map_err(snapshot_error)?;
 
     config.timeout = opts.timeout;
+    config.set_query_admission(opts.query_admission.clone());
     config.set_max_query_len(opts.max_query_len)?;
     config.set_max_concurrent_requests(opts.max_concurrent_requests)?;
     config.set_max_order_rows(opts.max_order_rows);

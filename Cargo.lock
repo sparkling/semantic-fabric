@@ -5064,6 +5064,7 @@ dependencies = [
  "sparesults",
  "spareval",
  "spargebra",
+ "subtle",
  "thiserror 2.0.20",
  "tokio",
  "tokio-postgres",

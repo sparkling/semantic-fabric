@@ -81,6 +81,7 @@ impl BackendProfile {
 /// Raw catalogue observations become a constraint-quarantined compiler view
 /// before the binding or cache exists.
 pub(crate) struct RuntimeBinding {
+    security_cache: sf_sparql::cache::SecurityPlanCache,
     binding_identity: RuntimeBindingIdentity,
     backend: Backend,
     profile: BackendProfile,
@@ -120,6 +121,9 @@ impl RuntimeBinding {
         );
         Self {
             binding_identity: RuntimeBindingIdentity::fresh(),
+            security_cache: sf_sparql::cache::SecurityPlanCache::new(
+                std::num::NonZeroUsize::new(PLAN_CACHE_CAP).unwrap(),
+            ),
             backend,
             profile,
             #[cfg(test)]
@@ -154,6 +158,7 @@ impl RuntimeBinding {
         let compiled = self.compiler.compile_shared(sparql);
         control.checkpoint()?;
         compiled.map(|plan| BoundPlan {
+            security: None,
             binding_identity: self.binding_identity.clone(),
             scope: self.compiler.scope(),
             source_id: self.compiler.source_id(),
@@ -172,6 +177,36 @@ impl RuntimeBinding {
         let compiled = self.compiler.compile_uncached_shared(sparql);
         control.checkpoint()?;
         compiled
+    }
+
+    /// Verify plan ownership before returning the inseparable execution pair.
+    pub(crate) fn compile_secured(
+        &self,
+        sparql: &str,
+        budget: &crate::budget::RequestBudget,
+        policy: sf_core::security_context::PolicySnapshotId,
+    ) -> sf_sparql::Result<BoundPlan> {
+        use sf_sparql::cache::SecurityCompileError;
+        budget.checkpoint()?;
+        let context = budget
+            .security_context()
+            .ok_or_else(|| sf_sparql::Error::Mapping("security context is missing".into()))?;
+        let compiled = self
+            .compiler
+            .for_security_policy(policy, &self.security_cache)
+            .compile_shared(&context, sparql)
+            .map_err(|error| match error {
+                SecurityCompileError::Compiler(error) => error,
+                _ => sf_sparql::Error::Mapping("security partition mismatch".into()),
+            });
+        budget.checkpoint()?;
+        compiled.map(|plan| BoundPlan {
+            binding_identity: self.binding_identity.clone(),
+            scope: self.scope(),
+            source_id: self.source_id(),
+            plan,
+            security: Some(context),
+        })
     }
 
     /// Verify plan ownership before returning the inseparable execution pair.
@@ -251,6 +286,7 @@ impl fmt::Debug for RuntimeBinding {
 
 /// A compiled plan attached to its exact runtime binding, source, and scope.
 pub(crate) struct BoundPlan {
+    pub(super) security: Option<sf_core::security_context::SecurityContext>,
     binding_identity: RuntimeBindingIdentity,
     scope: CompileScope,
     source_id: SourceId,
@@ -270,6 +306,7 @@ impl BoundPlan {
 /// A federated plan plus the private binding identities and compile scopes that
 /// prove each fragment still belongs to the activated binding before any I/O.
 pub(crate) struct BoundFederatedPlan {
+    pub(super) security: Option<sf_core::security_context::SecurityContext>,
     plan: FederatedPlan,
     binding_identities: [RuntimeBindingIdentity; 2],
     scopes: [CompileScope; 2],
@@ -294,6 +331,7 @@ impl BoundFederatedPlan {
             plan,
             binding_identities,
             scopes,
+            security: None,
         }
     }
 
@@ -309,12 +347,14 @@ impl BoundFederatedPlan {
         let plans = [
             BoundPlan {
                 binding_identity: first_identity,
+                security: self.security,
                 scope: first_scope,
                 source_id: fragments[0].source_id(),
                 plan: fragments[0].shared_plan(),
             },
             BoundPlan {
                 binding_identity: second_identity,
+                security: self.security,
                 scope: second_scope,
                 source_id: fragments[1].source_id(),
                 plan: fragments[1].shared_plan(),

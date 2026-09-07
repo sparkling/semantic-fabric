@@ -12,6 +12,8 @@ use crate::binding::{
 use crate::pg_direct_lifecycle::{RuntimeTransitionAuthority, ValidatedRuntimeCandidate};
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
 use crate::snapshot::RuntimeSnapshot;
+#[path = "activation_security.rs"]
+mod security;
 
 /// Monotonic process-local identity for one published runtime generation.
 ///

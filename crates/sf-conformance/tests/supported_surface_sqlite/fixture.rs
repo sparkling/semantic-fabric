@@ -63,6 +63,7 @@ pub fn config(max_query_len: Option<usize>) -> Arc<ServeConfig> {
     let ontology = SemanticOntology::from_turtle(ONTOLOGY_TTL).expect("parse fixture ontology");
     let mut config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
         .expect("admit fixture mapping and ontology");
+    config.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
     if let Some(maximum) = max_query_len {
         config
             .set_max_query_len(maximum)

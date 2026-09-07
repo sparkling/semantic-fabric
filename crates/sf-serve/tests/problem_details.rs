@@ -47,8 +47,9 @@ fn config_after_schema_change(change: &str) -> ServeConfig {
     let source = IntrospectedSource::observe_sqlite(Backend::sqlite(conn))
         .expect("observe fixture before drift");
     let pool = source.sqlite_pool().expect("fixture uses SQLite");
-    let config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
+    let mut config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
         .expect("admit fixture before drift");
+    config.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
     pool.pick()
         .lock()
         .expect("lock fixture connection")

@@ -123,6 +123,36 @@ impl Service<Request<Body>> for RequestDeadlineService {
         let admission = trace.in_scope(|| {
             telemetry::in_stage_sync(Stage::RequestAdmission, || {
                 let mut budget = self.cfg.request_budget_for(correlation);
+                if request.uri().path() == "/sparql" {
+                    let admitted = self.cfg.query_admission.authenticate(request.headers());
+                    request
+                        .headers_mut()
+                        .remove(axum::http::header::AUTHORIZATION);
+                    match admitted {
+                        Ok(context) => {
+                            if context
+                                .is_some_and(|context| budget.retain_security(context).is_err())
+                            {
+                                return Admission::Rejected {
+                                    budget,
+                                    response: problem::response(problem::ProblemCode::Internal),
+                                };
+                            }
+                            crate::access_telemetry::record(
+                                crate::access_telemetry::AccessDecision::Allow,
+                            );
+                        }
+                        Err(code) => {
+                            crate::access_telemetry::record(
+                                crate::access_telemetry::AccessDecision::Deny,
+                            );
+                            return Admission::Rejected {
+                                budget,
+                                response: problem::response(code),
+                            };
+                        }
+                    }
+                }
                 if let Err(error) = budget.checkpoint() {
                     return Admission::Rejected {
                         budget,
