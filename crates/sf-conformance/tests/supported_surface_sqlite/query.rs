@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use oxttl::TurtleParser;
 use sf_conformance::supported_surface::{Case, Manifest, Surface};
+use sparesults::{QueryResultsFormat, QueryResultsParser, SliceQueryResultsParserOutput};
 
 use super::fixture::{self, ResponseSnapshot};
 use super::observation::{finish_replay, Observation};
@@ -45,7 +46,7 @@ async fn execute(case: &Case) -> Result<Observation, String> {
             select(
                 fixture::SELECT_NAMES,
                 &["name"],
-                &[&["Alice"], &["Bob"]],
+                &[&["\"Alice\""], &["\"Bob\""]],
             )
             .await
         }
@@ -53,7 +54,7 @@ async fn execute(case: &Case) -> Result<Observation, String> {
             select(
                 "SELECT ?name WHERE { ?s <http://ex/age> ?age ; <http://ex/name> ?name . FILTER(?age > 25) }",
                 &["name"],
-                &[&["Alice"]],
+                &[&["\"Alice\""]],
             )
             .await
         }
@@ -61,7 +62,10 @@ async fn execute(case: &Case) -> Result<Observation, String> {
             select(
                 "SELECT ?name ?email WHERE { ?s <http://ex/name> ?name OPTIONAL { ?s <http://ex/email> ?email } } ORDER BY ?name LIMIT 2",
                 &["name", "email"],
-                &[&["Alice", "alice@example.test"], &["Bob", "UNBOUND"]],
+                &[
+                    &["\"Alice\"", "\"alice@example.test\""],
+                    &["\"Bob\"", "UNBOUND"],
+                ],
             )
             .await
         }
@@ -69,7 +73,7 @@ async fn execute(case: &Case) -> Result<Observation, String> {
             select(
                 "SELECT ?name WHERE { ?s <http://ex/name> ?name } ORDER BY ?name LIMIT 1 OFFSET 1",
                 &["name"],
-                &[&["Bob"]],
+                &[&["\"Bob\""]],
             )
             .await
         }
@@ -85,10 +89,13 @@ async fn ask(query: &str, expected: bool) -> Result<Observation, String> {
     let response = send_query(query, "application/sparql-results+json").await?;
     let document: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|_| "ASK returned malformed JSON".to_owned())?;
-    if document["boolean"].as_bool() != Some(expected) {
+    let observed = document["boolean"]
+        .as_bool()
+        .ok_or_else(|| "ASK JSON omitted its boolean".to_owned())?;
+    if observed != expected {
         return Err("ASK returned the wrong boolean".to_owned());
     }
-    Observation::supported(&response, "ask-boolean", &format!("ask:{expected}"))
+    Observation::supported(&response, "ask-boolean", &format!("ask:{observed}"))
 }
 
 async fn select(
@@ -97,7 +104,12 @@ async fn select(
     expected_rows: &[&[&str]],
 ) -> Result<Observation, String> {
     let response = send_query(query, "application/sparql-results+json").await?;
-    let normalized = normalize_select_json(&response, expected_variables, expected_rows)?;
+    let normalized = normalize_select_results(
+        &response,
+        QueryResultsFormat::Json,
+        expected_variables,
+        expected_rows,
+    )?;
     Observation::supported(&response, "select-bindings", &normalized)
 }
 
@@ -126,43 +138,44 @@ async fn send_query(query: &str, accept: &str) -> Result<ResponseSnapshot, Strin
     fixture::send(fixture::config(None), fixture::raw_post(query, accept)).await
 }
 
-pub fn normalize_select_json(
+pub fn normalize_select_results(
     response: &ResponseSnapshot,
+    format: QueryResultsFormat,
     expected_variables: &[&str],
     expected_rows: &[&[&str]],
 ) -> Result<String, String> {
-    let document: serde_json::Value = serde_json::from_slice(&response.body)
-        .map_err(|_| "SELECT returned malformed JSON".to_owned())?;
-    let variables = document["head"]["vars"]
-        .as_array()
-        .ok_or_else(|| "SELECT JSON omitted head variables".to_owned())?
+    let parsed = QueryResultsParser::from_format(format)
+        .for_slice(&response.body)
+        .map_err(|_| "SELECT returned malformed query results".to_owned())?;
+    let SliceQueryResultsParserOutput::Solutions(solutions) = parsed else {
+        return Err("SELECT result unexpectedly contains a boolean".to_owned());
+    };
+    let variables = solutions.variables().to_vec();
+    let variable_names = variables
         .iter()
-        .map(|value| value.as_str().unwrap_or_default().to_owned())
+        .map(|variable| variable.as_str().to_owned())
         .collect::<Vec<_>>();
     let expected_variables = expected_variables
         .iter()
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
-    if variables != expected_variables {
+    if variable_names != expected_variables {
         return Err("SELECT returned the wrong variable sequence".to_owned());
     }
-    let bindings = document["results"]["bindings"]
-        .as_array()
-        .ok_or_else(|| "SELECT JSON omitted bindings".to_owned())?;
-    let mut rows = bindings
-        .iter()
-        .map(|binding| {
-            expected_variables
+    let mut rows = solutions
+        .map(|solution| {
+            let solution = solution.map_err(|_| "SELECT returned a malformed row".to_owned())?;
+            Ok(variables
                 .iter()
                 .map(|variable| {
-                    binding[variable]["value"]
-                        .as_str()
-                        .unwrap_or("UNBOUND")
-                        .to_owned()
+                    solution
+                        .get(variable)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "UNBOUND".to_owned())
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>())
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     rows.sort();
     let mut expected = expected_rows
         .iter()
@@ -176,7 +189,7 @@ pub fn normalize_select_json(
     if rows != expected {
         return Err("SELECT returned the wrong binding bag".to_owned());
     }
-    Ok(format!("vars={expected_variables:?};rows={rows:?}"))
+    Ok(format!("vars={variable_names:?};rows={rows:?}"))
 }
 
 pub fn normalize_turtle_graph(

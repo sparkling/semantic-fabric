@@ -12,29 +12,29 @@ meta	standard-binding	retrieved-reference-metadata
 meta	hash-algorithm	sha256
 meta	attestation-scope	sqlite-public-protocol-supported-surface-not-mapping-query-full-w3c-runtime-provenance-or-backend-admission
 meta	case-count	25
-meta	cases-sha256	425a7b3cbfbf84bf6083e2b3b24407f6731ca3bfdfa42707e67b4e2c3411e2b7
+meta	cases-sha256	1ac8d1e4c394cf155ce9b3829aea645eb18fb8ea13c3d9c70ac813ce9adb8fd2
 case	protocol-construct-default-turtle	protocol-construct-default-turtle	supported	200	text/turtle	representation-rdf-graph	8483ab09c5db4575e044a21ac97f110fb084689760de626a932789e73908a7ab
 case	protocol-construct-jsonld	protocol-construct-jsonld	supported	200	application/ld+json	representation-rdf-graph	8483ab09c5db4575e044a21ac97f110fb084689760de626a932789e73908a7ab
 case	protocol-construct-ntriples	protocol-construct-ntriples	supported	200	application/n-triples	representation-rdf-graph	8483ab09c5db4575e044a21ac97f110fb084689760de626a932789e73908a7ab
 case	protocol-get-query	protocol-get-query	supported	200	application/sparql-results+json	transport-query	720720050a363bb561e17cd72673ea9078d43f763bea126d88921136faf819ee
 case	protocol-post-form-query	protocol-post-form-query	supported	200	application/sparql-results+json	transport-query	720720050a363bb561e17cd72673ea9078d43f763bea126d88921136faf819ee
 case	protocol-post-raw-query	protocol-post-raw-query	supported	200	application/sparql-results+json	transport-query	720720050a363bb561e17cd72673ea9078d43f763bea126d88921136faf819ee
-case	protocol-reject-get-dataset	protocol-reject-get-dataset	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-get-duplicate-query	protocol-reject-get-duplicate-query	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-get-missing-query	protocol-reject-get-missing-query	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-post-content-parameters	protocol-reject-post-content-parameters	rejected	415	application/problem+json	unsupported-media-type	6a047d66bccf3520b491cd00a1efa1876bdeec8dcf82507ac41e27da55d75fc5
-case	protocol-reject-post-form-duplicate-query	protocol-reject-post-form-duplicate-query	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-post-form-extra-field	protocol-reject-post-form-extra-field	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-post-missing-content-type	protocol-reject-post-missing-content-type	rejected	415	application/problem+json	unsupported-media-type	6a047d66bccf3520b491cd00a1efa1876bdeec8dcf82507ac41e27da55d75fc5
-case	protocol-reject-post-uri-parameter	protocol-reject-post-uri-parameter	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-put-method	protocol-reject-put-method	rejected	405	application/problem+json	method-not-allowed	4e67cb00d31899f80cc8dc6572cb575b47b8e17d561f67736a393ceba28ed456
-case	protocol-reject-raw-non-utf8	protocol-reject-raw-non-utf8	rejected	400	application/problem+json	invalid-request	e2f3943b6620eb71280e7710542f6f78b4d00f69030e697cd7432568e4de591b
-case	protocol-reject-raw-oversized	protocol-reject-raw-oversized	rejected	413	application/problem+json	payload-too-large	81f77cd940b0c785a8125e9daa2fdab1aac0e87229b6db16b27779a47356c635
-case	protocol-reject-service-description-accept	protocol-reject-service-description-accept	rejected	406	application/problem+json	not-acceptable	928ad456d1ab023b3581f6d76f5d578e530ee26f1f68f6b28839f64be74b356c
-case	protocol-select-csv	protocol-select-csv	supported	200	text/csv	representation-query-results	036c70849862993dde284291e98a5583e25d51d63070b46c891bdec9e71c9fc5
-case	protocol-select-default-json	protocol-select-default-json	supported	200	application/sparql-results+json	representation-query-results	366f71094e93dbf6c1cd24e37f2b96eea0e4814e25bb19a93f6a3cdf2d3bd3a9
-case	protocol-select-json	protocol-select-json	supported	200	application/sparql-results+json	representation-query-results	366f71094e93dbf6c1cd24e37f2b96eea0e4814e25bb19a93f6a3cdf2d3bd3a9
-case	protocol-select-tsv	protocol-select-tsv	supported	200	text/tab-separated-values	representation-query-results	036c70849862993dde284291e98a5583e25d51d63070b46c891bdec9e71c9fc5
-case	protocol-select-xml	protocol-select-xml	supported	200	application/sparql-results+xml	representation-query-results	036c70849862993dde284291e98a5583e25d51d63070b46c891bdec9e71c9fc5
+case	protocol-reject-get-dataset	protocol-reject-get-dataset	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-get-duplicate-query	protocol-reject-get-duplicate-query	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-get-missing-query	protocol-reject-get-missing-query	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-post-content-parameters	protocol-reject-post-content-parameters	rejected	415	application/problem+json	unsupported-media-type	35d1447195906d041c58c50065927e72efe577d14d83c6b93edda76d7a61d740
+case	protocol-reject-post-form-duplicate-query	protocol-reject-post-form-duplicate-query	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-post-form-extra-field	protocol-reject-post-form-extra-field	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-post-missing-content-type	protocol-reject-post-missing-content-type	rejected	415	application/problem+json	unsupported-media-type	35d1447195906d041c58c50065927e72efe577d14d83c6b93edda76d7a61d740
+case	protocol-reject-post-uri-parameter	protocol-reject-post-uri-parameter	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-put-method	protocol-reject-put-method	rejected	405	application/problem+json	method-not-allowed	c41280f5195015d82a63decf66029ed56cfc0d1a6aa6ea76783b1d1d05d54d86
+case	protocol-reject-raw-non-utf8	protocol-reject-raw-non-utf8	rejected	400	application/problem+json	invalid-request	8d164bc0f7a7ca4a312e144d00b10e2e724f38b0af1b3b06c6c252e99d167b45
+case	protocol-reject-raw-oversized	protocol-reject-raw-oversized	rejected	413	application/problem+json	payload-too-large	0c9473dcdb4c537b3f91e39aa01c1d73599965e1d6b9599723e7ab08fbccc198
+case	protocol-reject-service-description-accept	protocol-reject-service-description-accept	rejected	406	application/problem+json	not-acceptable	8a5beefeaa55ac2f36a05d4fc85dfbbe201e32418526838b5ea9cc3ad8257b68
+case	protocol-select-csv	protocol-select-csv	supported	200	text/csv	representation-query-results	366f71094e93dbf6c1cd24e37f2b96eea0e4814e25bb19a93f6a3cdf2d3bd3a9
+case	protocol-select-default-json	protocol-select-default-json	supported	200	application/sparql-results+json	representation-query-results	8dd659c323992b1be5ef4d5feba71a7d7231ea2ea7c4d9c47e9905e490c47d2d
+case	protocol-select-json	protocol-select-json	supported	200	application/sparql-results+json	representation-query-results	8dd659c323992b1be5ef4d5feba71a7d7231ea2ea7c4d9c47e9905e490c47d2d
+case	protocol-select-tsv	protocol-select-tsv	supported	200	text/tab-separated-values	representation-query-results	8dd659c323992b1be5ef4d5feba71a7d7231ea2ea7c4d9c47e9905e490c47d2d
+case	protocol-select-xml	protocol-select-xml	supported	200	application/sparql-results+xml	representation-query-results	8dd659c323992b1be5ef4d5feba71a7d7231ea2ea7c4d9c47e9905e490c47d2d
 case	protocol-service-description-get	protocol-service-description-get	supported	200	text/turtle	service-description	2ae4ef23ecfb1141d3ce370646b0dbabcbe3ff30845af503c60e6f7dd12e3719
 case	protocol-service-description-head	protocol-service-description-head	supported	200	text/turtle	service-description	bd225e99b15442fc358c7051e486de7ffcca49633f58588378464e4ac7e9f3e8

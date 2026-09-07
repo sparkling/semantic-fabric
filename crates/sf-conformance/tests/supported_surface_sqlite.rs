@@ -11,6 +11,7 @@ use support::{protocol, protocol_seal, query, query_seal};
 const QUERY_MANIFEST: &str = include_str!("../../../tests/sparql/query/supported-surface-v1.tsv");
 const PROTOCOL_MANIFEST: &str =
     include_str!("../../../tests/sparql/protocol/supported-surface-v1.tsv");
+const CAPABILITY_CATALOG: &str = include_str!("../../../tests/capabilities/catalog-v1.json");
 
 #[tokio::test]
 async fn sealed_query_supported_surface_matches_public_sqlite_behavior() {
@@ -48,6 +49,40 @@ fn sealed_inventories_have_explicit_typed_outcome_totals() {
     assert_eq!(outcome_totals(&protocol.cases), (13, 0, 12));
 }
 
+#[test]
+fn standard_snapshots_match_capability_catalog_authority() {
+    let catalog: serde_json::Value =
+        serde_json::from_str(CAPABILITY_CATALOG).expect("parse capability catalog");
+    let standards = catalog["standards"]
+        .as_array()
+        .expect("catalog standards array");
+    for text in [QUERY_MANIFEST, PROTOCOL_MANIFEST] {
+        let manifest = parse_manifest(text).expect("parse sealed supported-surface manifest");
+        let entry = standards
+            .iter()
+            .find(|entry| entry["id"].as_str() == Some(manifest.standard.id.as_str()))
+            .expect("manifest standard exists in capability catalog");
+        assert_eq!(entry["url"].as_str(), Some(manifest.standard.url.as_str()));
+        assert_eq!(entry["status"].as_str(), Some("W3C Working Draft"));
+        assert_eq!(
+            entry["snapshotDate"].as_str(),
+            Some(manifest.standard.snapshot_date.as_str())
+        );
+        assert_eq!(
+            entry["byteLength"].as_u64(),
+            Some(manifest.standard.byte_length)
+        );
+        assert_eq!(
+            entry["sha256"].as_str(),
+            Some(manifest.standard.sha256.as_str())
+        );
+        assert_eq!(
+            entry["classification"].as_str(),
+            Some("retrieved-reference-metadata")
+        );
+    }
+}
+
 fn reject_inventory_mutants(text: &str, seal: ManifestSeal, extra_id: &str) {
     let original = parse_manifest(text).expect("parse sealed supported-surface manifest");
 
@@ -64,10 +99,19 @@ fn reject_inventory_mutants(text: &str, seal: ManifestSeal, extra_id: &str) {
 
     let mut reclassified = original.clone();
     let first = reclassified.cases.first_mut().expect("non-empty manifest");
-    first.expected_status = ExpectedStatus::Rejected;
-    first.http_status = 400;
     first.response_media_type = "application/problem+json".to_owned();
-    first.cause = "invalid-request".to_owned();
+    match seal.surface {
+        sf_conformance::supported_surface::Surface::SparqlQuery => {
+            first.expected_status = ExpectedStatus::Unsupported;
+            first.http_status = 501;
+            first.cause = "unsupported-query".to_owned();
+        }
+        sf_conformance::supported_surface::Surface::SparqlProtocol => {
+            first.expected_status = ExpectedStatus::Rejected;
+            first.http_status = 400;
+            first.cause = "invalid-request".to_owned();
+        }
+    }
     assert_valid_mutant_fails_seal(&reclassified, &seal);
 
     let mut reordered = original;

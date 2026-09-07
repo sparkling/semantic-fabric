@@ -42,7 +42,24 @@ impl Observation {
         let cause = problem["code"]
             .as_str()
             .ok_or_else(|| "problem JSON omitted its typed code".to_owned())?;
-        if status != response.status || problem["detail"].as_str().is_none() {
+        let kind = problem["type"]
+            .as_str()
+            .ok_or_else(|| "problem JSON omitted its type".to_owned())?;
+        let title = problem["title"]
+            .as_str()
+            .ok_or_else(|| "problem JSON omitted its title".to_owned())?;
+        let detail = problem["detail"]
+            .as_str()
+            .ok_or_else(|| "problem JSON omitted its detail".to_owned())?;
+        let correlation_id = problem["correlationId"]
+            .as_str()
+            .ok_or_else(|| "problem JSON omitted its correlation identity".to_owned())?;
+        let expected_instance = format!("urn:semantic-fabric:problem-instance:{correlation_id}");
+        if status != response.status
+            || !is_generated_correlation_id(correlation_id)
+            || problem["instance"].as_str() != Some(expected_instance.as_str())
+            || response.correlation_id.as_deref() != Some(correlation_id)
+        {
             return Err("problem JSON contradicts the HTTP response".to_owned());
         }
         let expected_status = if status == 501 {
@@ -52,12 +69,16 @@ impl Observation {
         } else {
             return Err("problem status is outside the supported-surface outcome space".to_owned());
         };
+        let normalized = format!(
+            "problem:type={kind};title={title};status={status};detail={detail};code={cause};allow={};correlation=linked",
+            response.allow.as_deref().unwrap_or("-")
+        );
         Ok(Self {
             status: expected_status,
             http_status: status,
             media_type: response.media_type.clone(),
             cause: cause.to_owned(),
-            result_sha256: manifest_sha256(format!("problem:{status}:{cause}").as_bytes()),
+            result_sha256: manifest_sha256(normalized.as_bytes()),
         })
     }
 
@@ -84,6 +105,15 @@ impl Observation {
             )
         })
     }
+}
+
+fn is_generated_correlation_id(value: &str) -> bool {
+    value.len() == 36
+        && value.as_bytes().get(..3) == Some(b"sf-")
+        && value.as_bytes().get(19) == Some(&b'-')
+        && value.bytes().enumerate().all(|(index, byte)| {
+            index < 3 || index == 19 || byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+        })
 }
 
 pub fn finish_replay(failures: Vec<String>) -> Result<(), String> {

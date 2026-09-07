@@ -10,7 +10,7 @@ pub fn query_seal() -> ManifestSeal {
         profile_id: "sqlite-public-query-supported-surface-v1".to_owned(),
         surface: Surface::SparqlQuery,
         case_count: 12,
-        manifest_sha256: "8710ada0f6fa5ec9a93c5d94336688a412352e789979894f1aed49378094ee62"
+        manifest_sha256: "74ad8a80bf538c58523659459424a4e7c4ce2d55cc99af20f0f728cf19365814"
             .to_owned(),
     }
 }
@@ -20,7 +20,7 @@ pub fn protocol_seal() -> ManifestSeal {
         profile_id: "sqlite-public-protocol-supported-surface-v1".to_owned(),
         surface: Surface::SparqlProtocol,
         case_count: 25,
-        manifest_sha256: "e1d7545011a335100a6fbca59ecbd3e51ee229dbe93530bbd1b5557f6264f328"
+        manifest_sha256: "3c550754503523aaa2435870e7363a6a3b2b67042b2930375f4629e16ee15212"
             .to_owned(),
     }
 }

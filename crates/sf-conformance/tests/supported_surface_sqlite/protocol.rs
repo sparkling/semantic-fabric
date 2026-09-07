@@ -3,14 +3,14 @@ use std::collections::BTreeSet;
 use axum::body::Body;
 use axum::http::Method;
 use oxjsonld::JsonLdParser;
-use oxrdf::{GraphName, Term, Triple};
+use oxrdf::{GraphName, Triple};
 use oxttl::{NTriplesParser, TurtleParser};
 use sf_conformance::supported_surface::{Case, Manifest, Surface};
-use sparesults::{QueryResultsFormat, QueryResultsParser, SliceQueryResultsParserOutput};
+use sparesults::QueryResultsFormat;
 
 use super::fixture::{self, ResponseSnapshot};
 use super::observation::{finish_replay, Observation};
-use super::query::normalize_select_json;
+use super::query::normalize_select_results;
 
 pub async fn replay(manifest: &Manifest) -> Result<(), String> {
     if manifest.surface != Surface::SparqlProtocol {
@@ -156,10 +156,13 @@ async fn transport(request: axum::http::Request<Body>) -> Result<Observation, St
     let response = fixture::send(fixture::config(None), request).await?;
     let document: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|_| "transport scenario returned malformed JSON".to_owned())?;
-    if document["boolean"].as_bool() != Some(true) {
+    let observed = document["boolean"]
+        .as_bool()
+        .ok_or_else(|| "transport scenario omitted its ASK boolean".to_owned())?;
+    if !observed {
         return Err("transport scenario did not preserve its ASK result".to_owned());
     }
-    Observation::supported(&response, "transport-query", "ask:true")
+    Observation::supported(&response, "transport-query", &format!("ask:{observed}"))
 }
 
 #[derive(Clone, Copy)]
@@ -180,74 +183,45 @@ async fn select(accept: Option<&str>, format: ResultFormat) -> Result<Observatio
     );
     let response = fixture::send(fixture::config(None), request).await?;
     let normalized = match format {
-        ResultFormat::Json => normalize_select_json(&response, &["name"], &[&["Alice"], &["Bob"]])?,
-        ResultFormat::Xml => normalize_structured_results(&response, QueryResultsFormat::Xml)?,
+        ResultFormat::Json => normalize_select_results(
+            &response,
+            QueryResultsFormat::Json,
+            &["name"],
+            &[&["\"Alice\""], &["\"Bob\""]],
+        )?,
+        ResultFormat::Xml => normalize_select_results(
+            &response,
+            QueryResultsFormat::Xml,
+            &["name"],
+            &[&["\"Alice\""], &["\"Bob\""]],
+        )?,
         ResultFormat::Csv => normalize_csv_results(&response)?,
-        ResultFormat::Tsv => normalize_structured_results(&response, QueryResultsFormat::Tsv)?,
+        ResultFormat::Tsv => normalize_select_results(
+            &response,
+            QueryResultsFormat::Tsv,
+            &["name"],
+            &[&["\"Alice\""], &["\"Bob\""]],
+        )?,
     };
     Observation::supported(&response, "representation-query-results", &normalized)
-}
-
-fn normalize_structured_results(
-    response: &ResponseSnapshot,
-    format: QueryResultsFormat,
-) -> Result<String, String> {
-    let parsed = QueryResultsParser::from_format(format)
-        .for_slice(&response.body)
-        .map_err(|_| "query result representation is malformed".to_owned())?;
-    let SliceQueryResultsParserOutput::Solutions(solutions) = parsed else {
-        return Err("SELECT result unexpectedly contains a boolean".to_owned());
-    };
-    let variables = solutions.variables().to_vec();
-    if variables
-        .iter()
-        .map(|variable| variable.as_str())
-        .collect::<Vec<_>>()
-        != ["name"]
-    {
-        return Err("query result representation has the wrong variables".to_owned());
-    }
-    let mut rows = solutions
-        .map(|solution| {
-            let solution = solution.map_err(|_| "query result row is malformed".to_owned())?;
-            Ok(variables
-                .iter()
-                .map(|variable| {
-                    solution
-                        .get(variable)
-                        .map(term_value)
-                        .unwrap_or_else(|| "UNBOUND".to_owned())
-                })
-                .collect::<Vec<_>>())
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    rows.sort();
-    if rows != [vec!["Alice".to_owned()], vec!["Bob".to_owned()]] {
-        return Err("query result representation has the wrong binding bag".to_owned());
-    }
-    Ok("vars=[name];rows=[[Alice],[Bob]]".to_owned())
-}
-
-fn term_value(term: &Term) -> String {
-    match term {
-        Term::Literal(literal) => literal.value().to_owned(),
-        _ => term.to_string(),
-    }
 }
 
 fn normalize_csv_results(response: &ResponseSnapshot) -> Result<String, String> {
     let body = std::str::from_utf8(&response.body)
         .map_err(|_| "query result representation is not UTF-8".to_owned())?;
     let mut lines = body.lines().map(|line| line.trim_end_matches('\r'));
-    if lines.next() != Some("name") {
+    let header = lines
+        .next()
+        .ok_or_else(|| "CSV query result omitted its header".to_owned())?;
+    if header != "name" {
         return Err("CSV query result has the wrong header".to_owned());
     }
-    let mut rows = lines.collect::<Vec<_>>();
+    let mut rows = lines.map(|line| vec![line.to_owned()]).collect::<Vec<_>>();
     rows.sort_unstable();
-    if rows != ["Alice", "Bob"] {
+    if rows != [vec!["Alice".to_owned()], vec!["Bob".to_owned()]] {
         return Err("CSV query result has the wrong binding bag".to_owned());
     }
-    Ok("vars=[name];rows=[[Alice],[Bob]]".to_owned())
+    Ok(format!("vars={:?};rows={rows:?}", [header]))
 }
 
 #[derive(Clone, Copy)]

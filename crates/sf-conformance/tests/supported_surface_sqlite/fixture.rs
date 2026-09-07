@@ -48,6 +48,7 @@ pub struct ResponseSnapshot {
     pub status: u16,
     pub media_type: String,
     pub allow: Option<String>,
+    pub correlation_id: Option<String>,
     pub content_length: Option<String>,
     pub body: Bytes,
 }
@@ -161,6 +162,10 @@ pub async fn send(
         status,
         media_type: media_type(&headers),
         allow: header_value(&headers, header::ALLOW),
+        correlation_id: header_value(
+            &headers,
+            header::HeaderName::from_static("x-correlation-id"),
+        ),
         content_length: header_value(&headers, header::CONTENT_LENGTH),
         body,
     })

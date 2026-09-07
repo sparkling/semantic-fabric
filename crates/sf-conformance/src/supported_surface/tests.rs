@@ -97,16 +97,33 @@ fn fixed_seal_rejects_count_neutral_status_and_cause_reclassification() {
     let original_text = reseal(&original);
     let seal = seal_for(&original_text, &original);
     let mut mutated = original.clone();
-    mutated.cases[0].expected_status = ExpectedStatus::Rejected;
-    mutated.cases[0].http_status = 400;
+    mutated.cases[0].expected_status = ExpectedStatus::Unsupported;
+    mutated.cases[0].http_status = 501;
     mutated.cases[0].response_media_type = "application/problem+json".to_owned();
-    mutated.cases[0].cause = "invalid-request".to_owned();
+    mutated.cases[0].cause = "unsupported-query".to_owned();
     let mutated_text = reseal(&mutated);
     let mutated = parse_manifest(&mutated_text).expect("count-neutral reclassification is valid");
 
     assert_eq!(
         verify_seal(&mutated_text, &mutated, &seal),
         Err("supported-surface manifest does not match its fixed seal".to_owned())
+    );
+}
+
+#[test]
+fn parser_rejects_cross_surface_causes_and_identities() {
+    let mut cross_surface_cause = manifest();
+    cross_surface_cause.cases[0].cause = "transport-query".to_owned();
+    let mut cross_surface_identity = manifest();
+    cross_surface_identity.cases[0].id = "protocol-query-ask".to_owned();
+
+    assert_eq!(
+        parse_manifest(&reseal(&cross_surface_cause)),
+        Err("case query-ask has an invalid status/code/media/cause combination".to_owned())
+    );
+    assert_eq!(
+        parse_manifest(&reseal(&cross_surface_identity)),
+        Err("case identity does not match the manifest surface".to_owned())
     );
 }
 

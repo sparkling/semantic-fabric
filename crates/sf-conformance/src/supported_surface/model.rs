@@ -139,12 +139,19 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     }
     let mut previous = None;
     let mut scenarios = BTreeSet::new();
+    let expected_prefix = match manifest.surface {
+        Surface::SparqlQuery => "query-",
+        Surface::SparqlProtocol => "protocol-",
+    };
     for case in &manifest.cases {
         validate_token("case id", &case.id)?;
         validate_token("case scenario", &case.scenario)?;
         validate_token("case cause", &case.cause)?;
         validate_token("response media type", &case.response_media_type)?;
         validate_sha256("case result", &case.result_sha256)?;
+        if !case.id.starts_with(expected_prefix) || !case.scenario.starts_with(expected_prefix) {
+            return Err("case identity does not match the manifest surface".to_owned());
+        }
         if previous.is_some_and(|prior| prior >= case.id.as_str()) {
             return Err("case records are not strictly ordered".to_owned());
         }
@@ -152,24 +159,26 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         if !scenarios.insert(case.scenario.as_str()) {
             return Err("case scenarios must be unique".to_owned());
         }
-        validate_outcome(case)?;
+        validate_outcome(manifest.surface, case)?;
     }
     Ok(())
 }
 
-fn validate_outcome(case: &Case) -> Result<(), String> {
+fn validate_outcome(surface: Surface, case: &Case) -> Result<(), String> {
     let valid = match case.expected_status {
         ExpectedStatus::Supported => {
             case.http_status == 200
-                && supported_cause_matches_media(&case.cause, &case.response_media_type)
+                && supported_cause_matches_media(surface, &case.cause, &case.response_media_type)
         }
         ExpectedStatus::Unsupported => {
-            case.http_status == 501
+            surface == Surface::SparqlQuery
+                && case.http_status == 501
                 && case.response_media_type == "application/problem+json"
                 && case.cause == "unsupported-query"
         }
         ExpectedStatus::Rejected => {
-            case.response_media_type == "application/problem+json"
+            surface == Surface::SparqlProtocol
+                && case.response_media_type == "application/problem+json"
                 && matches!(
                     (case.http_status, case.cause.as_str()),
                     (400, "invalid-request")
@@ -190,7 +199,7 @@ fn validate_outcome(case: &Case) -> Result<(), String> {
     }
 }
 
-fn supported_cause_matches_media(cause: &str, media_type: &str) -> bool {
+fn supported_cause_matches_media(surface: Surface, cause: &str, media_type: &str) -> bool {
     let query_results = matches!(
         media_type,
         "application/sparql-results+json"
@@ -202,13 +211,18 @@ fn supported_cause_matches_media(cause: &str, media_type: &str) -> bool {
         media_type,
         "text/turtle" | "application/n-triples" | "application/ld+json"
     );
-    match cause {
-        "ask-boolean" | "select-bindings" | "transport-query" | "representation-query-results" => {
-            query_results
-        }
-        "construct-graph" | "describe-graph" | "representation-rdf-graph" => rdf_graph,
-        "service-description" => media_type == "text/turtle",
-        _ => false,
+    match surface {
+        Surface::SparqlQuery => match cause {
+            "ask-boolean" | "select-bindings" => query_results,
+            "construct-graph" | "describe-graph" => rdf_graph,
+            _ => false,
+        },
+        Surface::SparqlProtocol => match cause {
+            "transport-query" | "representation-query-results" => query_results,
+            "representation-rdf-graph" => rdf_graph,
+            "service-description" => media_type == "text/turtle",
+            _ => false,
+        },
     }
 }
 

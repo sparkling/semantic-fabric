@@ -372,7 +372,16 @@ jobs:
           set -euo pipefail
           listed="$(cargo test --locked -p sf-conformance --features evidence-receipts \
             --test supported_surface_sqlite -- --list)"
-          test "$(printf '%s\n' "$listed" | grep -Ec ': test$')" = 4
+          for test_name in \
+            compiled_seals_reject_exact_inventory_mutants \
+            sealed_inventories_have_explicit_typed_outcome_totals \
+            sealed_protocol_supported_surface_matches_public_sqlite_behavior \
+            sealed_query_supported_surface_matches_public_sqlite_behavior \
+            standard_snapshots_match_capability_catalog_authority
+          do
+            test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          done
+          test "$(printf '%s\n' "$listed" | grep -Ec ': test$')" = 5
           cargo test --locked -p sf-conformance --features evidence-receipts \
             --test supported_surface_sqlite -- --test-threads=1
       - name: verify default sf-cli package dependency closure
