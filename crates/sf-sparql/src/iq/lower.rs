@@ -2179,6 +2179,7 @@ pub(crate) fn pool_rendered(
                 guards,
                 distinct: false,
                 native_keys: vec![],
+                lexical_keys: vec![],
             },
         });
         branch.bindings = new_bindings;

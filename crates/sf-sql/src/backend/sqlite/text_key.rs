@@ -23,6 +23,7 @@ struct Context {
 pub(super) struct CharacterKeyGuard<'c> {
     connection: &'c Connection,
     context: Option<Arc<Mutex<Context>>>,
+    lexical: bool,
 }
 
 impl<'c> CharacterKeyGuard<'c> {
@@ -31,9 +32,28 @@ impl<'c> CharacterKeyGuard<'c> {
         required: bool,
         control: Option<Arc<dyn QueryControl>>,
     ) -> Result<Self> {
+        Self::install_kind(connection, required, control, false)
+    }
+
+    pub(super) fn install_lexical(
+        connection: &'c Connection,
+        required: bool,
+        control: Option<Arc<dyn QueryControl>>,
+    ) -> Result<Self> {
+        Self::install_kind(connection, required, control, true)
+    }
+
+    fn install_kind(
+        connection: &'c Connection,
+        required: bool,
+        control: Option<Arc<dyn QueryControl>>,
+        lexical: bool,
+    ) -> Result<Self> {
+        let name = if lexical { "__sf_lexical_key_v1" } else { NAME };
         let mut guard = Self {
             connection,
             context: None,
+            lexical,
         };
         if !required {
             return Ok(guard);
@@ -41,12 +61,12 @@ impl<'c> CharacterKeyGuard<'c> {
         // Never redefine an application callback, including a variadic overload.
         let exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = ? COLLATE NOCASE)",
-            [NAME],
+            [name],
             |row| row.get(0),
         )?;
         if exists {
             return Err(Error::Emit(
-                "SQLite CHARACTER key function name is already registered".into(),
+                "SQLite decoder key function name is already registered".into(),
             ));
         }
         let context = Arc::new(Mutex::new(Context {
@@ -56,14 +76,17 @@ impl<'c> CharacterKeyGuard<'c> {
         }));
         let callback = Arc::clone(&context);
         connection.create_scalar_function(
-            NAME,
-            2,
+            name,
+            if lexical { 3 } else { 2 },
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
             move |args| {
                 let mut state = callback.lock().unwrap_or_else(|p| p.into_inner());
                 let value = (|| {
                     if !state.active {
-                        return Err(Error::Emit("inactive SQLite CHARACTER key function".into()));
+                        return Err(Error::Emit("inactive SQLite decoder key function".into()));
+                    }
+                    if lexical {
+                        return super::lexical_key::evaluate(args, state.control.as_deref());
                     }
                     let width = match args.get_raw(1) {
                         ValueRef::Integer(n) if n >= 0 => usize::try_from(n).ok(),
@@ -115,7 +138,14 @@ impl<'c> CharacterKeyGuard<'c> {
             state.control = None;
             state.failure = None;
             drop(state);
-            self.connection.remove_function(NAME, 2)?;
+            self.connection.remove_function(
+                if self.lexical {
+                    "__sf_lexical_key_v1"
+                } else {
+                    NAME
+                },
+                if self.lexical { 3 } else { 2 },
+            )?;
         }
         Ok(())
     }

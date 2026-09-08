@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sf_core::ir::{LogicalSource, Segment, TermMap};
-use sf_sql::backend::TextKey;
+use sf_sql::backend::{SqliteDecode, TextKey};
 use sf_sql::Dialect;
 
 use crate::iq::{
@@ -40,6 +40,7 @@ use crate::{Error, Result};
 mod scan;
 use scan::{scan_actuals, scan_ref};
 mod aggregate_projection;
+mod lexical_key;
 mod path_comparison;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
@@ -55,14 +56,17 @@ use path_comparison::{path_actuals, path_key_expression, render_key_equality, su
 pub struct ColumnCatalog {
     by_source: std::sync::Arc<HashMap<String, Vec<String>>>,
     text_by_source: std::sync::Arc<HashMap<String, HashMap<String, TextKey>>>,
+    sqlite_by_source: std::sync::Arc<HashMap<String, HashMap<String, SqliteDecode>>>,
     suppress_path_collation: bool,
     character_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    lexical_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ColumnCatalog {
     /// Record `source`'s actual result-column names (in any order).
     pub fn insert(&mut self, source: &LogicalSource, columns: Vec<String>) {
         std::sync::Arc::make_mut(&mut self.text_by_source).remove(&source_key(source));
+        std::sync::Arc::make_mut(&mut self.sqlite_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.by_source).insert(source_key(source), columns);
     }
 
@@ -71,6 +75,10 @@ impl ColumnCatalog {
         source: &LogicalSource,
         columns: Vec<sf_sql::backend::ResultColumn>,
     ) -> Result<()> {
+        let sqlite = columns
+            .iter()
+            .filter_map(|column| column.sqlite_decode.map(|key| (column.name.clone(), key)))
+            .collect();
         let text = columns
             .iter()
             .filter_map(|column| column.text_key.map(|key| (column.name.clone(), key)))
@@ -80,6 +88,7 @@ impl ColumnCatalog {
             columns.into_iter().map(|column| column.name).collect(),
         )?;
         std::sync::Arc::make_mut(&mut self.text_by_source).insert(source_key(source), text);
+        std::sync::Arc::make_mut(&mut self.sqlite_by_source).insert(source_key(source), sqlite);
         Ok(())
     }
 
@@ -592,12 +601,20 @@ struct AliasActuals {
     columns: Vec<String>,
     path: bool,
     text_columns: HashMap<String, TextKey>,
+    sqlite_columns: HashMap<String, SqliteDecode>,
+    lexical_columns: HashMap<String, SqliteDecode>,
 }
 
 type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
     AliasActuals {
+        sqlite_columns: catalog
+            .sqlite_by_source
+            .get(&source_key(source))
+            .cloned()
+            .unwrap_or_default(),
+        lexical_columns: HashMap::new(),
         source_kind: match source {
             LogicalSource::Table(_) => AliasSourceKind::Table,
             LogicalSource::Query(_) => AliasSourceKind::Query,
@@ -646,6 +663,7 @@ pub struct EmittedBranch {
     pub metadata_sql: Option<String>,
     /// Engine-generated decoder call, never inferred from authored SQL text.
     pub sqlite_character_keys: bool,
+    pub sqlite_lexical_keys: bool,
     /// The result-set schema: column `i` is `projection[i]` (positional — the
     /// reconstruction reads by position, not by the cosmetic `AS c{i}` label).
     pub projection: Vec<ColRef>,
@@ -669,6 +687,7 @@ pub fn emit_branch_with(
 ) -> Result<EmittedBranch> {
     let mut emission_catalog = catalog.clone();
     emission_catalog.character_keys = Default::default();
+    emission_catalog.lexical_keys = Default::default();
     let catalog = &emission_catalog;
     let mut emitted = emit_branch_inner(b, dialect, catalog)?;
     if dialect == Dialect::Sqlite && !catalog.suppress_path_collation {
@@ -686,6 +705,9 @@ pub fn emit_branch_with(
     }
     emitted.sqlite_character_keys = catalog
         .character_keys
+        .load(std::sync::atomic::Ordering::Relaxed);
+    emitted.sqlite_lexical_keys = catalog
+        .lexical_keys
         .load(std::sync::atomic::Ordering::Relaxed);
     Ok(emitted)
 }
@@ -824,6 +846,7 @@ fn emit_branch_keys(
         sql,
         metadata_sql: None,
         sqlite_character_keys: false,
+        sqlite_lexical_keys: false,
         projection,
         params,
     })
@@ -1072,6 +1095,7 @@ fn emit_path_branch(
         sql,
         metadata_sql: None,
         sqlite_character_keys: false,
+        sqlite_lexical_keys: false,
         projection,
         params,
     })
@@ -1169,6 +1193,7 @@ fn emit_agg_branch(
         sql,
         metadata_sql: None,
         sqlite_character_keys: false,
+        sqlite_lexical_keys: false,
         projection,
         params,
     })
@@ -1432,6 +1457,7 @@ fn emit_subplan_sql(
     let mut catalog = synthetic_subplan_catalog(&branches);
     catalog.suppress_path_collation = live_catalog.suppress_path_collation;
     catalog.character_keys = std::sync::Arc::clone(&live_catalog.character_keys);
+    catalog.lexical_keys = std::sync::Arc::clone(&live_catalog.lexical_keys);
     // Live top-level execution has already probed every recursively reachable
     // base source. Overlay those authoritative names so nested SubPlan emission
     // does not depend on the offline lexical alias-folding heuristic. The
@@ -1443,6 +1469,10 @@ fn emit_subplan_sql(
             if let Some(text) = live_catalog.text_by_source.get(&source_key(source)) {
                 std::sync::Arc::make_mut(&mut catalog.text_by_source)
                     .insert(source_key(source), text.clone());
+            }
+            if let Some(sqlite) = live_catalog.sqlite_by_source.get(&source_key(source)) {
+                std::sync::Arc::make_mut(&mut catalog.sqlite_by_source)
+                    .insert(source_key(source), sqlite.clone());
             }
         }
     }

@@ -71,7 +71,10 @@ Their established OPTIONAL decomposition is retained. Raw output descriptors and
 blank-node graph scope survive; general term-key limits remain in ADR-0034.
 Ordinary D1 policy predicates now run as bound native guards before decoded
 representative selection, without adding policy-only columns to the RDF key.
-Every newly enabled policy key needs live text/CHAR proof; raw outputs stay native.
+Every newly enabled policy key needs live text/CHAR or the SQLite lexical-only
+IRI-template consumer/decoder proof in ADR-0034; raw outputs stay native. Lexical D1 identity
+is separate from numeric literal value comparisons. Only all-IRI-template
+consumers gain the new lexical comparison recipe; native guards are unchanged.
 
 ### Pipeline (`sf-sparql`)
 

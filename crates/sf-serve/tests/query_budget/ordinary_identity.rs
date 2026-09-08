@@ -1,5 +1,7 @@
 //! Ordinary public queries use RDF identity, not source SQL collation.
 use super::*;
+#[path = "mixed_identity.rs"]
+mod mixed_identity;
 #[path = "policy_identity.rs"]
 mod policy_identity;
 
@@ -125,6 +127,44 @@ async fn character_padding_does_not_duplicate_a_generated_triple() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["s"]["value"], "http://ex/n/a%20%20%20");
     assert_eq!(rows[0]["o"]["value"], "http://ex/n/b%20%20%20");
+}
+
+#[tokio::test]
+async fn ordinary_mixed_keys_preserve_signed_zero_iris() {
+    for query in [
+        "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o }",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o }",
+    ] {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE edges(s CHARACTER(2), o GENERATED ALWAYS AS (CASE WHEN s='a' THEN 0.0 ELSE -0.0 END) VIRTUAL); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges(s) VALUES('a'),('a ');").unwrap();
+        let native = conn
+            .prepare("SELECT o FROM edges ORDER BY length(s)")
+            .unwrap()
+            .query_map([], |row| Ok(row.get::<_, f64>(0)?.to_string()))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(native, vec!["0", "-0"]);
+        let mut cfg = support::serve_config(Backend::sqlite(conn), MAP);
+        cfg.set_query_admission(QueryAdmission::Bearer(
+            BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+        ));
+        let json = answer(cfg, query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        if query.contains("COUNT") {
+            assert_eq!(rows[0]["n"]["value"], "2");
+        } else {
+            let mut objects = rows
+                .iter()
+                .map(|r| {
+                    assert_eq!(r["s"]["value"], "http://ex/n/a%20");
+                    r["o"]["value"].as_str().unwrap()
+                })
+                .collect::<Vec<_>>();
+            objects.sort();
+            assert_eq!(objects, vec!["http://ex/n/-0", "http://ex/n/0"]);
+        }
+    }
 }
 
 #[tokio::test]

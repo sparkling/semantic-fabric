@@ -311,11 +311,12 @@ where
         // The ONLY bind site: `e.params` bound as N positional params by the adapter.
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let mut s = b
-            .open_branch_with_decoder(
+            .open_branch_with_identity(
                 &e.sql,
                 &e.params,
                 e.metadata_sql.as_deref(),
                 e.sqlite_character_keys,
+                e.sqlite_lexical_keys,
             )
             .await
             .map_err(map_sql_err)?;

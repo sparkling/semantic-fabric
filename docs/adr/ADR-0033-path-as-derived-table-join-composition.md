@@ -49,7 +49,9 @@ pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary non-native-consu
 text comparisons/dedup and live-proven text/CHAR template-based native Ref atoms
 now have public/native evidence (ADR-0034); unknown Ref keys retain prior D1.
 Ordinary text/CHAR policy consumers now filter before D1 dedup with public/native
-evidence; general term keys remain open.
+evidence. Ordinary SQLite all-IRI-template mixed D1 keys now share live row decoding
+with separate numeric-comparison semantics (ADR-0034); this does not qualify
+mixed-decoder SubPlans or path keys. General term keys remain open.
 ADR-0034 retains D1/D2
 wrappers as typed projections until emission; only original sources are probed,
 closing ordinary native folding without exposing table/constraint authority.

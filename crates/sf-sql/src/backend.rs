@@ -48,6 +48,14 @@ pub enum TextKey {
     PostgresCharacter,
 }
 
+/// Exact SQLite row decoder learned from a live prepare. `declared: None`
+/// means authoritative per-cell storage-class fallback, not missing evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SqliteDecode {
+    pub declared: Option<XsdTypeCode>,
+    pub padding: Option<usize>,
+}
+
 /// Live prepare-time evidence for comparison decoration, not schema constraints.
 #[derive(Clone, Debug)]
 pub struct ResultColumn {
@@ -55,6 +63,7 @@ pub struct ResultColumn {
     /// How to expose the decoder's exact text value to relational comparisons.
     /// Unknown and non-text families are never guessed or blanket-cast.
     pub text_key: Option<TextKey>,
+    pub sqlite_decode: Option<SqliteDecode>,
 }
 
 /// A bounded pull cursor over ONE emitted branch `SELECT`. One row in flight; the
@@ -99,6 +108,7 @@ pub trait SqlBackend {
             .map(|name| ResultColumn {
                 name,
                 text_key: None,
+                sqlite_decode: None,
             })
             .collect())
     }
@@ -125,6 +135,20 @@ pub trait SqlBackend {
         _sqlite_character_keys: bool,
     ) -> Result<Self::Stream<'s>> {
         self.open_branch_with_metadata(sql, lexical_params, metadata_sql)
+            .await
+    }
+
+    /// Additional compiler-owned lexical keys; the default backend has no such
+    /// callback. Never activate this by inspecting authored SQL text.
+    async fn open_branch_with_identity<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+        _sqlite_lexical_keys: bool,
+    ) -> Result<Self::Stream<'s>> {
+        self.open_branch_with_decoder(sql, lexical_params, metadata_sql, sqlite_character_keys)
             .await
     }
 

@@ -9,9 +9,38 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
         }
         ScanSource::Logical(source) => source_actuals(source, catalog),
         ScanSource::Path { closure, .. } => path_actuals(closure, catalog),
-        ScanSource::Projection { input, columns, .. } => {
+        ScanSource::Projection {
+            input,
+            columns,
+            lexical_keys,
+            ..
+        } => {
             let inner = scan_actuals(input, dialect, catalog);
+            let sqlite_columns: HashMap<_, _> = columns
+                .iter()
+                .filter_map(|(name, term)| {
+                    let TermMap::Column(raw, _) = term else {
+                        return None;
+                    };
+                    inner
+                        .sqlite_columns
+                        .get(resolve_col(raw, Some(&inner.columns)))
+                        .copied()
+                        .map(|decode| (name.to_string(), decode))
+                })
+                .collect();
+            let lexical_columns = sqlite_columns
+                .iter()
+                .filter(|(name, _)| {
+                    lexical_keys
+                        .iter()
+                        .any(|key| key.column.as_ref() == name.as_str())
+                })
+                .map(|(name, decode)| (name.clone(), *decode))
+                .collect();
             AliasActuals {
+                sqlite_columns,
+                lexical_columns,
                 source_kind: AliasSourceKind::Derived,
                 columns: columns.iter().map(|(name, _)| name.to_string()).collect(),
                 path: false,
@@ -59,6 +88,7 @@ fn projection_sql(
         guards,
         distinct,
         native_keys,
+        lexical_keys,
     } = source
     else {
         unreachable!("projection renderer")
@@ -110,21 +140,21 @@ fn projection_sql(
     if items.is_empty() {
         items.push("1 AS __sf_dummy".into());
     }
-    // Residual native consumers retain their raw relation. Policies inside this
-    // projection already filtered raw rows; their newly enabled window needs
-    // decoder proof for EVERY RDF key, never SQL numeric equality for +/-0.
-    let policy_guarded = guards.iter().any(|g| matches!(g, SqlCond::NativeCmp(..)));
+    // Original lexical consumer proof plus a live decoder makes mixed SQLite
+    // keys exact. Natural/base-IRI consumers cannot borrow that authority.
+    let lexical = |raw: &str| {
+        (dialect == Dialect::Sqlite && lexical_keys.iter().any(|key| key.column.as_ref() == raw))
+            .then(|| lexical_key::column_decode(&ColRef::new(input.alias, raw), &actuals))
+            .flatten()
+    };
     let window = distinct
         && native_keys.is_empty()
         && !columns.is_empty()
-        && if policy_guarded {
-            columns.iter().all(|(_, term)| {
-                matches!(term, TermMap::Column(raw, _) if path_comparison::column_text(
-                    &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
-            })
-        } else {
-            !actuals[&input.alias].text_columns.is_empty()
-        };
+        && (columns.iter().all(|(_, term)| {
+            matches!(term, TermMap::Column(raw, _) if lexical(raw).is_some() || path_comparison::column_text(
+                &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
+        }) || (!guards.iter().any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+            && !actuals[&input.alias].text_columns.is_empty()));
     let mut rank = "__sf_rank".to_owned();
     while columns
         .iter()
@@ -151,12 +181,24 @@ fn projection_sql(
             };
             let native = native_keys.iter().find(|(key, _)| key == name);
             if native.is_none_or(|(_, both)| *both) {
-                keys.push(path_comparison::rdf_column(
-                    &ColRef::new(input.alias, raw.clone()),
-                    dialect,
-                    catalog,
-                    &actuals,
-                ));
+                keys.push(
+                    if let Some(decode) = lexical(raw).filter(|_| {
+                        path_comparison::column_text(
+                            &ColRef::new(input.alias, raw.clone()),
+                            &actuals,
+                        )
+                        .is_none()
+                    }) {
+                        lexical_key::expression(column(raw), decode, catalog)
+                    } else {
+                        path_comparison::rdf_column(
+                            &ColRef::new(input.alias, raw.clone()),
+                            dialect,
+                            catalog,
+                            &actuals,
+                        )
+                    },
+                );
             }
             if native.is_some() {
                 let key = column(raw);
@@ -351,6 +393,7 @@ mod tests {
                     .insert_live_result(
                         &source,
                         vec![sf_sql::backend::ResultColumn {
+                            sqlite_decode: None,
                             name: "key".into(),
                             text_key: key,
                         }],
@@ -384,6 +427,7 @@ mod tests {
                             guards: vec![],
                             distinct: false,
                             native_keys: vec![],
+                            lexical_keys: vec![],
                         },
                     };
                     let actuals = scan_actuals(&scan, dialect, &catalog);

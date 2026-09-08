@@ -288,6 +288,24 @@ impl SqlBackend for SqliteOwnedBackend {
         metadata_sql: Option<&str>,
         sqlite_character_keys: bool,
     ) -> Result<SqliteReceiverStream> {
+        self.open_branch_with_identity(
+            sql,
+            lexical_params,
+            metadata_sql,
+            sqlite_character_keys,
+            false,
+        )
+        .await
+    }
+
+    async fn open_branch_with_identity(
+        &mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+        sqlite_lexical_keys: bool,
+    ) -> Result<SqliteReceiverStream> {
         // cap-1, FIFO (=_bag-preserving) channel: at most one buffered row in flight
         // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
@@ -328,6 +346,17 @@ impl SqlBackend for SqliteOwnedBackend {
             let mut key = match super::text_key::CharacterKeyGuard::install(
                 &guard,
                 sqlite_character_keys,
+                control.clone(),
+            ) {
+                Ok(key) => key,
+                Err(error) => {
+                    send_error(&tx, control.as_deref(), error);
+                    return;
+                }
+            };
+            let mut lexical_key = match super::text_key::CharacterKeyGuard::install_lexical(
+                &guard,
+                sqlite_lexical_keys,
                 control.clone(),
             ) {
                 Ok(key) => key,
@@ -420,7 +449,11 @@ impl SqlBackend for SqliteOwnedBackend {
                             Some(cancellation) => cancellation.map_rusqlite_error(e),
                             None => Error::Sqlite(e),
                         };
-                        send_error(&tx, control.as_deref(), key.map_error(error));
+                        send_error(
+                            &tx,
+                            control.as_deref(),
+                            lexical_key.map_error(key.map_error(error)),
+                        );
                         break;
                     }
                 }
@@ -428,6 +461,9 @@ impl SqlBackend for SqliteOwnedBackend {
             drop(rows);
             drop(stmt);
             if let Err(error) = key.finish() {
+                send_error(&tx, control.as_deref(), error);
+            }
+            if let Err(error) = lexical_key.finish() {
                 send_error(&tx, control.as_deref(), error);
             }
         });

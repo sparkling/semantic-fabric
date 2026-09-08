@@ -71,13 +71,32 @@ qualification. No broad admission is promoted.
 
 **Ordinary policy correction (2026-09-08):** native row equality runs inside the
 existing D1 projection before raw representative selection. The newly enabled
-policy window requires live text/CHAR proof for every projected key; unknown or
-mixed keys retain raw D1. Public SELECT/COUNT, projection bags, correlations and
+policy window initially required live text/CHAR proof for every projected key;
+the proven SQLite lexical subset below extends this without a partial-key gate.
+Public SELECT/COUNT, projection bags, correlations and
 policy-before-representative checks pass, as do owned PostgreSQL16.15/MySQL8.4.11
 text/CHAR policy queries. Missing guard columns and wrong operators/aliases reject
 before cursors; parameters follow SQL order through nested/conditional projections.
 A virtual-column fixture verifies native signed-zero values and catches removal
 of the all-key gate. Raw descriptors remain intact; general key identity is not closed.
+
+**SQLite lexical mixed-key correction (2026-09-08):** D1 now captures original
+term consumers before synthetic raw-column recipes erase that information. With
+live SQLite declaration/storage-fallback and padding facts, IRI-template-only keys use
+the same Rust decoder as result rows, not SQL CAST or numeric equality. Signed
+zero IRIs survive while integer/REAL lexical duplicates and CHAR duplicates
+collapse before projection; raw outputs and descriptors remain unchanged. A
+query-owned scalar charges source work, retains cancellation/lease ownership and
+cleans up on completion, drop and errors without replacing application callbacks.
+Lexical identity does not license literal value comparisons: only all-IRI-template
+consumers receive the new D1/comparison proof. Any literal, blank-node or column-IRI
+consumer revokes it; their old paths remain, including numeric FILTER comparison.
+Required public SELECT/COUNT, self-join/OPTIONAL/UNION, BLOB/date and
+numeric-filter checks pass. Owned PostgreSQL/MySQL mixed integer/case-insensitive
+text checks protect the existing native window path. This does not promote natural
+literal identity/value comparison or dual-use keys, base-resolved column IRIs, native scalar identity,
+mixed-decoder SubPlans/paths or unknown Ref keys. The existing unsupported
+template-vs-constant FILTER still rejects before source work; no admission flag changes.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

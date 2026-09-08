@@ -9,6 +9,8 @@ pub(super) fn actuals(
 ) -> AliasActuals {
     let sources = branch_actuals(input, dialect, catalog);
     AliasActuals {
+        sqlite_columns: HashMap::new(),
+        lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns: (0..columns.len()).map(|i| format!("c{i}")).collect(),
         path: false,

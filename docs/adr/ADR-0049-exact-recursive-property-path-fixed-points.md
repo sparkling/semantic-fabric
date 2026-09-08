@@ -75,6 +75,9 @@ SQLite also covers CHAR/VARCHAR, Unicode/NUL and authenticated outer correlation
 
 **Remaining exactness gate:** general mixed/natural-type key identity, raw
 mixed-decoder SubPlan UNION and base-resolved column IRI identity remain open.
+ADR-0034 now closes ordinary SQLite all-IRI-template mixed D1 dedup with public
+signed-zero/count/join/UNION evidence; that proof does not propagate general
+mixed identity into paths, SubPlans or unknown Ref keys.
 Ordinary policy text/CHAR consumers now filter before D1 dedup (ADR-0034); this
 does not qualify general mixed/natural keys or path-policy admission. Template-based text/CHAR Ref atoms now
 join/filter native witnesses before dedup only with live proof for every key

@@ -75,6 +75,8 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
+        sqlite_columns: HashMap::new(),
+        lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns: vec!["sf_s".into(), "sf_o".into()],
         path: true,
@@ -153,6 +155,11 @@ pub(super) fn rdf_column(
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
 ) -> String {
+    if dialect == Dialect::Sqlite && column_text(column, actuals).is_none() {
+        if let Some(decode) = lexical_key::proven_column(column, actuals) {
+            return lexical_key::expression(colref(column, dialect, actuals), decode, catalog);
+        }
+    }
     let key = column_text(column, actuals);
     let expression = decoded_text(colref(column, dialect, actuals), key, dialect, catalog);
     if !catalog.suppress_path_collation && key.is_some() {
@@ -232,6 +239,8 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
+        sqlite_columns: HashMap::new(),
+        lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns,
         path: plan.branches.iter().any(branch_has_path),
@@ -246,6 +255,18 @@ pub(super) fn render_key_equality(
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
 ) -> String {
+    if dialect == Dialect::Sqlite
+        && [a, b].iter().all(|column| {
+            lexical_key::proven_column(column, actuals).is_some()
+                || column_text(column, actuals).is_some()
+        })
+    {
+        return format!(
+            "{} = {}",
+            rdf_column(a, dialect, catalog, actuals),
+            rdf_column(b, dialect, catalog, actuals)
+        );
+    }
     let (mut left, mut right) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
     let path = [a, b]
         .iter()

@@ -518,7 +518,7 @@ impl CmpOp {
 }
 
 pub(crate) mod scan;
-pub use scan::{Scan, ScanSource};
+pub use scan::{LexicalKey, Scan, ScanSource};
 
 /// A single OPTIONAL right side rendered as a SQL `LEFT JOIN` (ADR-0007 R1–R5).
 ///

@@ -149,6 +149,7 @@ pub(super) fn visit_scan<'a>(
             columns,
             guards,
             native_keys,
+            lexical_keys,
             ..
         } => {
             walker.push(depth, Work::Scan(input))?;
@@ -160,6 +161,10 @@ pub(super) fn visit_scan<'a>(
             walker.collection(native_keys.len())?;
             for (name, _) in native_keys {
                 walker.payload(name.len())?;
+            }
+            walker.collection(lexical_keys.len())?;
+            for key in lexical_keys {
+                walker.payload(key.column.len())?;
             }
             push_conditions(walker, guards, depth)
         }

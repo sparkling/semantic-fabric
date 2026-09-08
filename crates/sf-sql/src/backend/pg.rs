@@ -378,6 +378,7 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
             .columns()
             .iter()
             .map(|column| crate::backend::ResultColumn {
+                sqlite_decode: None,
                 name: column.name().to_owned(),
                 text_key: match *column.type_() {
                     Type::TEXT | Type::VARCHAR => Some(crate::backend::TextKey::Verbatim),

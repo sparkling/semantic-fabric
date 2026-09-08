@@ -141,6 +141,16 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > keep original decoding. This is thin-adapter work, not a graph materializer;
 > general decoded identity and total source controls remain open under ADR-0049.
 
+> **Lexical-key refinement (2026-09-08).** SQLite now exposes its live declared
+> datatype/storage-class fallback and CHAR padding as decoder facts. An explicit
+> compiler request installs a second query-local scalar sharing `lexical_typed`
+> and `character` with row decoding; raw result values remain unchanged. The
+> same collision, cleanup, source-charge and request-owner guard covers both
+> scalars, including the owned worker's lease lifetime. Original term-consumer
+> proof gates ordinary D1 use (ADR-0034), independently of numeric value comparison.
+> Native adapters provide no SQLite decoder authority. This extends the thin
+> adapter seam, not the executor architecture or general identity admission.
+
 ## More Information
 
 * **Evidence (2026-07-01):** the live Ontop 5.5.0 vs semantic-fabric head-to-head (`BENCHMARKS.md`, `scripts/compare/race.sh`) — five Postgres-path-only correctness defects (q9 agg-over-union, q10 sequence path, q11 MINUS, q12 FILTER-EXISTS/typed-column, q15 DISTINCT-over-join) + one perf blowup (q14), all invisible to the green SQLite differential; fixed in `exec_pg.rs`/`unfold.rs`/`iq.rs`/`leftjoin.rs` and re-verified at row-parity on the live PG endpoint.

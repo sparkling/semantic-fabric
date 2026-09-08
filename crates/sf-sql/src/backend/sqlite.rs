@@ -33,6 +33,7 @@ use crate::error::{Error, Result};
 use crate::stream::sqlite_column_decltypes;
 
 mod cancellation;
+mod lexical_key;
 #[cfg(test)]
 mod metadata_twin_tests;
 mod owned;
@@ -68,12 +69,18 @@ pub struct SqliteBranch<'s> {
     pads: Vec<Option<usize>>,
     nproj: usize,
     key: text_key::CharacterKeyGuard<'s>,
+    lexical_key: text_key::CharacterKeyGuard<'s>,
 }
 
 impl BranchStream for SqliteBranch<'_> {
     async fn next_row(&mut self) -> Result<Option<RawTuple>> {
-        let Some(row) = self.rows.next().map_err(|e| self.key.map_error(e.into()))? else {
+        let Some(row) = self
+            .rows
+            .next()
+            .map_err(|e| self.lexical_key.map_error(self.key.map_error(e.into())))?
+        else {
             self.key.finish()?;
+            self.lexical_key.finish()?;
             return Ok(None);
         };
         Ok(Some(marshal_row(
@@ -156,9 +163,29 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
         metadata_sql: Option<&str>,
         sqlite_character_keys: bool,
     ) -> Result<SqliteBranch<'s>> {
+        self.open_branch_with_identity(
+            sql,
+            lexical_params,
+            metadata_sql,
+            sqlite_character_keys,
+            false,
+        )
+        .await
+    }
+
+    async fn open_branch_with_identity<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+        sqlite_lexical_keys: bool,
+    ) -> Result<SqliteBranch<'s>> {
         // §10 declared codes + CHARACTER(n) pads from the prepared statement's
         // column metadata (no rows fetched), then the streaming cursor.
         let key = text_key::CharacterKeyGuard::install(self.conn, sqlite_character_keys, None)?;
+        let lexical_key =
+            text_key::CharacterKeyGuard::install_lexical(self.conn, sqlite_lexical_keys, None)?;
         let (decl_codes, pads, nproj) = column_meta(self.conn, metadata_sql.unwrap_or(sql))?;
         // Store the prepared statement in the backend so the returned Rows can
         // borrow it for the branch's lifetime (the GAT stream). The Statement
@@ -182,6 +209,7 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
             pads,
             nproj,
             key,
+            lexical_key,
         })
     }
 }
@@ -234,6 +262,10 @@ fn result_columns(conn: &Connection, sql: &str) -> Result<Vec<crate::backend::Re
             ResultColumn {
                 name: column.name().to_owned(),
                 text_key,
+                sqlite_decode: Some(crate::backend::SqliteDecode {
+                    declared: decl.as_deref().and_then(datatype::natural_xsd),
+                    padding: decl.as_deref().and_then(char_pad_len),
+                }),
             }
         })
         .collect())

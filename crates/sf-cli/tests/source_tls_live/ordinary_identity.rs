@@ -61,6 +61,7 @@ pub(super) fn assert_ordinary(address: SocketAddr, fixture: &Fixture) {
 }
 
 pub(super) fn assert_references(fixture: &Fixture, database: &Database, postgres: bool) {
+    assert_mixed_columns(fixture, database, postgres);
     let text = if postgres {
         "VARCHAR(32) COLLATE path_ci"
     } else {
@@ -99,6 +100,48 @@ pub(super) fn assert_references(fixture: &Fixture, database: &Database, postgres
         &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> ?o }}"),
     );
     assert_eq!(count[0]["n"]["value"], "4");
+    database.assert_encrypted_sessions();
+    drop(server);
+    fixture.write("first.ttl", MAPPING);
+}
+
+fn assert_mixed_columns(fixture: &Fixture, database: &Database, postgres: bool) {
+    let text = if postgres {
+        "VARCHAR(32) COLLATE path_ci"
+    } else {
+        "VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    };
+    sql(database, &format!("CREATE TABLE mixed_keys(src INTEGER,dst {text}); INSERT INTO mixed_keys VALUES (1,'A'),(1,'a'),(1,'A')"));
+    if postgres {
+        sql(database, "GRANT SELECT ON mixed_keys TO sf_tls");
+    }
+    fixture.write(
+        "first.ttl",
+        &MAPPING.replace("rr:tableName \"items\"", "rr:tableName \"mixed_keys\""),
+    );
+    let (server, address) = start(fixture, database);
+    for distinct in ["", "DISTINCT "] {
+        let query = format!("SELECT {distinct}?s ?o WHERE {{ ?s <{EDGE}> ?o }}");
+        let result = rows(address, fixture, &query);
+        let mut objects = result
+            .iter()
+            .map(|row| {
+                assert_eq!(row["s"]["value"], "http://example.test/n/1");
+                row["o"]["value"].as_str().unwrap()
+            })
+            .collect::<Vec<_>>();
+        objects.sort();
+        assert_eq!(
+            objects,
+            vec!["http://example.test/n/A", "http://example.test/n/a"]
+        );
+    }
+    let count = rows(
+        address,
+        fixture,
+        &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    assert_eq!(count[0]["n"]["value"], "2");
     database.assert_encrypted_sessions();
     drop(server);
     fixture.write("first.ttl", MAPPING);

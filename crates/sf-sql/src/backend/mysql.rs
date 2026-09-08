@@ -189,6 +189,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                 ) && mysql_xsd_code(column, self.type_profile)?
                     == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
+                    sqlite_decode: None,
                     name: column.name_str().into_owned(),
                     text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),
                 })

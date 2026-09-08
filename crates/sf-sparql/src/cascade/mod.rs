@@ -1947,6 +1947,7 @@ fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
 /// engine must reject, silently produced a bogus triple instead).
 fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], _dialect: sf_sql::Dialect) {
     let native_keys = distinct_scan::native_keys(b, alias);
+    let lexical_keys = distinct_scan::lexical_keys(b, alias);
     let scan = b
         .core
         .iter_mut()
@@ -1974,6 +1975,7 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], _dialect:
         guards: Vec::new(),
         distinct: true,
         native_keys,
+        lexical_keys,
     };
 }
 

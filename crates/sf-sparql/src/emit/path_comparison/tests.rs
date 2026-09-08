@@ -17,10 +17,12 @@ fn fixture() -> (Vec<sf_core::ir::TriplesMap>, ColumnCatalog) {
             &maps[0].source,
             vec![
                 sf_sql::backend::ResultColumn {
+                    sqlite_decode: None,
                     name: "src".into(),
                     text_key: None,
                 },
                 sf_sql::backend::ResultColumn {
+                    sqlite_decode: None,
                     name: "dst".into(),
                     text_key: Some(sf_sql::backend::TextKey::Verbatim),
                 },
@@ -57,10 +59,12 @@ fn aggregate_metadata_uses_sql_projection_order() {
                 source,
                 vec![
                     sf_sql::backend::ResultColumn {
+                        sqlite_decode: None,
                         name: "src".into(),
                         text_key: None,
                     },
                     sf_sql::backend::ResultColumn {
+                        sqlite_decode: None,
                         name: "dst".into(),
                         text_key: Some(sf_sql::backend::TextKey::Verbatim),
                     },
@@ -98,10 +102,12 @@ fn singleton_metadata_uses_prepared_distinct_and_term_dedup_state() {
             &maps[0].source,
             vec![
                 sf_sql::backend::ResultColumn {
+                    sqlite_decode: None,
                     name: "src".into(),
                     text_key: None,
                 },
                 sf_sql::backend::ResultColumn {
+                    sqlite_decode: None,
                     name: "dst".into(),
                     text_key: Some(TextKey::SqliteCharacter(4)),
                 },
@@ -293,6 +299,7 @@ fn character_decoder_emission_is_explicit_and_preserved_in_metadata() {
                     source,
                     ["src", "dst"]
                         .map(|name| sf_sql::backend::ResultColumn {
+                            sqlite_decode: None,
                             name: name.into(),
                             text_key: Some(key),
                         })
