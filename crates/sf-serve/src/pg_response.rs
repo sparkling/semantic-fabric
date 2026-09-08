@@ -5,7 +5,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::response::Response;
 use sf_sparql::{exec_pg, Plan};
-use sparesults::QueryResultsFormat;
 
 use crate::backend::PgQueryClient;
 use crate::budget::RequestBudget;
@@ -18,7 +17,7 @@ pub(crate) async fn select(
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
-    format: QueryResultsFormat,
+    format: stream::SelectFormat,
     variables: Vec<String>,
     budget: RequestBudget,
 ) -> Result<Body, Response> {

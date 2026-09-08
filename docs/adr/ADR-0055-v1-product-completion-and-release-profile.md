@@ -32,6 +32,20 @@ definition of product completion and release work for v1. ADR-0038 remains an
 auditable record of the broader SOTA programme; its research and advanced-
 assurance work becomes a labelled post-1.0 backlog.
 
+**Lineage update (2026-09-08):** ADR-0017 now has a public opt-in, compiler-proved
+constant mapping/source SELECT profile with per-solution PROV-O, pinned snapshot,
+logical-plan/policy identifiers and bounded fail-terminal streaming. Its required
+SQLite HTTP, isolation, reload and failure tests are an incremental result, not
+full lineage, native-backend lineage qualification or application completion.
+Dynamic multi-origin operators, graph reification and authorized row keys remain
+open. The capability catalog separately retains that incomplete release gate.
+
+The catalog's wider global-operator and atomic/no-prefix-stream limitations are
+non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add
+v1 requirements, and a failed bounded prefix is not a complete answer. Existing
+admitted-operator exactness, bounds, rejection, terminal-failure, redaction and
+cancellation tests remain required; no capability or backend is removed.
+
 Native PostgreSQL/MySQL serving cancellation now holds dirty connections and
 request capacity through bounded stop/discard, with acknowledged cleanup before
 reuse. Required owned TLS CLI tests observe stopped database work and pool

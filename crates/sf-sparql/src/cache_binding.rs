@@ -11,6 +11,77 @@ use crate::runtime_identity::{CompileDigests, SemanticIdentity};
 use crate::Tbox;
 
 impl CompilerBinding {
+    /// Prove the constant mapping origin of every emitted solution for the
+    /// initial on-demand lineage profile. This is a query/input proof, NOT an
+    /// execution capability for an independently mutable `Plan`.
+    ///
+    /// Exactly one authored map, no referencing object maps, and nonempty
+    /// mandatory BGPs (possibly joined/unioned/projected/deduplicated/sliced).
+    /// Saturation preserves the authored map identity. Every witness therefore
+    /// has this same origin, even where semantic dedup erases witness identity.
+    /// Other shapes reject; never substitute a list of candidate maps.
+    pub fn constant_mapping_origin(
+        &self,
+        sparql: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> crate::Result<String> {
+        use sf_core::{ir::ObjectMap, query_control::QueryCharge};
+        use spargebra::{algebra::GraphPattern, Query};
+        let unsupported = || crate::Error::Unsupported("lineage profile is not admitted".into());
+        control.checkpoint()?;
+        let [map] = self.mapping.triples_maps() else {
+            return Err(unsupported());
+        };
+        if map.id.is_empty()
+            || map.id.len() > 1024
+            || map
+                .predicate_object_maps
+                .iter()
+                .flat_map(|pom| &pom.objects)
+                .any(|object| matches!(object, ObjectMap::Ref(_)))
+        {
+            return Err(unsupported());
+        }
+        let query = crate::parse_query(sparql)?;
+        let Query::Select {
+            pattern,
+            dataset: None,
+            ..
+        } = &query
+        else {
+            return Err(unsupported());
+        };
+        let mut pending = vec![pattern];
+        let mut work = 0usize;
+        while let Some(pattern) = pending.pop() {
+            control.checkpoint()?;
+            control.consume(QueryCharge::CompilerWork, 1)?;
+            work += 1;
+            if work > 256 {
+                return Err(unsupported());
+            }
+            match pattern {
+                GraphPattern::Bgp { patterns } if !patterns.is_empty() => {
+                    work = work.saturating_add(patterns.len());
+                    if work > 256 {
+                        return Err(unsupported());
+                    }
+                    control.consume(QueryCharge::CompilerWork, patterns.len() as u64)?;
+                }
+                GraphPattern::Project { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. } => pending.push(inner),
+                GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+                    pending.push(left);
+                    pending.push(right);
+                }
+                _ => return Err(unsupported()),
+            }
+        }
+        Ok(map.id.clone())
+    }
+
     /// Build a binding with externally supplied semantic identity. The exact
     /// document and admission digests partition every plan/cache entry, but the
     /// caller remains responsible for enforcing its opaque admission boundary.

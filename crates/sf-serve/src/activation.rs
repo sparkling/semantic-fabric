@@ -115,7 +115,6 @@ impl RuntimeSnapshotLease {
         self.activation_id
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> &RuntimeSnapshot {
         &self.snapshot
     }

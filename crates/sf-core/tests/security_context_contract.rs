@@ -76,6 +76,14 @@ fn policy_matching_is_exact_for_the_snapshot_owned_identity() {
 }
 
 #[test]
+fn public_lineage_fingerprint_changes_only_with_policy_not_subject_or_attributes() {
+    let baseline = context(1, 2, 3).policy_lineage_digest();
+    assert_eq!(baseline, context(1, 9, 8).policy_lineage_digest());
+    assert_ne!(baseline, context(4, 2, 3).policy_lineage_digest());
+    assert_ne!(baseline, [1; 32], "never expose the raw policy identity");
+}
+
+#[test]
 fn diagnostics_and_errors_never_render_identity_material() {
     let context = context(0xa1, 0xb2, 0xc3);
     let forbidden = ["a1".repeat(32), "b2".repeat(32), "c3".repeat(32)];

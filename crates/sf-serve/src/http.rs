@@ -94,7 +94,11 @@ async fn handle_get(
         Ok(query) => query,
         Err(code) => return problem::response(code),
     };
-    process(cfg, snapshot, query, accept(&headers), budget).await
+    let accept = match accept(&headers) {
+        Ok(accept) => accept,
+        Err(code) => return problem::response(code),
+    };
+    process(cfg, snapshot, query, accept, budget).await
 }
 
 /// `POST /sparql` — either a strict single-query urlencoded form or a bounded
@@ -109,7 +113,10 @@ async fn handle_post(
         return problem::response(ProblemCode::InvalidRequest);
     }
     let (parts, body) = request.into_parts();
-    let accepted = accept(&parts.headers);
+    let accepted = match accept(&parts.headers) {
+        Ok(accept) => accept,
+        Err(code) => return problem::response(code),
+    };
     let query = match traced(
         Stage::Decode,
         crate::post_body::query(
@@ -138,6 +145,22 @@ async fn process(
     if query.len() > cfg.max_query_len() {
         return problem::response(ProblemCode::PayloadTooLarge);
     }
+
+    // Prove the requested provenance profile before generation admission can
+    // perform source I/O. The same pinned snapshot and unchanged query are used
+    // below; neither public caller plans nor another generation can be substituted.
+    let lineage = match crate::lineage::prepare(
+        cfg.clone(),
+        snapshot.clone(),
+        &query,
+        accept.as_deref(),
+        &budget,
+    )
+    .await
+    {
+        Ok(proof) => proof,
+        Err(response) => return response,
+    };
 
     let generation_admission = match traced(
         Stage::GenerationLease,
@@ -202,8 +225,12 @@ async fn process(
             }
             match &plan.form {
                 PlanForm::Select { .. } => {
+                    let format = match lineage {
+                        Some(proof) => stream::SelectFormat::Lineage(proof),
+                        None => negotiate_results(accept).into(),
+                    };
                     traced_execute(respond_select(
-                        backend, plan, generation, rls_tables, accept, budget,
+                        backend, plan, generation, rls_tables, format, budget,
                     ))
                     .await
                 }
@@ -257,11 +284,19 @@ async fn process(
     }
 }
 
-fn accept(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned())
+fn accept(headers: &HeaderMap) -> Result<Option<String>, ProblemCode> {
+    let mut joined = String::new();
+    for (index, value) in headers.get_all(header::ACCEPT).iter().enumerate() {
+        let value = value.to_str().map_err(|_| ProblemCode::InvalidRequest)?;
+        if index >= 16 || joined.len().saturating_add(value.len()).saturating_add(1) > 8192 {
+            return Err(ProblemCode::InvalidRequest);
+        }
+        if index != 0 {
+            joined.push(',');
+        }
+        joined.push_str(value);
+    }
+    Ok((!joined.is_empty()).then_some(joined))
 }
 
 fn ok_stream(content_type: &str, body: Body) -> Response {

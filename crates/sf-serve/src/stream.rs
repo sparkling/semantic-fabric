@@ -38,6 +38,29 @@ use tokio::sync::mpsc::Sender;
 use crate::budget::RequestBudget;
 use crate::terminal_body;
 
+#[path = "stream_lineage.rs"]
+mod lineage;
+
+pub(crate) enum SelectFormat {
+    Standard(QueryResultsFormat),
+    Lineage(Arc<crate::lineage::Lineage>),
+}
+
+impl From<QueryResultsFormat> for SelectFormat {
+    fn from(value: QueryResultsFormat) -> Self {
+        Self::Standard(value)
+    }
+}
+
+impl SelectFormat {
+    pub(crate) fn media_type(&self) -> &'static str {
+        match self {
+            Self::Standard(format) => format.media_type(),
+            Self::Lineage(_) => crate::lineage::MEDIA_TYPE,
+        }
+    }
+}
+
 /// Bytes per streamed body chunk (a flush boundary, not a result-size cap).
 const CHUNK: usize = 16 * 1024;
 /// Bound on chunks in flight — the HTTP-body backpressure window (ADR-0006).
@@ -159,13 +182,17 @@ where
 
 pub(crate) fn select_body_streaming_controlled<D>(
     drive: D,
-    fmt: QueryResultsFormat,
+    fmt: impl Into<SelectFormat>,
     vars: Vec<String>,
     budget: RequestBudget,
 ) -> Body
 where
     D: FnOnce(RowSink) -> BoxedResult + Send + 'static,
 {
+    let fmt = match fmt.into() {
+        SelectFormat::Standard(format) => format,
+        SelectFormat::Lineage(proof) => return lineage::body(drive, proof, vars, budget),
+    };
     let (body, producer) =
         terminal_body::spawn(CHANNEL_CAP, budget, move |tx, phase_budget| async move {
             let varv = variables(&vars);

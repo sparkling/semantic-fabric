@@ -209,7 +209,7 @@ impl SourceRegistry {
             .map(RuntimeBinding::semantic_warning_count)
     }
 
-    fn binding(&self, source_id: SourceId) -> Option<&RuntimeBinding> {
+    pub(crate) fn binding(&self, source_id: SourceId) -> Option<&RuntimeBinding> {
         self.entries.get(&source_id)
     }
 }
@@ -227,12 +227,17 @@ impl fmt::Debug for SourceRegistry {
 /// epochs, and deterministic digests for one runtime generation.
 pub(crate) struct RuntimeSnapshot {
     epoch: Epoch,
+    lineage_identity: crate::correlation::CorrelationId,
     _ontology: SemanticOntology,
     ontology_digest: OntologyDigest,
     registry: SourceRegistry,
 }
 
 impl RuntimeSnapshot {
+    pub(crate) fn lineage_identity(&self) -> &str {
+        self.lineage_identity.as_str()
+    }
+
     pub(crate) fn permits_rls(&self, source: SourceId) -> bool {
         self.registry
             .binding(source)
@@ -253,6 +258,7 @@ impl RuntimeSnapshot {
             .all(|binding| binding.digests().ontology() == ontology_digest));
         Ok(Self {
             epoch,
+            lineage_identity: crate::correlation::CorrelationId::generate(),
             _ontology: ontology,
             ontology_digest,
             registry,

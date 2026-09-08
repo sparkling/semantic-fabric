@@ -49,6 +49,7 @@ mod federation;
 mod health;
 mod http;
 mod lifecycle;
+mod lineage;
 mod metrics;
 mod mysql_query;
 mod observed_source;

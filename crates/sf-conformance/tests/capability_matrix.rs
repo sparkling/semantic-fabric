@@ -8,11 +8,9 @@ use std::process::Command;
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
-
 fn catalog_bytes() -> Vec<u8> {
     fs::read(root().join(capability_catalog::CATALOG_PATH)).expect("read catalog")
 }
-
 fn mutated(mutator: impl FnOnce(&mut Value)) -> Result<capability_catalog::Catalog, String> {
     let mut value: Value = serde_json::from_slice(&catalog_bytes()).expect("parse mutation source");
     mutator(&mut value);
@@ -21,7 +19,6 @@ fn mutated(mutator: impl FnOnce(&mut Value)) -> Result<capability_catalog::Catal
         &serde_json::to_vec(&value).expect("serialize mutation"),
     )
 }
-
 fn array<'a>(value: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
     value[key].as_array_mut().expect("catalog array")
 }
@@ -37,10 +34,10 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 104);
+    assert_eq!(loaded.catalog.cells.len(), 106);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&75));
-    assert_eq!(counts.get(&Status::Planned), Some(&26));
+    assert_eq!(counts.get(&Status::Implemented), Some(&76));
+    assert_eq!(counts.get(&Status::Planned), Some(&27));
     assert_eq!(counts.get(&Status::Unsupported), Some(&3));
     assert!(loaded
         .catalog
@@ -55,6 +52,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
     for id in [
         "authored-generation-reload-generic",
         "bounded-graceful-shutdown-generic",
+        "constant-mapping-source-lineage-sqlite",
         "describe-execution-sqlite",
         "federated-bounded-join-multi-source",
         "federated-two-source-union-multi-source",
@@ -78,6 +76,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         "federation-multi-source",
         "immutable-snapshot-generic",
         "observability-lifecycle-generic",
+        "query-lineage-generic",
     ] {
         let cell = loaded
             .catalog

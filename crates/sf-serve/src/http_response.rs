@@ -11,10 +11,10 @@ pub(super) async fn respond_select(
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
-    accept: Option<&str>,
+    fmt: stream::SelectFormat,
     budget: RequestBudget,
 ) -> Response {
-    let fmt = negotiate_results(accept);
+    let media_type = fmt.media_type();
     let PlanForm::Select { vars } = &plan.form else {
         return problem::response(ProblemCode::Internal);
     };
@@ -75,7 +75,7 @@ pub(super) async fn respond_select(
             )
         }
     };
-    ok_stream(fmt.media_type(), body)
+    ok_stream(media_type, body)
 }
 
 pub(super) async fn respond_ask(

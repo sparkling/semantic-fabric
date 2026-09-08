@@ -121,6 +121,15 @@ pub struct SecurityContext {
 }
 
 impl SecurityContext {
+    /// Public provenance fingerprint of policy only; never exposes subject,
+    /// request attributes, credentials, or the private cache partition.
+    pub fn policy_lineage_digest(self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        update_framed(&mut hasher, 0, b"semantic-fabric/policy-lineage/v1");
+        update_framed(&mut hasher, 1, &self.policy_snapshot.0);
+        hasher.finalize().into()
+    }
+
     /// Bind one request identity to exactly one snapshot-owned policy identity.
     pub const fn new(
         policy_snapshot: PolicySnapshotId,
