@@ -179,7 +179,29 @@ fn parent_reference_borrows_map_and_charges_only_actual_sources() {
     )
     .unwrap();
     assert_eq!(branches.len(), 1);
+    // Join-less references retain their established two-scan path.
     assert_eq!(branches[0].core.len(), 2);
+    assert_eq!(control.consumed(QueryCharge::CompilerWork), expected);
+    let ObjectMap::Ref(reference) = &mut maps[0].predicate_object_maps[0].objects[0] else {
+        unreachable!()
+    };
+    reference.joins.push(sf_core::ir::Join {
+        child: "id".into(),
+        parent: "id".into(),
+    });
+    let control = budget(expected);
+    let branches = expand(
+        &maps,
+        &pattern(Some("http://example.test/a")),
+        None,
+        &control,
+    )
+    .unwrap();
+    assert_eq!(branches[0].core.len(), 1);
+    let crate::iq::ScanSource::RefAtom { input, .. } = &branches[0].core[0].source else {
+        panic!("expected reference atom");
+    };
+    assert_eq!(input.core.len(), 2);
     assert_eq!(control.consumed(QueryCharge::CompilerWork), expected);
 }
 

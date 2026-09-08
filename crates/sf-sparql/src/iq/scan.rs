@@ -2,11 +2,19 @@
 //! until live emission; it is never an authored SQL query or table authority.
 use sf_core::ir::{LogicalSource, TermMap};
 
-use super::{Branch, PathClosure, SqlCond};
+use super::{Branch, ColRef, PathClosure, SqlCond};
+
+pub(crate) mod ref_atom;
 
 #[derive(Debug, Clone)]
 pub enum ScanSource {
     Logical(LogicalSource),
+    /// One reference-object atom: native join/filter first, RDF tuple dedup second.
+    /// The original leaves remain metadata/policy inputs, never outer table authority.
+    RefAtom {
+        input: Box<Branch>,
+        columns: Vec<ColRef>,
+    },
     Path {
         closure: Box<PathClosure>,
         cte_alias: usize,
@@ -30,11 +38,31 @@ impl From<LogicalSource> for ScanSource {
 }
 
 impl ScanSource {
+    /// Column-level origin for native type compatibility only, not constraints.
+    pub(crate) fn raw_column_origin<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Option<(&'a LogicalSource, &'a str)> {
+        match self {
+            Self::Logical(source) => Some((source, name)),
+            Self::RefAtom { input, columns } => {
+                let column = columns
+                    .iter()
+                    .enumerate()
+                    .find(|(i, _)| name == format!("c{i}"))?
+                    .1;
+                let scan = input.core.iter().find(|s| s.alias == column.alias)?;
+                scan.source.raw_column_origin(&column.column)
+            }
+            // Other wrappers keep their existing separately captured authority.
+            Self::Path { .. } | Self::Projection { .. } => None,
+        }
+    }
     /// Only authored tables/queries confer ordinary source/constraint authority.
     pub fn logical(&self) -> Option<&LogicalSource> {
         match self {
             Self::Logical(source) => Some(source),
-            Self::Path { .. } | Self::Projection { .. } => None,
+            Self::Path { .. } | Self::Projection { .. } | Self::RefAtom { .. } => None,
         }
     }
 
@@ -42,7 +70,7 @@ impl ScanSource {
         match self {
             Self::Logical(_) => true,
             Self::Projection { input, .. } => input.source.is_logical_projection(),
-            Self::Path { .. } => false,
+            Self::Path { .. } | Self::RefAtom { .. } => false,
         }
     }
 

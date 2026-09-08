@@ -74,7 +74,10 @@ without inferred width or added trimming/padding. Required owned TLS tests cover
 SQLite also covers CHAR/VARCHAR, Unicode/NUL and authenticated outer correlations.
 
 **Remaining exactness gate:** general mixed/natural-type key identity, raw
-mixed-decoder SubPlan UNION and native Ref/policy witness/set identity remain open.
+mixed-decoder SubPlan UNION, base-resolved column IRI identity and ordinary
+policy-consumer set identity remain open. Template-based text/CHAR Ref atoms now
+join/filter native witnesses before dedup only with live proof for every key
+(ADR-0034); unknown Ref keys retain prior D1. This does not close general keys.
 ADR-0034's typed D1/D2 wrappers close ordinary early-wrapper native folding;
 this does not qualify additional path type families. ADR-0015 now closes the ordinary NULL-term
 absence defect with atom-local guards and public/native evidence. Native CHAR path expectations

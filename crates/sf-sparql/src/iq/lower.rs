@@ -2072,7 +2072,8 @@ pub(crate) fn pool_rendered(
     // Preflight borrows the arms; successful lowering moves their payloads.
     for b in &arms {
         let scan = &b.core[0];
-        if !scan.source.is_logical_projection()
+        if !(scan.source.is_logical_projection()
+            || matches!(scan.source, crate::iq::ScanSource::RefAtom { .. }))
             || !b.where_conds.iter().all(|cond| {
                 matches!(cond,
                 SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == scan.alias)
@@ -3222,13 +3223,17 @@ mod tests {
         );
     }
 
-    /// A refObjectMap triple → a 2-scan branch with a native database join.
+    /// A refObjectMap triple seals its two native scans into one RDF relation.
     #[test]
-    fn ref_object_map_is_two_scan_branch() {
+    fn ref_object_map_keeps_two_native_inputs_inside_one_atom() {
         let p = plan("SELECT * WHERE { ?s <http://ex/dept> ?d }");
         assert_eq!(p.branches.len(), 1);
-        let b = &p.branches[0];
-        assert_eq!(b.core.len(), 2, "child ⋈ parent scan: {:?}", b.core);
+        let outer = &p.branches[0];
+        assert_eq!(outer.core.len(), 1);
+        let crate::iq::ScanSource::RefAtom { input: b, .. } = &outer.core[0].source else {
+            panic!("expected reference atom");
+        };
+        assert_eq!(b.core.len(), 2, "child ⋈ parent inputs: {:?}", b.core);
         assert!(
             b.where_conds
                 .iter()

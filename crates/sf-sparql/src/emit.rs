@@ -41,6 +41,7 @@ mod scan;
 use scan::{scan_actuals, scan_ref};
 mod aggregate_projection;
 mod path_comparison;
+mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
 use path_comparison::{path_actuals, path_key_expression, render_key_equality, subplan_actuals};
 
@@ -245,6 +246,7 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
             crate::iq::ScanSource::Logical(source) => out.push(source),
             crate::iq::ScanSource::Path { closure, .. } => hop_sources(&closure.hop, out),
             crate::iq::ScanSource::Projection { input, .. } => scan_sources(input, out),
+            crate::iq::ScanSource::RefAtom { input, .. } => branch_sources(input, out),
         }
     }
 
@@ -269,6 +271,7 @@ pub(crate) fn validate_live_columns(
         Derived,
         Path,
         Projection(&'a [(Box<str>, TermMap)]),
+        RefAtom(usize),
     }
 
     fn scan_alias<'a>(
@@ -277,6 +280,11 @@ pub(crate) fn validate_live_columns(
         catalog: &ColumnCatalog,
     ) -> Result<AliasSource<'a>> {
         match &scan.source {
+            crate::iq::ScanSource::RefAtom { input, columns } => {
+                crate::iq::scan::ref_atom::validate_shape(input, columns)?;
+                validate_branch(input, dialect, catalog)?;
+                Ok(AliasSource::RefAtom(columns.len()))
+            }
             crate::iq::ScanSource::Logical(source) => Ok(AliasSource::Base(source)),
             crate::iq::ScanSource::Path { closure, .. } => {
                 validate_hop(&closure.hop, dialect, catalog)?;
@@ -305,6 +313,9 @@ pub(crate) fn validate_live_columns(
         }
         if let Some(AliasSource::Projection(columns)) = aliases.get(&column.alias) {
             scan::validate_output(columns, &column.column)?;
+        }
+        if let Some(AliasSource::RefAtom(width)) = aliases.get(&column.alias) {
+            ref_atom::validate_output(*width, &column.column)?;
         }
         if matches!(aliases.get(&column.alias), Some(AliasSource::Path))
             && !matches!(column.column.as_ref(), "sf_s" | "sf_o")
@@ -1344,7 +1355,7 @@ fn render_from(
         let mut from = "(SELECT 1) t_empty".to_owned();
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan, dialect, catalog)?);
+            from.push_str(&scan_ref(&opt.scan, dialect, catalog, params, pidx)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -1372,14 +1383,14 @@ fn render_from(
     } else {
         let mut scans = b.core.iter();
         let first = scans.next().expect("core non-empty — checked above");
-        let mut from = scan_ref(first, dialect, catalog)?;
+        let mut from = scan_ref(first, dialect, catalog, params, pidx)?;
         for s in scans {
             from.push_str(" CROSS JOIN ");
-            from.push_str(&scan_ref(s, dialect, catalog)?);
+            from.push_str(&scan_ref(s, dialect, catalog, params, pidx)?);
         }
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan, dialect, catalog)?);
+            from.push_str(&scan_ref(&opt.scan, dialect, catalog, params, pidx)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -1643,7 +1654,7 @@ fn render_cond(
             let neg = matches!(cond, SqlCond::NotExists { .. });
             let from = scans
                 .iter()
-                .map(|scan| scan_ref(scan, dialect, catalog))
+                .map(|scan| scan_ref(scan, dialect, catalog, params, pidx))
                 .collect::<Result<Vec<_>>>()?
                 .join(" CROSS JOIN ");
             let mut nested_actuals = actuals.clone();

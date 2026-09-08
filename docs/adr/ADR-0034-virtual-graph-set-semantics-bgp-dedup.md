@@ -42,13 +42,30 @@ Required public SELECT/ASK/COUNT and JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS check
 cover SQLite NOCASE plus pinned PostgreSQL/MySQL native collations and CHAR widths.
 
 `NativeColEq` and `NativeCmp` preserve authored Ref joins and row-policy predicates.
-Scans with native consumers retain prior raw DISTINCT semantics; normalizing their
-keys without an atom-level proof could erase valid matches. A singleton-SubPlan
-experiment was rejected because it regressed established OPTIONAL/EXISTS paths.
-The ignored `reference_atom_dedup_preserves_conflicting_collations_and_projection_bags`
-test is a recorded, still-failing Ref-witness exactness requirement, not passing
-evidence or a deferral from v1. Native-consumer set identity, general mixed/natural
-types, synthetic row identity and total source-work/release qualification remain open.
+`ScanSource::RefAtom` now seals the complete native child/parent relation before
+D1, joins and projection narrowing. Both original leaves and their policies are
+filtered before decoded-key window dedup, enabled only when every key has live
+text/CHAR decoder proof (or the key tuple is empty). Unknown families retain the
+previous per-source D1/native join, preserving distinct signed-zero IRIs rather
+than applying SQL numeric equality. Policy-only/join-only columns cannot widen
+its RDF key. Raw outputs retain individual decoder descriptors, including
+child-owned graph scope for parent-generated blank nodes. Parameters follow SQL
+text order through nested projections, OPTIONAL and EXISTS. A Ref remains on the
+established OPTIONAL decomposition path and never gains table/constraint authority.
+Column-level origins preserve PostgreSQL pooling without inspecting generated SQL.
+Join-less references retain their established path. The unknown-family fallback
+clones only the admitted two-source plan payload, not source rows; it adds no
+claim of compiler-work metering or total source-work control.
+
+The formerly ignored Ref-witness regression is now active and passing. Required
+HTTP checks cover conflicting collations, projection bags, policy ordering,
+CHAR padding, named blank-node scope and unknown-family signed-zero preservation; owned PostgreSQL16.15/MySQL8.4.11 checks
+cover folded columns, SELECT/DISTINCT/COUNT, fixed values and correlations. The
+rejected universal SubPlan experiment remains unintegrated. These proofs cover
+fixed injective templates with decoder-proven text/CHAR keys, not universal term
+identity: base-resolved column IRIs and general mixed/natural scalar keys remain
+open, as do ordinary policy-consumer set identity, synthetic row identity, total
+source-work controls and exact-release qualification. No broad admission is promoted.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

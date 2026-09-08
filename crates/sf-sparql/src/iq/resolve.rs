@@ -801,17 +801,16 @@ mod tests {
         }
     }
 
-    /// A `rr:refObjectMap` pattern bridges to a 2-scan `InnerJoin` (child scan ⋈
-    /// parent scan) under the arm's `Construction` (design §3.1, §3.4).
+    /// A reference atom exposes one relation while retaining both native inputs.
     #[test]
-    fn ref_object_map_resolves_to_two_scan_inner_join() {
+    fn ref_object_map_resolves_to_sealed_native_join() {
         let maps = mapping();
         let tbox = Tbox::new();
         let schema = keyed_schema();
         let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let q = "SELECT * WHERE { ?s <http://ex/dept> ?d }";
         let tree = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
-        // Project Construction → the single arm Construction → InnerJoin of 2 scans.
+        // Project Construction → arm Construction → sealed atom scan.
         let inner = match tree {
             IqNode::Construction { child, .. } => *child,
             other => panic!("expected Project Construction, got {other:?}"),
@@ -819,21 +818,17 @@ mod tests {
         let IqNode::Construction { child, .. } = inner else {
             panic!("expected arm Construction, got {inner:?}");
         };
-        let IqNode::InnerJoin { children, cond } = *child else {
-            panic!("expected 2-scan InnerJoin, got {child:?}");
+        let IqNode::Extensional { scan, .. } = *child else {
+            panic!("expected sealed scan, got {child:?}");
         };
-        assert_eq!(children.len(), 2, "refObjectMap → child ⋈ parent scan");
-        assert!(
-            children
-                .iter()
-                .all(|c| matches!(c, IqNode::Extensional { .. })),
-            "both children are Extensional scans"
-        );
-        // The join condition is the rr:joinCondition ColEq, carried as IqCond::Sql.
-        assert!(
-            cond.iter().any(|c| matches!(c, IqCond::Sql(_))),
-            "the refObjectMap join equality is carried as IqCond::Sql: {cond:?}"
-        );
+        let crate::iq::ScanSource::RefAtom { input, .. } = scan.source else {
+            panic!("expected reference atom");
+        };
+        assert_eq!(input.core.len(), 2);
+        assert!(input
+            .where_conds
+            .iter()
+            .any(|c| matches!(c, crate::iq::SqlCond::NativeColEq(..))));
     }
 
     /// `resolve` leaves ZERO `Intensional` leaves anywhere in the tree, including

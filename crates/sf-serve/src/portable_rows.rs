@@ -140,6 +140,11 @@ impl PortableRowPolicy {
         scan: &mut Scan,
     ) -> sf_sparql::Result<Vec<SqlCond>> {
         use sf_sparql::iq::ScanSource;
+        if let ScanSource::RefAtom { input, .. } = &mut scan.source {
+            // Filter both native witnesses before choosing an RDF representative.
+            authorize_branch(self, source, dialect, input)?;
+            return Ok(Vec::new());
+        }
         let table = if let Some(table) = scan.source.distinct_table() {
             table.to_owned()
         } else {

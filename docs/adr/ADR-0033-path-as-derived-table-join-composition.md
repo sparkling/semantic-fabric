@@ -46,8 +46,10 @@ raw SubPlans retain exact recipes only where all arms agree. An explicit compile
 flag propagates through nested emission; authored SQL never activates callbacks.
 Required duplicate/connectivity, mixed-width and authenticated correlation tests
 pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary non-native-consumer
-text comparisons/dedup now have public/native evidence (ADR-0034); Ref/policy set
-identity and general mixed-type identity remain open. ADR-0034 retains D1/D2
+text comparisons/dedup and live-proven text/CHAR template-based native Ref atoms
+now have public/native evidence (ADR-0034); unknown Ref keys retain prior D1.
+General term keys and ordinary policy-consumer set identity remain open.
+ADR-0034 retains D1/D2
 wrappers as typed projections until emission; only original sources are probed,
 closing ordinary native folding without exposing table/constraint authority.
 ADR-0015's atom-local NULL guards now remove non-triples before projection and

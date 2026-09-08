@@ -198,10 +198,7 @@ async fn portable_policy_keeps_native_equality_before_rdf_reconstruction() {
     }
 }
 
-#[tokio::test]
-#[ignore = "known pre-existing Ref witness identity gap; required before native Ref exactness qualification"]
-async fn reference_atom_dedup_preserves_conflicting_collations_and_projection_bags() {
-    const REF: &str = r#"
+const REF_WITNESS: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
 <#parent> rr:logicalTable [rr:tableName "parent"];
  rr:subjectMap [rr:template "http://ex/{label}"].
@@ -212,6 +209,8 @@ async fn reference_atom_dedup_preserves_conflicting_collations_and_projection_ba
  rr:objectMap [rr:parentTriplesMap <#parent>;
  rr:joinCondition [rr:child "fk"; rr:parent "k"]]].
 "#;
+#[tokio::test]
+async fn reference_atom_dedup_preserves_conflicting_collations_and_projection_bags() {
     for (child_collation, parent_collation) in [
         ("BINARY", "NOCASE"),
         ("NOCASE", "BINARY"),
@@ -225,9 +224,9 @@ async fn reference_atom_dedup_preserves_conflicting_collations_and_projection_ba
         ] {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
             conn.execute_batch(&format!("CREATE TABLE child(s TEXT, fk TEXT COLLATE {child_collation}); CREATE TABLE parent(k TEXT COLLATE {parent_collation}, label TEXT); INSERT INTO child VALUES('one','a'),('two','a'); INSERT INTO parent VALUES('A','target'),('a','target');")).unwrap();
-            let mut cfg = support::serve_config(Backend::sqlite(conn), REF);
+            let mut cfg = support::serve_config(Backend::sqlite(conn), REF_WITNESS);
             cfg.set_query_admission(QueryAdmission::Bearer(BearerQueryAdmission::for_service_principal(TOKEN).unwrap()));
-            let maps = sf_mapping::parse_r2rml(REF).unwrap();
+            let maps = sf_mapping::parse_r2rml(REF_WITNESS).unwrap();
             sf_sparql::parse_and_translate(query, &maps, sf_sql::Dialect::Sqlite).expect("raw compiler preserves Ref OPTIONAL");
             let json = answer(cfg, query).await;
             let rows = json["results"]["bindings"].as_array().unwrap();
@@ -238,4 +237,110 @@ async fn reference_atom_dedup_preserves_conflicting_collations_and_projection_ba
             }
         }
     }
+}
+
+#[tokio::test]
+async fn reference_atom_filters_policies_before_dedup_and_preserves_parameter_order() {
+    use sf_serve::{
+        PortableRowPolicy, PortableRowRule, ProvisionedBearerAdmission, ProvisionedBearerSubject,
+    };
+    for (pattern, expected) in [
+        ("?s <http://ex/ref> ?o", 2),
+        ("<http://ex/one> <http://ex/ref> ?o", 1),
+        ("?s <http://ex/ref> <http://ex/target>", 2),
+        ("?s <http://ex/ref> <http://ex/absent>", 0),
+        (
+            "?s <http://ex/mark> ?m OPTIONAL { ?s <http://ex/ref> <http://ex/target> }",
+            3,
+        ),
+        (
+            "?s <http://ex/mark> ?m FILTER EXISTS { ?s <http://ex/ref> <http://ex/target> }",
+            2,
+        ),
+        (
+            "?s <http://ex/mark> ?m FILTER NOT EXISTS { ?s <http://ex/ref> <http://ex/target> }",
+            1,
+        ),
+        (
+            "?s <http://ex/mark> ?m MINUS { ?s <http://ex/ref> <http://ex/target> }",
+            1,
+        ),
+        ("?s <http://ex/ref> ?o . ?other <http://ex/ref> ?o", 4),
+        (
+            "{ ?s <http://ex/ref> ?o } UNION { ?s <http://ex/ref> ?o }",
+            4,
+        ),
+    ] {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE child(s TEXT, fk TEXT COLLATE NOCASE, tenant TEXT); CREATE TABLE parent(k TEXT COLLATE NOCASE, label TEXT, tenant TEXT); INSERT INTO child VALUES('one','a','child-allowed'),('two','a','child-allowed'),('three','b','child-allowed'),('hidden','a','denied'); INSERT INTO parent VALUES('a','target','denied'),('A','target','parent-allowed'),('a','target','parent-allowed'),('b','hidden','denied');").unwrap();
+        let mut cfg = support::serve_config(Backend::sqlite(conn), REF_WITNESS);
+        let policy = PortableRowPolicy::new(vec![
+            PortableRowRule::new(0, "child", "tenant", "child-allowed").unwrap(),
+            PortableRowRule::new(0, "parent", "tenant", "parent-allowed").unwrap(),
+        ])
+        .unwrap();
+        let subject = ProvisionedBearerSubject::portable_rows("reader", TOKEN, policy).unwrap();
+        cfg.set_query_admission(QueryAdmission::ProvisionedBearers(
+            ProvisionedBearerAdmission::new(vec![subject]).unwrap(),
+        ));
+        let query = format!("SELECT ?s ?o ?other WHERE {{ {pattern} }}");
+        let json = answer(cfg, &query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), expected, "{query}");
+        assert!(!json.to_string().contains("http://ex/hidden"), "{query}");
+    }
+}
+
+#[tokio::test]
+async fn reference_atom_preserves_character_decoders_and_named_blank_node_scope() {
+    for (mapping, setup, query, expected) in [
+        (REF_WITNESS.to_owned(),
+         "CREATE TABLE child(s CHARACTER(2),fk TEXT COLLATE NOCASE); CREATE TABLE parent(k TEXT,label CHARACTER(4)); INSERT INTO child VALUES('a','a'),('a ','A'); INSERT INTO parent VALUES('a','b'),('A','b ');",
+         "SELECT ?s ?o WHERE { ?s <http://ex/ref> ?o }", 1),
+        (REF_WITNESS.replace("rr:template \"http://ex/{label}\"", "rr:template \"{label}\"; rr:termType rr:BlankNode")
+            .replace("rr:template \"http://ex/{s}\"", "rr:template \"http://ex/{s}\"; rr:graphMap [rr:template \"http://ex/{g}\"]"),
+         "CREATE TABLE child(s TEXT,fk TEXT COLLATE NOCASE,g TEXT COLLATE NOCASE); CREATE TABLE parent(k TEXT,label TEXT); INSERT INTO child VALUES('one','a','A'),('one','a','a'); INSERT INTO parent VALUES('a','same'),('A','same');",
+         "SELECT ?o WHERE { GRAPH ?g { ?s <http://ex/ref> ?o } }", 2),
+    ] {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(setup).unwrap();
+        let mut cfg = support::serve_config(Backend::sqlite(conn), &mapping);
+        cfg.set_query_admission(QueryAdmission::Bearer(BearerQueryAdmission::for_service_principal(TOKEN).unwrap()));
+        let json = answer(cfg, query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), expected, "{query}");
+        if expected == 1 {
+            assert_eq!(rows[0]["s"]["value"], "http://ex/a%20");
+            assert_eq!(rows[0]["o"]["value"], "http://ex/b%20%20%20");
+        } else {
+            assert_eq!(rows[0]["o"]["type"], "bnode");
+            assert_ne!(rows[0]["o"]["value"], rows[1]["o"]["value"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn reference_atom_unknown_float_keys_preserve_signed_zero_witnesses() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE child(s TEXT,fk TEXT); INSERT INTO child VALUES('same','a'),('same','b');",
+    )
+    .unwrap();
+    let mapping = REF_WITNESS.replace(
+        "rr:tableName \"parent\"",
+        "rr:sqlQuery \"SELECT 'a' AS k, 0.0 AS label UNION ALL SELECT 'b' AS k, -0.0 AS label\"",
+    );
+    let mut cfg = support::serve_config(Backend::sqlite(conn), &mapping);
+    cfg.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    let json = answer(cfg, "SELECT ?o WHERE { ?s <http://ex/ref> ?o }").await;
+    let mut objects = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["o"]["value"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    objects.sort();
+    assert_eq!(objects, vec!["http://ex/-0", "http://ex/0"]);
 }

@@ -1759,15 +1759,30 @@ fn group_pool_type_safety_impl(
     let schema_map = build_schema_map(schema);
     let col_type = |index: usize, branch: &Branch, c: &ColRef| -> Option<&str> {
         let authority = source_authorities.map(|authorities| authorities[index]);
-        let LogicalSource::Table(t) = pool_core_source(branch, authority, c.alias)? else {
+        let (source, column) = branch
+            .core
+            .iter()
+            .find(|scan| scan.alias == c.alias)
+            .and_then(|scan| scan.source.raw_column_origin(&c.column))
+            .or_else(|| {
+                pool_core_source(branch, authority, c.alias).map(|s| (s, c.column.as_ref()))
+            })?;
+        let LogicalSource::Table(t) = source else {
             return None;
         };
         schema_map_get(&schema_map, t)?
-            .column(&c.column)
+            .column(column)
             .map(|col| col.sql_type.as_str())
     };
     let same_physical_col =
         |i: usize, bi: &Branch, ci: &ColRef, j: usize, bj: &Branch, cj: &ColRef| {
+            let origin = crate::iq::scan::ref_atom::raw_origin;
+            if let (Some(left), Some(right)) = (origin(bi, ci), origin(bj, cj)) {
+                return left.1 == right.1
+                    && matches!((left.0, right.0),
+                    (LogicalSource::Table(a), LogicalSource::Table(b))
+                    | (LogicalSource::Query(a), LogicalSource::Query(b)) if a == b);
+            }
             if ci.column != cj.column {
                 return false;
             }

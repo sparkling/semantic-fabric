@@ -64,8 +64,11 @@ equality is not proof of identical RDF lexical values, even with an FK/PK claim;
 RDF substitution/elimination rules cannot consume that marker. Structural visitors
 preserve it; same-terms elimination cannot orphan a residual native join. Ordinary
 RDF text comparisons use live decoder recipes and exact comparison, without
-blanket-casting other native types. Ref/policy DISTINCT relations retain their
-prior raw semantics; their remaining identity gap is recorded in ADR-0034.
+blanket-casting other native types. Ref atoms now join/filter both native sources
+before per-atom dedup when every key has live text/CHAR decoder proof; other
+families retain prior per-source D1. Policy values remain bound inside the relation.
+Their established OPTIONAL decomposition is retained. Raw output descriptors and
+blank-node graph scope survive; general term-key limits remain in ADR-0034.
 
 ### Pipeline (`sf-sparql`)
 

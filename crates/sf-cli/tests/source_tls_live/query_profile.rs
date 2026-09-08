@@ -460,6 +460,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         assert_joined_paths(address, &fixture);
         drop(server);
         drop(assert_collated_paths(&fixture, &database, postgres));
+        ordinary_identity::assert_references(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
         let _server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();

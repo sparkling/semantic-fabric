@@ -125,3 +125,129 @@ fn parameter_values_stay_outside_projection_recipes() {
     assert!(!emitted.sql.contains("user-supplied"));
     assert!(emitted.sql.contains("$1"));
 }
+
+fn reference_projection() -> Scan {
+    let mut atom = Branch::single(Scan {
+        alias: 4,
+        source: LogicalSource::Table("child".into()).into(),
+    });
+    atom.core.push(Scan {
+        alias: 5,
+        source: LogicalSource::Table("parent".into()).into(),
+    });
+    atom.bindings.insert(
+        "value".into(),
+        TermDef::Derived {
+            alias: 5,
+            term_map: TermMap::Column("LABEL".into(), TermSpec::plain_literal()),
+        },
+    );
+    atom.where_conds = vec![
+        SqlCond::NativeColEq(ColRef::new(4, "FK"), ColRef::new(5, "K")),
+        SqlCond::NativeCmp(
+            ColRef::new(5, "TENANT"),
+            crate::iq::CmpOp::Eq,
+            "policy-'value".into(),
+        ),
+    ];
+    let atom = crate::iq::scan::ref_atom::seal(atom)
+        .unwrap()
+        .core
+        .remove(0);
+    Scan {
+        alias: 7,
+        source: ScanSource::Projection {
+            input: Box::new(atom),
+            columns: vec![(
+                "value".into(),
+                TermMap::Column("c0".into(), TermSpec::plain_literal()),
+            )],
+            guards: vec![],
+            distinct: false,
+            native_keys: vec![],
+        },
+    }
+}
+
+#[test]
+fn ref_atom_probes_original_leaves_in_every_scan_position_before_open() {
+    for position in 0..4 {
+        for parent_label in ["label", "wrong"] {
+            let mut backend = backend_with(vec![
+                Ok(vec!["fk".into()]),
+                Ok(vec![parent_label.into(), "k".into(), "tenant".into()]),
+            ]);
+            let result = run_select(&plan(reference_projection(), position), &mut backend);
+            assert_eq!(result.is_ok(), parent_label == "label");
+            assert_eq!(backend.opens, usize::from(parent_label == "label"));
+            assert_eq!(
+                backend.probes,
+                vec![
+                    Dialect::Postgres.probe_sql(&LogicalSource::Table("child".into())),
+                    Dialect::Postgres.probe_sql(&LogicalSource::Table("parent".into())),
+                ]
+            );
+            if parent_label == "label" {
+                assert!(
+                    backend.sql[0].contains("t4.\"FK\" = t5.\"K\"")
+                        && backend.sql[0].contains("t4.\"fk\" AS \"FK\"")
+                        && backend.sql[0].contains("t5.\"k\" AS \"K\""),
+                    "{}",
+                    backend.sql[0]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ref_atom_parameters_follow_core_optional_and_existential_sql_order() {
+    for position in 0..4 {
+        for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::MySql] {
+            let mut p = plan(reference_projection(), position);
+            let query_column = if position < 2 {
+                ColRef::new(7, "value")
+            } else {
+                p.branches[0].core.push(Scan {
+                    alias: 8,
+                    source: LogicalSource::Table("outer".into()).into(),
+                });
+                ColRef::new(8, "prefix")
+            };
+            // SQL WHERE precedes a nested EXISTS body but follows FROM/LEFT JOIN.
+            p.branches[0].where_conds.insert(
+                0,
+                SqlCond::Cmp(query_column, crate::iq::CmpOp::Eq, "query-'value".into()),
+            );
+            let e = crate::emit::emit_branch(&p.branches[0], dialect).unwrap();
+            let expected = if position < 2 {
+                vec!["policy-'value", "query-'value"]
+            } else {
+                vec!["query-'value", "policy-'value"]
+            };
+            assert_eq!(e.params, expected, "{position}/{dialect:?}: {}", e.sql);
+            assert!(!e.sql.contains("policy-'value") && !e.sql.contains("query-'value"));
+        }
+    }
+}
+
+#[test]
+fn ref_atom_inner_source_and_policy_are_in_clone_work_measurement() {
+    use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+    let small = reference_projection();
+    let mut large = small.clone();
+    let ScanSource::Projection { input, .. } = &mut large.source else {
+        unreachable!()
+    };
+    let ScanSource::RefAtom { input, .. } = &mut input.source else {
+        unreachable!()
+    };
+    input.where_conds.push(SqlCond::NativeCmp(
+        ColRef::new(4, "tenant"),
+        crate::iq::CmpOp::Eq,
+        "x".repeat(4096),
+    ));
+    let a = measure_compiler_clone_root_v1(CompilerCloneRootV1::Scan(&small)).unwrap();
+    let b = measure_compiler_clone_root_v1(CompilerCloneRootV1::Scan(&large)).unwrap();
+    assert!(b.deep_clone_work > a.deep_clone_work);
+}

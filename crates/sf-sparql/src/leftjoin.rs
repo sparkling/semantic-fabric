@@ -50,7 +50,16 @@ pub fn left_join_branches(
     }
 
     // Single-branch, single-scan right: SQL LEFT JOIN (the common case).
-    if right.len() == 1 && right[0].core.len() == 1 {
+    // A sealed Ref still represents the former two-scan native relation. Keep
+    // its decomposition path: making it an OptJoin here can strand nested
+    // OPTIONALs in `opts` and diverge from the tree lowerer's decomposition.
+    if right.len() == 1
+        && right[0].core.len() == 1
+        && !matches!(
+            right[0].core[0].source,
+            crate::iq::ScanSource::RefAtom { .. }
+        )
+    {
         let r = &right[0];
         let mut out = Vec::new();
         for l in left {

@@ -854,6 +854,9 @@ impl<'a> Unfolder<'a> {
         if !self.bind_position(&mut branch, &tp.object, q_obj)? {
             return Ok(None);
         }
+        if matches!(om, ObjectMap::Ref(_)) {
+            branch = crate::iq::scan::ref_atom::seal(branch)?;
+        }
         Ok(Some(branch))
     }
 

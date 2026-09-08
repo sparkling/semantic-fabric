@@ -132,6 +132,14 @@ pub(super) fn visit_scan<'a>(
 ) -> Result<(), PlanMeasureError> {
     let Scan { alias: _, source } = scan;
     match source {
+        crate::iq::ScanSource::RefAtom { input, columns } => {
+            walker.push(depth, Work::Branch(input))?;
+            walker.collection(columns.len())?;
+            for column in columns {
+                walker.push(depth, Work::ColRef(column))?;
+            }
+            Ok(())
+        }
         crate::iq::ScanSource::Logical(source) => walker.push(depth, Work::LogicalSource(source)),
         crate::iq::ScanSource::Path { closure, .. } => {
             walker.push(depth, Work::PathClosure(closure))

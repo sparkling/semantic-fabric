@@ -4,6 +4,9 @@ use crate::iq::{Scan, ScanSource};
 
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
     match &scan.source {
+        ScanSource::RefAtom { input, columns } => {
+            ref_atom::actuals(input, columns, dialect, catalog)
+        }
         ScanSource::Logical(source) => source_actuals(source, catalog),
         ScanSource::Path { closure, .. } => path_actuals(closure, catalog),
         ScanSource::Projection { input, columns, .. } => {
@@ -44,14 +47,23 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
 }
 
 fn projection_sql(
-    input: &Scan,
-    columns: &[(Box<str>, TermMap)],
-    guards: &[SqlCond],
-    distinct: bool,
-    native_keys: &[(Box<str>, bool)],
+    source: &ScanSource,
     dialect: Dialect,
     catalog: &ColumnCatalog,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
 ) -> Result<String> {
+    let ScanSource::Projection {
+        input,
+        columns,
+        guards,
+        distinct,
+        native_keys,
+    } = source
+    else {
+        unreachable!("projection renderer")
+    };
+    let distinct = *distinct;
     let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
     let column = |name: &str| {
         // Raw/offline APIs retain their existing authored-AS fallback. Live
@@ -164,7 +176,7 @@ fn projection_sql(
         "SELECT {}{} FROM {}",
         if distinct && !window { "DISTINCT " } else { "" },
         items.join(", "),
-        scan_ref(input, dialect, catalog)?
+        scan_ref(input, dialect, catalog, params, pidx)?
     );
     let predicates = guards
         .iter()
@@ -253,6 +265,10 @@ fn validate_input_column(
     catalog: &ColumnCatalog,
 ) -> Result<()> {
     match &input.source {
+        ScanSource::RefAtom { input, columns } => {
+            validate_live_columns(std::slice::from_ref(input), dialect, catalog)?;
+            ref_atom::validate_output(columns.len(), name)
+        }
         ScanSource::Logical(source) => catalog.validate_live_column(source, name, dialect),
         ScanSource::Projection { columns, .. } => validate_output(columns, name),
         ScanSource::Path { .. } => Err(Error::Unsupported("projection over path".into())),
@@ -273,9 +289,19 @@ pub(super) fn validate_output(columns: &[(Box<str>, TermMap)], name: &str) -> Re
     }
 }
 
-pub(super) fn scan_ref(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> Result<String> {
+pub(super) fn scan_ref(
+    scan: &Scan,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<String> {
     let alias = scan.alias;
     match &scan.source {
+        ScanSource::RefAtom { input, columns } => {
+            let sql = ref_atom::sql(input, columns, dialect, catalog, params, pidx)?;
+            Ok(format!("({sql}) t{alias}"))
+        }
         ScanSource::Logical(LogicalSource::Table(table)) => {
             Ok(format!("{} t{alias}", dialect.quote_ident(table)))
         }
@@ -284,22 +310,8 @@ pub(super) fn scan_ref(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -
             let sql = path_as_derived_table_sql(closure, *cte_alias, dialect, catalog)?;
             Ok(format!("({sql}) t{alias}"))
         }
-        ScanSource::Projection {
-            input,
-            columns,
-            guards,
-            distinct,
-            native_keys,
-        } => {
-            let sql = projection_sql(
-                input,
-                columns,
-                guards,
-                *distinct,
-                native_keys,
-                dialect,
-                catalog,
-            )?;
+        ScanSource::Projection { .. } => {
+            let sql = projection_sql(&scan.source, dialect, catalog, params, pidx)?;
             Ok(format!("({sql}) t{alias}"))
         }
     }
