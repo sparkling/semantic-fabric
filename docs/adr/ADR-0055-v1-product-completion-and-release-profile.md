@@ -68,8 +68,14 @@ pre-200 executor. Explicit map-to-source links disambiguate identical authored I
 hidden keys, filtered rows and empty joins acquire no inferred row provenance.
 Required HTTP tests cover bags, limits, policy, activation and recovery; the pinned
 TLS CLI aggregate adds both-order exact bags and twelve join-lineage native
-deadline/disconnect/forced-shutdown cases. This closes that public wiring slice,
-not native lineage reload/source-RLS coverage, full lineage or exact-release gates.
+deadline/disconnect/forced-shutdown cases. The required owned TLS aggregate now
+also qualifies authored lineage reload: constant/multi-map SELECT/CONSTRUCT,
+mixed UNION and nonempty both-order join results carry changed actual mapping
+documents; invalid input fences new queries while native-held requests complete
+with pre-invalid results/provenance, and repaired input restores readiness.
+Held-query cases are multi-map SELECT on both providers and mixed UNION/forward
+join on PostgreSQL, not every graph/operator/order. This closes that reload evidence
+slice, not source-RLS lineage, full lineage or exact-release gates.
 The aggregate gate concerns coverage of declared v1 paths, not every historical
 ADR-0017 combination. Row-key transport is conditional on explicitly declared or
 verified authority: ADR-0017 permits mapping/source-only lineage when no authorized
@@ -354,7 +360,7 @@ optional and individually updated; malformed/failed recall cannot block delivery
 
 ## Current implementation status
 
-The v1 profile is accepted and **not complete** on 2026-09-07. Existing code has
+The v1 profile is accepted and **not complete** on 2026-09-08. Existing code has
 exact-path, request-admission, immutable-snapshot, bounded-shutdown, partial
 tracing, mapping-evidence, public bearer query admission/security-partitioned cache, and narrow
 multi-source UNION and bounded join paths. Default-off three-family Prometheus metrics are

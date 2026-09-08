@@ -216,3 +216,29 @@ fn joined_lineage_keeps_sealed_origins_pre200_and_required_native_evidence() {
         assert_eq!(evidence.command_id.as_deref(), Some(command));
     }
 }
+
+#[test]
+fn native_lineage_reload_is_required_for_each_qualified_profile() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    for id in [
+        "bounded-federated-join-lineage-multi-source",
+        "bounded-federated-union-lineage-multi-source",
+        "bounded-mapping-source-lineage-mysql",
+        "bounded-mapping-source-lineage-postgresql",
+        "constant-mapping-source-lineage-mysql",
+        "constant-mapping-source-lineage-postgresql",
+    ] {
+        let cell = catalog.cells.iter().find(|c| c.id == id).unwrap();
+        for id in ["e-authored-reload-tls", "e-query-lineage-native-reload"] {
+            assert!(cell.evidence_ids.iter().any(|e| e == id));
+            let proof = catalog.evidence.iter().find(|e| e.id == id).unwrap();
+            assert!(proof.required);
+            assert_eq!(proof.verification, Verification::CiRequired);
+            assert_eq!(
+                proof.command_id.as_deref(),
+                Some("cmd-verified-source-tls-live")
+            );
+        }
+    }
+}

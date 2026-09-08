@@ -278,8 +278,33 @@ The required pinned PostgreSQL/MySQL TLS CLI aggregate parses both-source PROV-O
 checks exact twelve-pair bags in both pattern orders, and tests twelve additional
 join-lineage deadline/disconnect/SIGTERM cases with encrypted target, held-lock,
 unaffected sibling, exact cap-one recovery and bounded clean exit witnesses.
-Native lineage reload, portable/source-RLS cancellation, protected generations and
-exact-release qualification remain separate; this does not complete ADR-0017.
+The native reload qualification below now covers this join; portable/source-RLS
+cancellation, protected generations and exact-release qualification remain separate.
+
+### Native authored reload qualification (2026-09-08)
+
+The required `source_tls_live` aggregate above passed in 120.14 seconds with
+lineage-specific reload assertions on its owned PostgreSQL 16.15/MySQL 8.4.11
+TLS fixtures. Valid authored replacements change returned values and mapping-document
+identities for single-source constant and overlapping-map SELECT/CONSTRUCT and
+mixed-source UNION. A nonempty federated join changes both subject templates,
+preserving all twelve exact pairs in both pattern orders and both actual origins.
+Constant/federated SELECT bags match ordinary results; the overlapping-map lineage
+profile uses exact fixture values because the ordinary optimizer rejects that shape.
+
+A held native query is observed by exact session ID before invalid Turtle is written:
+multi-map SELECT on each provider, mixed UNION and forward join on PostgreSQL.
+`/readyz` and new authenticated lineage queries become `503`, unauthenticated queries
+remain `401`, and `/livez` remains `200`. The old native work stays active under its
+held lock, then completes with its original exact bag, authored mapping documents,
+policy and internally consistent generation references. Repair restores original
+documents/results and readiness through a fresh generation. Periodic unchanged
+rebuilds may change resource identities, so distinct-request generation equality is
+not used as proof of semantic identity. Complete transport and returned PROV-O/RDF
+are parsed; a header or readiness check alone cannot qualify this slice.
+
+This is not policy/configuration reload, a distributed data snapshot, a held-query
+test for every graph/operator/order, source-RLS lineage or exact-release admission.
 
 ### Consequences
 

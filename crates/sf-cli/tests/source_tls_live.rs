@@ -347,6 +347,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     wrong_second_ca.env("SF_TLS_ROOTS_2", &postgres.roots);
     assert_rejects(wrong_second_ca, address, &fixture);
     join::assert_joins(&fixture, &postgres, &mysql);
+    reload::assert_join_reloads(&fixture, &postgres, &mysql);
     stop_matrix::assert_federated_stop(&fixture, &postgres, &mysql);
     lineage_stop::assert_native_stop(&fixture, &postgres, &mysql);
     eprintln!(
