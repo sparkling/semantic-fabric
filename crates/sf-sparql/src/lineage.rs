@@ -214,7 +214,10 @@ impl CompilerBinding {
             self.dialect(),
             self.schema(),
             self.column_type_use(),
-        );
+        )
+        .with_work_mode(crate::CompilerWorkMode::Metered(
+            crate::compiler_control::CompileContext::new(control),
+        ));
         let mut branches = Vec::new();
         for (atom, pattern) in spec.atoms.iter().enumerate() {
             let NamedNodePattern::NamedNode(predicate) = &pattern.predicate else {

@@ -30,6 +30,79 @@ const MAPPING: &str = r#"
   ] .
 "#;
 
+fn mapping_product_config(work: u64) -> ServeConfig {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1);",
+    )
+    .unwrap();
+    let mapping = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.test/> .
+<#Items> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "items" ] ;
+  rr:subject ex:item ;
+  rr:predicateObjectMap [ rr:predicate ex:a, ex:b ; rr:object "one", "two", "three" ] .
+"#;
+    let mut cfg = support::serve_config(Backend::sqlite(conn), mapping);
+    cfg.query_limits = QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX);
+    cfg.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    cfg
+}
+
+#[tokio::test]
+async fn mapping_products_charge_even_candidates_that_cannot_match() {
+    let query = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
+    let response = router(Arc::new(mapping_product_config(query.len() as u64 + 5)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_budget_problem(response).await;
+    let response = router(Arc::new(mapping_product_config(100_000)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["results"]["bindings"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn mapping_products_preserve_all_six_exact_triples() {
+    let query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o }";
+    let response = router(Arc::new(mapping_product_config(100_000)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut triples: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| ["s", "p", "o"].map(|v| row[v]["value"].as_str().unwrap().to_owned()))
+        .collect();
+    triples.sort();
+    let mut expected: Vec<_> = ["a", "b"]
+        .into_iter()
+        .flat_map(|p| {
+            ["one", "two", "three"].map(|o| {
+                [
+                    "http://example.test/item".to_owned(),
+                    format!("http://example.test/{p}"),
+                    o.to_owned(),
+                ]
+            })
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(triples, expected);
+}
+
 fn config(limits: QueryLimits) -> ServeConfig {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
     conn.execute_batch(

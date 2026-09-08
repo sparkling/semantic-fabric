@@ -43,18 +43,18 @@ Commit `38e9c7a` additionally exercises closed zero-, one-, and three-byte plus 
 
 The provisional whole-life input cap is exactly 1,048,856 bytes: the normal source ceiling is 1,048,576, while the directive reduces the mutant ceiling to 1,048,574. Output is capped at 8,388,920 bytes (`Ready` 184 + result header 128 + body 8,388,608), independently of the 67,108,864-byte `RLIMIT_FSIZE`. Commit `235084d` adds a separately feature-gated real-parser `QueryV1` evidence peer across the sealed seven-case starter corpus: fresh contained children parse six inputs and return one fixed syntax rejection. Success is accepted only after EOF, exact reap and correlation, worker decode/re-encode byte replay, independent direct decode/re-encode byte replay, and source/profile-bound alpha equivalence. Only aggregate counts escape; no witness or authority is minted. Fresh parser encodings are not required to be byte-identical because generated identifiers may differ.
 
-Public ordinary/security tree misses, preflight and federation now use
-`CompilerWorkMode::Metered` with the request's `CompileContext`; cache authority
-remains `Uncontrolled`, not `GovernedV1`. Tree inner joins reserve checked candidate
-products before pairing and exact scalar left-branch copies, including pruned pairs,
-with between-pair checkpoints. HTTP tests prove redacted pre-source rejection and
-all 64 exact VALUES tuples on success; empty/pruned products and inclusive bounds
-are test-locked. Merge internals/right copies and other compiler phases stay open.
-Verified-generation preflight retains its exact compiler permit across lease
-acquisition and authoritative compilation without requeue. Required-live
-SELECT/ASK/CONSTRUCT retain the 34-unit metadata admission and 33-unit rejection
-proof. Parser construction/destruction, remaining owned phases, cache capacity/
-eviction and provisional limits remain ungoverned.
+Public ordinary/security tree misses, preflight and federation retain the request's
+`CompileContext`; cache authority remains `Uncontrolled`, not `GovernedV1`.
+Tree inner joins reserve candidate pairs and exact scalar left copies; HTTP tests
+prove pre-source rejection and all 64 exact VALUES tuples with sufficient work.
+Atom resolution and direct lineage also meter map/POM visits, graph comparisons/
+filtering/enumeration, class/POM products, parent lookups and exact source copies.
+Parent maps are borrowed. Nested contexts retain control; lineage keeps separate
+eligibility/recipe charges. Absent-predicate rejection and exact six-triple results
+are tested. Path-specific mapping loops, TBox/unifier internals, other copies and
+compiler phases remain open. Verified-generation preflight retains its permit
+across lease acquisition; live SELECT/ASK/CONSTRUCT keep the 34/33 metadata gate.
+Parser/destruction, other owned phases, cache eviction and provisional limits remain open.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -386,8 +386,8 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    Exact `N`/`N-1`, nested-condition, allocation-identity, raw-equivalence and
    pre-mutation tests cover those operations. Completed earlier operations and
    charges are not rolled back when a later recursive operation fails.
-   Tree inner-join pair/left-copy accounting is public; instrument mapping expansion,
-   other branch products, merge internals/right copies and the rest of
+   Inner-join and atom-resolution candidate/source-copy accounting are public;
+   instrument path-specific mapping loops, other products, merge/right copies and
    normalization/cascade, canonical content, remaining hidden recursive copies
    and plan construction; reserve before work and prove whole-path governed/raw
    semantic equivalence.

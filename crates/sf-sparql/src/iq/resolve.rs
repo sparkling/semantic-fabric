@@ -86,6 +86,11 @@ pub struct ResolveCx<'a> {
 }
 
 impl<'a> ResolveCx<'a> {
+    pub(crate) fn with_work_mode(mut self, work: crate::CompilerWorkMode<'a>) -> Self {
+        self.unfolder = self.unfolder.with_work_mode(work);
+        self
+    }
+
     /// A fresh resolution context over the given mappings, T-Box, dialect, and
     /// source schema (the same `(maps, tbox, dialect, schema)` the flat
     /// [`Unfolder::new`] takes — `schema` feeds ADR-0034 D1, see its doc comment

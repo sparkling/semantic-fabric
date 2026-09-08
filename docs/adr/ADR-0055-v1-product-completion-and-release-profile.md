@@ -113,7 +113,13 @@ protect this wiring. Tree inner-join lowering now precharges checked candidate
 products and exact left-branch copies, with between-pair cancellation. Authenticated
 HTTP tests prove pre-source rejection and all 64 exact VALUES tuples on success;
 pruned/empty products and inclusive bounds are test-locked. Merge internals/right
-copies, parsing/build/resolve and other compiler work remain open.
+copies, parsing/build and other compiler work remain open. Atom resolution now
+reserves map/POM visits, graph comparisons/filtering, class/POM products and parent
+lookups, and meters actual logical-source copies. Direct lineage retains the same
+control alongside its existing eligibility/recipe charges; nested contexts preserve
+ownership. Public absent-predicate queries cannot bypass this work by yielding no
+branches; sufficient work preserves all six exact triples. Path-specific mapping
+loops, TBox/unifier internals and other payload copies remain unqualified.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

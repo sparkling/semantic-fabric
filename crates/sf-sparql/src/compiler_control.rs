@@ -148,6 +148,18 @@ impl<'control> CompileContext<'control> {
         Ok(branch.clone())
     }
 
+    /// Bind the measured source payload to the actual one owned scan copy.
+    pub(crate) fn clone_logical_source(
+        &self,
+        source: &sf_core::ir::LogicalSource,
+    ) -> Result<sf_core::ir::LogicalSource> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::LogicalSource(source))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(source.clone())
+    }
+
     /// Measure, reserve, and perform exactly one recursive IQ-condition clone.
     ///
     /// The source slice remains bound to its exact measurement and the one clone,

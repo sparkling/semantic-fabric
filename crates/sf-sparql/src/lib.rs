@@ -634,7 +634,8 @@ fn translate_tree_with_column_type_use(
         dialect,
         schema,
         column_type_use,
-    );
+    )
+    .with_work_mode(work_mode);
     let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns

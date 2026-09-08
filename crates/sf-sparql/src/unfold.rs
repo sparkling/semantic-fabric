@@ -6,7 +6,6 @@
 //! then rewrites.
 
 use sf_core::datatype::XsdTypeCode;
-use sf_core::graph_map::union;
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 use spargebra::algebra::{
@@ -16,7 +15,7 @@ use spargebra::algebra::{
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
 use crate::compiler_schema::ColumnTypeUse;
-use crate::graph_map::{apply_filter, bind_variable, is_default_graph, RR_DEFAULT_GRAPH};
+use crate::graph_map::{bind_variable, RR_DEFAULT_GRAPH};
 use crate::iq::lower::{convert_path_branches, remap_termdef};
 use crate::iq::node::triple_pattern_vars;
 use crate::iq::{
@@ -29,6 +28,7 @@ use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
 
 mod join;
+mod mapping_work;
 pub(crate) use join::join_branches_with_work_mode;
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -165,6 +165,7 @@ pub struct Unfolder<'a> {
     /// a duplicate row there is NOT moot (a separate, still-open gap: `group_by_
     /// over_multibranch_optional_is_tree_superset_of_flat`).
     pub(crate) in_existential: bool,
+    work_mode: crate::CompilerWorkMode<'a>,
 }
 
 impl<'a> Unfolder<'a> {
@@ -201,6 +202,7 @@ impl<'a> Unfolder<'a> {
             schema,
             column_type_use,
             in_existential: false,
+            work_mode: crate::CompilerWorkMode::Uncontrolled,
         }
     }
 
@@ -250,8 +252,9 @@ impl<'a> Unfolder<'a> {
         &self.dedup_groups
     }
 
-    fn map_by_id(&self, id: &str) -> Option<&'a TriplesMap> {
-        self.maps.iter().find(|m| m.id == id)
+    fn map_by_id(&self, id: &str) -> Result<Option<&'a TriplesMap>> {
+        self.reserve_product(&[self.maps.len()])?;
+        Ok(self.maps.iter().find(|m| m.id == id))
     }
 
     /// Translate a graph pattern, peeling Project/Distinct/Reduced/Slice and
@@ -714,89 +717,6 @@ impl<'a> Unfolder<'a> {
         out
     }
 
-    /// All atom alternatives for one triple pattern (a bag union over the
-    /// matching triples-maps / predicate-object maps / `rr:class` entries).
-    ///
-    /// ADR-0035 (`current_graph_var` set, `GRAPH ?v { … }`): instead of the ordinary
-    /// FILTER-by-`current_graph` test below, each candidate contributes one branch
-    /// PER effective graph map (`gm_attempts`) — a constant graph map binds `v` to a
-    /// `Const`, a template/column one to an ordinary `Derived` binding (the SAME
-    /// mechanism `def_of` already builds subject/object bindings with); an EMPTY
-    /// graph-map set (no `rr:graphMap` ⇒ default graph) contributes ZERO attempts —
-    /// excluded, never falling back to the default graph (SPARQL §13.3: `GRAPH ?v`
-    /// ranges over named graphs only). `rr:class` atoms inherit the subject map's
-    /// graph maps exactly as the filtering path already does (R2RML: no POM-level
-    /// override exists for a class atom).
-    pub(crate) fn pattern_branches(&mut self, tp: &TriplePattern) -> Result<Vec<Branch>> {
-        let mut out = Vec::new();
-        // Predicate match set (direct + sub-properties + inverse/symmetric).
-        let pred_iri = match &tp.predicate {
-            NamedNodePattern::NamedNode(p) => Some(p.as_str().to_owned()),
-            NamedNodePattern::Variable(_) => None,
-        };
-        let want_type = pred_iri.as_deref() == Some(RDF_TYPE);
-        let graph_var = self.current_graph_var.clone();
-
-        for tm in self.maps {
-            // rr:class → rdf:type atoms (when predicate is rdf:type or a variable).
-            // rr:class triples inherit the subject map's graph.
-            if want_type || pred_iri.is_none() {
-                let class_graphs = union(&tm.subject.graphs, &[]);
-                match &graph_var {
-                    Some(v) => {
-                        for &gm in &class_graphs {
-                            if is_default_graph(gm) {
-                                continue;
-                            }
-                            self.class_atoms(
-                                tp,
-                                tm,
-                                &class_graphs,
-                                Some((v.as_ref(), gm)),
-                                &mut out,
-                            )?;
-                        }
-                        // empty tm.subject.graphs ⇒ default graph ⇒ no attempts (excluded).
-                    }
-                    None => {
-                        self.class_atoms(tp, tm, &class_graphs, None, &mut out)?;
-                    }
-                }
-            }
-            for pom in &tm.predicate_object_maps {
-                let graph_union = union(&tm.subject.graphs, &pom.graphs);
-                // One graph-binding attempt per call below: `None` (filter mode, ≤1 call
-                // total, unchanged from before this ADR) or one `Some((v, gm))` per
-                // union member (enumeration mode — zero when the union is empty).
-                let graph_attempts: Vec<AtomGraph<'_>> = match &graph_var {
-                    Some(v) => graph_union
-                        .iter()
-                        .copied()
-                        .filter(|gm| !is_default_graph(gm))
-                        .map(|gm| AtomGraph::Bind(v.as_ref(), gm))
-                        .collect(),
-                    // Filter mode (fixed named graph or default-graph context): the
-                    // match/exclude/reject decision needs the atom's own alias to turn
-                    // a row-dependent graph map into a raw-column condition, so it is
-                    // deferred to `atom` itself (below) rather than decided here.
-                    None => vec![AtomGraph::Filter(&graph_union)],
-                };
-                for graph in graph_attempts {
-                    for pm in &pom.predicates {
-                        for om in &pom.objects {
-                            if let Some(b) =
-                                self.atom(tp, tm, pm, om, pred_iri.as_deref(), graph)?
-                            {
-                                out.push(b);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(out)
-    }
-
     /// Build one predicate-object atom branch, or `None` if it cannot match.
     ///
     /// `AtomGraph::Bind` is ADR-0035's enumeration-mode payload: it binds the
@@ -833,7 +753,7 @@ impl<'a> Unfolder<'a> {
         let alias = self.alias();
         let mut branch = Branch::single(Scan {
             alias,
-            source: tm.source.clone(),
+            source: self.copy_source(&tm.source)?,
         });
 
         // Capture the ACTUAL target graph for generated blank-node identity. In
@@ -858,7 +778,7 @@ impl<'a> Unfolder<'a> {
                 }
             }
             AtomGraph::Filter(graph_union) => {
-                if !apply_filter(&mut branch, self.current_graph.as_ref(), graph_union, alias)? {
+                if !self.filter_graphs(&mut branch, graph_union, alias)? {
                     return Ok(None);
                 }
             }
@@ -876,16 +796,13 @@ impl<'a> Unfolder<'a> {
         let obj_def = match om {
             ObjectMap::Term(otm) => mapping_term_def(otm, alias, term_graph.clone()),
             ObjectMap::Ref(r) => {
-                let parent = self
-                    .map_by_id(&r.parent_triples_map)
-                    .ok_or_else(|| {
-                        Error::Mapping(format!("unknown parent map {}", r.parent_triples_map))
-                    })?
-                    .clone();
+                let parent = self.map_by_id(&r.parent_triples_map)?.ok_or_else(|| {
+                    Error::Mapping(format!("unknown parent map {}", r.parent_triples_map))
+                })?;
                 let palias = self.alias();
                 branch.core.push(Scan {
                     alias: palias,
-                    source: parent.source.clone(),
+                    source: self.copy_source(&parent.source)?,
                 });
                 for j in &r.joins {
                     branch.where_conds.push(SqlCond::ColEq(
@@ -963,6 +880,7 @@ impl<'a> Unfolder<'a> {
             _ => return Ok(()), // class object can only be an IRI or a variable
         };
         for class in &tm.subject.classes {
+            self.work_checkpoint()?;
             if let Some(w) = &wanted {
                 if !w.iter().any(|c| c == class.as_str()) {
                     continue;
@@ -971,13 +889,13 @@ impl<'a> Unfolder<'a> {
             let alias = self.alias();
             let mut branch = Branch::single(Scan {
                 alias,
-                source: tm.source.clone(),
+                source: self.copy_source(&tm.source)?,
             });
             if let Some((var, gm)) = graph_binding {
                 if !bind_variable(&mut branch, var, gm, alias)? {
                     continue;
                 }
-            } else if !apply_filter(&mut branch, self.current_graph.as_ref(), graphs, alias)? {
+            } else if !self.filter_graphs(&mut branch, graphs, alias)? {
                 continue;
             }
             let term_graph = graph_binding

@@ -177,16 +177,25 @@ mod tests {
     const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
     fn config(work: u64) -> (Arc<ServeConfig>, crate::SqlitePool) {
+        config_with_mapping(work, vec![])
+    }
+
+    fn config_with_mapping(
+        work: u64,
+        maps: Vec<sf_core::ir::TriplesMap>,
+    ) -> (Arc<ServeConfig>, crate::SqlitePool) {
         let backend = crate::Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap());
         let crate::Backend::Sqlite(pool) = &backend else {
             unreachable!()
         };
         let pool = pool.clone();
         let source = crate::IntrospectedSource::unchecked(backend, vec![]);
+        let ontology =
+            crate::test_support::ontology(&[], &["http://example.test/a", "http://example.test/b"]);
         let mut cfg = ServeConfig::new(
             source,
-            SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
-            crate::test_support::empty_ontology(),
+            SourceMapping::new(SourceId::new(0).unwrap(), maps),
+            ontology,
         )
         .unwrap();
         cfg.query_limits = QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX);
@@ -286,7 +295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clone_and_product_work_reject_before_source_admission() {
+    async fn compiler_expansion_work_rejects_before_source_admission() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let cloning =
             "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
@@ -294,8 +303,25 @@ mod tests {
             "SELECT ?a ?b ?c WHERE { VALUES ?a { 0 1 2 3 } ",
             "VALUES ?b { 0 1 2 3 } VALUES ?c { 0 1 2 3 } }",
         );
-        for query in [cloning, products] {
-            let (mut cfg, pool) = config(query.len() as u64);
+        let absent = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
+        let mapping = sf_mapping::parse_r2rml(
+            r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://example.test/map> a rr:TriplesMap ;
+              rr:logicalTable [ rr:tableName "items" ] ;
+              rr:subject <http://example.test/s> ;
+              rr:predicateObjectMap [
+                rr:predicate <http://example.test/a>, <http://example.test/b> ;
+                rr:object "x", "y", "z" ] .
+        "#,
+        )
+        .unwrap();
+        for (query, maps, extra) in [
+            (cloning, vec![], 0),
+            (products, vec![], 0),
+            (absent, mapping, 5),
+        ] {
+            let (mut cfg, pool) = config_with_mapping(query.len() as u64 + extra, maps);
             Arc::get_mut(&mut cfg)
                 .unwrap()
                 .set_query_admission(crate::QueryAdmission::Bearer(

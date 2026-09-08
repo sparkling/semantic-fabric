@@ -347,7 +347,18 @@ with checkpoints between pairs. Authenticated VALUES products reject before sour
 admission or preserve all 64 tuples; raw merge semantics remain unchanged. This
 does not govern work inside merge or its right-field copies. Parsing, key rendering,
 build/resolve, other products/copies and destruction remain open; `l-query-budget` stays
-open. Direct multi-origin unfolding keeps its separate existing meter.
+open. Direct multi-origin unfolding retains its separate eligibility/recipe charges.
+
+**Mapping-expansion update (2026-09-08):** public resolution and direct lineage
+unfolding now retain that same work mode through nested contexts. Map/POM visits,
+graph-union visits/comparison candidates, named-graph enumeration, fixed graph
+filter candidates, class/POM products and parent lookup candidates are reserved
+before their corresponding work, including later-pruned atoms. Actual child/parent
+logical-source copies use exact scalar measurement; parent maps are borrowed.
+No graph-attempt vector is allocated. Required tests prove absent-predicate rejection
+before held source admission, exact six-triple results, inclusive bounds, cancellation,
+graph/default/class semantics and raw equivalence. Path-specific mapping loops,
+TBox/unifier internals and other payload copies/phases remain separate open work.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
