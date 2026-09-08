@@ -182,7 +182,11 @@ fn ontology_digest(tbox: &Tbox) -> OntologyDigest {
     encode_multimap(&mut out, &tbox.sub_classes);
     encode_multimap(&mut out, &tbox.sub_properties);
 
-    let mut inverses: Vec<_> = tbox.inverses.iter().collect();
+    let mut inverses: Vec<_> = tbox
+        .inverses
+        .iter()
+        .flat_map(|(predicate, inverses)| inverses.iter().map(move |inverse| (predicate, inverse)))
+        .collect();
     inverses.sort_unstable_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
     out.len(inverses.len());
     for (predicate, inverse) in inverses {

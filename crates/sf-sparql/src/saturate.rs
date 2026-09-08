@@ -21,7 +21,7 @@
 //! right-hand-side existentials (the OWL-as-documentation policy), so tier-1 is
 //! provably complete and no tree-witness rewriting is built (ADR-0008).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use sf_core::ir::TriplesMap;
 use sf_core::NamedNode;
@@ -36,8 +36,8 @@ pub struct Tbox {
     pub(crate) sub_classes: HashMap<String, Vec<String>>,
     /// property IRI → all its sub-properties (transitive, excluding itself).
     pub(crate) sub_properties: HashMap<String, Vec<String>>,
-    /// property IRI → its inverse property IRI (`owl:inverseOf`, both directions).
-    pub(crate) inverses: HashMap<String, String>,
+    /// property IRI → all declared inverse properties (both directions).
+    pub(crate) inverses: HashMap<String, BTreeSet<String>>,
     /// symmetric properties (`owl:SymmetricProperty`).
     pub(crate) symmetric: HashSet<String>,
 }
@@ -67,8 +67,11 @@ impl Tbox {
     /// Declare `p owl:inverseOf q` (recorded both ways).
     pub fn add_inverse(&mut self, p: impl Into<String>, q: impl Into<String>) {
         let (p, q) = (p.into(), q.into());
-        self.inverses.insert(p.clone(), q.clone());
-        self.inverses.insert(q, p);
+        self.inverses
+            .entry(p.clone())
+            .or_default()
+            .insert(q.clone());
+        self.inverses.entry(q).or_default().insert(p);
     }
 
     /// Declare `p a owl:SymmetricProperty`.
@@ -123,7 +126,7 @@ impl Tbox {
         if self
             .inverses
             .get(query_pred)
-            .is_some_and(|inv| inv == mapping_pred)
+            .is_some_and(|inverses| inverses.contains(mapping_pred))
         {
             return true;
         }
@@ -142,14 +145,14 @@ impl Tbox {
     }
 
     /// Predicates that, matched with subject/object **swapped**, also satisfy a
-    /// query on `predicate`: its `owl:inverseOf` partner, and `predicate` itself
+    /// query on `predicate`: all declared `owl:inverseOf` partners, and itself
     /// if it is symmetric (ADR-0008 inverse/symmetric folding).
     pub fn inverse_predicates(&self, predicate: &str) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(inv) = self.inverses.get(predicate) {
-            out.push(inv.clone());
+            out.extend(inv.iter().cloned());
         }
-        if self.symmetric.contains(predicate) {
+        if self.symmetric.contains(predicate) && !out.iter().any(|p| p == predicate) {
             out.push(predicate.to_owned());
         }
         out
@@ -307,6 +310,20 @@ mod tests {
             vec!["http://ex/marriedTo"]
         );
         assert!(t.inverse_predicates("http://ex/unrelated").is_empty());
+    }
+
+    #[test]
+    fn multiple_inverse_edges_are_order_independent_and_never_overwritten() {
+        let mut t = Tbox::new();
+        t.add_inverse("urn:b", "urn:p");
+        t.add_inverse("urn:a", "urn:p");
+        t.add_inverse("urn:p", "urn:b");
+        assert_eq!(t.inverse_predicates("urn:p"), ["urn:a", "urn:b"]);
+        assert!(t.predicate_can_match("urn:a", "urn:p"));
+        assert!(t.predicate_can_match("urn:b", "urn:p"));
+        t.add_inverse("urn:p", "urn:p");
+        t.add_symmetric("urn:p");
+        assert_eq!(t.inverse_predicates("urn:p"), ["urn:a", "urn:b", "urn:p"]);
     }
 
     // --- M6: super_classes / super_properties / saturate_maps ---------------

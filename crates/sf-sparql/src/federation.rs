@@ -21,6 +21,7 @@ use crate::{CompilerBinding, Error, Plan, PlanForm, Result};
 #[allow(dead_code)] // Private ADR-0040 comparison prototype; not serving admission.
 mod global;
 mod join;
+mod lineage;
 pub use join::BoundedJoin;
 
 /// One parsed source-local arm of the narrow federated UNION profile.
@@ -128,6 +129,7 @@ fn unsupported<T>() -> Result<T> {
 pub struct SourceFragment {
     source_id: SourceId,
     plan: Arc<Plan>,
+    lineage: Option<Arc<crate::lineage::LineageSpec>>,
 }
 
 impl SourceFragment {
@@ -135,7 +137,11 @@ impl SourceFragment {
         if !source_local_union_arm(&plan) {
             return unsupported();
         }
-        Ok(Self { source_id, plan })
+        Ok(Self {
+            source_id,
+            plan,
+            lineage: None,
+        })
     }
 
     pub const fn source_id(&self) -> SourceId {
@@ -148,6 +154,10 @@ impl SourceFragment {
 
     pub fn shared_plan(&self) -> Arc<Plan> {
         Arc::clone(&self.plan)
+    }
+
+    pub fn lineage(&self) -> Option<Arc<crate::lineage::LineageSpec>> {
+        self.lineage.clone()
     }
 }
 
@@ -239,6 +249,16 @@ enum CompileMode {
     Uncached,
 }
 
+/// Compile actual origin witnesses for the same sealed two-source UNION shape.
+/// Source affinity is proved with the same RDF/TBox atom compiler as execution.
+pub fn compile_source_affine_union_lineage(
+    sparql: &str,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+) -> Result<FederatedPlan> {
+    lineage::compile(sparql, bindings, control)
+}
+
 fn compile_source_affine_union_with(
     sparql: &str,
     bindings: [&CompilerBinding; 2],
@@ -292,9 +312,23 @@ fn compile_source_affine_union_with(
 
 fn binding_could_match(binding: &CompilerBinding, triple: &TriplePattern) -> bool {
     let saturated = crate::saturate::saturate_maps(binding.triples_maps(), binding.tbox());
-    saturated
-        .iter()
-        .any(|mapping| mapping_could_emit(mapping, &triple.predicate))
+    saturated.iter().any(|mapping| {
+        mapping_could_emit(mapping, &triple.predicate)
+            || match &triple.predicate {
+                NamedNodePattern::NamedNode(wanted) => {
+                    mapping.predicate_object_maps.iter().any(|pom| {
+                        !pom.objects.is_empty()
+                            && pom.predicates.iter().any(|predicate| match predicate {
+                                TermMap::Constant(Term::NamedNode(node)) => binding
+                                    .tbox()
+                                    .predicate_can_match(node.as_str(), wanted.as_str()),
+                                _ => false,
+                            })
+                    })
+                }
+                _ => false,
+            }
+    })
 }
 
 fn mapping_could_emit(mapping: &sf_core::ir::TriplesMap, predicate: &NamedNodePattern) -> bool {

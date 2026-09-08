@@ -143,6 +143,30 @@ fn ontology_mapping_and_epoch_each_partition_the_compile_scope() {
 }
 
 #[test]
+fn inverse_set_identity_covers_every_edge_without_declaration_order_or_duplicates() {
+    let digest = |tbox| {
+        binding(
+            mapping(SourceId::new(0).unwrap(), "items"),
+            Dialect::Sqlite,
+            tbox,
+            schema("items", "text", 1),
+        )
+        .digests()
+        .ontology()
+    };
+    let mut first = Tbox::new();
+    first.add_inverse("urn:p", "urn:a");
+    let one = digest(first.clone());
+    first.add_inverse("urn:p", "urn:b");
+    let mut second = Tbox::new();
+    second.add_inverse("urn:b", "urn:p");
+    second.add_inverse("urn:a", "urn:p");
+    second.add_inverse("urn:p", "urn:b");
+    assert_ne!(one, digest(first.clone()));
+    assert_eq!(digest(first), digest(second));
+}
+
+#[test]
 fn structural_type_and_capabilities_are_identity_but_statistics_are_not() {
     let source_id = SourceId::new(3).unwrap();
     let baseline = binding(

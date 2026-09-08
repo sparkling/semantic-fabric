@@ -18,6 +18,8 @@ use crate::{
 
 pub(crate) const MEDIA_TYPE: &str = "application/vnd.semantic-fabric.lineage+json-seq";
 
+#[path = "lineage_federation.rs"]
+mod federation;
 #[path = "lineage_graph.rs"]
 mod graph;
 #[path = "lineage_multiple.rs"]
@@ -27,6 +29,7 @@ mod multiple;
 /// execution. It never decorates a caller-supplied/mutable plan. Authorization
 /// can only remove rows from this constant-origin profile, not add origins.
 pub(crate) struct Lineage {
+    federated: Option<Box<FederatedOrigins>>,
     pub(crate) header: Value,
     pub(crate) multi_origin: bool,
     request: String,
@@ -36,6 +39,7 @@ pub(crate) struct Lineage {
     plan: String,
     policy: String,
 }
+type FederatedOrigins = [(sf_core::SourceId, Arc<Lineage>); 2];
 
 pub(crate) async fn prepare(
     cfg: Arc<ServeConfig>,
@@ -62,8 +66,13 @@ pub(crate) async fn prepare(
     cfg.query_admission
         .validate(budget)
         .map_err(problem::response)?;
-    let QueryMode::Single(source_id) = cfg.query_mode() else {
-        return Err(problem::response(ProblemCode::UnsupportedQuery));
+    let source_id = match cfg.query_mode() {
+        QueryMode::Single(source_id) => source_id,
+        QueryMode::SourceAffineUnion(sources) => {
+            return federation::prepare(cfg, snapshot, sources, query, budget)
+                .await
+                .map(Some)
+        }
     };
     let query = query.to_owned();
     let result = deadline::run_compiler(budget.clone(), cfg.compiler_permits(), move |control| {
@@ -130,6 +139,7 @@ pub(crate) async fn prepare(
             header["maxWitnessesPerRelation"] = sf_sparql::lineage::MAX_WITNESSES.into();
         }
         Ok(Arc::new(Lineage {
+            federated: None,
             multi_origin,
             header,
             request: control.correlation_id().as_str().into(),
@@ -187,6 +197,7 @@ mod tests {
 
     fn proof() -> Arc<Lineage> {
         Arc::new(Lineage {
+            federated: None,
             multi_origin: false,
             header: json!({"type":"header", "mappingId":"urn:map", "sourceId":0}),
             request: "test".into(),

@@ -18,6 +18,7 @@ impl Lineage {
                     .as_str()
                     .ok_or_else(|| io::Error::other("invalid mapping identity"))?;
                 Ok(Lineage {
+                    federated: None,
                     header: json!({"mappingId":id,"sourceId":self.header["sourceId"]}),
                     multi_origin: false,
                     request: self.request.clone(),

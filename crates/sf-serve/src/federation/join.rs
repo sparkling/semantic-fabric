@@ -244,7 +244,7 @@ fn writer_error(budget: &RequestBudget) -> sf_sparql::Error {
         .map(sf_sparql::Error::from)
         .unwrap_or_else(|| sf_sparql::Error::Sql("result serialization failed".into()))
 }
-fn row_bytes(row: &[Option<Term>]) -> sf_sparql::Result<u64> {
+pub(super) fn row_bytes(row: &[Option<Term>]) -> sf_sparql::Result<u64> {
     row.iter()
         .try_fold(std::mem::size_of_val(row) as u64, |n, t| {
             n.checked_add(t.as_ref().map_or(0, term_bytes))
@@ -268,7 +268,7 @@ fn term_bytes(term: &Term) -> u64 {
         }
     }
 }
-fn scope(row: &mut [Option<Term>], source: SourceId) {
+pub(super) fn scope(row: &mut [Option<Term>], source: SourceId) {
     for term in row.iter_mut().flatten() {
         scope_term(term, source);
     }

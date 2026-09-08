@@ -223,6 +223,17 @@ impl CompilerBinding {
             if predicate.as_str() == crate::unfold::RDF_TYPE {
                 return Err(unsupported());
             }
+            // Multi-valued inverse declarations must not turn this bounded
+            // profile into an ontology-sized per-atom allocation.
+            let inverse_count = self
+                .tbox()
+                .inverses
+                .get(predicate.as_str())
+                .map_or(0, |v| v.len());
+            if inverse_count > MAX_BRANCHES {
+                return Err(unsupported());
+            }
+            control.consume(QueryCharge::CompilerWork, inverse_count as u64)?;
             let direct = self.tbox().saturate_predicate(predicate.as_str());
             let inverse = self.tbox().inverse_predicates(predicate.as_str());
             if direct.iter().any(|p| inverse.contains(p)) {
@@ -396,6 +407,23 @@ mod tests {
         assert!(matches!(
             binding(maps(), crate::Tbox::default()).compile_lineage(query, &budget),
             Err(Error::QueryControl(_))
+        ));
+    }
+
+    #[test]
+    fn inverse_fanout_is_capped_before_query_side_copying() {
+        let query = "SELECT ?s ?o WHERE { ?s <urn:p> ?o }";
+        let mut tbox = crate::Tbox::new();
+        for id in 0..MAX_BRANCHES {
+            tbox.add_inverse("urn:p", format!("urn:inverse:{id}"));
+        }
+        assert!(binding(maps(), tbox.clone())
+            .compile_lineage(query, &UncontrolledQueryControl)
+            .is_ok());
+        tbox.add_inverse("urn:p", "urn:too-many");
+        assert!(matches!(
+            binding(maps(), tbox).compile_lineage(query, &UncontrolledQueryControl),
+            Err(Error::Unsupported(_))
         ));
     }
 }

@@ -45,6 +45,7 @@ fn lineage_keeps_full_contract_open_and_only_advertises_the_evidenced_subset() {
         .unwrap();
     assert_eq!(full.status, Status::Planned);
     assert!(!full.advertisable);
+    assert!(full.qualification.contains("conditional"));
     assert!(
         catalog
             .limitations
@@ -130,4 +131,54 @@ fn accepted_release_contract_excludes_research_and_no_prefix_delivery_not_requir
                 .release_blocking
         );
     }
+}
+
+#[test]
+fn federated_lineage_binds_actual_public_origins_and_native_stop_evidence() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    let cell = catalog
+        .cells
+        .iter()
+        .find(|c| c.id == "bounded-federated-union-lineage-multi-source")
+        .unwrap();
+    assert_eq!(cell.status, Status::Implemented);
+    assert!(cell.semantic_exact && cell.bounded && cell.advertisable);
+    assert!(cell.limitation_ids.iter().any(|id| id == "l-lineage"));
+    for (id, command) in [
+        (
+            "e-query-lineage-federated-http",
+            "cmd-federated-union-serve",
+        ),
+        (
+            "e-query-lineage-federated-control",
+            "cmd-federated-union-serve",
+        ),
+        (
+            "e-query-lineage-federated-native",
+            "cmd-verified-source-tls-live",
+        ),
+        (
+            "e-query-lineage-federated-native-stop",
+            "cmd-verified-source-tls-live",
+        ),
+        (
+            "e-query-lineage-inverse-identity",
+            "cmd-query-lineage-inverse",
+        ),
+    ] {
+        let proof = catalog.evidence.iter().find(|e| e.id == id).unwrap();
+        assert!(cell.evidence_ids.contains(&proof.id));
+        assert!(proof.required);
+        assert_eq!(proof.verification, Verification::CiRequired);
+        assert_eq!(proof.command_id.as_deref(), Some(command));
+    }
+    assert!(
+        !catalog
+            .cells
+            .iter()
+            .find(|c| c.id == "query-lineage-generic")
+            .unwrap()
+            .advertisable
+    );
 }

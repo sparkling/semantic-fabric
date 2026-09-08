@@ -84,7 +84,7 @@ fn exact_lineage(body: &[u8], graph: bool, postgres: bool) {
     );
 }
 
-fn failed_wire(response: &[u8]) {
+pub(super) fn failed_wire(response: &[u8]) {
     assert!(
         response.is_empty()
             || response.starts_with(b"HTTP/1.1 200 ")

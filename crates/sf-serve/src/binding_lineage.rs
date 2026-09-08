@@ -35,3 +35,36 @@ impl ExecutablePlan {
         self.lineage.clone()
     }
 }
+
+impl crate::snapshot::RuntimeSnapshot {
+    pub(crate) fn compile_federated_lineage(
+        &self,
+        sources: [SourceId; 2],
+        query: &str,
+        budget: &RequestBudget,
+        policy: Option<PolicySnapshotId>,
+    ) -> sf_sparql::Result<BoundFederatedPlan> {
+        let security = budget.security_context();
+        if policy.is_some_and(|p| security.is_none_or(|c| !c.matches_policy_snapshot(p))) {
+            return Err(sf_sparql::Error::Mapping(
+                "security partition mismatch".into(),
+            ));
+        }
+        let left = self
+            .registry()
+            .binding(sources[0])
+            .ok_or_else(|| sf_sparql::Error::Mapping("lineage source missing".into()))?;
+        let right = self
+            .registry()
+            .binding(sources[1])
+            .ok_or_else(|| sf_sparql::Error::Mapping("lineage source missing".into()))?;
+        let plan = sf_sparql::federation::compile_source_affine_union_lineage(
+            query,
+            [left.compiler(), right.compiler()],
+            budget,
+        )?;
+        let mut bound = BoundFederatedPlan::new(plan, [left, right]);
+        bound.security = security;
+        Ok(bound)
+    }
+}

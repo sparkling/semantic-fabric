@@ -16,7 +16,8 @@ implements:
 > The public opt-in constant-mapping/source SELECT and CONSTRUCT profiles emit
 > per-solution PROV-O and native graph reification under the pinned request.
 > A bounded multiple-mapping positive-query profile also carries actual origins.
-> Full ADR-0017 remains open: wider multi-origin operators, federation,
+> The bounded two-source UNION also carries source-keyed actual origins.
+> Full ADR-0017 remains open: wider multi-origin operators, federated joins,
 > declared/verified row-key authority and wider native-profile/release qualification.
 > ADR-0055, not historical ADR-0038, controls v1.
 
@@ -159,8 +160,8 @@ DISTINCT/REDUCED/slice spine, constant non-`rdf:type` query predicates and const
 mapping predicates/graph maps; referencing maps, variable predicates, quoted WHERE
 patterns, overlapping direct/inverse rewrites and nested operand modifiers reject
 before source I/O. This is an additional physical execution profile, not a new
-architecture or a claim that excluded shapes are complete. Ordinary compilation
-and the existing constant-origin profile are unchanged.
+architecture or a claim that excluded shapes are complete. Ordinary query
+optimization remains separate from the lineage recipe.
 
 Each compiled atom reads through the existing owned native cursor and reconstructs
 fresh private subject/object slots. Native RDF equality checks constants, repeated
@@ -211,6 +212,43 @@ SELECT/CONSTRUCT evidence, not lineage UNION/JOIN cancellation, portable/source-
 cancellation, reload or every operator combination.
 Full lineage, all native lifecycle/source-RLS combinations and exact-artifact
 release admission remain open under ADR-0055.
+
+### Bounded federated UNION profile (2026-09-08)
+
+`bounded-federated-union-lineage-v1` adds the same media type to the existing
+two-source SELECT UNION: exactly two one-triple arms, each belonging to a distinct
+source, with no global modifiers. Both source-affinity admission and execution use
+the bounded actual-origin compiler, including subproperty/inverse matching.
+Ambiguous or absent sources reject before generation/source acquisition. Multiple
+inverse declarations are retained as a deterministic set, never overwritten;
+the bounded lineage compiler caps 256 inverse partners before copying them.
+
+Each arm carries its private plan/spec through the existing immutable source and
+security binding. The header contains two source-keyed mapping dictionaries and
+one snapshot/logical-plan/policy identity. Per-result PROV-O names only actual
+contributing mappings from that result's source; reversed arm order cannot swap
+catalogs. Source IDs are snapshot-local. Policy identity names the configured
+registry snapshot, not the caller or physical parameterized SQL. No row keys or
+distributed point-in-time database snapshot are asserted.
+
+Each arm resolves its at-most-1,024-witness relations before emitting rows. One
+request budget covers both arms, metadata, source work, retained state and all
+serialized bytes. UNION bag occurrences remain separate across sources. Blank
+nodes, including nested triple terms, are standardized apart by SourceId in both
+ordinary and lineage UNION responses, with scratch growth charged before mutation.
+Both source owners are acquired before 200; successful completion requires both
+executions and owned cleanup. A source/budget failure cannot complete a prefix.
+
+Required SQLite HTTP tests cover actual multi-map origins, reversed/unbound bags,
+entailed affinity, blank-node scope, alternating portable callers, rejection before
+held pools, exact byte/result limits, witness overflow, cap-one recovery and pinned
+activation. The existing required pinned PostgreSQL/MySQL TLS CLI aggregate checks
+actual federated metadata against ordinary complete bags and includes six lineage
+UNION deadline/disconnect/SIGTERM cases: exact encrypted target stop under held
+locks, unaffected separately locked sibling, cap-one recovery and bounded clean
+forced exit. This does not qualify federated lineage JOIN/CONSTRUCT, native lineage
+reload, portable/source-RLS cancellation, protected generations, all operators or
+exact-release admission. Full ADR-0017 remains open under ADR-0055.
 
 ### Consequences
 

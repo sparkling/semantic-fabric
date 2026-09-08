@@ -2,6 +2,8 @@
 #![cfg(unix)]
 #[path = "source_tls_live/cancellation.rs"]
 mod cancellation;
+#[path = "source_tls_live/federated_lineage.rs"]
+mod federated_lineage;
 #[path = "source_tls_live/join.rs"]
 mod join;
 #[path = "source_tls_live/lineage.rs"]
@@ -216,6 +218,13 @@ fn assert_serves(
     first.assert_encrypted_sessions();
     if let Some(second) = second {
         second.assert_encrypted_sessions();
+        let (status, body) =
+            request_format(address, query, Some(&fixture.token), lineage::FORMAT).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(
+            federated_lineage::bag(&body, [1, 1]),
+            stop_matrix::bag(&serde_json::to_vec(&document).unwrap())
+        );
     } else {
         lineage::assert_responses(address, fixture, first);
     }

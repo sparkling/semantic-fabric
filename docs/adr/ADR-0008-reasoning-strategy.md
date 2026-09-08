@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-09-08
 tags: [reasoning, entailment, owl2-ql, query-rewriting, t-saturation, transitive, ontology-depth, virtualization]
 supersedes: []
 depends-on:
@@ -33,6 +34,15 @@ A fabric that lets you query the *ontology* (T), not raw tables, needs some enta
 Subclass/subproperty + `rdf:type` entailment is folded into the mappings at startup via **T-mapping saturation** (each class absorbs its subclasses as a UNION; each property its subproperties); `owl:inverseOf` and `owl:SymmetricProperty` fold into the rewriter; `owl:disjointWith` is a consistency check (run via the SHACL/`rudof` gate, ADR-0005). This is transitive closure over T's already-built hierarchy edges + UNION expansion — **no reasoner crate** — and the ADR-0007 cascade prunes the UNIONs back to near-native SQL. Domain/range is documentation-only (not inferred). `owl:TransitiveProperty` is not FO-rewritable, so it is served live as a `P+`/`P*` property path (recursive CTE; ADR-0007), not by tier-1 rewriting.
 
 This native query-time lane replaces the host platform's Jena Fuseki `GenericRuleReasoner` + a safe OWL-RL rule subset (authored in the upstream modelling project): the rule subset's enabled constructs are exactly subclass/subproperty (+ transitivity), `owl:inverseOf`, `owl:TransitiveProperty`, `owl:SymmetricProperty`, and the `owl:disjointWith` check — all covered by the rewrite (subclass/subproperty/inverse/symmetric by UNION-folding; transitive by recursive CTE). **No A-Box closure is computed or stored.**
+
+**Correctness update (2026-09-08):** inverse partners are a deterministic set in
+both directions. A second declaration no longer overwrites the first; duplicate
+and reversed declarations are idempotent, and symmetric self-edges do not duplicate
+an inverse match. Compiler identity encodes every sorted directed edge, preserving
+the old encoding for single-partner inputs. Unit and public federated-lineage
+tests cover lookup, identity and fail-before-I/O source ambiguity. The bounded
+lineage profile caps/charges inverse fan-out before query-side copies. This is
+declared-edge preservation, not a new ontology classifier or closure algorithm.
 
 ### Tier-2 (full OWL 2 QL: RHS-existential / tree-witness) — evidence-gated, deferred
 Tier-2 adds only **answering over anonymous individuals** (`C ⊑ ∃R.D` queried through an existential join variable) — rare in OBDA over relatively-complete operational data, and the source of exponential rewriting blow-up once ontology depth ≥ 2. Gate it on **ontology depth**:

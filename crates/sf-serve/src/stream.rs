@@ -45,6 +45,7 @@ mod lineage;
 #[path = "stream_multiple_lineage.rs"]
 mod multiple_lineage;
 pub(crate) use multiple_lineage::{body as multiple_lineage_body, OriginSink};
+pub(crate) use multiple_lineage::{tagged_body as tagged_lineage_body, TaggedOriginSink};
 
 pub(crate) enum GraphFormat {
     Standard(RdfFormat),

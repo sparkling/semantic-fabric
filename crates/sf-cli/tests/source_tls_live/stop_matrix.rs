@@ -134,11 +134,24 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
             request(sibling_address, SINGLE, Some(&sibling_fixture.token)).unwrap();
         assert_eq!(status, 200);
         let sibling_bag = bag(&body);
-        for query in [UNION, join::JOIN, join::REVERSED] {
+        for (query, format) in [
+            (UNION, "application/sparql-results+json"),
+            (join::JOIN, "application/sparql-results+json"),
+            (join::REVERSED, "application/sparql-results+json"),
+            (UNION, lineage::FORMAT),
+        ] {
             let is_join = query != UNION;
+            let is_lineage = format == lineage::FORMAT;
+            let checked_bag = |body: &[u8]| {
+                if is_lineage {
+                    federated_lineage::bag(body, [3, 5])
+                } else {
+                    bag(body)
+                }
+            };
             for stop in [Stop::Deadline, Stop::Disconnect, Stop::Shutdown] {
                 eprintln!(
-                    "native federation: postgres={is_postgres}, join={is_join}, stop={stop:?}"
+                    "native federation: postgres={is_postgres}, join={is_join}, lineage={is_lineage}, stop={stop:?}"
                 );
                 let (mut command, address) = command(fixture, postgres, Some(mysql));
                 command.args([
@@ -158,10 +171,16 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                     format!("{}?pool_min=0&pool_max=1", mysql.source),
                 );
                 let mut server = start(command, address);
-                let (status, body) = request(address, query, Some(&fixture.token)).unwrap();
+                let (status, body) =
+                    request_format(address, query, Some(&fixture.token), format).unwrap();
                 assert_eq!(status, 200);
-                let expected = bag(&body);
+                let expected = checked_bag(&body);
                 assert_eq!(expected.1.len(), if is_join { 12 } else { 8 });
+                if is_lineage {
+                    let (status, ordinary) = request(address, query, Some(&fixture.token)).unwrap();
+                    assert_eq!(status, 200);
+                    assert_eq!(expected, bag(&ordinary));
+                }
 
                 // Both statements stay blocked until after target-stop assertions.
                 // Distinct IDs and tables distinguish wrong-session cancellation.
@@ -170,9 +189,17 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                     cancellation::begin(sibling_address, SINGLE, &sibling_fixture.token);
                 let sibling_id = blocked_session(database, is_postgres, "healthy");
                 let mut target_lock = database.hold_table("items");
-                let stream = cancellation::begin(address, query, &fixture.token);
+                let stream = cancellation::begin_format(address, query, &fixture.token, format);
                 let target_id = blocked_session(database, is_postgres, "items");
                 assert_ne!(target_id, sibling_id);
+                if is_lineage {
+                    let encrypted = database.sql(&if is_postgres {
+                        format!("SELECT count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.pid={target_id} AND a.usename='sf_tls' AND s.ssl")
+                    } else {
+                        format!("SELECT count(*) FROM performance_schema.status_by_thread s JOIN performance_schema.threads t USING (THREAD_ID) WHERE t.PROCESSLIST_ID={target_id} AND t.PROCESSLIST_USER='sf_tls' AND s.VARIABLE_NAME='Ssl_cipher' AND s.VARIABLE_VALUE <> ''")
+                    });
+                    assert_eq!(encrypted, "1");
+                }
                 if is_join {
                     // A staged join must still be pre-header while the source waits.
                     stream.set_nonblocking(true).unwrap();
@@ -195,6 +222,9 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                             .unwrap()
                             .success());
                         let response = wire(stream);
+                        if is_lineage {
+                            lineage_stop::failed_wire(&response);
+                        }
                         if is_join {
                             assert!(!response.starts_with(b"HTTP/1.1 200"));
                         } else {
@@ -203,6 +233,9 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                     }
                     Stop::Deadline => {
                         let response = wire(stream);
+                        if is_lineage {
+                            lineage_stop::failed_wire(&response);
+                        }
                         if is_join {
                             assert!(
                                 response.starts_with(b"HTTP/1.1 504"),
@@ -257,10 +290,11 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                     assert!(stopped_at.elapsed() < Duration::from_secs(4));
                     assert!(TcpStream::connect(address).is_err());
                 } else {
-                    let (status, body) = request(address, query, Some(&fixture.token)).unwrap();
+                    let (status, body) =
+                        request_format(address, query, Some(&fixture.token), format).unwrap();
                     assert_eq!(status, 200, "both cap-one pools must recover");
                     assert_eq!(
-                        bag(&body),
+                        checked_bag(&body),
                         expected,
                         "full exact federated bag after cancellation"
                     );

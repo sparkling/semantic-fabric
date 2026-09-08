@@ -284,15 +284,21 @@ async fn process(
                 }
             };
             let format = negotiate_results(accept);
+            let content_type = if lineage.is_some() {
+                crate::lineage::MEDIA_TYPE
+            } else {
+                format.media_type()
+            };
             match traced_execute(crate::federation::select_union_body(
                 execution,
                 generations,
                 format,
+                lineage,
                 budget,
             ))
             .await
             {
-                Ok(body) => ok_stream(format.media_type(), body),
+                Ok(body) => ok_stream(content_type, body),
                 Err(response) => response,
             }
         }

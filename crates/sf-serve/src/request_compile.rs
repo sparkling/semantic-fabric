@@ -78,6 +78,11 @@ pub(crate) async fn compile(
     let policy = cfg.query_admission.policy();
     let portable_rows = budget.portable_rows().cloned();
     let work = move |worker_budget: RequestBudget| match mode {
+        QueryMode::SourceAffineUnion(source_ids) if multi_origin => snapshot
+            .snapshot()
+            .compile_federated_lineage(source_ids, &query, &worker_budget, policy)
+            .map(Box::new)
+            .map(BoundQuery::Federated),
         QueryMode::Single(source_id) if multi_origin => snapshot
             .snapshot()
             .registry()

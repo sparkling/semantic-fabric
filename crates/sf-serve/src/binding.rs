@@ -383,7 +383,7 @@ impl BoundFederatedPlan {
         let [first_scope, second_scope] = self.scopes;
         let plans = [
             BoundPlan {
-                lineage: None,
+                lineage: fragments[0].lineage(),
                 binding_identity: first_identity,
                 security: self.security,
                 scope: first_scope,
@@ -391,7 +391,7 @@ impl BoundFederatedPlan {
                 plan: fragments[0].shared_plan(),
             },
             BoundPlan {
-                lineage: None,
+                lineage: fragments[1].lineage(),
                 binding_identity: second_identity,
                 security: self.security,
                 scope: second_scope,

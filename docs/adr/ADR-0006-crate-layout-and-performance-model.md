@@ -53,6 +53,15 @@ The product flow is **core → {mapping, SQL/source} → virtualizer → validat
 * **Cross-source (rare; tables in *different* relational databases).** Non-blocking `UnionAll` is now implemented for the sealed exactly-two-source shape above: both source-local plans retain their immutable bindings, both source leases are acquired before success is committed, one request budget and serializer span both fragments, and the bags stream sequentially without global buffering. The separately implemented two-pattern join below follows the original baseline: an admitted reducible join ships a bounded representation of one side's keys as a fixed-size Bloom filter or bounded `IN`-list/temp-table batch and use a proven bounded merge. That reducer is not a general N:M join answer. Shapes needing an unimplemented blocking global operator reject before I/O; accepting proposed ADR-0040 would replace only this semi-join/merge-only clause with its quota-bounded external layer. The streaming `UnionAll` slice neither depends on nor accepts ADR-0040.
 * **No columnar/OLAP engine on the relational path.** DataFusion, `connector_arrow`, and DuckDB are **not** used to mediate between the rewriter and relational sources: a columnar engine in-process would buffer instance data and break the bounded-memory invariant; only the source DB does blocking set-work (it spills natively). Relational execution = native drivers + push-down + bounded semi-join reduction.
 
+**UNION lineage update (2026-09-08):** the opt-in bounded actual-origin profile in
+ADR-0017 composes two capped source-local witness producers with the same public
+UNION owners, snapshot, security and cumulative budget. It adds no global join,
+spill, persistent data or new architecture. Ordinary and lineage UNION now scope
+blank nodes, including nested triple terms, by their actual SourceId before shared
+serialization; scratch growth is charged first. TBox-aware source affinity in both formats
+rejects ambiguity before I/O. Required HTTP and pinned native CLI checks cover the
+precise profile; federated lineage joins and broader release admission remain open.
+
 ### Cross-source semi-join cost
 
 The cross-source semi-join is the engine's one genuinely in-process join decision, so its planner is **cost-driven from the start** — a foundational, baked-in decision, because retrofitting cost once the planner has callers is expensive:

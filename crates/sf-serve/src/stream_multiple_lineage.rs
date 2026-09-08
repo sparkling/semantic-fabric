@@ -2,6 +2,8 @@
 use super::*;
 use sf_sparql::exec_core::{LineageOutput, LineageSolution};
 pub(crate) type OriginSink = Box<dyn FnMut(LineageSolution) -> BoxedResult + Send>;
+pub(crate) type TaggedOriginSink =
+    Box<dyn FnMut(Option<sf_core::SourceId>, LineageSolution) -> BoxedResult + Send>;
 
 pub(crate) fn body<D>(
     drive: D,
@@ -11,6 +13,23 @@ pub(crate) fn body<D>(
 ) -> Body
 where
     D: FnOnce(OriginSink) -> BoxedResult + Send + 'static,
+{
+    tagged_body(
+        move |mut sink| drive(Box::new(move |solution| sink(None, solution))),
+        proof,
+        form,
+        budget,
+    )
+}
+
+pub(crate) fn tagged_body<D>(
+    drive: D,
+    proof: Arc<crate::lineage::Lineage>,
+    form: sf_sparql::PlanForm,
+    budget: RequestBudget,
+) -> Body
+where
+    D: FnOnce(TaggedOriginSink) -> BoxedResult + Send + 'static,
 {
     let (body, producer) = terminal_body::spawn(
         CHANNEL_CAP,
@@ -36,14 +55,15 @@ where
             record(&mut buf, &header)?;
             let variables = variables(&vars);
             let counts = Arc::new(Mutex::new((0u64, 0u64)));
-            let sink: OriginSink = {
+            let sink: TaggedOriginSink = {
                 let mut buf = buf.clone();
                 let tx = tx.clone();
                 let budget = budget.clone();
                 let counts = counts.clone();
-                Box::new(move |solution| {
+                Box::new(move |source, solution| {
                     let prepared = (|| -> io::Result<Vec<u8>> {
                         budget.checkpoint().map_err(control_error)?;
+                        let proof = proof.for_source(source)?;
                         let mut count = counts.lock().unwrap_or_else(|p| p.into_inner());
                         match solution.output {
                             LineageOutput::Row(row) if !graph => {

@@ -55,6 +55,16 @@ required pinned native multi-map SELECT/CONSTRUCT cases now prove exact-target
 TLS/native stop under deadline/disconnect/forced SIGTERM, held-lock and unrelated
 sibling isolation, cap-one recovery and fail-terminal completion. This does not
 qualify lineage UNION/JOIN cancellation, source-RLS, reload or every operator.
+The separate bounded two-source UNION lineage profile now binds actual origins to
+their source under shared snapshot/security/budget and native cleanup owners.
+Required HTTP and owned TLS CLI checks cover its bags, entailed source affinity,
+source-scoped blank nodes, portable callers, pinned activation, limits and native
+deadline/disconnect/forced-shutdown failures. ADR-0017 records the exact profile;
+federated joins, row-key authority and broader qualification remain open.
+The aggregate gate concerns coverage of declared v1 paths, not every historical
+ADR-0017 combination. Row-key transport is conditional on explicitly declared or
+verified authority: ADR-0017 permits mapping/source-only lineage when no authorized
+stable key exists. Tested wider operator exclusions are not promoted to v1 gates.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

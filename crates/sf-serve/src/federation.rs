@@ -16,6 +16,7 @@ use crate::problem::{self, ProblemCode};
 use crate::{sqlite_admission, stream, Backend};
 
 mod join;
+mod lineage;
 type RowSink = Box<
     dyn FnMut(
             Vec<Option<sf_core::Term>>,
@@ -73,10 +74,12 @@ pub(crate) async fn select_union_body(
     mut execution: ExecutableFederatedPlan,
     mut generations: VerifiedGenerationLeases,
     format: QueryResultsFormat,
+    proof: Option<Arc<crate::lineage::Lineage>>,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
     let join = execution.bounded_join();
     let (variables, fragments) = execution.into_parts();
+    let specs = fragments.each_ref().map(|fragment| fragment.lineage());
     let rls_tables = fragments.each_ref().map(|fragment| fragment.rls_tables());
     let fragments = fragments.map(|fragment| fragment.into_parts());
     let source_ids = fragments.each_ref().map(|fragment| fragment.0);
@@ -88,6 +91,17 @@ pub(crate) async fn select_union_body(
             },
         );
     if !valid {
+        let _ = generations.finish().await;
+        return Err(problem::response(ProblemCode::Internal));
+    }
+    if proof.as_ref().is_some_and(|proof| {
+        join.is_some()
+            || source_ids.iter().zip(&specs).any(|(id, spec)| {
+                spec.as_ref()
+                    .is_none_or(|spec| !proof.matches_source(*id, spec))
+            })
+    }) || (proof.is_none() && specs.iter().any(Option::is_some))
+    {
         let _ = generations.finish().await;
         return Err(problem::response(ProblemCode::Internal));
     }
@@ -142,17 +156,37 @@ pub(crate) async fn select_union_body(
     if let Some(join) = join {
         return join::body(acquired, source_ids, join, variables, format, budget).await;
     }
+    if let Some(proof) = proof {
+        return Ok(lineage::body(
+            acquired,
+            source_ids,
+            specs.map(Option::unwrap),
+            proof,
+            variables,
+            budget,
+        ));
+    }
 
     let drive_budget = budget.clone();
     Ok(stream::select_body_streaming_controlled(
-        move |mut sink| {
+        move |sink| {
             Box::pin(async move {
-                for fragment in acquired {
+                let sink = Arc::new(std::sync::Mutex::new(sink));
+                for (fragment, source) in acquired.into_iter().zip(source_ids) {
+                    let sink = sink.clone();
+                    let scope_budget = drive_budget.clone();
+                    let mut peak = 0;
+                    let mut scoped: RowSink = Box::new(move |mut row| {
+                        if let Err(error) = scope_row(&mut row, source, &scope_budget, &mut peak) {
+                            return Box::pin(std::future::ready(Err(error)));
+                        }
+                        sink.lock().unwrap_or_else(|p| p.into_inner())(row)
+                    });
                     drive(
                         fragment,
                         &drive_budget,
                         Arc::new(drive_budget.clone()),
-                        &mut sink,
+                        &mut scoped,
                     )
                     .await?;
                 }
@@ -163,6 +197,26 @@ pub(crate) async fn select_union_body(
         variables,
         budget.clone(),
     ))
+}
+
+fn scope_row(
+    row: &mut [Option<sf_core::Term>],
+    source: sf_core::SourceId,
+    budget: &RequestBudget,
+    peak: &mut u64,
+) -> sf_sparql::Result<()> {
+    let bytes = join::row_bytes(row)?
+        .checked_mul(8)
+        .ok_or(sf_core::query_control::QueryControlError::AccountingOverflow)?;
+    if bytes > *peak {
+        budget.consume(
+            sf_core::query_control::QueryCharge::RetainedBytes,
+            bytes - *peak,
+        )?;
+        *peak = bytes;
+    }
+    join::scope(row, source);
+    Ok(())
 }
 
 async fn drive(
@@ -233,6 +287,69 @@ async fn close_acquired(acquired: Vec<AcquiredFragment>) {
 mod tests {
     use super::*;
     use crate::binding_identity::RuntimeBindingIdentity;
+
+    #[test]
+    fn source_scope_preserves_nested_blank_identity_and_charges_before_mutation() {
+        use oxrdf::{BlankNode, NamedNode, Term, Triple};
+        let blank = BlankNode::new("same").unwrap();
+        let predicate = NamedNode::new("urn:p").unwrap();
+        let triple = Triple::new(
+            blank.clone(),
+            predicate.clone(),
+            Term::Triple(Box::new(Triple::new(
+                blank.clone(),
+                predicate,
+                blank.clone(),
+            ))),
+        );
+        let original = vec![
+            Some(Term::BlankNode(blank)),
+            Some(Term::Triple(Box::new(triple))),
+        ];
+        let budget = RequestBudget::after(
+            std::time::Duration::from_secs(2),
+            crate::DEFAULT_QUERY_LIMITS,
+        );
+        let mut left = original.clone();
+        let mut right = original.clone();
+        scope_row(
+            &mut left,
+            sf_core::SourceId::new(0).unwrap(),
+            &budget,
+            &mut 0,
+        )
+        .unwrap();
+        scope_row(
+            &mut right,
+            sf_core::SourceId::new(1).unwrap(),
+            &budget,
+            &mut 0,
+        )
+        .unwrap();
+        assert_ne!(left, right);
+        let Some(Term::Triple(outer)) = &left[1] else {
+            panic!("triple")
+        };
+        assert_eq!(Some(Term::from(outer.subject.clone())), left[0]);
+        let Term::Triple(inner) = &outer.object else {
+            panic!("nested triple")
+        };
+        assert_eq!(Some(inner.object.clone()), left[0]);
+        let zero = RequestBudget::after(
+            std::time::Duration::from_secs(2),
+            sf_core::query_control::QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)
+                .with_max_retained_bytes(0),
+        );
+        let mut denied = original.clone();
+        assert!(scope_row(
+            &mut denied,
+            sf_core::SourceId::new(0).unwrap(),
+            &zero,
+            &mut 0
+        )
+        .is_err());
+        assert_eq!(denied, original);
+    }
 
     #[test]
     fn verified_fragment_without_its_identity_bound_lease_is_internal() {
