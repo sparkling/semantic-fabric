@@ -37,8 +37,10 @@ Discover specialized installed security capabilities first. Use
 `aidefence_scan`, `aidefence_is_safe`, and `aidefence_has_pii` only when
 they are registered and reachable. Ruflo source/dependency scanning is CLI-only:
 when the Brain bridge is present, obtain exact subcommand help with
-`ruvnet_cli_help`, then use `ruvnet_cli_run` with literal argv. Otherwise
-inspect the installed executable's help; never guess flags or claim a scan ran.
+`ruvnet_cli_help({executable: "ruflo", argv: ["<group>", "<command>"]})`,
+then use `ruvnet_cli_run({executable: "ruflo", argv: [...]})` only with the
+authorized literal arguments. Otherwise inspect the installed `ruflo`
+executable's help; never guess flags or claim a scan ran.
 
 
 ## References
