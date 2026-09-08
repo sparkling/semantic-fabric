@@ -80,7 +80,7 @@ fn record(buf: &mut SharedBuf, value: &serde_json::Value) -> io::Result<()> {
 /// enclosing JSON string without collecting a second copy. Writes may split a
 /// UTF-8 code point, so only ASCII bytes are interpreted here. All expanded bytes
 /// go through SharedBuf's existing serialized-byte charge before allocation.
-struct JsonStringWriter<W>(W);
+pub(super) struct JsonStringWriter<W>(pub(super) W);
 
 impl<W: Write> Write for JsonStringWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {

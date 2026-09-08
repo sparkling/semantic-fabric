@@ -56,6 +56,44 @@ fn lineage_keeps_full_contract_open_and_only_advertises_the_evidenced_subset() {
 }
 
 #[test]
+fn actual_multi_mapping_profiles_bind_required_native_and_bounded_executor_evidence() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    for backend in ["mysql", "postgresql", "sqlite"] {
+        let cell = catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == format!("bounded-mapping-source-lineage-{backend}"))
+            .unwrap();
+        assert_eq!(cell.status, Status::Implemented);
+        assert_eq!(cell.verification, Verification::CiRequired);
+        assert!(cell.semantic_exact && cell.bounded && cell.advertisable);
+        assert!(cell.limitation_ids.iter().any(|id| id == "l-lineage"));
+        for id in [
+            "e-query-lineage-multiple-compiler",
+            "e-query-lineage-multiple-executor",
+            "e-query-lineage-multiple-http",
+            "e-query-lineage-multiple-stream",
+        ] {
+            assert!(cell.evidence_ids.iter().any(|entry| entry == id));
+        }
+        if backend != "sqlite" {
+            let evidence = catalog
+                .evidence
+                .iter()
+                .find(|e| e.id == "e-query-lineage-multiple-native")
+                .unwrap();
+            assert!(cell.evidence_ids.contains(&evidence.id));
+            assert!(evidence.required);
+            assert_eq!(
+                evidence.command_id.as_deref(),
+                Some("cmd-verified-source-tls-live")
+            );
+        }
+    }
+}
+
+#[test]
 fn accepted_release_contract_excludes_research_and_no_prefix_delivery_not_required_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = capability_catalog::load(&root).unwrap().catalog;

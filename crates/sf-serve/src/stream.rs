@@ -42,6 +42,9 @@ use crate::terminal_body;
 mod graph_lineage;
 #[path = "stream_lineage.rs"]
 mod lineage;
+#[path = "stream_multiple_lineage.rs"]
+mod multiple_lineage;
+pub(crate) use multiple_lineage::{body as multiple_lineage_body, OriginSink};
 
 pub(crate) enum GraphFormat {
     Standard(RdfFormat),

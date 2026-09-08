@@ -6,6 +6,8 @@ mod cancellation;
 mod join;
 #[path = "source_tls_live/lineage.rs"]
 mod lineage;
+#[path = "source_tls_live/multiple_lineage.rs"]
+mod multiple_lineage;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
 #[path = "source_tls_live/stop_matrix.rs"]
@@ -290,6 +292,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     for database in [&postgres, &mysql] {
         assert_serves(&fixture, database, None, &["same"]);
         lineage::assert_portable_policy(&fixture, database);
+        multiple_lineage::assert_responses(&fixture, database);
         let expected = if std::ptr::eq(database, &postgres) {
             "postgres-reloaded"
         } else {

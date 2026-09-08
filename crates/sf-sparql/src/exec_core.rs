@@ -11,6 +11,7 @@ mod dedup_scope_runtime;
 mod driver;
 mod expression;
 mod forms;
+mod lineage;
 mod literal_order;
 mod order;
 mod row;
@@ -41,6 +42,7 @@ pub use forms::{
     construct_triples, dump_quads, dump_quads_stream, select, select_each, select_each_async,
     select_each_async_controlled, Solutions,
 };
+pub use lineage::{lineage_each_async_controlled, LineageOutput, LineageSolution};
 #[allow(unused_imports)]
 pub(crate) use row::{reconstruct, Bindings, RawRow};
 #[allow(unused_imports)]

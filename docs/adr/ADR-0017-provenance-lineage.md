@@ -15,7 +15,8 @@ implements:
 > **Implementation status (2026-09-08): accepted, partially implemented.**
 > The public opt-in constant-mapping/source SELECT and CONSTRUCT profiles emit
 > per-solution PROV-O and native graph reification under the pinned request.
-> Full ADR-0017 remains open: dynamic multi-origin operators, federation,
+> A bounded multiple-mapping positive-query profile also carries actual origins.
+> Full ADR-0017 remains open: wider multi-origin operators, federation,
 > declared/verified row-key authority and wider native-profile/release qualification.
 > ADR-0055, not historical ADR-0038, controls v1.
 
@@ -62,9 +63,10 @@ parsing, nested term recursion or total compiler CPU.
 All positive witnesses necessarily use the same authored map, including its
 saturated class/predicate variants. Thus final-row annotation remains exact
 after projection, bag UNION, duplicate elimination and LIMIT. A candidate-map
-list is never substituted for actual origins. Ambiguous/multiple maps, OPTIONAL,
-GROUP, FILTER/expressions, paths, ASK/DESCRIBE and federation currently reject
-provenance with `501` before source I/O; ordinary-query support is unaffected.
+list is never substituted for actual origins. This constant-origin profile excludes
+multiple maps, OPTIONAL, GROUP, FILTER/expressions, paths, ASK/DESCRIBE and
+federation; the bounded profile below separately admits multiple maps. Other
+shapes reject with `501` before source I/O; ordinary-query support is unaffected.
 
 The response is an RS/LF-framed JSON text sequence. Its first `header` record
 contains projected variables, mapping ID, snapshot-local source index, opaque
@@ -142,6 +144,61 @@ observed on both providers. This qualifies those native cases, not every operato
 combination, source-RLS lineage, lineage-specific reload/cancellation, production
 admission or an exact packed release artifact. Shared lifecycle checks remain
 required; no successful ordinary-query test is renamed as lineage-specific proof.
+
+### Bounded multiple-mapping profiles (2026-09-08)
+
+The same media type additionally admits `bounded-mapping-source-v1` SELECT and
+`bounded-mapping-source-graph-v1` CONSTRUCT. Its `mappingCatalog` is an identifier
+dictionary, **not** a list of contributing origins. Only actual emitted solutions
+carry used mapping-entry/source identities, the mapping document and the same
+snapshot/logical-plan/policy references. Row keys are still not provided.
+
+The opt-in compiler keeps atom/mapping alternatives separate from ordinary query
+optimization. It admits positive BGP/JOIN/UNION with a root-only projection,
+DISTINCT/REDUCED/slice spine, constant non-`rdf:type` query predicates and constant
+mapping predicates/graph maps; referencing maps, variable predicates, quoted WHERE
+patterns, overlapping direct/inverse rewrites and nested operand modifiers reject
+before source I/O. This is an additional physical execution profile, not a new
+architecture or a claim that excluded shapes are complete. Ordinary compilation
+and the existing constant-origin profile are unchanged.
+
+Each compiled atom reads through the existing owned native cursor and reconstructs
+fresh private subject/object slots. Native RDF equality checks constants, repeated
+variables and joins, avoiding SQL collation/coercion as provenance authority.
+Missing mandatory terms cannot produce witnesses. Atom duplicates union their
+origin bits; syntactic UNION choices preserve bag occurrences, including under
+joins and projection. DISTINCT combines actual origins before slicing, so later
+witnesses cannot disappear behind an early LIMIT. Graph output uses the unchanged
+native template/reification path and preserves its response-wide blank-node scope.
+
+Admission caps 64 distinct authored map IDs (1,024 bytes each), 256 prospective
+atom alternatives/compiled branches, 128 algebra/triple visits, 256 projected
+variables/template triples and 1,024 template-expansion units. Execution caps each
+intermediate relation at 1,024 witnesses and charges source pulls, local join work,
+retained containers/payloads and serialization to the same request budget. Borrowed
+key lookup avoids full-key clones; candidate and template expansion are charged
+before cloning. All origins are resolved in this bounded request-local buffer
+before final records stream. An overflow fails; it never truncates or fabricates
+complete provenance. This is not total compiler/native-row/heap governance.
+
+There is no separate provenance re-query or persisted store. Multiple atom cursors
+retain their existing backend isolation/transaction guarantees; an immutable
+runtime-generation identifier does **not** assert a database-wide point-in-time
+data snapshot. PostgreSQL generation/source-RLS paths retain their transaction
+owners and fail-closed admission. Broader transactional/backend qualification is
+not inferred from SQLite or ordinary-query tests.
+
+Required SQLite HTTP tests cover actual/unused/overlapping mappings, hidden BGP
+bindings, nested UNION/JOIN bags, RDF-vs-SQL equality, NULLs, late origins, both
+forms, alternating portable-policy subjects and exact byte/witness failures.
+Compiler tests pin graph/inverse/identifier/expansion rejection; stream tests pin
+deadline and cleanup failure. The owned PostgreSQL/MySQL TLS CLI aggregate also
+contains multiple-map SELECT/UNION/join/CONSTRUCT and allowed/empty portable-policy
+checks with parsed returned provenance. That required aggregate passed on
+2026-09-08 against owned PostgreSQL 16.15/MySQL 8.4.11 fixtures (63.39 seconds).
+Its presence or ordinary test ignores alone are not qualification evidence.
+Full lineage, all native lifecycle/source-RLS combinations and exact-artifact
+release admission remain open under ADR-0055.
 
 ### Consequences
 

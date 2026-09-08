@@ -9,6 +9,27 @@ use sf_sparql::{exec_pg, Plan};
 use super::{PgGenerationError, RequestBudget, VerifiedPostgresGenerationLease};
 
 impl VerifiedPostgresGenerationLease {
+    pub(crate) async fn lineage_each(
+        self,
+        plan: &Plan,
+        spec: &sf_sparql::lineage::LineageSpec,
+        control: &RequestBudget,
+        sink: crate::stream::OriginSink,
+    ) -> Result<sf_sparql::Result<()>, PgGenerationError> {
+        let result = {
+            let mut backend = sf_sql::backend::pg::PgBackend::new(self.execution_client());
+            sf_sparql::exec_core::lineage_each_async_controlled(
+                plan,
+                spec,
+                &mut backend,
+                control,
+                sink,
+            )
+            .await
+        };
+        self.finish_bounded(control).await?;
+        Ok(result)
+    }
     pub(crate) async fn select_each<F, Fut>(
         self,
         plan: &Plan,

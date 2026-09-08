@@ -294,6 +294,25 @@ pub(crate) async fn ask(
     backend.into_inner().finish(result).await
 }
 
+pub(crate) async fn lineage(
+    plan: &Plan,
+    spec: &sf_sparql::lineage::LineageSpec,
+    query: MysqlQuery,
+    control: &dyn QueryControl,
+    sink: crate::stream::OriginSink,
+) -> Result<()> {
+    let mut backend = MysqlBackend::new(query);
+    let result = sf_sparql::exec_core::lineage_each_async_controlled(
+        plan,
+        spec,
+        &mut backend,
+        control,
+        sink,
+    )
+    .await;
+    backend.into_inner().finish(result).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

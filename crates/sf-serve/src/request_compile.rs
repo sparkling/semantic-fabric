@@ -68,6 +68,7 @@ pub(crate) async fn compile(
     query: String,
     budget: RequestBudget,
     reservation: Option<CompilerReservation>,
+    multi_origin: bool,
 ) -> Result<BoundQuery, Response> {
     cfg.query_admission
         .validate(&budget)
@@ -77,6 +78,14 @@ pub(crate) async fn compile(
     let policy = cfg.query_admission.policy();
     let portable_rows = budget.portable_rows().cloned();
     let work = move |worker_budget: RequestBudget| match mode {
+        QueryMode::Single(source_id) if multi_origin => snapshot
+            .snapshot()
+            .registry()
+            .binding(source_id)
+            .ok_or_else(|| sf_sparql::Error::Mapping("lineage source is missing".into()))?
+            .compile_lineage(&query, &worker_budget, policy)
+            .map(Box::new)
+            .map(BoundQuery::Single),
         QueryMode::Single(source_id) if policy.is_some() => snapshot
             .compile_secured(source_id, &query, &worker_budget, policy.unwrap())
             .map(Box::new)

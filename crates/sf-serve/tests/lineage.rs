@@ -14,6 +14,8 @@ use tower::ServiceExt;
 mod graph;
 #[path = "lineage/more.rs"]
 mod more;
+#[path = "lineage/multiple.rs"]
+mod multiple;
 mod support;
 
 const FORMAT: &str = "application/vnd.semantic-fabric.lineage+json-seq";

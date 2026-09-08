@@ -351,7 +351,7 @@ impl Bindings {
     }
 }
 
-fn term_payload_bytes(term: &Term) -> Option<u64> {
+pub(super) fn term_payload_bytes(term: &Term) -> Option<u64> {
     fn length(value: &str) -> Option<u64> {
         u64::try_from(value.len()).ok()
     }

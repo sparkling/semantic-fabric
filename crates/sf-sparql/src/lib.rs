@@ -82,6 +82,7 @@ pub mod federation;
 mod graph_map;
 pub mod iq;
 pub mod leftjoin;
+pub mod lineage;
 #[allow(dead_code)] // Dormant ADR-0053 handshake; process wiring is a later slice.
 mod parser_isolation;
 pub mod path;

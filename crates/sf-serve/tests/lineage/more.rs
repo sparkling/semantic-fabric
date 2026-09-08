@@ -6,10 +6,8 @@ use sf_serve::{
 #[tokio::test]
 async fn unsupported_origins_and_shape_bounds_reject_without_querying_source() {
     let query = "SELECT ?name WHERE { ?s <http://example.test/name> ?name }";
-    let second = MAPPING.replace("http://example.test/People", "http://example.test/Second");
-    let multiple = format!("{MAPPING}\n{second}");
     let referenced = MAPPING.replace("rr:column \"name\"", "rr:parentTriplesMap <http://example.test/People> ; rr:joinCondition [ rr:child \"id\" ; rr:parent \"id\" ]");
-    for mapping in [multiple, referenced] {
+    for mapping in [referenced] {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO people VALUES(1,'Alice');").unwrap();
         let mut cfg = support::serve_config(Backend::sqlite(conn), &mapping);

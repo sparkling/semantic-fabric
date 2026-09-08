@@ -20,12 +20,15 @@ pub(crate) const MEDIA_TYPE: &str = "application/vnd.semantic-fabric.lineage+jso
 
 #[path = "lineage_graph.rs"]
 mod graph;
+#[path = "lineage_multiple.rs"]
+mod multiple;
 
 /// Immutable proof is created from the SAME pinned snapshot and query string as
 /// execution. It never decorates a caller-supplied/mutable plan. Authorization
 /// can only remove rows from this constant-origin profile, not add origins.
 pub(crate) struct Lineage {
     pub(crate) header: Value,
+    pub(crate) multi_origin: bool,
     request: String,
     source: String,
     mapping: String,
@@ -71,12 +74,21 @@ pub(crate) async fn prepare(
             .ok_or_else(|| {
                 sf_sparql::Error::Unsupported("lineage source is not admitted".into())
             })?;
-        let mapping_id = binding
-            .compiler()
-            .constant_mapping_origin(&query, &control)?;
+        let (mapping_id, mapping_ids) =
+            match binding.compiler().constant_mapping_origin(&query, &control) {
+                Ok(id) => (Some(id), Vec::new()),
+                Err(sf_sparql::Error::Unsupported(_)) => {
+                    let (_, spec) = binding.compiler().compile_lineage(&query, &control)?;
+                    (None, spec.mapping_ids().to_vec())
+                }
+                Err(error) => return Err(error),
+            };
         // Fixed metadata is bounded independently of source/result size; charge
         // it before construction. Every serialized byte is charged by SharedBuf.
         control.consume(QueryCharge::RetainedBytes, 32768)?;
+        if mapping_id.is_none() {
+            control.consume(QueryCharge::RetainedBytes, 262144)?;
+        }
         let scope = binding.compiler().scope();
         let digests = scope.digests();
         let epoch = scope.epoch().0.to_be_bytes();
@@ -107,10 +119,18 @@ pub(crate) async fn prepare(
         );
         let source = identifier("source", &[snapshot.as_bytes(), &source_index]);
         let mapping = identifier("mapping-document", &[digests.mapping().as_bytes()]);
-        let header = json!({"type":"header", "profile":"constant-mapping-source-v1",
+        let mut header = json!({"type":"header", "profile":"constant-mapping-source-v1",
             "mappingId":mapping_id, "sourceId":source_id.index(), "snapshot":snapshot,
             "logicalPlan":plan, "policy":policy, "rowKeys":"not-provided"});
+        let multi_origin = mapping_id.is_none();
+        if multi_origin {
+            header["profile"] = "bounded-mapping-source-v1".into();
+            header.as_object_mut().unwrap().remove("mappingId");
+            header["mappingCatalog"] = json!(mapping_ids);
+            header["maxWitnessesPerRelation"] = sf_sparql::lineage::MAX_WITNESSES.into();
+        }
         Ok(Arc::new(Lineage {
+            multi_origin,
             header,
             request: control.correlation_id().as_str().into(),
             source,
@@ -167,6 +187,7 @@ mod tests {
 
     fn proof() -> Arc<Lineage> {
         Arc::new(Lineage {
+            multi_origin: false,
             header: json!({"type":"header", "mappingId":"urn:map", "sourceId":0}),
             request: "test".into(),
             source: "urn:source".into(),
@@ -281,6 +302,58 @@ mod tests {
         let body = crate::stream::construct_body_streaming_controlled(
             |_sink| Box::pin(std::future::pending()),
             crate::stream::GraphFormat::Lineage(proof()),
+            budget,
+        );
+        assert_eq!(
+            body.collect().await.unwrap_err().to_string(),
+            "result stream failed"
+        );
+    }
+
+    fn multiple_proof() -> Arc<Lineage> {
+        let mut proof = Arc::try_unwrap(proof()).ok().unwrap();
+        proof.multi_origin = true;
+        proof.header = json!({"type":"header","profile":"bounded-mapping-source-v1","sourceId":0,"mappingCatalog":["urn:a","urn:b"]});
+        Arc::new(proof)
+    }
+
+    #[tokio::test]
+    async fn multiple_lineage_cleanup_failure_cannot_complete() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(30),
+            QueryLimits::new(10000, 10000, 10000, 100000),
+        );
+        let body = crate::stream::multiple_lineage_body(
+            |mut sink| {
+                Box::pin(async move {
+                    sink(sf_sparql::exec_core::LineageSolution {
+                        output: sf_sparql::exec_core::LineageOutput::Row(vec![]),
+                        mappings: 3,
+                    })
+                    .await?;
+                    Err(sf_sparql::Error::Sql("private cleanup failure".into()))
+                })
+            },
+            multiple_proof(),
+            sf_sparql::PlanForm::Select { vars: vec![] },
+            budget,
+        );
+        assert_eq!(
+            body.collect().await.unwrap_err().to_string(),
+            "result stream failed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn multiple_lineage_stalled_driver_is_deadline_bound() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(1),
+            QueryLimits::new(10000, 10000, 10000, 100000),
+        );
+        let body = crate::stream::multiple_lineage_body(
+            |_| Box::pin(std::future::pending()),
+            multiple_proof(),
+            sf_sparql::PlanForm::Select { vars: vec![] },
             budget,
         );
         assert_eq!(

@@ -180,6 +180,7 @@ async fn process(
             query,
             budget.clone(),
             compiler,
+            lineage.as_ref().is_some_and(|proof| proof.multi_origin),
         ),
     )
     .await
@@ -212,6 +213,7 @@ async fn process(
                 }
             };
             let rls_tables = execution.rls_tables();
+            let origins = execution.lineage();
             let (source_id, binding_identity, backend, verified_generation, plan) =
                 execution.into_parts();
             if !generations.matches(source_id, &binding_identity, verified_generation) {
@@ -222,6 +224,15 @@ async fn process(
             if !generations.is_empty() {
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::Internal);
+            }
+            if let Some(origins) = origins {
+                let Some(proof) = lineage else {
+                    return problem::response(ProblemCode::Internal);
+                };
+                return traced_execute(crate::lineage_response::respond(
+                    backend, plan, origins, generation, rls_tables, proof, budget,
+                ))
+                .await;
             }
             match &plan.form {
                 PlanForm::Select { .. } => {

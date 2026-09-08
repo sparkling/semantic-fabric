@@ -31,6 +31,8 @@ use crate::IntrospectedSource;
 
 /// Plan-cache capacity for one immutable compiler binding (ADR-0007).
 const PLAN_CACHE_CAP: usize = 64;
+#[path = "binding_lineage.rs"]
+mod lineage;
 
 #[cfg(test)]
 std::thread_local! {
@@ -165,6 +167,7 @@ impl RuntimeBinding {
         let compiled = self.compiler.compile_shared(sparql);
         control.checkpoint()?;
         compiled.map(|plan| BoundPlan {
+            lineage: None,
             security: None,
             binding_identity: self.binding_identity.clone(),
             scope: self.compiler.scope(),
@@ -208,6 +211,7 @@ impl RuntimeBinding {
             });
         budget.checkpoint()?;
         compiled.map(|plan| BoundPlan {
+            lineage: None,
             binding_identity: self.binding_identity.clone(),
             scope: self.scope(),
             source_id: self.source_id(),
@@ -230,6 +234,7 @@ impl RuntimeBinding {
             return Err(BindingMismatch);
         }
         Ok(ExecutablePlan {
+            lineage: bound.lineage,
             binding_identity: self.binding_identity.clone(),
             rls_tables: self.rls_tables.clone(),
             backend: self.backend.clone(),
@@ -298,6 +303,7 @@ impl fmt::Debug for RuntimeBinding {
 
 /// A compiled plan attached to its exact runtime binding, source, and scope.
 pub(crate) struct BoundPlan {
+    lineage: Option<Arc<sf_sparql::lineage::LineageSpec>>,
     pub(super) security: Option<sf_core::security_context::SecurityContext>,
     binding_identity: RuntimeBindingIdentity,
     scope: CompileScope,
@@ -377,6 +383,7 @@ impl BoundFederatedPlan {
         let [first_scope, second_scope] = self.scopes;
         let plans = [
             BoundPlan {
+                lineage: None,
                 binding_identity: first_identity,
                 security: self.security,
                 scope: first_scope,
@@ -384,6 +391,7 @@ impl BoundFederatedPlan {
                 plan: fragments[0].shared_plan(),
             },
             BoundPlan {
+                lineage: None,
                 binding_identity: second_identity,
                 security: self.security,
                 scope: second_scope,
@@ -409,6 +417,7 @@ impl fmt::Debug for BoundPlan {
 
 /// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
+    lineage: Option<Arc<sf_sparql::lineage::LineageSpec>>,
     rls_tables: Option<Arc<[String]>>,
     binding_identity: RuntimeBindingIdentity,
     backend: Backend,

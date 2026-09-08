@@ -175,6 +175,7 @@ async fn assert_exact_metadata_reservation(
         query,
         request.clone(),
         reservation,
+        false,
     )
     .await
     .unwrap_or_else(|response| {
@@ -266,6 +267,7 @@ async fn acquire_compile(
         query.to_owned(),
         request.clone(),
         reservation,
+        false,
     )
     .await
     .unwrap_or_else(|response| panic!("authoritative compile failed: {}", response.status()));
