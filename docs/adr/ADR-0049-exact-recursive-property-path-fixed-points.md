@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-02
+updated: 2026-09-08
 tags: [sparql, property-paths, correctness, recursive-cte, resource-governance]
 supersedes: []
 depends-on: [ADR-0007, ADR-0010, ADR-0038]
@@ -24,6 +24,14 @@ rows/recursive SQL and source cost, source-native timeouts/cancellation, cross-
 source closure, production backend admission, and live MySQL remain open.
 
 ## Context
+
+**Compiler-side update (2026-09-08):** predicate-hop mapping searches and negated
+complement expansion now use request-owned prospective work and exact term/source
+copy reservations. Public rejection precedes source admission and sufficient work
+preserves exact NPS multiplicity; fixed-point/oracle regression checks pass.
+This does not govern source-side recursive iterations, graph inventory/reflexive
+eligibility or every compiler phase. ADR-0055 controls current v1 release scope;
+the historical ADR-0038 links below do not add deferred research prerequisites.
 
 The previous recursive CTE keyed rows by `(sf_s, sf_o, sf_d)`, where `sf_d` was
 the walk depth. `UNION` could not collapse a cyclic revisit at a different depth,

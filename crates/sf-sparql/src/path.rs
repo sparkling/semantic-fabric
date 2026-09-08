@@ -30,17 +30,18 @@
 //!   or multi-mapping or multi-column predicate, and a non-constant/`rr:class`
 //!   predicate under `!p` — all stay explicit 501s (never silently wrong).
 
-use sf_core::graph_map::union;
-use sf_core::ir::{LogicalSource, ObjectMap, Segment, Template, TermMap, TermSpec};
+use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
 use sf_core::Term;
 use spargebra::algebra::PropertyPathExpression;
-use spargebra::term::{NamedNode, TermPattern};
+use spargebra::term::TermPattern;
 
 use crate::iq::{
     mapping_term_def, Branch, HopExpr, HopRelation, PathClosure, PathKind, R2rmlGraphScope, TermDef,
 };
 use crate::unfold::{bind, Unfolder};
 use crate::{Error, Result};
+
+mod mapping_work;
 
 /// A compiled one-hop relation plus the term maps and node shapes its endpoints
 /// reconstruct from / are checked against.
@@ -75,6 +76,7 @@ impl<'a> Unfolder<'a> {
         path: &PropertyPathExpression,
         object: &TermPattern,
     ) -> Result<Branch> {
+        self.work_checkpoint()?;
         use PropertyPathExpression as P;
         let (kind, inner): (PathKind, &PropertyPathExpression) = match path {
             P::OneOrMore(p) => (PathKind::OneOrMore, p),
@@ -251,6 +253,7 @@ impl<'a> Unfolder<'a> {
 
     /// Compile a (closure-free) path sub-expression into a [`CompiledHop`].
     fn compile_path(&self, path: &PropertyPathExpression) -> Result<CompiledHop> {
+        self.work_checkpoint()?;
         use PropertyPathExpression as P;
         match path {
             P::NamedNode(p) => self.resolve_pred_hop(p.as_str()),
@@ -321,179 +324,6 @@ impl<'a> Unfolder<'a> {
                     .to_owned(),
             )),
         }
-    }
-
-    /// Compile `!(...)` — the union of every mapped predicate EXCEPT the negated
-    /// set. The R2RML predicate set is finite, so the complement is enumerable; all
-    /// included predicates must share one endpoint shape pair (else the union is not
-    /// reconstructible with a single term map → 501).
-    fn compile_nps(&self, negated: &[NamedNode]) -> Result<CompiledHop> {
-        let mut complement: Vec<String> = Vec::new();
-        for tm in self.maps {
-            // `rr:class` adds rdf:type triples whose object IRIs we cannot fold into
-            // the raw-key complement — defer rather than under-produce.
-            if !tm.subject.classes.is_empty() {
-                return Err(Error::Unsupported(
-                    "!p over a graph with rr:class (rdf:type) triples cannot be \
-                     enumerated soundly → 501"
-                        .to_owned(),
-                ));
-            }
-            for pom in &tm.predicate_object_maps {
-                // Same graph filter as `resolve_pred_hop` (R2RML §6.1/§6.2 subject-map
-                // ∪ POM graph union): a POM outside the active GRAPH context must not
-                // contribute to the `!p` complement enumeration either.
-                let graphs = union(&tm.subject.graphs, &pom.graphs);
-                if !crate::graph_map::path_scope_matches(self.current_graph.as_ref(), &graphs)? {
-                    continue;
-                }
-                for pm in &pom.predicates {
-                    let q = match pm {
-                        TermMap::Constant(Term::NamedNode(q)) => q.as_str().to_owned(),
-                        _ => {
-                            return Err(Error::Unsupported(
-                                "!p over a non-constant (column/template) predicate map \
-                                 cannot be enumerated → 501"
-                                    .to_owned(),
-                            ))
-                        }
-                    };
-                    if negated.iter().any(|n| n.as_str() == q) || complement.contains(&q) {
-                        continue;
-                    }
-                    complement.push(q);
-                }
-            }
-        }
-
-        let mut leaves: Vec<CompiledHop> = Vec::new();
-        let mut shape: Option<(NodeShape, NodeShape)> = None;
-        for q in &complement {
-            let c = self.resolve_pred_hop(q)?;
-            match &shape {
-                None => shape = Some((c.subj_shape.clone(), c.obj_shape.clone())),
-                Some((s, o)) => {
-                    if *s != c.subj_shape || *o != c.obj_shape {
-                        return Err(Error::Unsupported(
-                            "!p complement predicates have differing endpoint node shapes \
-                             — the union cannot be reconstructed with one term map → 501"
-                                .to_owned(),
-                        ));
-                    }
-                }
-            }
-            leaves.push(c);
-        }
-
-        let (subj_shape, obj_shape) = shape.ok_or_else(|| {
-            Error::Unsupported(
-                "!p complement is empty (no non-negated predicate is mapped) → 501".to_owned(),
-            )
-        })?;
-        let subj_map = leaves[0].subj_map.clone();
-        let obj_map = leaves[0].obj_map.clone();
-        let exprs = leaves.into_iter().map(|c| c.expr).collect();
-        Ok(CompiledHop {
-            expr: HopExpr::Nps(exprs),
-            subj_map,
-            obj_map,
-            subj_shape,
-            obj_shape,
-            single_pred: None,
-        })
-    }
-
-    /// Resolve a single predicate IRI to its one-hop leaf: exactly one producing
-    /// triples-map, a direct constant predicate, single-column subject and `Term`
-    /// object term maps; else 501.
-    ///
-    /// Runs [`Self::find_pred_hop`] twice. The first, graph-scoped pass mirrors
-    /// `Unfolder::pattern_branches`'s identical check for ordinary triples
-    /// (`unfold.rs`): a predicate-object map whose triples live in a graph other
-    /// than the active `GRAPH <g>` (or the default graph) contributes no hop.
-    /// Unlike ordinary triples, though, "no graph-matching candidate" is not by
-    /// itself grounds for a 501 — R2RML §7.4 graph scoping is a MAPPING-level
-    /// fact (a wrong-graph POM's rows are never visible under a mismatched
-    /// GRAPH, regardless of their content), so the sound answer is an EMPTY
-    /// relation, not a refusal. The second, unscoped pass answers exactly the
-    /// question that decides between the two: is `pred_iri` mapped ANYWHERE? If
-    /// so, its real term maps/shapes are kept (sound to reuse — they describe
-    /// how this predicate's terms are built when it IS visible, which composite
-    /// shape-matching needs regardless of whether any row ever flows through)
-    /// and only the relation itself is swapped for a statically-empty derived
-    /// table ([`empty_hop`]). Only when even the unscoped pass finds nothing —
-    /// or finds only an uncompilable shape (an ambiguous or refObjectMap-joined
-    /// candidate is still, and always, a 501) — does `pred_iri` genuinely fail
-    /// to compile.
-    fn resolve_pred_hop(&self, pred_iri: &str) -> Result<CompiledHop> {
-        if let Some(hop) = self.find_pred_hop(pred_iri, true)? {
-            return Ok(hop);
-        }
-        if let Some(hop) = self.find_pred_hop(pred_iri, false)? {
-            return Ok(empty_hop(hop));
-        }
-        Err(Error::Unsupported(format!(
-            "property path predicate {pred_iri} is not mapped → 501"
-        )))
-    }
-
-    /// The search loop behind [`Self::resolve_pred_hop`]. `graph_scoped = true`
-    /// restricts to predicate-object maps whose effective graph matches
-    /// `current_graph` (R2RML subject-map/POM graph union) — the
-    /// real-relation case. `false` searches the WHOLE mapping regardless of
-    /// graph; `resolve_pred_hop` calls it that way ONLY as the empty-hop shape
-    /// source once the scoped pass finds nothing, never to admit real rows from
-    /// the wrong graph.
-    fn find_pred_hop(&self, pred_iri: &str, graph_scoped: bool) -> Result<Option<CompiledHop>> {
-        let mut found: Option<CompiledHop> = None;
-        for tm in self.maps {
-            for pom in &tm.predicate_object_maps {
-                if graph_scoped {
-                    let graphs = union(&tm.subject.graphs, &pom.graphs);
-                    if !crate::graph_map::path_scope_matches(self.current_graph.as_ref(), &graphs)?
-                    {
-                        continue;
-                    }
-                }
-                let produces = pom.predicates.iter().any(|pm| {
-                    matches!(pm, TermMap::Constant(Term::NamedNode(q)) if q.as_str() == pred_iri)
-                });
-                if !produces {
-                    continue;
-                }
-                for om in &pom.objects {
-                    let obj_map = match om {
-                        ObjectMap::Term(t) => t.clone(),
-                        ObjectMap::Ref(_) => {
-                            return Err(Error::Unsupported(
-                                "property path over a refObjectMap-joined predicate → 501"
-                                    .to_owned(),
-                            ))
-                        }
-                    };
-                    if found.is_some() {
-                        return Err(Error::Unsupported(
-                            "property path over a predicate produced by >1 mapping → 501"
-                                .to_owned(),
-                        ));
-                    }
-                    let subj_map = tm.subject.term.clone();
-                    found = Some(CompiledHop {
-                        expr: HopExpr::Pred(HopRelation {
-                            source: tm.source.clone(),
-                            subj_col: single_col(&subj_map)?,
-                            obj_col: single_col(&obj_map)?,
-                        }),
-                        subj_shape: node_shape(&subj_map)?,
-                        obj_shape: node_shape(&obj_map)?,
-                        subj_map,
-                        obj_map,
-                        single_pred: Some(pred_iri.to_owned()),
-                    });
-                }
-            }
-        }
-        Ok(found)
     }
 }
 

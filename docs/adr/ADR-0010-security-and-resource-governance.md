@@ -357,8 +357,19 @@ before their corresponding work, including later-pruned atoms. Actual child/pare
 logical-source copies use exact scalar measurement; parent maps are borrowed.
 No graph-attempt vector is allocated. Required tests prove absent-predicate rejection
 before held source admission, exact six-triple results, inclusive bounds, cancellation,
-graph/default/class semantics and raw equivalence. Path-specific mapping loops,
-TBox/unifier internals and other payload copies/phases remain separate open work.
+graph/default/class semantics and raw equivalence.
+
+**Path-search update (2026-09-08):** the shared predicate-hop resolver now reserves
+map/POM/predicate/object search candidates and graph union/filter work before
+execution, with exact scalar term-map/source-copy reservations. Negated paths also
+charge exclusion/complement comparisons and leaf visits, borrow predicate IRIs and
+move first-hop endpoints without collapsing the `Nps` bag marker. Required public
+tests reject exhausted work before held source admission and preserve six exact
+duplicate pairs; focused checks cover cancellation, cache exclusion, graph fallback,
+duplicate declarations and ambiguity. Raw semantics and supported shapes remain.
+Graph-variable inventory, reflexive eligibility, shape/rewrite construction,
+TBox/unifier internals and other phases still lack complete controls; this is not
+total compiler CPU, source-recursion governance or release admission.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

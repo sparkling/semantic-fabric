@@ -316,10 +316,23 @@ mod tests {
         "#,
         )
         .unwrap();
+        let path_maps = sf_mapping::parse_r2rml(
+            r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://example.test/path> a rr:TriplesMap ;
+              rr:logicalTable [ rr:tableName "items" ] ;
+              rr:subjectMap [ rr:template "http://example.test/node/{s}" ] ;
+              rr:predicateObjectMap [
+                rr:predicate <http://example.test/a>, <http://example.test/b> ;
+                rr:objectMap [ rr:template "http://example.test/node/{o}" ] ] .
+            "#,
+        )
+        .unwrap();
         for (query, maps, extra) in [
             (cloning, vec![], 0),
             (products, vec![], 0),
             (absent, mapping, 5),
+            ("SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }", path_maps, 0),
         ] {
             let (mut cfg, pool) = config_with_mapping(query.len() as u64 + extra, maps);
             Arc::get_mut(&mut cfg)

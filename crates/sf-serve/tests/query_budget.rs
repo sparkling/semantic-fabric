@@ -115,6 +115,59 @@ fn config(limits: QueryLimits) -> ServeConfig {
     config
 }
 
+fn path_config(work: u64) -> ServeConfig {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE edges (s INTEGER, o INTEGER); INSERT INTO edges VALUES (1, 2);",
+    )
+    .unwrap();
+    let mapping = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.test/> .
+<#Edges> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "edges" ] ;
+  rr:subjectMap [ rr:template "http://example.test/node/{s}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:a, ex:b, ex:c, ex:d, ex:e, ex:f ;
+    rr:objectMap [ rr:template "http://example.test/node/{o}" ] ] .
+"#;
+    let mut cfg = support::serve_config(Backend::sqlite(conn), mapping);
+    cfg.query_limits = QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX);
+    cfg.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    cfg
+}
+
+#[tokio::test]
+async fn negated_path_mapping_searches_obey_compiler_allowance() {
+    let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
+    let response = router(Arc::new(path_config(query.len() as u64)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_budget_problem(response).await;
+}
+
+#[tokio::test]
+async fn negated_path_preserves_six_exact_duplicate_pairs() {
+    let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
+    let response = router(Arc::new(path_config(100_000)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let pair = serde_json::json!({
+        "s": {"type": "uri", "value": "http://example.test/node/1"},
+        "o": {"type": "uri", "value": "http://example.test/node/2"}
+    });
+    assert_eq!(
+        json["results"]["bindings"],
+        serde_json::json!(vec![pair; 6])
+    );
+}
+
 fn request(query: &str) -> Request<Body> {
     Request::builder()
         .method("POST")

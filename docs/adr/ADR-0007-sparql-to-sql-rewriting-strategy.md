@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-02
+updated: 2026-09-08
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -78,6 +78,14 @@ IRI/literal construction (`concat`/`cast` over `rr:template` segments) is **lift
 **Supported:** BGP, `JOIN`, `FILTER`, `OPTIONAL` (null-safe), `UNION`, `BIND`, `VALUES`, projection, `DISTINCT`/`REDUCED`, `LIMIT`/`OFFSET`, `ORDER BY` (with explicit SPARQL NULL/UNBOUND ordering), aggregates, `GRAPH`, `MINUS`, and the characterized variable-endpoint property-path profile: `P+`/`P*`, single-predicate `p?`, negated property sets, inverse, sequence and alternative. Recursive paths use exact finite-pair fixed points under ADR-0049. Residual bound-endpoint, nested-closure, shape-mismatched and multi-mapping/refObjectMap path shapes return `501`, as do the parsed `LATERAL` extension, `SERVICE`, and OWL 2 QL tier-2 entailment.
 
 ### Performance
+
+**Path-search controls (2026-09-08):** public compiler misses now prospectively
+charge mapping/graph candidate searches, negated-complement comparisons and actual
+term-map/source copies under the same request control. Borrowing complement IRIs
+and moving first-hop endpoints preserves `Nps` bag identity and raw restrictions.
+Exact six-pair HTTP, no-source-admission rejection and path-oracle tests pass.
+Graph inventory/reflexive eligibility, shape construction and total compiler/source
+work remain open under ADR-0010; no supported shape or cache authority changes.
 
 **Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, compiler-safe schema, constraint authority, column-type authority and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope (including both authorities), dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding/policy reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability/policy digests and atomic generation changes.
 

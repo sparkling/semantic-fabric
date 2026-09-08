@@ -13,21 +13,25 @@ impl<'a> Unfolder<'a> {
         self
     }
 
-    pub(super) fn work_checkpoint(&self) -> Result<()> {
+    pub(crate) fn work_mode(&self) -> CompilerWorkMode<'a> {
+        self.work_mode
+    }
+
+    pub(crate) fn work_checkpoint(&self) -> Result<()> {
         match self.work_mode {
             CompilerWorkMode::Uncontrolled => Ok(()),
             CompilerWorkMode::Metered(context) => context.checkpoint(),
         }
     }
 
-    pub(super) fn reserve_product(&self, factors: &[usize]) -> Result<()> {
+    pub(crate) fn reserve_product(&self, factors: &[usize]) -> Result<()> {
         if let CompilerWorkMode::Metered(context) = self.work_mode {
             context.reserve_checked_product(factors)?;
         }
         Ok(())
     }
 
-    pub(super) fn copy_source(&self, source: &LogicalSource) -> Result<LogicalSource> {
+    pub(crate) fn copy_source(&self, source: &LogicalSource) -> Result<LogicalSource> {
         match self.work_mode {
             CompilerWorkMode::Uncontrolled => Ok(source.clone()),
             CompilerWorkMode::Metered(context) => context.clone_logical_source(source),
@@ -47,7 +51,7 @@ impl<'a> Unfolder<'a> {
     /// Preserve canonical first-declaration order and exact graph-map equality.
     /// Charge input visits before iteration and prospective comparisons before
     /// each duplicate check; no graph-attempt vector or owned map copy is built.
-    fn graph_union<'g>(
+    pub(crate) fn graph_union<'g>(
         &self,
         subject: &'g [TermMap],
         pom: &'g [TermMap],

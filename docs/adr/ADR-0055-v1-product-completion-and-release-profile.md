@@ -118,8 +118,12 @@ reserves map/POM visits, graph comparisons/filtering, class/POM products and par
 lookups, and meters actual logical-source copies. Direct lineage retains the same
 control alongside its existing eligibility/recipe charges; nested contexts preserve
 ownership. Public absent-predicate queries cannot bypass this work by yielding no
-branches; sufficient work preserves all six exact triples. Path-specific mapping
-loops, TBox/unifier internals and other payload copies remain unqualified.
+branches; sufficient work preserves all six exact triples. Path predicate searches
+now also reserve mapping candidates, graph work and exact term/source copies;
+negated paths charge complement comparisons/visits and preserve exact duplicate
+pairs. Required pre-source rejection, cancellation, cache and raw-equivalence checks
+pass. Graph inventory/reflexive checks, shape construction, TBox/unifier internals
+and other payload copies/phases remain unqualified; the total-work gate stays open.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

@@ -160,6 +160,18 @@ impl<'control> CompileContext<'control> {
         Ok(source.clone())
     }
 
+    /// Reserve the scalar term-map payload immediately before its one copy.
+    pub(crate) fn clone_term_map(
+        &self,
+        map: &sf_core::ir::TermMap,
+    ) -> Result<sf_core::ir::TermMap> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::TermMap(map))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(map.clone())
+    }
+
     /// Measure, reserve, and perform exactly one recursive IQ-condition clone.
     ///
     /// The source slice remains bound to its exact measurement and the one clone,
