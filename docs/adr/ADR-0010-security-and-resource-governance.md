@@ -311,6 +311,25 @@ This is the pinned session-affine TLS profile, not raw-pool/proxy, every backend
 combination, source-generation or exact-release admission. SQLite busy/UDF/VFS/
 I/O, total compiler/database/recursive work and post-200 atomicity remain open.
 
+### Public compiler-input admission (2026-09-08)
+
+The serving boundary now charges one compiler-work unit per decoded UTF-8 query
+byte before each public compilation entry: lineage preparation, structural
+preflight and authoritative compilation, including cache hits. Authentication
+and policy validation retain precedence. All entries share the request's sticky
+counter; an insufficient first-pass allowance returns redacted 429 before compiler
+queue/source admission. Verified-generation preflight and authoritative compilation
+charge cumulatively: a later shortage can occur after lease acquisition and still
+requires normal owned cleanup. Existing lineage-specific work charges remain.
+
+Required `query_budget` HTTP tests prove zero allowance, exact/one-below decoded
+UTF-8 limits, GET/form/raw transport, authenticated cold/warm caches and exact
+successful results. `request_compile::tests` prove cumulative two-pass accounting,
+unchanged counters on rejection, permit recovery and no source admission. This
+closes the ignored compiler-input allowance, not total parser/optimizer CPU,
+catalog/product growth, recursive destruction or the broader governance gate.
+The raw compiler and dormant governed pipeline are not promoted by this change.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.

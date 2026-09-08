@@ -6,10 +6,13 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::query_control::QueryLimits;
-use sf_serve::{router, Backend, ServeConfig};
+use sf_serve::{router, Backend, BearerQueryAdmission, QueryAdmission, ServeConfig};
 use tower::ServiceExt;
 
 mod support;
+
+const TOKEN: &str = "test-only-compiler-budget-credential-123456";
+const SELECT: &str = "SELECT ?value WHERE { ?item <http://example.test/value> ?value }";
 
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -67,6 +70,139 @@ async fn assert_budget_problem(response: axum::response::Response) {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("problem JSON");
     assert_eq!(json["code"], "query-budget-exceeded");
     assert_eq!(json["status"], 429);
+    let text = std::str::from_utf8(&body).unwrap();
+    for private in [TOKEN, "example.test", "SELECT", "items"] {
+        assert!(!text.contains(private));
+    }
+}
+
+fn authenticated(query: &str) -> Request<Body> {
+    let mut req = request(query);
+    req.headers_mut().insert(
+        header::AUTHORIZATION,
+        format!("Bearer {TOKEN}").parse().unwrap(),
+    );
+    req
+}
+
+fn protected(work: u64) -> ServeConfig {
+    let mut cfg = config(QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX));
+    cfg.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    cfg
+}
+
+async fn assert_values(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut values: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["value"]["value"].as_str().unwrap())
+        .collect();
+    values.sort();
+    assert_eq!(values, ["one", "two"]);
+}
+
+#[tokio::test]
+async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
+    let mut cfg = Arc::new(protected(SELECT.len() as u64));
+    // The same immutable runtime/cache survives all requests and limit changes.
+    for _ in 0..2 {
+        assert_values(
+            router(cfg.clone())
+                .oneshot(authenticated(SELECT))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    Arc::get_mut(&mut cfg)
+        .expect("response released configuration")
+        .query_limits = QueryLimits::new(0, u64::MAX, u64::MAX, u64::MAX);
+    assert_budget_problem(router(cfg).oneshot(authenticated(SELECT)).await.unwrap()).await;
+    assert_budget_problem(
+        router(Arc::new(protected(0)))
+            .oneshot(authenticated(SELECT))
+            .await
+            .unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
+    let query = format!("{SELECT} # café");
+    let wire = form_urlencoded::Serializer::new(String::new())
+        .append_pair("query", &query)
+        .finish();
+    for method in ["GET", "POST"] {
+        for (work, accepted) in [(query.len() as u64 - 1, false), (query.len() as u64, true)] {
+            let req = Request::builder()
+                .method(method)
+                .uri(if method == "GET" {
+                    format!("/sparql?{wire}")
+                } else {
+                    "/sparql".into()
+                })
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(if method == "GET" {
+                    Body::empty()
+                } else {
+                    Body::from(wire.clone())
+                })
+                .unwrap();
+            let response = router(Arc::new(protected(work)))
+                .oneshot(req)
+                .await
+                .unwrap();
+            if accepted {
+                assert_values(response).await;
+            } else {
+                assert_budget_problem(response).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn authentication_precedes_zero_compiler_allowance() {
+    let response = router(Arc::new(protected(0)))
+        .oneshot(request(SELECT))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn all_query_forms_and_lineage_reject_zero_compiler_allowance() {
+    for query in [
+        SELECT,
+        "ASK { ?s ?p ?o }",
+        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+        "DESCRIBE <http://example.test/item/1>",
+    ] {
+        for accept in ["*/*", "application/vnd.semantic-fabric.lineage+json-seq"] {
+            let mut req = authenticated(query);
+            req.headers_mut()
+                .insert(header::ACCEPT, accept.parse().unwrap());
+            assert_budget_problem(router(Arc::new(protected(0))).oneshot(req).await.unwrap()).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn zero_compiler_work_is_a_pre_response_429() {
+    let response = route(
+        QueryLimits::new(0, u64::MAX, u64::MAX, u64::MAX),
+        "SELECT ?value WHERE { ?item <http://example.test/value> ?value }",
+    )
+    .await;
+    assert_budget_problem(response).await;
 }
 
 #[tokio::test]

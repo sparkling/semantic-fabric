@@ -96,6 +96,14 @@ planned work requires a documented limitation and architecture-plan evidence,
 but not a fabricated release blocker. Planned capabilities cannot be advertised;
 required checks and production-admission guards are unchanged.
 
+**Compiler-input update (2026-09-08):** public compilation now precharges decoded
+UTF-8 bytes for lineage preparation, preflight and authoritative compilation,
+including authenticated cache hits, under the same cumulative request budget.
+Required HTTP/unit tests cover exact bounds, security precedence, no first-pass
+source admission and two-pass permit recovery. This closes a reproduced zero-budget
+bypass, not total compiler CPU/catalog-growth governance; `l-query-budget` remains
+blocking. No dormant parser-worker or governed-cache profile is activated.
+
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add
 v1 requirements, and a failed bounded prefix is not a complete answer. Existing

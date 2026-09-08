@@ -276,7 +276,7 @@ Outcomes:
 - preserve strict media-specific request admission and its raw `n`/checked form `3n+16` wire/decoded `n` caps; it is a subset, not full Protocol conformance;
 - preserve the shared fail-fast active-work gate: finite default 64, startup range `1..=Semaphore::MAX_PERMITS` before I/O, shedding in `call` before Router/body polling, deadline/control precedence, stable `503 service-overloaded` plus `Retry-After: 1`, and closed-gate `500`;
 - retain its permit through active producer/compiler/backend clones but not completed-byte draining; keep terminal state out-of-band so a full channel finishes at its deadline and a streamed failure yields buffered prefix, one stable `result stream failed` error and fused EOF without `Content-Length`;
-- extend the identity into total `QueryBudget`: deterministic compiler work, database rows, source cost, recursive iterations, raw/conformance callers and stream-lifetime limits; do not represent compiler fuel as exact CPU;
+- retain the 2026-09-08 compiler-input floor: decoded UTF-8 bytes are precharged at every public compilation entry, including lineage, preflight and authenticated cache hits; exact-bound HTTP and cumulative two-pass tests pass. Finish required admitted-profile compiler/catalog-growth and source-work controls without equating fuel to exact CPU; raw/conformance extensions are not silently v1 prerequisites under ADR-0055;
 - keep lexical and direct-IRI scanners diagnostic. ADR-0053's parser-worker
   transport evidence remains non-shipped and moves to post-1.0; v1 instead
   requires strict ingress caps, deadline/cancellation, deterministic parser and

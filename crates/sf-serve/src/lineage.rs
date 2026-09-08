@@ -66,6 +66,7 @@ pub(crate) async fn prepare(
     cfg.query_admission
         .validate(budget)
         .map_err(problem::response)?;
+    crate::request_compile::charge_input(query, budget).map_err(problem::response_for_control)?;
     let source_id = match cfg.query_mode() {
         QueryMode::Single(source_id) => source_id,
         QueryMode::SourceAffineUnion(sources) => {
