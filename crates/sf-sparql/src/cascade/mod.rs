@@ -70,6 +70,8 @@ fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema
 
 mod fd;
 mod joinelim;
+mod optional_prune;
+use optional_prune::distinct_prune_unused_opts;
 #[cfg(test)]
 mod pool_source_authority_tests;
 mod sameterm;
@@ -643,18 +645,6 @@ fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &SchemaMap) -> b
 fn find_self_left_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, usize)> {
     for (idx, opt) in b.opts.iter().enumerate() {
         let opt_alias = opt.scan.alias;
-        // A FILTER inside the OPTIONAL can make the match conditional → keep it.
-        // Exception: a lone `IS NOT NULL(col)` on the opt scan is not conditional in
-        // the PK self-join case — because the same-row identity means the column has
-        // the same value on the kept scan, and NULL propagates naturally after merge.
-        let extra_ok = opt.extra.is_empty()
-            || matches!(
-                opt.extra.as_slice(),
-                [SqlCond::IsNotNull(c)] if c.alias == opt_alias
-            );
-        if !extra_ok {
-            continue;
-        }
         // The right side must be a single base-table scan.
         let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
             continue;
@@ -682,7 +672,22 @@ fn find_self_left_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, 
         // The shared column must be a NON-NULL single-column unique key.
         if let Some(t) = schema_map_get(schema, opt_table.as_str()) {
             if t.is_unique_key(&keep.column) && key_is_non_null(t, &keep.column) {
-                return Some((keep.alias, opt_alias, idx));
+                // A verified NOT-NULL/PK guard adds no match condition. After
+                // excluding only those tautologies, retain the existing lone
+                // nullable-column exception (its NULL propagates after merging).
+                // Multiple nullable guards or any other FILTER remain conditional.
+                let mut conditional = opt.extra.iter().filter(|cond| {
+                    !matches!(cond, SqlCond::IsNotNull(col)
+                        if col.alias == opt_alias && key_is_non_null(t, &col.column))
+                });
+                let extra_ok = match (conditional.next(), conditional.next()) {
+                    (None, None) => true,
+                    (Some(SqlCond::IsNotNull(col)), None) => col.alias == opt_alias,
+                    _ => false,
+                };
+                if extra_ok {
+                    return Some((keep.alias, opt_alias, idx));
+                }
             }
         }
     }
@@ -852,39 +857,7 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
 }
 
 // --- 2c. same terms elimination — see `sameterm.rs` ----------------------
-
-// --- 2d. DISTINCT-driven pruning of unused OPTIONAL right sides -----------
-
-/// Pass 2d — under DISTINCT, drop any OPTIONAL (LEFT JOIN) right side whose
-/// scan alias is not read by any *projected* binding.
-///
-/// Soundness (=_bag): under DISTINCT, if no projected binding reads the opt
-/// scan, then for every core row:
-///   * matches k opt rows  → k identical projected tuples → DISTINCT ⇒ 1
-///   * matches 0 opt rows  → 1 NULL-extended projected tuple → same 1 row
-///
-/// So DISTINCT ∘ (core ⊕ opt) ≡ DISTINCT ∘ core on the projected columns.
-///
-/// The `extra` conditions are part of the LEFT JOIN ON clause — they cannot
-/// filter core rows (the core always appears in a LEFT JOIN regardless of
-/// whether the optional side matches), so dropping the OptJoin is safe even
-/// when `extra` references core aliases.
-fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
-    if !ctx.distinct {
-        return;
-    }
-    let Some(project) = ctx.project else {
-        return;
-    };
-    b.opts.retain(|oj| {
-        let opt_alias = oj.scan.alias;
-        // Retain if any projected binding reads a column from the optional scan.
-        // TermDef::columns() recurses through Coalesce / Concat for correctness.
-        b.bindings.iter().any(|(var, def)| {
-            project.iter().any(|p| p == var) && def.columns().iter().any(|c| c.alias == opt_alias)
-        })
-    });
-}
+// --- 2d. DISTINCT optional pruning — see `optional_prune.rs` --------------
 
 // --- 2e. FD-driven self-join elimination under DISTINCT -------------------
 

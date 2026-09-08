@@ -177,7 +177,18 @@ on every v1 commit.
 
 ## Context
 
-**Query-profile delta (2026-09-08):** required owned-TLS PostgreSQL 16.15/MySQL 8.4.11 CLI checks cover one-hop DESCRIBE, duplicate-edge cycles, complete 258-edge closures and joined-path folded identifiers. The text-comparison repair now preserves case/trailing-space-distinct nodes under SQLite NOCASE, PostgreSQL nondeterministic ICU and MySQL PAD SPACE collations. Live varying-text facts gate native decorations; SQLite uses a same-IR prepare-only metadata twin, retaining CHAR/DATE decoding and authored SQL. Authenticated JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS regressions pass. SubPlan metadata shares actual aggregate projection order, retains standalone paths and avoids width-exponential recursion. Required CHARACTER duplicate/connectivity tests now pass: per-backend decoder recipes normalize path leaves before joins/UNION, keep normalized metadata as text and preserve each endpoint width. SQLite uses an explicitly requested, query-local Rust scalar with shared decoding, pre-allocation source charges and tested cleanup/collision safety; native 4/2, 2/4 and 4/4 CHAR fixtures pass. General typed/mixed-key identity, ordinary early-wrapper native folding, ordinary source-collation/NULL behavior, total source controls and exact release remain open; no path exactness/admission flag is promoted. ADR-0033/0049 record the precise boundary.
+**Query-profile delta (2026-09-08):** required owned-TLS PostgreSQL 16.15/MySQL 8.4.11 CLI checks cover one-hop DESCRIBE, duplicate-edge cycles, complete 258-edge closures and joined-path folded identifiers. The text-comparison repair now preserves case/trailing-space-distinct nodes under SQLite NOCASE, PostgreSQL nondeterministic ICU and MySQL PAD SPACE collations. Live varying-text facts gate native decorations; SQLite uses a same-IR prepare-only metadata twin, retaining CHAR/DATE decoding and authored SQL. Authenticated JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS regressions pass. SubPlan metadata shares actual aggregate projection order, retains standalone paths and avoids width-exponential recursion. Required CHARACTER duplicate/connectivity tests now pass: per-backend decoder recipes normalize path leaves before joins/UNION, keep normalized metadata as text and preserve each endpoint width. SQLite uses an explicitly requested, query-local Rust scalar with shared decoding, pre-allocation source charges and tested cleanup/collision safety; native 4/2, 2/4 and 4/4 CHAR fixtures pass. General typed/mixed-key identity, ordinary early-wrapper native folding, ordinary source-collation behavior, total source controls and exact release remain open; no path exactness/admission flag is promoted. ADR-0033/0049 record the precise boundary.
+
+**NULL-term correction (2026-09-08):** ordinary atoms now require every generated
+subject/predicate/object, including referenced parent subjects, before binding or
+inverse swapping. Class shortcuts require their subject; selected graph filtering
+keeps valid alternatives. Required tree/flat/unoptimized regressions and authenticated
+SQLite HTTP cover projection, ASK/COUNT and OPTIONAL/existence/anti-join behavior;
+owned PostgreSQL16.15/MySQL8.4.11 CLI checks cover admitted subject/object/class
+absence and non-NULL recovery. Dynamic predicate maps still reject at serving
+startup. Their separate raw fixed-predicate matching defect is not a newly adopted
+v1 requirement. Ordinary native identifier/collation correctness and remaining
+source controls/release qualification are still open.
 
 The application programme mixed three different outcomes:
 

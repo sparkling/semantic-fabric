@@ -11,6 +11,8 @@ use tower::ServiceExt;
 
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
+#[path = "query_budget/null_terms.rs"]
+mod null_terms;
 #[path = "query_budget/path_identity.rs"]
 mod path_identity;
 mod support;

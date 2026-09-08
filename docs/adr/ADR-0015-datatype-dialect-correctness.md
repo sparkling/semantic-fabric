@@ -38,7 +38,7 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 
 **MySQL — explicit profile boundary.** `MysqlTypeProfile::Native` is the product law: ambiguous `BOOL`/`TINYINT(1)` remains `xsd:integer`, including value `2`. Only the sealed W3C runner selects `MysqlTypeProfile::W3cSql2008`, whose versioned identity `mysql-w3c-sql-2008-v1` applies the suite's SQL-2008 logical-boolean convention. An explicit `rr:datatype` is authoritative in either profile. MySQL-only aliases remain outside dialect-neutral `natural_xsd`, so neither SQLite nor PostgreSQL admission changes. The selected profile participates in receipt outcome identity; this convention is not native-product type provenance.
 
-**`sqlparser` is SQL syntax only** — used for SQL emission and parsing `rr:sqlQuery`; it contributes nothing to type semantics, which is this separate subsystem. **NULL** in any referenced column ⇒ no RDF term (R2RML §11), enforced in Rust (not via SQL concat NULL-semantics).
+**`sqlparser` is SQL syntax only** — used for SQL emission and parsing `rr:sqlQuery`; it contributes nothing to type semantics, which is this separate subsystem. **NULL** in any referenced column ⇒ no RDF term (R2RML §11). Rust reconstructs terms; SQL atom-local `IS NOT NULL` conditions prevent absent subjects, predicates, objects and referenced parent subjects from becoming query solutions before projection, ASK, aggregation or correlation. Class shortcuts guard their subject. Selected graph guards preserve OR semantics across graph alternatives; they never require every graph map to exist.
 
 > **Path comparison refinement (2026-09-08).** Live text-decoder facts authorize
 > exact comparison without replacing Rust RDF reconstruction. SQLite CHARACTER(n)
@@ -52,7 +52,16 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 > and parameters match; normalized outputs are text, raw SubPlans retain only
 > agreed decoder facts. Required duplicate/connectivity, mixed-width, Unicode/NUL,
 > HTTP correlation and pinned native tests pass. General mixed-type identity,
-> ordinary-query collation/NULL handling and exact release remain open (ADR-0049).
+> ordinary-query collation and exact release remain open (ADR-0049).
+
+> **NULL-query correction (2026-09-08).** Required `sf-sparql --test null_terms`
+> checks cover subject column/template/blank-node absence, predicate absence,
+> referenced parent subjects, inverse direction, class shortcuts, SELECT/ASK/COUNT,
+> OPTIONAL/existence/anti-joins and graph alternatives across tree/flat/unoptimized
+> translation. Authenticated SQLite HTTP and owned PostgreSQL16.15/MySQL8.4.11 TLS
+> CLI checks exercise the admitted subject/object/class profiles. Dynamic predicates
+> remain rejected by serving admission; raw compiler predicate tests do not widen
+> that profile. General key equality, source bounds and release remain separate.
 
 ### Identifier resolution — lenient against the live schema (decision 2026-06-28)
 

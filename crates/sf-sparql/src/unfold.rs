@@ -816,15 +816,25 @@ impl<'a> Unfolder<'a> {
                 mapping_term_def(&parent.subject.term, palias, term_graph.clone())
             }
         };
-        // R2RML §11: a column/template object term map produces NO RDF term (hence no
-        // triple) when any referenced column is NULL. Capture those columns now, before
-        // `obj_def` is moved, so we can guard them below. The join already excludes NULL
-        // child columns for a `Ref` (parentTriplesMap) object, so only a plain column/
-        // template object map needs the explicit guard.
-        let obj_null_guard: Vec<crate::iq::ColRef> = match om {
-            ObjectMap::Term(_) => obj_def.columns(),
-            ObjectMap::Ref(_) => Vec::new(),
-        };
+        // R2RML §11: absence of ANY generated position means no triple, even when
+        // that position is not projected. A ref-object join only proves its join
+        // keys exist, not the parent's subject-template columns. Guard the base
+        // definitions before inverse swapping or later OPTIONAL/Coalesce binding.
+        // These atom-local conditions remain inside OPTIONAL ON / anti-joins.
+        for col in subj_def
+            .columns()
+            .into_iter()
+            .chain(pred_def.columns())
+            .chain(obj_def.columns())
+        {
+            if !branch
+                .where_conds
+                .iter()
+                .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &col))
+            {
+                branch.where_conds.push(SqlCond::IsNotNull(col));
+            }
+        }
 
         let (q_subj, q_obj) = if swap {
             (obj_def, subj_def)
@@ -843,20 +853,6 @@ impl<'a> Unfolder<'a> {
         }
         if !self.bind_position(&mut branch, &tp.object, q_obj)? {
             return Ok(None);
-        }
-        // Enforce the R2RML §11 NULL rule inside SQL (not only at reconstruct time): a
-        // NULL data column drops the row. Without this, a NULL object would still emit a
-        // solution (object UNBOUND), so an anti-join (SPARQL MINUS / NOT EXISTS), whose
-        // correlation is the clone of these `where_conds`, would correlate on the subject
-        // alone and wrongly remove every left row.
-        for col in obj_null_guard {
-            if !branch
-                .where_conds
-                .iter()
-                .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &col))
-            {
-                branch.where_conds.push(SqlCond::IsNotNull(col));
-            }
         }
         Ok(Some(branch))
     }
@@ -906,6 +902,11 @@ impl<'a> Unfolder<'a> {
                 })
                 .unwrap_or_else(|| fixed_graph_scope(self.current_graph.as_ref()));
             let subj_def = mapping_term_def(&tm.subject.term, alias, term_graph);
+            // A class shortcut still requires a generated subject. Guard only
+            // this selected term/graph, never every member of the graph union.
+            branch
+                .where_conds
+                .extend(subj_def.columns().into_iter().map(SqlCond::IsNotNull));
             // predicate is rdf:type (matched); bind object var to the class IRI.
             if let TermPattern::Variable(ov) = &tp.object {
                 if !bind(

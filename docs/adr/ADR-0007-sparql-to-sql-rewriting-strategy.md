@@ -46,6 +46,18 @@ NULL / left-join rules the base translation obeys:
 * **R4** — preserve bag semantics / multiplicities everywhere except inside an established DISTINCT/uniqueness context.
 * **R5** — FILTER *inside* OPTIONAL belongs in the LEFT JOIN `ON` condition; FILTER *after* OPTIONAL is a later WHERE — an outer FILTER must never be pushed onto the preserved (left) side.
 
+**NULL/cascade correction (2026-09-08):** base atoms now guard every generated
+subject/predicate/object (including referenced parent subjects); class shortcuts
+guard their subject before projection or correlation. DISTINCT may remove an
+OPTIONAL only when projected bindings, WHERE and other OPTIONAL conditions no
+longer consume its alias, including nested existential correlations. Its own ON
+conditions alone do not prevent pruning. Ordered/aggregate/path/SubPlan consumers
+remain outside this pruning proof. Verified NOT-NULL/PK guards are tautologies for
+the existing same-row self-left-join proof, but multiple nullable guards remain
+conditional and cannot be discarded. Required NULL-term, pruning and independent
+bag-oracle regressions preserve both absence and valid OPTIONAL results; serving
+retains its unverified-constraint quarantine.
+
 ### Pipeline (`sf-sparql`)
 
 1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`. Since 2026-09-08 public serving uses an explicit prepared Rust process and bounded QueryV1 transfer before parent AST ownership (ADR-0055 parser-lifetime repair); raw diagnostic APIs retain their caller-owned contract. Existing semantic/compiler/cache profiles are not promoted to `GovernedV1`.

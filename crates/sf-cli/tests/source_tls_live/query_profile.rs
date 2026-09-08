@@ -205,6 +205,69 @@ fn assert_paths(address: SocketAddr, fixture: &Fixture, database: &Database) {
     }
 }
 
+fn assert_null_terms(fixture: &Fixture, database: &Database) {
+    let class = MAPPING.replace(
+        "rr:subjectMap [ rr:template \"http://example.test/n/{src}\" ]",
+        "rr:subjectMap [ rr:template \"http://example.test/n/{src}\"; rr:class <http://example.test/C> ]",
+    );
+    for (mapping, values, pattern) in [
+        (MAPPING, "(0,NULL,'b','same')", format!("?s <{EDGE}> ?o")),
+        (MAPPING, "(0,'a',NULL,'same')", format!("?s <{EDGE}> ?o")),
+        (class.as_str(), "(0,NULL,'b','same')", "?s a ?o".to_owned()),
+    ] {
+        fixture.write("first.ttl", mapping);
+        sql(
+            database,
+            &format!("DELETE FROM items; INSERT INTO items(id,src,dst,value) VALUES {values}"),
+        );
+        let (server, address) = start(fixture, database);
+        assert!(
+            rows(
+                address,
+                fixture,
+                &format!("SELECT ?o WHERE {{ {pattern} }}")
+            )
+            .is_empty(),
+            "{pattern}"
+        );
+        let (status, body) = request(
+            address,
+            &format!("ASK {{ {pattern} }}"),
+            Some(&fixture.token),
+        )
+        .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["boolean"],
+            false,
+            "{pattern}"
+        );
+        let count = rows(
+            address,
+            fixture,
+            &format!("SELECT (COUNT(*) AS ?n) WHERE {{ {pattern} }}"),
+        );
+        assert_eq!(count[0]["n"]["value"], "0", "{pattern}");
+        sql(
+            database,
+            "UPDATE items SET src='present',dst='http://example.test/edge'",
+        );
+        assert_eq!(
+            rows(
+                address,
+                fixture,
+                &format!("SELECT ?o WHERE {{ {pattern} }}")
+            )
+            .len(),
+            1,
+            "non-NULL control: {pattern}"
+        );
+        database.assert_encrypted_sessions();
+        drop(server);
+    }
+    fixture.write("first.ttl", MAPPING);
+}
+
 fn assert_collated_paths(fixture: &Fixture, database: &Database, postgres: bool) -> Server {
     if postgres {
         sql(database, "CREATE COLLATION path_ci (provider = icu, locale = 'und-u-ks-level1', deterministic = false); ALTER TABLE items ALTER COLUMN src TYPE VARCHAR(32) COLLATE path_ci; ALTER TABLE items ALTER COLUMN dst TYPE VARCHAR(32) COLLATE path_ci");
@@ -346,7 +409,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         fixture.write("first.ttl", MAPPING);
         fixture.write(
             "ontology.ttl",
-            &format!("<{EDGE}> a <http://www.w3.org/2002/07/owl#ObjectProperty> ."),
+            &format!("<{EDGE}> a <http://www.w3.org/2002/07/owl#ObjectProperty> . <http://example.test/C> a <http://www.w3.org/2002/07/owl#Class> ."),
         );
         let database = Database::start(&fixture, postgres);
         sql(&database, "ALTER TABLE items ADD COLUMN id INTEGER PRIMARY KEY DEFAULT 0; ALTER TABLE items ADD COLUMN src VARCHAR(32); ALTER TABLE items ADD COLUMN dst VARCHAR(32)");
@@ -355,6 +418,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         assert_describe(address, &fixture, &database);
         assert_paths(address, &fixture, &database);
         drop(server);
+        assert_null_terms(&fixture, &database);
         seed(&database, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 0), (0, 1)]);
         fixture.write(
             "first.ttl",

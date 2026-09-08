@@ -75,7 +75,8 @@ SQLite also covers CHAR/VARCHAR, Unicode/NUL and authenticated outer correlation
 
 **Remaining exactness gate:** general mixed/natural-type key identity, raw
 mixed-decoder SubPlan UNION, ordinary early-wrapper native folding and ordinary
-source-collation/NULL-subject behavior remain open. Native CHAR path expectations
+source-collation behavior remain open. ADR-0015 now closes the ordinary NULL-term
+absence defect with atom-local guards and public/native evidence. Native CHAR path expectations
 use an independent decoded graph, not a case-collapsing ordinary MySQL DISTINCT
 result. Total source work, synthetic row identity and exact-release qualification
 remain blockers. No broad semantic-exact, bounded or admission flag is promoted.

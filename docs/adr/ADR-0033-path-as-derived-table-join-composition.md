@@ -46,8 +46,9 @@ raw SubPlans retain exact recipes only where all arms agree. An explicit compile
 flag propagates through nested emission; authored SQL never activates callbacks.
 Required duplicate/connectivity, mixed-width and authenticated correlation tests
 pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary translate-time
-folding, ordinary source-collation/NULL behavior and general mixed-type identity
-remain open. Equal node shapes alone do not prove all SQL-key/RDF equality;
+folding, ordinary source-collation and general mixed-type identity remain open.
+ADR-0015's atom-local NULL guards now remove non-triples before projection and
+correlation; supported OPTIONAL and anti-join behavior is preserved. Equal node shapes alone do not prove all SQL-key/RDF equality;
 historical green fixtures are not total source-work bounds or release admission.
 
 ## Implementation status (2026-07-19, same day)
