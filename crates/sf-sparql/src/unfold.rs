@@ -28,6 +28,9 @@ use crate::saturate::Tbox;
 use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
 
+mod join;
+pub(crate) use join::join_branches_with_work_mode;
+
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 #[derive(Clone, Copy)]
@@ -2174,15 +2177,7 @@ fn term_map_spec(tm: &TermMap) -> Option<&sf_core::ir::TermSpec> {
 }
 
 pub fn join_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>> {
-    let mut out = Vec::new();
-    for l in &left {
-        for r in &right {
-            if let Some(b) = merge(l.clone(), r)? {
-                out.push(b);
-            }
-        }
-    }
-    Ok(out)
+    join_branches_with_work_mode(left, right, crate::CompilerWorkMode::Uncontrolled)
 }
 
 /// Merge a right branch into a left branch (inner join). `None` ⇒ pruned.

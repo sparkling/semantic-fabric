@@ -109,7 +109,11 @@ bounded federation. Public `EXISTS` tests prove input-only work cannot fund tree
 cloning and sufficient work preserves the exact bag; cache hits avoid clone replay.
 Operation-local measurement limits grant no whole-plan admission authority.
 Required exact-bound, cancellation, no-cache-on-clone-failure and partition checks
-protect this wiring; parsing/build/resolve and remaining work stay open.
+protect this wiring. Tree inner-join lowering now precharges checked candidate
+products and exact left-branch copies, with between-pair cancellation. Authenticated
+HTTP tests prove pre-source rejection and all 64 exact VALUES tuples on success;
+pruned/empty products and inclusive bounds are test-locked. Merge internals/right
+copies, parsing/build/resolve and other compiler work remain open.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

@@ -15,6 +15,8 @@ const TOKEN: &str = "test-only-compiler-budget-credential-123456";
 const SELECT: &str = "SELECT ?value WHERE { ?item <http://example.test/value> ?value }";
 const CLONING: &str =
     "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
+const PRODUCTS: &str = "SELECT ?a ?b ?c WHERE { VALUES ?a { 0 1 2 3 } \
+                       VALUES ?b { 0 1 2 3 } VALUES ?c { 0 1 2 3 } }";
 
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -111,9 +113,13 @@ async fn assert_values(response: axum::response::Response) {
 
 #[tokio::test]
 async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
-    let mut cfg = Arc::new(protected(SELECT.len() as u64));
+    let mut cfg = Arc::new(protected(10_000));
     // The same immutable runtime/cache survives all requests and limit changes.
-    for _ in 0..2 {
+    for warm in [false, true] {
+        if warm {
+            Arc::get_mut(&mut cfg).unwrap().query_limits =
+                QueryLimits::new(SELECT.len() as u64, u64::MAX, u64::MAX, u64::MAX);
+        }
         assert_values(
             router(cfg.clone())
                 .oneshot(authenticated(SELECT))
@@ -137,9 +143,10 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    let query = format!("{SELECT} # café");
+    // A single VALUES leaf has no branch product: isolate the decoded-input floor.
+    let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
-        .append_pair("query", &query)
+        .append_pair("query", query)
         .finish();
     for method in ["GET", "POST"] {
         for (work, accepted) in [(query.len() as u64 - 1, false), (query.len() as u64, true)] {
@@ -215,6 +222,39 @@ async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
         .await
         .unwrap();
     assert_budget_problem(response).await;
+}
+
+#[tokio::test]
+async fn compiler_products_cannot_spend_only_their_input_allowance() {
+    let response = router(Arc::new(protected(PRODUCTS.len() as u64)))
+        .oneshot(authenticated(PRODUCTS))
+        .await
+        .unwrap();
+    assert_budget_problem(response).await;
+}
+
+#[tokio::test]
+async fn compiler_products_preserve_every_exact_public_tuple() {
+    let response = router(Arc::new(protected(100_000)))
+        .oneshot(authenticated(PRODUCTS))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut tuples: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            ["a", "b", "c"].map(|v| row[v]["value"].as_str().unwrap().parse::<u8>().unwrap())
+        })
+        .collect();
+    tuples.sort();
+    let expected: Vec<_> = (0..4)
+        .flat_map(|a| (0..4).flat_map(move |b| (0..4).map(move |c| [a, b, c])))
+        .collect();
+    assert_eq!(tuples, expected);
 }
 
 #[tokio::test]

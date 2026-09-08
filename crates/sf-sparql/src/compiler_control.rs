@@ -138,6 +138,16 @@ impl<'control> CompileContext<'control> {
         Ok(branches.to_vec())
     }
 
+    /// Measure, reserve, and perform one scalar branch clone, without charging
+    /// a synthetic collection slot.
+    pub(crate) fn clone_branch(&self, branch: &Branch) -> Result<Branch> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(branch))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(branch.clone())
+    }
+
     /// Measure, reserve, and perform exactly one recursive IQ-condition clone.
     ///
     /// The source slice remains bound to its exact measurement and the one clone,

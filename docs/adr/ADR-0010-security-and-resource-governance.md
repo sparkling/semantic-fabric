@@ -341,8 +341,12 @@ checkpoints bracket key lookup, hits and insertion. A cancellation racing after
 insertion may retain the completed valid plan, but cannot return it to that caller.
 Tests prove exact/N-1 charging, cumulative uncached passes, cancellation,
 security partitioning and public `EXISTS` rejection before source admission with
-exact sufficient-budget results. Parsing, key rendering, build/resolve, remaining
-products/copies and destruction still require controls; `l-query-budget` remains
+exact sufficient-budget results. Tree inner joins also prospectively reserve every
+candidate pair and exact scalar left-branch clone, including later-pruned pairs,
+with checkpoints between pairs. Authenticated VALUES products reject before source
+admission or preserve all 64 tuples; raw merge semantics remain unchanged. This
+does not govern work inside merge or its right-field copies. Parsing, key rendering,
+build/resolve, other products/copies and destruction remain open; `l-query-budget` stays
 open. Direct multi-origin unfolding keeps its separate existing meter.
 
 ## More Information

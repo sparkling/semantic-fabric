@@ -23,7 +23,7 @@
 //!   `bind` empty; constant-position constraints arrive as [`IqCond::Sql`] in the
 //!   enclosing `InnerJoin`/`Filter` and lower with the conds (NOT re-derived here).
 //! * **`InnerJoin`** → lower each child, cross-product+merge via the flat
-//!   [`join_branches`] (the proven `merge` — empty leaf bindings ⇒ a pure CROSS JOIN,
+//!   [`join_branches_with_work_mode`] (proven `merge`; empty bindings ⇒ CROSS JOIN,
 //!   the shared-var equalities ride `cond` as [`IqCond::Sql`]), then resolve each
 //!   `cond` into `where_conds`.
 //! * **`LeftJoin`** → §5.3 dispatcher: lower left/right to `Vec<Branch>` and hand BOTH
@@ -68,7 +68,7 @@ use crate::leftjoin::{
     def_is_nullable, inner_join_one, left_join_branches, not_exists_cond_for, null_safe,
 };
 use crate::star::{self, StarEnv};
-use crate::unfold::{group_key_columns, join_branches, single_column_of};
+use crate::unfold::{group_key_columns, join_branches_with_work_mode, single_column_of};
 use crate::unify::{bind_term_def, filter_cond, unify, Unify};
 use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 
@@ -436,7 +436,7 @@ fn lower_node(
                 // 1-child joins, so a standalone path never reaches an `InnerJoin` with only
                 // itself as a child (it stays the fast top-level-`WITH` shape untouched).
                 convert_path_branches(&mut cbr, dialect, next_alias)?;
-                acc = join_branches(acc, cbr)?;
+                acc = join_branches_with_work_mode(acc, cbr, work_mode)?;
                 if acc.is_empty() {
                     break;
                 }

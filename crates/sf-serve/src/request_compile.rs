@@ -286,42 +286,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clone_work_rejects_public_and_preflight_paths_before_source_admission() {
+    async fn clone_and_product_work_reject_before_source_admission() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let query =
+        let cloning =
             "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
-        let (cfg, pool) = config(query.len() as u64);
-        let held = pool.pick_owned().acquire().await.unwrap();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let observed = calls.clone();
-        pool.set_admission_pending_observer(move || {
-            observed.fetch_add(1, Ordering::SeqCst);
-        });
-        let request = Request::post("/sparql")
-            .header("content-type", "application/sparql-query")
-            .body(Body::from(query))
-            .unwrap();
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            crate::router(cfg.clone()).oneshot(request),
-        )
-        .await
-        .expect("must reject before source wait")
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        let preflight = preflight(
-            cfg.clone(),
-            cfg.runtime_lease().unwrap(),
-            query.into(),
-            cfg.request_budget(),
-        )
-        .await;
-        assert_eq!(
-            preflight.err().unwrap().status(),
-            StatusCode::TOO_MANY_REQUESTS
+        let products = concat!(
+            "SELECT ?a ?b ?c WHERE { VALUES ?a { 0 1 2 3 } ",
+            "VALUES ?b { 0 1 2 3 } VALUES ?c { 0 1 2 3 } }",
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(cfg.compiler_permits().available_permits(), 4);
-        drop(held);
+        for query in [cloning, products] {
+            let (mut cfg, pool) = config(query.len() as u64);
+            Arc::get_mut(&mut cfg)
+                .unwrap()
+                .set_query_admission(crate::QueryAdmission::Bearer(
+                    crate::BearerQueryAdmission::for_service_principal(
+                        "test-only-product-work-credential",
+                    )
+                    .unwrap(),
+                ));
+            let held = pool.pick_owned().acquire().await.unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            pool.set_admission_pending_observer(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            });
+            let request = Request::post("/sparql")
+                .header("content-type", "application/sparql-query")
+                .header("authorization", "Bearer test-only-product-work-credential")
+                .body(Body::from(query))
+                .unwrap();
+            let mut preflight_budget = cfg.request_budget();
+            preflight_budget
+                .retain_authenticated(cfg.query_admission.admit(request.headers()).unwrap())
+                .unwrap();
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                crate::router(cfg.clone()).oneshot(request),
+            )
+            .await
+            .expect("must reject before source wait")
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            let preflight = preflight(
+                cfg.clone(),
+                cfg.runtime_lease().unwrap(),
+                query.into(),
+                preflight_budget,
+            )
+            .await;
+            assert_eq!(
+                preflight.err().unwrap().status(),
+                StatusCode::TOO_MANY_REQUESTS
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(cfg.compiler_permits().available_permits(), 4);
+            drop(held);
+        }
     }
 }

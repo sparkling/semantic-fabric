@@ -62,10 +62,11 @@ fn lower(source: IqNode, work_mode: CompilerWorkMode<'_>) -> Result<Plan> {
     )
 }
 
-fn assert_direct_schedule(source: IqNode, branch_count: u64, clone_work: u64) {
+fn assert_direct_schedule(source: IqNode, branch_count: u64, clone_work: u64, prior_work: u64) {
     assert!(branch_count >= 3);
-    let expected = clone_work.checked_mul(branch_count - 1).unwrap();
-    let retained_before_last_rejection = clone_work.checked_mul(branch_count - 2).unwrap();
+    let expected = prior_work + clone_work.checked_mul(branch_count - 1).unwrap();
+    let retained_before_last_rejection =
+        prior_work + clone_work.checked_mul(branch_count - 2).unwrap();
     let exact = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -216,7 +217,7 @@ fn wrapped_exists_over_four_filter_branches_charges_three_clones() {
         cond: vec![wrapped],
     };
 
-    assert_direct_schedule(source, 4, work);
+    assert_direct_schedule(source, 4, work, 0);
 }
 
 #[test]
@@ -231,7 +232,7 @@ fn construction_filter_over_three_branches_uses_the_owned_final_schedule() {
         project: Vec::new(),
     };
 
-    assert_direct_schedule(source, 3, work);
+    assert_direct_schedule(source, 3, work, 0);
 }
 
 #[test]
@@ -242,7 +243,12 @@ fn inner_join_condition_over_three_branches_uses_the_owned_final_schedule() {
         cond: vec![IqCond::Exists(Box::new(body))],
     };
 
-    assert_direct_schedule(source, 3, work);
+    // Two products (1×3 and 3×1), each copying only empty scalar branches,
+    // precede the independent B-1 EXISTS-clone schedule.
+    let empty_copy = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(&Branch::empty()))
+        .unwrap()
+        .deep_clone_work;
+    assert_direct_schedule(source, 3, work, 6 * (1 + empty_copy));
 }
 
 fn whole_pipeline_fixture() -> (Query, u64) {
