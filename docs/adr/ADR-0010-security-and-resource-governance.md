@@ -367,8 +367,13 @@ move first-hop endpoints without collapsing the `Nps` bag marker. Required publi
 tests reject exhausted work before held source admission and preserve six exact
 duplicate pairs; focused checks cover cancellation, cache exclusion, graph fallback,
 duplicate declarations and ambiguity. Raw semantics and supported shapes remain.
-Graph-variable inventory, reflexive eligibility, shape/rewrite construction,
-TBox/unifier internals and other phases still lack complete controls; this is not
+Graph-variable inventory and reflexive eligibility now also reserve mapping visits,
+prospective graph comparisons, scalar graph copies and enumeration slots, with
+request cancellation and graph-scope restoration on failure. Required HTTP tests
+prove that an empty named-graph answer still pays for mapping inspection, rejects
+before source admission when exhausted, and preserves exact named-graph `+`, `*`
+and `?` results when paid. Shape/rewrite construction, TBox/unifier internals and
+other phases still lack complete controls; this is not
 total compiler CPU, source-recursion governance or release admission.
 
 ### Public parser lifetime (2026-09-08)

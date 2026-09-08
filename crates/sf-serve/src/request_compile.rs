@@ -336,6 +336,11 @@ mod tests {
             (cloning, vec![], 0),
             (products, vec![], 0),
             (absent, mapping, 5),
+            (
+                "SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s <http://example.test/a>+ ?o } }",
+                path_maps.clone(),
+                0,
+            ),
             ("SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }", path_maps, 0),
         ] {
             let (mut cfg, pool) = config_with_mapping(query.len() as u64 + extra, maps);

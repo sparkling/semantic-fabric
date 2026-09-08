@@ -122,8 +122,12 @@ branches; sufficient work preserves all six exact triples. Path predicate search
 now also reserve mapping candidates, graph work and exact term/source copies;
 negated paths charge complement comparisons/visits and preserve exact duplicate
 pairs. Required pre-source rejection, cancellation, cache and raw-equivalence checks
-pass. Graph inventory/reflexive checks, shape construction, TBox/unifier internals
-and other payload copies/phases remain unqualified; the total-work gate stays open.
+pass. Graph inventory/reflexive checks now reserve visits, graph comparisons and
+copies, and enumeration slots on the same control identity. Empty named-graph
+answers cannot bypass mapping work; required HTTP/preflight tests prove pre-source
+rejection and permit recovery, with exact paid `+`, `*` and `?` results. Shape
+construction, TBox/unifier internals and other payload copies/phases remain
+unqualified; the total-work gate stays open.
 
 **Parser-lifetime correction (2026-09-08):** an authenticated, sub-ingress-limit
 query reproduced a server-process abort. Public compilation now uses a prepared

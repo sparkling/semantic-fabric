@@ -147,10 +147,10 @@ impl<'a> Unfolder<'a> {
         // switching to a term-first CTE model — both are ADR-0020 / MB-5 scope.
         if matches!(kind, PathKind::ZeroOrMore | PathKind::ZeroOrOne) {
             let reflexive_ok = compiled.expr.as_pred().is_some()
-                && compiled
-                    .single_pred
-                    .as_deref()
-                    .is_some_and(|p| self.graph_is_single_predicate(p));
+                && match compiled.single_pred.as_deref() {
+                    Some(p) => self.graph_is_single_predicate(p)?,
+                    None => false,
+                };
             if !reflexive_ok {
                 return Err(Error::Unsupported(
                     "P*/p? reflexive ZeroLengthPath: graph node enumeration is ADR-0007 \
@@ -211,7 +211,7 @@ impl<'a> Unfolder<'a> {
     /// silently drops a valid graph) even though some arms turn out empty.
     ///
     /// Boundary (ADR-0035, "paths under non-constant graph maps → 501"): when
-    /// [`crate::unfold::has_non_constant_graph_map`] finds a template/column
+    /// [`Self::has_non_constant_graph_map`] finds a template/column
     /// `rr:graphMap` ANYWHERE in the mapping, the true named-graph set for some
     /// predicate is row-dependent (not statically enumerable), so this refuses
     /// outright rather than answering over the constant subset alone (unsound —
@@ -225,7 +225,8 @@ impl<'a> Unfolder<'a> {
         object: &TermPattern,
         var: &str,
     ) -> Result<Vec<Branch>> {
-        if crate::unfold::has_non_constant_graph_map(self.maps) {
+        self.work_checkpoint()?;
+        if self.has_non_constant_graph_map()? {
             return Err(Error::Unsupported(
                 "GRAPH ?v { …PATH… } over a mapping declaring a template/column \
                  rr:graphMap is deferred → 501 (a PathClosure needs one pinned graph per \
@@ -234,12 +235,14 @@ impl<'a> Unfolder<'a> {
                     .to_owned(),
             ));
         }
-        let graphs = crate::unfold::declared_constant_graphs(self.maps);
+        let graphs = self.declared_constant_graphs()?;
+        self.reserve_product(&[graphs.len()])?;
         let mut out = Vec::with_capacity(graphs.len());
         for g in graphs {
+            let pinned = self.copy_graph_name(&g)?;
             let saved_g = self.current_graph.take();
             let saved_v = self.current_graph_var.take();
-            self.current_graph = Some(g.clone());
+            self.current_graph = Some(pinned);
             let branch = self.path_branch(subject, path, object);
             self.current_graph = saved_g;
             self.current_graph_var = saved_v;
@@ -248,6 +251,7 @@ impl<'a> Unfolder<'a> {
                 out.push(branch);
             }
         }
+        self.work_checkpoint()?;
         Ok(out)
     }
 

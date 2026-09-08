@@ -15,7 +15,7 @@ use spargebra::algebra::{
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
 use crate::compiler_schema::ColumnTypeUse;
-use crate::graph_map::{bind_variable, RR_DEFAULT_GRAPH};
+use crate::graph_map::bind_variable;
 use crate::iq::lower::{convert_path_branches, remap_termdef};
 use crate::iq::node::triple_pattern_vars;
 use crate::iq::{
@@ -27,6 +27,7 @@ use crate::saturate::Tbox;
 use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
 
+mod graph_inventory;
 mod join;
 mod mapping_work;
 pub(crate) use join::join_branches_with_work_mode;
@@ -1124,80 +1125,6 @@ impl<'a> Unfolder<'a> {
             SqlCond::Or(sub_conds) // OR of EXISTS: at least one branch must match
         })
     }
-
-    /// `true` iff `pred_iri` is the ONLY predicate the whole mapping produces —
-    /// no other `rr:predicate` and no `rr:class` (which would add `rdf:type`
-    /// triples and class-IRI object nodes). In that case the hop relation's node
-    /// set (subjects ∪ objects of `pred_iri`) equals the active graph's node set,
-    /// making `P*`/`p?`'s reflexive ZeroLengthPath provably complete (under the
-    /// same-domain raw-key assumption that already underpins `P+`).
-    pub(crate) fn graph_is_single_predicate(&self, pred_iri: &str) -> bool {
-        for tm in self.maps {
-            if !tm.subject.classes.is_empty() {
-                return false;
-            }
-            for pom in &tm.predicate_object_maps {
-                let only_this_pred = pom.predicates.iter().all(|pm| {
-                    matches!(pm, TermMap::Constant(Term::NamedNode(q)) if q.as_str() == pred_iri)
-                });
-                if !only_this_pred {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-}
-
-/// ADR-0035 item 3: every DISTINCT constant named-graph IRI declared anywhere in the
-/// mapping (a subject map's or predicate-object map's `rr:graphMap`/`rr:graph`) — the
-/// finite enumeration `GRAPH ?v { …PATH… }` compiles to (see `path.rs`'s
-/// `path_branches_for_graph_var`): a `PathClosure` needs ONE pinned graph per
-/// compiled CTE, so unlike an ordinary triple pattern's per-branch fan-out, a path
-/// under a variable graph unions over this finite set instead — template/column
-/// graph maps are not statically enumerable, so they are simply absent from it (the
-/// residual pinned 501 lives in the caller, for a path under one of those). Excludes
-/// `rr:defaultGraph` (never a real named graph). Deterministic first-seen order.
-pub(crate) fn declared_constant_graphs(maps: &[TriplesMap]) -> Vec<NamedNode> {
-    let mut out: Vec<NamedNode> = Vec::new();
-    let mut push = |gm: &TermMap| {
-        if let TermMap::Constant(Term::NamedNode(n)) = gm {
-            if n.as_str() != RR_DEFAULT_GRAPH && !out.iter().any(|g| g == n) {
-                out.push(n.clone());
-            }
-        }
-    };
-    for tm in maps {
-        for g in &tm.subject.graphs {
-            push(g);
-        }
-        for pom in &tm.predicate_object_maps {
-            for g in &pom.graphs {
-                push(g);
-            }
-        }
-    }
-    out
-}
-
-/// ADR-0035 item 3 / boundary "paths under non-constant graph maps → 501": whether
-/// ANY subject-map or predicate-object-map graph declaration anywhere in the mapping
-/// is a template/column (non-constant) `rr:graphMap` — the trigger `path_branches_
-/// for_graph_var` (`path.rs`) uses to refuse rather than enumerate. Mapping-wide
-/// (not scoped to the path's own predicate): the true named-graph set for SOME
-/// predicate is then row-dependent, so it is unsound to answer over the constant
-/// subset alone. When this is `false`, [`declared_constant_graphs`] is the COMPLETE
-/// enumeration (possibly empty — a mapping with no named graphs at all is a sound
-/// empty result, not a 501).
-pub(crate) fn has_non_constant_graph_map(maps: &[TriplesMap]) -> bool {
-    let non_const = |gms: &[TermMap]| gms.iter().any(|gm| !matches!(gm, TermMap::Constant(_)));
-    maps.iter().any(|tm| {
-        non_const(&tm.subject.graphs)
-            || tm
-                .predicate_object_maps
-                .iter()
-                .any(|pom| non_const(&pom.graphs))
-    })
 }
 
 enum PredMatch {

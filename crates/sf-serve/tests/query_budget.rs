@@ -9,6 +9,8 @@ use sf_core::query_control::QueryLimits;
 use sf_serve::{router, Backend, BearerQueryAdmission, QueryAdmission, ServeConfig};
 use tower::ServiceExt;
 
+#[path = "query_budget/graph_inventory.rs"]
+mod graph_inventory;
 mod support;
 
 const TOKEN: &str = "test-only-compiler-budget-credential-123456";

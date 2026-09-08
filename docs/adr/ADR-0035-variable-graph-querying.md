@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-20
-updated: 2026-09-01
+updated: 2026-09-08
 tags: [graph-queries, named-graphs, quad-semantics, sparql-dataset, unfold, rdf-star]
 supersedes: []
 depends-on:
@@ -29,6 +29,9 @@ PostgreSQL matrix, mutation-lite receipt, and accepted dual-host MetaHarness
 transaction were not completed. Those are evidence gaps, not a reversal of the
 landed semantic correction.
 
+Under accepted ADR-0055, the historical dual-host/mutation receipt programme is
+not a v1 prerequisite; required admitted-backend exactness still is.
+
 The 2026-09-01 graph-scope correction adds one further required invariant:
 mapping-generated blank-node identity is `(effective target graph, generated
 identifier)`, not the identifier alone and not a triples-map/source identifier.
@@ -40,6 +43,16 @@ fresh-per-solution domain. Required SQLite differentials cover those paths.
 Dynamic-graph paths and row-dependent rendered-width pooling remain explicit
 `501` boundaries, and PostgreSQL/MySQL still lack direct named-graph matrices,
 so this does not upgrade the broader evidence status above.
+
+**2026-09-08 resource-control correction:** public variable-graph path inventory
+now charges mapping/graph visits, prospective deduplication, actual scalar graph
+copies and branch slots before work, even for a complete empty inventory. The
+mapping-wide dynamic-graph and single-predicate reflexive checks share request
+cancellation. Failures preserve the previous graph scope. Required SQLite HTTP
+tests cover exhausted pre-source rejection, exact empty answers and `+`/`*`/`?`
+results over two named graphs with duplicate/default declarations; deterministic
+tests cover inclusive limits and cancellation. This does not qualify native
+backend matrices or the remaining compiler/source controls.
 
 ## Context and problem statement
 
