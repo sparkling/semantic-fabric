@@ -4,6 +4,8 @@
 mod cancellation;
 #[path = "source_tls_live/join.rs"]
 mod join;
+#[path = "source_tls_live/lineage.rs"]
+mod lineage;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
 #[path = "source_tls_live/stop_matrix.rs"]
@@ -34,6 +36,20 @@ fn command(
     first: &Database,
     second: Option<&Database>,
 ) -> (Command, SocketAddr) {
+    command_with_admission(
+        fixture,
+        first,
+        second,
+        &["--auth-token-env", "SF_TLS_BEARER"],
+    )
+}
+
+fn command_with_admission(
+    fixture: &Fixture,
+    first: &Database,
+    second: Option<&Database>,
+    admission: &[&str],
+) -> (Command, SocketAddr) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
@@ -45,13 +61,12 @@ fn command(
             "SF_TLS_SOURCE",
             "--source-tls-roots-env",
             "SF_TLS_ROOTS",
-            "--auth-token-env",
-            "SF_TLS_BEARER",
             "--mapping",
         ])
         .arg(fixture.root.join("first.ttl"))
         .arg("--ontology")
         .arg(fixture.root.join("ontology.ttl"))
+        .args(admission)
         .args(["--bind", &address.to_string(), "--log-level", "info"])
         .env("SF_TLS_SOURCE", &first.source)
         .env("SF_TLS_ROOTS", &first.roots)
@@ -73,6 +88,15 @@ fn command(
 }
 
 fn request(address: SocketAddr, query: &str, token: Option<&str>) -> Option<(u16, Vec<u8>)> {
+    request_format(address, query, token, "application/sparql-results+json")
+}
+
+fn request_format(
+    address: SocketAddr,
+    query: &str,
+    token: Option<&str>,
+    accept: &str,
+) -> Option<(u16, Vec<u8>)> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
@@ -83,10 +107,19 @@ fn request(address: SocketAddr, query: &str, token: Option<&str>) -> Option<(u16
     let authorization = token
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
-    write!(stream, "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{authorization}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{query}", query.len()).unwrap();
+    write!(stream, "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{authorization}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: {accept}\r\nContent-Length: {}\r\n\r\n{query}", query.len()).unwrap();
     let mut wire = Vec::new();
     stream.take(65537).read_to_end(&mut wire).unwrap();
     assert!(wire.len() <= 65536);
+    if accept == lineage::FORMAT && wire.starts_with(b"HTTP/1.1 200 ") {
+        let end = wire.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let headers = std::str::from_utf8(&wire[..end])
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(headers
+            .lines()
+            .any(|line| line == format!("content-type: {accept}")));
+    }
     Some(decode_response(wire))
 }
 
@@ -179,6 +212,8 @@ fn assert_serves(
     first.assert_encrypted_sessions();
     if let Some(second) = second {
         second.assert_encrypted_sessions();
+    } else {
+        lineage::assert_responses(address, fixture, first);
     }
 }
 
@@ -254,6 +289,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     mysql.sql("ALTER TABLE sf_tls.items ADD COLUMN refreshed VARCHAR(32); UPDATE sf_tls.items SET refreshed='mysql-reloaded'");
     for database in [&postgres, &mysql] {
         assert_serves(&fixture, database, None, &["same"]);
+        lineage::assert_portable_policy(&fixture, database);
         let expected = if std::ptr::eq(database, &postgres) {
             "postgres-reloaded"
         } else {

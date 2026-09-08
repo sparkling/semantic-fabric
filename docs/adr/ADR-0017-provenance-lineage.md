@@ -16,7 +16,7 @@ implements:
 > The public opt-in constant-mapping/source SELECT and CONSTRUCT profiles emit
 > per-solution PROV-O and native graph reification under the pinned request.
 > Full ADR-0017 remains open: dynamic multi-origin operators, federation,
-> declared/verified row-key authority and native-backend lineage qualification.
+> declared/verified row-key authority and wider native-profile/release qualification.
 > ADR-0055, not historical ADR-0038, controls v1.
 
 ## Context and Problem Statement
@@ -122,12 +122,26 @@ Required evidence: `cargo test --locked -p sf-serve --test lineage`,
 `cargo test --locked -p sf-core --test security_context_contract`. Public SQLite
 tests cover bags, saturation, modifiers, no-PK promotion, row-policy isolation,
 cache/generation identity, pinned reload, rejection and exact byte limits;
-terminal tests cover deadline and source/cleanup failure. PostgreSQL/MySQL use
-the shared serializer but still need their lineage-specific live qualification.
+terminal tests cover deadline and source/cleanup failure.
 Graph tests additionally compare the ordinary product graph, parse native
 reification, preserve mapped/template blank nodes and nested/directional terms,
 check empty/invalid/duplicate outputs and template admission, and verify exact
 response bytes and cleanup failure without a successful completion record.
+
+Required native evidence (2026-09-08):
+`cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact authenticated_public_queries_require_verified_source_tls`.
+This existing CI gate owns digest-pinned PostgreSQL 16.15/MySQL 8.4.11 fixtures and
+now exercises the serving-only CLI's lineage media type and complete transport,
+exact SELECT/CONSTRUCT results, parsed PROV-O/native reification, empty results,
+bag UNION, cache/snapshot/policy identities and missing/invalid authentication.
+A two-subject portable equality-row registry alternates allowed/empty callers on
+each native backend and proves results and metadata do not expose the other
+caller. Unsupported ASK/FILTER lineage rejects while a native table-lock witness
+remains held, then ordinary admitted lineage recovers. Encrypted sessions are
+observed on both providers. This qualifies those native cases, not every operator
+combination, source-RLS lineage, lineage-specific reload/cancellation, production
+admission or an exact packed release artifact. Shared lifecycle checks remain
+required; no successful ordinary-query test is renamed as lineage-specific proof.
 
 ### Consequences
 

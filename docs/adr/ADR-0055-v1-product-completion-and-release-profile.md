@@ -37,8 +37,12 @@ constant mapping/source SELECT and CONSTRUCT profiles with per-solution PROV-O,
 native graph reification, pinned snapshot/logical-plan/policy identifiers and bounded
 fail-terminal streaming. Graph metadata stays in named bundles outside the product
 graph, preserving response-wide blank-node identity. Its required
-SQLite HTTP, isolation, reload and failure tests are an incremental result, not
-full lineage, native-backend lineage qualification or application completion.
+SQLite HTTP, isolation, reload and failure tests plus owned pinned PostgreSQL
+16.15/MySQL 8.4.11 serving-only CLI lineage/portable-policy checks are incremental
+results, not full lineage, all native-profile or exact-release qualification, or
+application completion. Native evidence parses the actual returned metadata and
+reification, observes encrypted sessions and rejects unsupported lineage while
+a source-table lock remains held; it is not lineage-specific reload/cancellation.
 Dynamic multi-origin operators, federation and authorized row keys remain
 open. The capability catalog separately retains that incomplete release gate.
 

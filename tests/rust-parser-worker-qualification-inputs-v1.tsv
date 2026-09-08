@@ -35,9 +35,9 @@ meta	edge-kinds	normal,build
 meta	feature-mode	no-default-features+parser-worker-evidence
 meta	root-feature	parser-worker-evidence
 meta	host	x86_64-unknown-linux-gnu
-meta	cargo-lock-sha256	684c2e1649654541add0dd1299417da8a0c90ce5e2e50f90a8b641771709b0e2
+meta	cargo-lock-sha256	50d645e97b770e5ea52ed48fbcc82f342ff08adc17418e5f39249b0cec2ee453
 meta	rust-toolchain-sha256	e8c8b3d67e37fa6c751296b6583b82805e597b619a1868b35369185eb61e4b45
-meta	workspace-manifests-sha256	787b39c0dfdb3aa39d081dc2d086c0e2dc25220abfc441a42b1e80fd408ffdc4
+meta	workspace-manifests-sha256	dff1a5f92d95ddd61973643996d46708feb7426c4d699d69872e574e44760190
 meta	workspace-manifest-count	11
 meta	target-cfg-sha256	fc10eb20a7d7b72645bb1bca51c110fe8af01944a91935dfac9a9cc6a8fb53a5
 meta	cargo-version	cargo 1.96.0 (30a34c682 2026-05-25)
@@ -49,7 +49,7 @@ meta	context-count	384
 meta	feature-count	762
 meta	edge-count	1012
 meta	closure-sha256	c1ea0e56de1e180f67d58d3b514666ac5f517f185c0bb447900a9d2407707253
-meta	qualification-inputs-sha256	6111dd8d318974a3cfcbb3d9ad1f6e3d04736433b3cbc77c0a6a445aa6c52766
+meta	qualification-inputs-sha256	f62a4bb9e53e9fc9c4ab69bdec88abc1bdcc1a70a9a3af0b4d6bda3e01b3a147
 package	008eb847d9b9cd2203157d552d26e5c54653c62397f757035ae709287b2a469f	darling	0.23.0	registry	registry+https://github.com/rust-lang/crates.io-index	[["host",["default","suggestions"],[["darling_core","383d1128cde3353d740c1d9c2ef154af0e45065d923a58e0de2f2f13047fb591","host","normal","-"],["darling_macro","32aab9bbe91ebc0075a8bbd3c8776de4fb6474b5fafb0f37bffcbaa218e628db","host","normal","-"]]]]
 package	0163455f052cf8adb751d1e60fae70f35fa40ff91cf47647ab9c83ff1d58fc6d	manyhow-macros	0.11.4	registry	registry+https://github.com/rust-lang/crates.io-index	[["host",[],[["proc_macro2","ff7ddaef427d4971cc9da9c3f2e4a3b34cfab0759a559d9db041d5563dd9c969","host","normal","-"],["proc_macro_utils","c47513022ee9e85126fcff117dec9450a1d13bb779bb881c2f538f0b7f85a020","host","normal","-"],["quote","36078d23491d68b6daf1c2443ecf8eed813d45f7b233ffdd56fd8fd01abdba1c","host","normal","-"]]]]
 package	01d063c32cca129674545ca0f7e189e12d256b9599cc6ae0edfd34f701f6a2b1	syn	3.0.4	registry	registry+https://github.com/rust-lang/crates.io-index	[["host",["clone-impls","default","derive","extra-traits","full","parsing","printing","proc-macro","visit-mut"],[["proc_macro2","ff7ddaef427d4971cc9da9c3f2e4a3b34cfab0759a559d9db041d5563dd9c969","host","normal","-"],["quote","36078d23491d68b6daf1c2443ecf8eed813d45f7b233ffdd56fd8fd01abdba1c","host","normal","-"],["unicode_ident","2756baba732f5b2c452490298212c0f9bf3824f55b5820aa7ac52f0071bc51bf","host","normal","-"]]]]

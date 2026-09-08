@@ -12,7 +12,7 @@ meta	target	x86_64-unknown-linux-gnu
 meta	host	x86_64-unknown-linux-gnu
 meta	edge-kinds	normal,build
 meta	feature-mode	default
-meta	cargo-lock-sha256	684c2e1649654541add0dd1299417da8a0c90ce5e2e50f90a8b641771709b0e2
+meta	cargo-lock-sha256	50d645e97b770e5ea52ed48fbcc82f342ff08adc17418e5f39249b0cec2ee453
 meta	rust-toolchain-sha256	e8c8b3d67e37fa6c751296b6583b82805e597b619a1868b35369185eb61e4b45
 meta	cargo-version	cargo 1.96.0 (30a34c682 2026-05-25)
 meta	rustc-version	rustc 1.96.0 (ac68faa20 2026-05-25)

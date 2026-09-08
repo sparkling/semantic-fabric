@@ -1,24 +1,42 @@
 //! The incremental provenance profile never substitutes for complete ADR-0017.
-use sf_conformance::{capability_catalog, capability_catalog::Status};
+use sf_conformance::{
+    capability_catalog, capability_catalog::Status, capability_model::Verification,
+};
 use std::path::Path;
 
 #[test]
 fn lineage_keeps_full_contract_open_and_only_advertises_the_evidenced_subset() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = capability_catalog::load(&root).unwrap().catalog;
-    let partial = catalog
-        .cells
-        .iter()
-        .find(|cell| cell.id == "constant-mapping-source-lineage-sqlite")
-        .unwrap();
-    assert_eq!(partial.status, Status::Implemented);
-    assert!(partial.semantic_exact && partial.bounded && partial.advertisable);
-    for id in [
-        "e-query-lineage-graph",
-        "e-query-lineage-graph-http",
-        "e-query-lineage-graph-stream",
-    ] {
-        assert!(partial.evidence_ids.iter().any(|evidence| evidence == id));
+    for backend in ["mysql", "postgresql", "sqlite"] {
+        let partial = catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == format!("constant-mapping-source-lineage-{backend}"))
+            .unwrap();
+        assert_eq!(partial.status, Status::Implemented);
+        assert_eq!(partial.verification, Verification::CiRequired);
+        assert!(partial.semantic_exact && partial.bounded && partial.advertisable);
+        for id in [
+            "e-query-lineage-graph",
+            "e-query-lineage-graph-http",
+            "e-query-lineage-graph-stream",
+        ] {
+            assert!(partial.evidence_ids.iter().any(|evidence| evidence == id));
+        }
+        if backend != "sqlite" {
+            let live = catalog
+                .evidence
+                .iter()
+                .find(|e| e.id == "e-query-lineage-native")
+                .unwrap();
+            assert!(partial.evidence_ids.contains(&live.id));
+            assert!(live.required);
+            assert_eq!(
+                live.command_id.as_deref(),
+                Some("cmd-verified-source-tls-live")
+            );
+        }
     }
     let full = catalog
         .cells
