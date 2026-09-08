@@ -1264,29 +1264,23 @@ fn s2b_self_join_merge_preserves_template_eq() {
 
 // --- 2(a) FK/PK join-elimination over a TemplateEq — the LOCK --------------
 
-/// LOCK: `?p ex:dept ?d` joins person→dept via the FK (dept_id → id);
-/// `fk_pk_join_elimination` eliminates the parent (dept) scan because the FK
-/// gives dept.id = person.dept_id. A `FILTER(?d = ?t)` over ?d (the parent
-/// subject template `http://ex.org/dept/{id}`) and ?t (a differently-shaped
-/// child template) produces a `TemplateEq` referencing the PARENT alias's
-/// `id` column. `collect_cond_cols`'s `TemplateEq` arm reports that column, so
-/// `parent_referenced_only_via` sees the reference is the (rewritable) join key
-/// and `rewrite_parent_template_segments` rewrites dept.id → person.dept_id.
-/// Result: the dept scan is gone, BOTH TemplateEq sides reference the person
-/// alias (no dangling parent alias), and the answer matches the oracle.
+/// Native rr:joinCondition is not proof of identical RDF lexical values.
+/// Retain the parent witness and evaluate TemplateEq on its actual generated
+/// term. FK/PK rewrites
+/// remain available for separately proved RDF equalities, not native equality.
 #[test]
-fn s2a_fk_pk_elimination_rewrites_template_eq_parent_segment() {
+fn s2a_native_fk_keeps_parent_template_eq_value() {
     let query =
         format!("{EX}SELECT ?p WHERE {{ ?p ex:dept ?d . ?p ex:other ?t . FILTER(?d = ?t) }}");
     let (sql, _params) = tree_sql(S2FK_SQL, S2FK_R2RML, &query);
     assert_eq!(
         sql.matches("\"dept\"").count(),
-        0,
-        "FK-PK elimination must remove the parent dept scan: {sql}"
+        1,
+        "native FK equality must retain the parent RDF value: {sql}"
     );
     assert!(
         sql.contains("t0.\"dept_id\""),
-        "the TemplateEq's parent id segment must be rewritten to person.dept_id: {sql}"
+        "the native join still reads its authored child key: {sql}"
     );
     // No match (a 1-col `dept/{id}` can never equal a 2-col `dept/{a}-{b}`), so
     // both engine and oracle are empty — the machinery ran without a dangling

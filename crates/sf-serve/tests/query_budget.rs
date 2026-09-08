@@ -13,6 +13,8 @@ use tower::ServiceExt;
 mod graph_inventory;
 #[path = "query_budget/null_terms.rs"]
 mod null_terms;
+#[path = "query_budget/ordinary_identity.rs"]
+mod ordinary_identity;
 #[path = "query_budget/path_identity.rs"]
 mod path_identity;
 mod support;

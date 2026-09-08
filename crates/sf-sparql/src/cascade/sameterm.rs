@@ -150,8 +150,11 @@ fn find_same_terms_eliminable(
                         refs_other = true;
                     }
                 });
-                if !refs_drop || refs_other {
+                if !refs_drop {
                     continue;
+                }
+                if refs_other {
+                    continue 'drop_loop;
                 }
                 if !same_cond_on_keep(&b.where_conds, cond, drop, keep) {
                     continue 'drop_loop;

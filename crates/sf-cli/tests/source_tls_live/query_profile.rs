@@ -1,6 +1,8 @@
 //! Actual public query results against only owned, pinned, TLS-enabled providers.
 use super::*;
 use std::collections::BTreeSet;
+#[path = "ordinary_identity.rs"]
+mod ordinary_identity;
 
 const EDGE: &str = "http://example.test/edge";
 const MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -299,6 +301,7 @@ fn assert_collated_paths(fixture: &Fixture, database: &Database, postgres: bool)
     }
     sql(database, "DELETE FROM items; INSERT INTO items(id,src,dst,value) VALUES (0,'a','B','same'),(1,'b','c','same'),(2,'A','B','same'),(3,'s','a ','same'),(4,'a','z','same')");
     let (server, address) = start(fixture, database);
+    ordinary_identity::assert_ordinary(address, fixture);
     for operator in ["+", "*", "?", "|<http://example.test/edge>"] {
         let query = format!("SELECT ?s ?o WHERE {{ ?s (<{EDGE}>{operator}) ?o }}");
         let result = rows(address, fixture, &query);
@@ -358,7 +361,8 @@ fn assert_character_paths(fixture: &Fixture, database: &Database, postgres: bool
                 })
                 .collect()
         };
-        let direct = pairs(&direct);
+        let actual_direct = pairs(&direct);
+        let direct_len = direct.len();
         let node = |s: &str, width: usize| {
             format!(
                 "http://example.test/n/{s}{}",
@@ -369,14 +373,19 @@ fn assert_character_paths(fixture: &Fixture, database: &Database, postgres: bool
                 }
             )
         };
-        // Ordinary native DISTINCT under a source collation remains a separate
-        // open defect. Check its decoder here, but use an independent graph
-        // oracle so that defect cannot erase the required A/a path distinction.
-        assert!(direct.contains(&(node("a", src_width), node("b", dst_width))));
         let direct: BTreeSet<_> = [("a", "b"), ("b", "c"), ("A", "b")]
             .map(|(s, o)| (node(s, src_width), node(o, dst_width)))
             .into_iter()
             .collect();
+        assert_eq!(
+            actual_direct, direct,
+            "ordinary native CHAR {src_width}/{dst_width}"
+        );
+        assert_eq!(
+            direct_len,
+            direct.len(),
+            "duplicate ordinary decoded CHAR pairs"
+        );
         let mut closure = direct.clone();
         loop {
             let more: Vec<_> = closure

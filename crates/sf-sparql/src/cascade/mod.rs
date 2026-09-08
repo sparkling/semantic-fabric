@@ -68,6 +68,7 @@ fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema
         .map(|pos| map[pos].1)
 }
 
+mod distinct_scan;
 mod fd;
 mod joinelim;
 mod optional_prune;
@@ -809,11 +810,14 @@ pub(super) fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
 
 fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
     match cond {
-        SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
+        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             fix(a);
             fix(b);
         }
-        SqlCond::Cmp(a, _, _) | SqlCond::IsNotNull(a) | SqlCond::IsNull(a) => fix(a),
+        SqlCond::Cmp(a, _, _)
+        | SqlCond::NativeCmp(a, _, _)
+        | SqlCond::IsNotNull(a)
+        | SqlCond::IsNull(a) => fix(a),
         SqlCond::StrMatch { col, .. } => fix(col),
         SqlCond::Not(c) => rewrite_cond_alias(c, fix),
         SqlCond::And(cs) | SqlCond::Or(cs) => {
@@ -1472,7 +1476,11 @@ fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect
 /// which is testing a DIFFERENT property (the elision proof's injectivity filter)
 /// than this mechanism addresses.
 pub(crate) fn eligible_for_term_dedup(b: &Branch) -> bool {
-    b.distinct
+    eligible_for_term_dedup_with_distinct(b, b.distinct)
+}
+
+pub(crate) fn eligible_for_term_dedup_with_distinct(b: &Branch, distinct: bool) -> bool {
+    distinct
         && b.path.is_none()
         && b.agg.is_none()
         && b.core.len() + b.opts.len() + b.subplan_joins.len() <= 1
@@ -1923,6 +1931,7 @@ fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
 /// R2RMLTC0002c regression (a deliberately undefined `rr:column`, which the
 /// engine must reject, silently produced a bogus triple instead).
 fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], _dialect: sf_sql::Dialect) {
+    let native_keys = distinct_scan::native_keys(b, alias);
     let scan = b
         .core
         .iter_mut()
@@ -1949,6 +1958,7 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], _dialect:
             .collect(),
         guards: Vec::new(),
         distinct: true,
+        native_keys,
     };
 }
 

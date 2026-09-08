@@ -58,6 +58,15 @@ conditional and cannot be discarded. Required NULL-term, pruning and independent
 bag-oracle regressions preserve both absence and valid OPTIONAL results; serving
 retains its unverified-constraint quarantine.
 
+**Equality correction (2026-09-08):** authored `rr:joinCondition` and portable
+row-policy predicates retain separate native SQL condition variants. Native
+equality is not proof of identical RDF lexical values, even with an FK/PK claim;
+RDF substitution/elimination rules cannot consume that marker. Structural visitors
+preserve it; same-terms elimination cannot orphan a residual native join. Ordinary
+RDF text comparisons use live decoder recipes and exact comparison, without
+blanket-casting other native types. Ref/policy DISTINCT relations retain their
+prior raw semantics; their remaining identity gap is recorded in ADR-0034.
+
 ### Pipeline (`sf-sparql`)
 
 1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`. Since 2026-09-08 public serving uses an explicit prepared Rust process and bounded QueryV1 transfer before parent AST ownership (ADR-0055 parser-lifetime repair); raw diagnostic APIs retain their caller-owned contract. Existing semantic/compiler/cache profiles are not promoted to `GovernedV1`.

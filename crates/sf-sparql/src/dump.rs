@@ -120,7 +120,7 @@ fn pom_branch(
                 source: (parent.source.clone()).into(),
             });
             for j in &r.joins {
-                b.where_conds.push(SqlCond::ColEq(
+                b.where_conds.push(SqlCond::NativeColEq(
                     ColRef::new(CHILD, j.child.clone()),
                     ColRef::new(PARENT, j.parent.clone()),
                 ));

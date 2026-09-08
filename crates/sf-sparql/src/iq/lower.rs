@@ -77,10 +77,11 @@ use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 /// with any scan alias produced by the RESOLVE pass across all subtrees.
 fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
     match cond {
-        SqlCond::ColEq(left, right) | SqlCond::NullSafeEq(left, right) => {
-            left.alias.max(right.alias)
-        }
+        SqlCond::ColEq(left, right)
+        | SqlCond::NativeColEq(left, right)
+        | SqlCond::NullSafeEq(left, right) => left.alias.max(right.alias),
         SqlCond::Cmp(column, _, _)
+        | SqlCond::NativeCmp(column, _, _)
         | SqlCond::IsNotNull(column)
         | SqlCond::IsNull(column)
         | SqlCond::StrMatch { col: column, .. } => column.alias,
@@ -2176,6 +2177,7 @@ pub(crate) fn pool_rendered(
                 columns,
                 guards,
                 distinct: false,
+                native_keys: vec![],
             },
         });
         branch.bindings = new_bindings;
@@ -3220,14 +3222,20 @@ mod tests {
         );
     }
 
-    /// A refObjectMap triple → a 2-scan branch with the join `ColEq` (design §3.4 / §5).
+    /// A refObjectMap triple → a 2-scan branch with a native database join.
     #[test]
     fn ref_object_map_is_two_scan_branch() {
         let p = plan("SELECT * WHERE { ?s <http://ex/dept> ?d }");
         assert_eq!(p.branches.len(), 1);
         let b = &p.branches[0];
         assert_eq!(b.core.len(), 2, "child ⋈ parent scan: {:?}", b.core);
-        assert!(has_col_eq(&b.where_conds), "{:?}", b.where_conds);
+        assert!(
+            b.where_conds
+                .iter()
+                .any(|c| matches!(c, SqlCond::NativeColEq(..))),
+            "{:?}",
+            b.where_conds
+        );
     }
 
     /// OPTIONAL with a single-scan right → ONE branch with an `OptJoin` (the SQL LEFT

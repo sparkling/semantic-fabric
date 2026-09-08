@@ -424,29 +424,23 @@ fn norec_optimized_equals_unoptimized() {
     }
 }
 
-/// (d) End-to-end FK/PK join-elimination differential (ADR-0007 pass 4, ADR-0012).
-/// `?p ex:dept ?d` isolates a PK-only-parent join: `dept` is reached ONLY via its
-/// PK (`id`) through `person`'s NOT-NULL FK `dept_id`, and no `dept` column other
-/// than that PK is projected (the `?d` IRI rebuilds from the equal child FK). So
-/// the optimizer drops the `dept` scan entirely. This asserts BOTH halves of
-/// soundness the prior structural unit tests could not: (a) the join-eliminated
-/// plan is `=_bag`-identical to the unoptimized two-scan plan over a REAL source
-/// with schema wired, AND (b) the emitted optimized SQL has strictly fewer
-/// joins/scans.
+/// Native FK/PK equality does not prove identical reconstructed RDF values.
+/// Keep the native parent scan while retaining independent optimized/base bag
+/// evidence. Separately proved RDF-key elimination remains covered by unit tests.
 #[test]
-fn fk_pk_join_elimination_end_to_end_differential() {
+fn native_fk_pk_preserves_parent_value_end_to_end() {
     let (conn, maps, schema) = fixture();
     let q = r#"PREFIX ex: <http://ex/> SELECT ?p ?d WHERE { ?p ex:dept ?d }"#;
 
     let opt_plan = engine_plan(&maps, &schema, q, true);
     let base_plan = engine_plan(&maps, &schema, q, false);
 
-    // (b) the parent (`dept`) scan/join is gone from the optimized SQL.
+    // (b) the native parent witness is not removed by RDF-key substitution.
     let opt_scans = scan_count(&opt_plan);
     let base_scans = scan_count(&base_plan);
     assert!(
-        opt_scans < base_scans,
-        "FK/PK elim must reduce joins/scans: optimized={opt_scans} base={base_scans}\n opt_sql={:#?}\n base_sql={:#?}",
+        opt_scans == base_scans,
+        "native FK must retain its witness: optimized={opt_scans} base={base_scans}\n opt_sql={:#?}\n base_sql={:#?}",
         opt_plan.emitted().unwrap().iter().map(|e| e.sql.clone()).collect::<Vec<_>>(),
         base_plan.emitted().unwrap().iter().map(|e| e.sql.clone()).collect::<Vec<_>>(),
     );

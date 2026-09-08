@@ -29,6 +29,7 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
                                         .text_columns
                                         .get(resolve_col(column, Some(&inner.columns)))
                                         .copied()
+                                        .map(|_| TextKey::Verbatim)
                                 }
                                 _ => Some(TextKey::Verbatim),
                             },
@@ -47,6 +48,7 @@ fn projection_sql(
     columns: &[(Box<str>, TermMap)],
     guards: &[SqlCond],
     distinct: bool,
+    native_keys: &[(Box<str>, bool)],
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<String> {
@@ -78,7 +80,14 @@ fn projection_sql(
                 template.segments(),
                 spec.term_type == sf_core::ir::TermType::Iri,
                 dialect,
-                column,
+                |name| {
+                    path_comparison::rdf_column(
+                        &ColRef::new(input.alias, name),
+                        dialect,
+                        catalog,
+                        &actuals,
+                    )
+                },
             )?,
             TermMap::Constant(_) => {
                 return Err(Error::Unsupported("constant projection recipe".into()))
@@ -89,9 +98,71 @@ fn projection_sql(
     if items.is_empty() {
         items.push("1 AS __sf_dummy".into());
     }
+    // Native joins/policies retain their original raw relation until an atom-level
+    // equivalence proof can preserve every consumer (including OPTIONAL/EXISTS).
+    let window = distinct
+        && native_keys.is_empty()
+        && !columns.is_empty()
+        && !actuals[&input.alias].text_columns.is_empty();
+    let mut rank = "__sf_rank".to_owned();
+    while columns
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case(&rank))
+    {
+        rank.push('_');
+    }
+    let mut native_seen = HashSet::new();
+    for (name, _) in native_keys {
+        if !distinct
+            || !native_seen.insert(name)
+            || !columns.iter().any(|(output, term)| {
+                output == name && matches!(term, TermMap::Column(raw, _) if raw == name)
+            })
+        {
+            return Err(Error::Sql("invalid native projection key".into()));
+        }
+    }
+    if window {
+        let mut keys = Vec::new();
+        for (name, term) in columns {
+            let TermMap::Column(raw, _) = term else {
+                return Err(Error::Unsupported("distinct computed scan recipe".into()));
+            };
+            let native = native_keys.iter().find(|(key, _)| key == name);
+            if native.is_none_or(|(_, both)| *both) {
+                keys.push(path_comparison::rdf_column(
+                    &ColRef::new(input.alias, raw.clone()),
+                    dialect,
+                    catalog,
+                    &actuals,
+                ));
+            }
+            if native.is_some() {
+                let key = column(raw);
+                keys.push(
+                    if !catalog.suppress_path_collation
+                        && path_comparison::column_text(
+                            &ColRef::new(input.alias, raw.clone()),
+                            &actuals,
+                        )
+                        .is_some()
+                    {
+                        path_comparison::exact_text(key, dialect)
+                    } else {
+                        key
+                    },
+                );
+            }
+        }
+        items.push(format!(
+            "ROW_NUMBER() OVER (PARTITION BY {}) AS {}",
+            keys.join(", "),
+            dialect.quote_ident(&rank)
+        ));
+    }
     let mut sql = format!(
         "SELECT {}{} FROM {}",
-        if distinct { "DISTINCT " } else { "" },
+        if distinct && !window { "DISTINCT " } else { "" },
         items.join(", "),
         scan_ref(input, dialect, catalog)?
     );
@@ -110,6 +181,17 @@ fn projection_sql(
     if !predicates.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&predicates.join(" AND "));
+    }
+    if window {
+        let selected = columns
+            .iter()
+            .map(|(name, _)| format!("__sf_identity.{}", dialect.quote_ident(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql = format!(
+            "SELECT {selected} FROM ({sql}) __sf_identity WHERE __sf_identity.{} = 1",
+            dialect.quote_ident(&rank)
+        );
     }
     Ok(sql)
 }
@@ -207,8 +289,17 @@ pub(super) fn scan_ref(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -
             columns,
             guards,
             distinct,
+            native_keys,
         } => {
-            let sql = projection_sql(input, columns, guards, *distinct, dialect, catalog)?;
+            let sql = projection_sql(
+                input,
+                columns,
+                guards,
+                *distinct,
+                native_keys,
+                dialect,
+                catalog,
+            )?;
             Ok(format!("({sql}) t{alias}"))
         }
     }
@@ -242,7 +333,7 @@ mod tests {
                 for (template, expected) in [
                     (
                         "{KEY}",
-                        if dialect == Dialect::MySql {
+                        if dialect == Dialect::MySql || key.is_some() {
                             Some(TextKey::Verbatim)
                         } else {
                             key
@@ -266,6 +357,7 @@ mod tests {
                             )],
                             guards: vec![],
                             distinct: false,
+                            native_keys: vec![],
                         },
                     };
                     let actuals = scan_actuals(&scan, dialect, &catalog);

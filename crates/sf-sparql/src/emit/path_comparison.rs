@@ -7,7 +7,7 @@ mod tests;
 #[cfg(test)]
 thread_local! { static METADATA_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
-fn exact_text(expression: String, dialect: Dialect) -> String {
+pub(super) fn exact_text(expression: String, dialect: Dialect) -> String {
     match dialect {
         Dialect::Sqlite => format!("({expression} COLLATE BINARY)"),
         Dialect::Postgres => format!("({expression} COLLATE \"C\")"),
@@ -113,7 +113,7 @@ pub(super) fn branch_has_path(branch: &Branch) -> bool {
         })
 }
 
-fn column_text(column: &ColRef, actuals: &ActualColumns) -> Option<TextKey> {
+pub(super) fn column_text(column: &ColRef, actuals: &ActualColumns) -> Option<TextKey> {
     actuals.get(&column.alias).and_then(|a| {
         a.text_columns
             .get(resolve_col(&column.column, Some(&a.columns)))
@@ -146,6 +146,22 @@ fn decoded_text(
     }
 }
 
+/// RDF comparison key, without converting unrelated native type families.
+pub(super) fn rdf_column(
+    column: &ColRef,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+) -> String {
+    let key = column_text(column, actuals);
+    let expression = decoded_text(colref(column, dialect, actuals), key, dialect, catalog);
+    if !catalog.suppress_path_collation && key.is_some() {
+        exact_text(expression, dialect)
+    } else {
+        expression
+    }
+}
+
 pub(super) fn subplan_actuals(
     plan: &crate::Plan,
     dialect: Dialect,
@@ -156,6 +172,11 @@ pub(super) fn subplan_actuals(
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
     for branch in &plan.branches {
+        let effective_distinct = if plan.branches.len() == 1 {
+            plan.distinct
+        } else {
+            branch.distinct
+        };
         let projection: Vec<_> = match &branch.agg {
             Some(agg) if branch.path.is_none() => aggregate_projection(agg, dialect)
                 .iter()
@@ -180,7 +201,23 @@ pub(super) fn subplan_actuals(
                 column
                     .as_ref()
                     .and_then(|column| column_text(column, &actuals))
-                    .map(|key| (index, key))
+                    .map(|key| {
+                        (
+                            index,
+                            if branch.agg.is_none()
+                                && branch.path.is_none()
+                                && (plan.distinct || effective_distinct)
+                                && !crate::cascade::eligible_for_term_dedup_with_distinct(
+                                    branch,
+                                    effective_distinct,
+                                )
+                            {
+                                TextKey::Verbatim
+                            } else {
+                                key
+                            },
+                        )
+                    })
             })
             .collect();
         match common.as_mut() {
@@ -213,7 +250,7 @@ pub(super) fn render_key_equality(
     let path = [a, b]
         .iter()
         .any(|c| actuals.get(&c.alias).is_some_and(|a| a.path));
-    if path {
+    if path || (column_text(a, actuals).is_some() && column_text(b, actuals).is_some()) {
         let (a_key, b_key) = (column_text(a, actuals), column_text(b, actuals));
         left = decoded_text(left, a_key, dialect, catalog);
         right = decoded_text(right, b_key, dialect, catalog);

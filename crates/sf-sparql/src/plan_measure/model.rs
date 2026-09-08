@@ -140,6 +140,7 @@ pub(super) fn visit_scan<'a>(
             input,
             columns,
             guards,
+            native_keys,
             ..
         } => {
             walker.push(depth, Work::Scan(input))?;
@@ -147,6 +148,10 @@ pub(super) fn visit_scan<'a>(
             for (name, term) in columns {
                 walker.payload(name.len())?;
                 walker.push(depth, Work::TermMap(term))?;
+            }
+            walker.collection(native_keys.len())?;
+            for (name, _) in native_keys {
+                walker.payload(name.len())?;
             }
             push_conditions(walker, guards, depth)
         }
@@ -239,11 +244,13 @@ pub(super) fn visit_sql_cond<'a>(
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
     match cond {
-        SqlCond::ColEq(left, right) | SqlCond::NullSafeEq(left, right) => {
+        SqlCond::ColEq(left, right)
+        | SqlCond::NativeColEq(left, right)
+        | SqlCond::NullSafeEq(left, right) => {
             walker.push(depth, Work::ColRef(left))?;
             walker.push(depth, Work::ColRef(right))?;
         }
-        SqlCond::Cmp(col, _operation, param) => {
+        SqlCond::Cmp(col, _operation, param) | SqlCond::NativeCmp(col, _operation, param) => {
             walker.push(depth, Work::ColRef(col))?;
             walker.payload(param.len())?;
         }

@@ -91,6 +91,76 @@ fn aggregate_metadata_uses_sql_projection_order() {
 }
 
 #[test]
+fn singleton_metadata_uses_prepared_distinct_and_term_dedup_state() {
+    let (maps, mut catalog) = fixture();
+    catalog
+        .insert_live_result(
+            &maps[0].source,
+            vec![
+                sf_sql::backend::ResultColumn {
+                    name: "src".into(),
+                    text_key: None,
+                },
+                sf_sql::backend::ResultColumn {
+                    name: "dst".into(),
+                    text_key: Some(TextKey::SqliteCharacter(4)),
+                },
+            ],
+        )
+        .unwrap();
+    for plan_distinct in [false, true] {
+        for stored_distinct in [false, true] {
+            for noninjective in [false, true] {
+                let mut plan = crate::parse_and_translate(
+                    "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o }",
+                    &maps,
+                    Dialect::Sqlite,
+                )
+                .unwrap();
+                let mut branch = Branch::single(crate::iq::Scan {
+                    alias: 0,
+                    source: maps[0].source.clone().into(),
+                });
+                branch.bindings.insert(
+                    "v".into(),
+                    TermDef::Derived {
+                        alias: 0,
+                        term_map: if noninjective {
+                            TermMap::Template(
+                                sf_core::ir::Template::parse("{src}{dst}").unwrap(),
+                                sf_core::ir::TermSpec::plain_literal(),
+                            )
+                        } else {
+                            TermMap::Column("dst".into(), sf_core::ir::TermSpec::plain_literal())
+                        },
+                    },
+                );
+                branch.distinct = stored_distinct;
+                plan.branches = vec![branch];
+                plan.distinct = plan_distinct;
+                let expected = if plan_distinct && !noninjective {
+                    TextKey::Verbatim
+                } else {
+                    TextKey::SqliteCharacter(4)
+                };
+                let actuals = subplan_actuals(&plan, Dialect::Sqlite, &catalog);
+                assert_eq!(
+                    actuals.text_columns.values().copied().collect::<Vec<_>>(),
+                    vec![expected]
+                );
+                let emitted =
+                    emit_branch_with(&plan.prepared_branches()[0], Dialect::Sqlite, &catalog)
+                        .unwrap();
+                assert_eq!(
+                    emitted.sqlite_character_keys,
+                    plan_distinct && !noninjective
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn sqlite_avg_layout_includes_only_its_metadata_operand() {
     let (maps, catalog) = fixture();
     let mut plan = crate::parse_and_translate(
@@ -247,10 +317,11 @@ fn character_decoder_emission_is_explicit_and_preserved_in_metadata() {
             dialect,
         )
         .unwrap();
-        assert!(
-            !emit_branch_with(&ordinary.prepared_branches()[0], dialect, &catalog)
+        assert_eq!(
+            emit_branch_with(&ordinary.prepared_branches()[0], dialect, &catalog)
                 .unwrap()
-                .sqlite_character_keys
+                .sqlite_character_keys,
+            dialect == Dialect::Sqlite,
         );
     }
 }

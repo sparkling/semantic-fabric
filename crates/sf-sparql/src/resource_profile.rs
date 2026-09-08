@@ -149,8 +149,10 @@ fn condition_reads_source(condition: &crate::iq::SqlCond) -> bool {
             conditions.iter().any(condition_reads_source)
         }
         SqlCond::ColEq(..)
+        | SqlCond::NativeColEq(..)
         | SqlCond::NullSafeEq(..)
         | SqlCond::Cmp(..)
+        | SqlCond::NativeCmp(..)
         | SqlCond::StrMatch { .. }
         | SqlCond::IsNotNull(..)
         | SqlCond::IsNull(..)

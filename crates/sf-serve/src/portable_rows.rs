@@ -165,10 +165,19 @@ impl PortableRowPolicy {
             *sql =
                 sf_sql::policy_projection::expose_single_table_view_columns(sql, dialect, &columns)
                     .map_err(|_| denied())?;
-        } else if let ScanSource::Projection { columns, .. } = &mut scan.source {
+        } else if let ScanSource::Projection {
+            columns,
+            native_keys,
+            ..
+        } = &mut scan.source
+        {
             // Only the sealed same-named raw-column DISTINCT shape reached here.
             // Expose policy keys without embedding policy values in generated SQL.
             for rule in &matching {
+                let existing = columns.iter().any(|(name, _)| name == &rule.column);
+                if !native_keys.iter().any(|(name, _)| name == &rule.column) {
+                    native_keys.push((rule.column.clone(), existing));
+                }
                 if !columns.iter().any(|(name, _)| name == &rule.column) {
                     columns.push((
                         rule.column.clone(),
@@ -183,7 +192,7 @@ impl PortableRowPolicy {
         Ok(matching
             .into_iter()
             .map(|rule| {
-                SqlCond::Cmp(
+                SqlCond::NativeCmp(
                     ColRef::new(scan.alias, rule.column.clone()),
                     CmpOp::Eq,
                     rule.value.to_string(),

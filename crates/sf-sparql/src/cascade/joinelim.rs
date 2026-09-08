@@ -311,13 +311,14 @@ fn rewrite_parent_template_segments_multi(
 
 fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
     match cond {
-        SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
+        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             rewrite_parent_colref_multi(a, e);
             rewrite_parent_colref_multi(b, e);
         }
-        SqlCond::Cmp(a, _, _) | SqlCond::IsNotNull(a) | SqlCond::IsNull(a) => {
-            rewrite_parent_colref_multi(a, e)
-        }
+        SqlCond::Cmp(a, _, _)
+        | SqlCond::NativeCmp(a, _, _)
+        | SqlCond::IsNotNull(a)
+        | SqlCond::IsNull(a) => rewrite_parent_colref_multi(a, e),
         SqlCond::StrMatch { col, .. } => rewrite_parent_colref_multi(col, e),
         SqlCond::Not(c) => rewrite_parent_cond_multi(c, e),
         SqlCond::And(cs) | SqlCond::Or(cs) => {
@@ -534,13 +535,14 @@ fn rewrite_parent_template_segments(segs: &mut [Segment], alias: &mut usize, e: 
 
 fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
     match cond {
-        SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
+        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             rewrite_parent_colref(a, e);
             rewrite_parent_colref(b, e);
         }
-        SqlCond::Cmp(a, _, _) | SqlCond::IsNotNull(a) | SqlCond::IsNull(a) => {
-            rewrite_parent_colref(a, e)
-        }
+        SqlCond::Cmp(a, _, _)
+        | SqlCond::NativeCmp(a, _, _)
+        | SqlCond::IsNotNull(a)
+        | SqlCond::IsNull(a) => rewrite_parent_colref(a, e),
         SqlCond::StrMatch { col, .. } => rewrite_parent_colref(col, e),
         SqlCond::Not(c) => rewrite_parent_cond(c, e),
         SqlCond::And(cs) | SqlCond::Or(cs) => {

@@ -383,8 +383,8 @@ fn stale_foreign_key_cannot_invent_a_reference_triple() {
 
     assert_eq!(
         exec::select(&poisoned, &conn).unwrap().rows.len(),
-        1,
-        "the stale FK/PK pair must poison this fixture, or the safe assertion is vacuous"
+        0,
+        "native FK equality no longer licenses replacing a missing parent's RDF value"
     );
     for _ in 0..2 {
         assert_eq!(

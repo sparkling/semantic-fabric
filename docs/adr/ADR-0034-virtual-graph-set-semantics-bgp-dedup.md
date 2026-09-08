@@ -23,9 +23,9 @@ available. Generated wrappers are not authored queries or catalog/constraint
 authority. Stable quoted output labels carry resolved native columns through
 nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
 
-Raw columns retain native descriptors. Transparent one-column non-IRI templates
-retain those descriptors on PostgreSQL/SQLite; actual concatenations use text
-descriptors. Existing template encoding and query/policy parameter isolation remain.
+Raw columns retain native descriptors. Live-proven text template operands now
+normalize to decoder text; transparent non-text operands retain their descriptors
+on PostgreSQL/SQLite. Template encoding and parameter isolation remain.
 Only same-named raw-column DISTINCT over one table may expose portable-policy
 keys or be restored by the existing bounded-join proof; computed/nested wrappers
 gain no such authority. Shared RDF-term dedup follows relation aliases, not
@@ -35,8 +35,20 @@ Required owned TLS public SELECT now resolves mapping SRC/DST against native
 lowercase columns on PostgreSQL16.15/MySQL8.4.11. Boundary tests cover original
 probes, nested/conditional wrappers, missing/ambiguous names before cursors,
 descriptor propagation, parameter separation and clone-work measurement.
-This repairs identifier folding, not ordinary SQL-collation versus RDF identity,
-generic synthetic row identity or total source-work/release qualification.
+Ordinary text-only D1 comparisons now use decoded, exact keys in a native window
+partition while returning original raw values. SELECT DISTINCT and SQL-pooled
+outputs normalize text keys too; SQLite metadata twins preserve decoder identity.
+Required public SELECT/ASK/COUNT and JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS checks
+cover SQLite NOCASE plus pinned PostgreSQL/MySQL native collations and CHAR widths.
+
+`NativeColEq` and `NativeCmp` preserve authored Ref joins and row-policy predicates.
+Scans with native consumers retain prior raw DISTINCT semantics; normalizing their
+keys without an atom-level proof could erase valid matches. A singleton-SubPlan
+experiment was rejected because it regressed established OPTIONAL/EXISTS paths.
+The ignored `reference_atom_dedup_preserves_conflicting_collations_and_projection_bags`
+test is a recorded, still-failing Ref-witness exactness requirement, not passing
+evidence or a deferral from v1. Native-consumer set identity, general mixed/natural
+types, synthetic row identity and total source-work/release qualification remain open.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

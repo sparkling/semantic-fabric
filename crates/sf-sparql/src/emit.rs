@@ -343,11 +343,14 @@ pub(crate) fn validate_live_columns(
         catalog: &ColumnCatalog,
     ) -> Result<()> {
         match condition {
-            SqlCond::ColEq(left, right) | SqlCond::NullSafeEq(left, right) => {
+            SqlCond::ColEq(left, right)
+            | SqlCond::NativeColEq(left, right)
+            | SqlCond::NullSafeEq(left, right) => {
                 validate_ref(left, aliases, dialect, catalog)?;
                 validate_ref(right, aliases, dialect, catalog)
             }
             SqlCond::Cmp(column, _, _)
+            | SqlCond::NativeCmp(column, _, _)
             | SqlCond::IsNotNull(column)
             | SqlCond::IsNull(column)
             | SqlCond::StrMatch { col: column, .. } => {
@@ -657,10 +660,7 @@ pub fn emit_branch_with(
     emission_catalog.character_keys = Default::default();
     let catalog = &emission_catalog;
     let mut emitted = emit_branch_inner(b, dialect, catalog)?;
-    if dialect == Dialect::Sqlite
-        && !catalog.suppress_path_collation
-        && path_comparison::branch_has_path(b)
-    {
+    if dialect == Dialect::Sqlite && !catalog.suppress_path_collation {
         let mut metadata_catalog = catalog.clone();
         metadata_catalog.suppress_path_collation = true;
         let metadata = emit_branch_inner(b, dialect, &metadata_catalog)?;
@@ -683,6 +683,15 @@ fn emit_branch_inner(
     b: &Branch,
     dialect: Dialect,
     catalog: &ColumnCatalog,
+) -> Result<EmittedBranch> {
+    emit_branch_keys(b, dialect, catalog, b.distinct)
+}
+
+fn emit_branch_keys(
+    b: &Branch,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    normalize_projection: bool,
 ) -> Result<EmittedBranch> {
     let actuals = branch_actuals(b, dialect, catalog);
     if let Some(pc) = &b.path {
@@ -754,7 +763,16 @@ fn emit_branch_inner(
         projection
             .iter()
             .enumerate()
-            .map(|(i, c)| format!("{} AS c{i}", colref(c, dialect, &actuals)))
+            .map(|(i, c)| {
+                format!(
+                    "{} AS c{i}",
+                    if normalize_projection && !term_dedup {
+                        path_comparison::rdf_column(c, dialect, catalog, &actuals)
+                    } else {
+                        colref(c, dialect, &actuals)
+                    }
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -776,7 +794,14 @@ fn emit_branch_inner(
         skeleton.push_str(&w);
     }
     // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
-    if let Some(order) = render_order(&b.order, b, dialect, &actuals)? {
+    if let Some(order) = render_order(
+        &b.order,
+        b,
+        dialect,
+        catalog,
+        &actuals,
+        normalize_projection && !term_dedup,
+    )? {
         skeleton.push_str(&order);
     }
     push_limit_offset(&mut skeleton, b, dialect);
@@ -829,7 +854,9 @@ fn render_order(
     order: &[OrderKey],
     b: &Branch,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &ActualColumns,
+    normalize: bool,
 ) -> Result<Option<String>> {
     if order.is_empty() {
         return Ok(None);
@@ -854,7 +881,14 @@ fn render_order(
         } else {
             "ASC NULLS FIRST"
         };
-        terms.push(format!("{} {dir}", colref(&col, dialect, actuals)));
+        terms.push(format!(
+            "{} {dir}",
+            if normalize {
+                path_comparison::rdf_column(&col, dialect, catalog, actuals)
+            } else {
+                colref(&col, dialect, actuals)
+            }
+        ));
     }
     Ok(Some(format!(" ORDER BY {}", terms.join(", "))))
 }
@@ -1403,7 +1437,7 @@ fn emit_subplan_sql(
     }
     let emitted = branches
         .iter()
-        .map(|branch| emit_branch_inner(branch, dialect, &catalog))
+        .map(|branch| emit_branch_keys(branch, dialect, &catalog, plan.distinct || branch.distinct))
         .collect::<Result<Vec<_>>>()?;
     if emitted.is_empty() {
         // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
@@ -1519,17 +1553,26 @@ fn render_cond(
 ) -> Result<String> {
     Ok(match cond {
         SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals),
+        SqlCond::NativeColEq(a, b) => format!(
+            "{} = {}",
+            colref(a, dialect, actuals),
+            colref(b, dialect, actuals)
+        ),
         SqlCond::NullSafeEq(a, b) => {
             let (la, lb) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
             let equal = render_key_equality(a, b, dialect, catalog, actuals);
             format!("({equal} OR {la} IS NULL OR {lb} IS NULL)")
         }
-        SqlCond::Cmp(a, op, val) => {
+        SqlCond::Cmp(a, op, val) | SqlCond::NativeCmp(a, op, val) => {
             params.push(val.clone());
             *pidx += 1;
             format!(
                 "{} {} {}",
-                colref(a, dialect, actuals),
+                if matches!(cond, SqlCond::NativeCmp(..)) {
+                    colref(a, dialect, actuals)
+                } else {
+                    path_comparison::rdf_column(a, dialect, catalog, actuals)
+                },
                 op.as_sql(),
                 dialect.placeholder(*pidx)
             )
@@ -1643,8 +1686,22 @@ fn render_cond(
         // argument (why a NULL underlying column correctly excludes the row
         // rather than needing special-casing here).
         SqlCond::TemplateEq(sx, a1, sy, a2, encode_iri) => {
-            let r1 = render_template_concat(sx, *a1, *encode_iri, dialect, actuals, params, pidx)?;
-            let r2 = render_template_concat(sy, *a2, *encode_iri, dialect, actuals, params, pidx)?;
+            let r1 = render_template_concat(
+                sx,
+                *encode_iri,
+                dialect,
+                |c| path_comparison::rdf_column(&ColRef::new(*a1, c), dialect, catalog, actuals),
+                params,
+                pidx,
+            )?;
+            let r2 = render_template_concat(
+                sy,
+                *encode_iri,
+                dialect,
+                |c| path_comparison::rdf_column(&ColRef::new(*a2, c), dialect, catalog, actuals),
+                params,
+                pidx,
+            )?;
             format!("{r1} = {r2}")
         }
     })
@@ -1712,10 +1769,9 @@ fn render_cond(
 /// pushdown already sets for an analogous dialect-behavior gap.
 fn render_template_concat(
     segs: &[sf_core::ir::Segment],
-    alias: usize,
     encode_iri: bool,
     dialect: Dialect,
-    actuals: &ActualColumns,
+    column: impl Fn(&str) -> String,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
@@ -1729,7 +1785,7 @@ fn render_template_concat(
                 dialect.placeholder(*pidx)
             }
             Segment::Column(c) => {
-                let col = colref(&ColRef::new(alias, c.clone()), dialect, actuals);
+                let col = column(c);
                 if encode_iri {
                     percent_encode_col(&col, dialect)?
                 } else {

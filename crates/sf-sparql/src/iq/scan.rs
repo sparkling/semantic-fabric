@@ -18,6 +18,8 @@ pub enum ScanSource {
         columns: Vec<(Box<str>, TermMap)>,
         guards: Vec<SqlCond>,
         distinct: bool,
+        /// Native comparison keys; bool also requires RDF-key equivalence.
+        native_keys: Vec<(Box<str>, bool)>,
     },
 }
 
@@ -54,6 +56,7 @@ impl ScanSource {
                 columns,
                 guards,
                 distinct: true,
+                ..
             } if guards.is_empty()
                 && !columns.is_empty()
                 && columns.iter().all(

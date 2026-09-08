@@ -361,11 +361,15 @@ pub fn term_map_type(term_map: &TermMap) -> Option<TermType> {
 pub enum SqlCond {
     /// `l = r` — an inner-join key equality (raw columns).
     ColEq(ColRef, ColRef),
+    /// Authored rr:joinCondition: native database equality, not RDF identity.
+    NativeColEq(ColRef, ColRef),
     /// `(l = r OR l IS NULL OR r IS NULL)` — the OPTIONAL shared-variable
     /// compatibility condition (ADR-0007 R1); **never** a plain `l = r`.
     NullSafeEq(ColRef, ColRef),
     /// `col <op> ?` — a comparison against a bound constant (its lexical form).
     Cmp(ColRef, CmpOp, String),
+    /// Trusted source policy comparison; preserve database value/collation rules.
+    NativeCmp(ColRef, CmpOp, String),
     /// A source-side string-match pushdown — the near-free FTS baseline
     /// (ADR-0020 §2): a SPARQL string FILTER lowered so the source index/scan does
     /// the work. `param` is the match operand and is a **bound parameter only**
@@ -837,11 +841,14 @@ impl Branch {
 /// Walk every [`ColRef`] mentioned by a condition.
 pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
     match cond {
-        SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
+        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             f(a);
             f(b);
         }
-        SqlCond::Cmp(a, _, _) | SqlCond::IsNotNull(a) | SqlCond::IsNull(a) => f(a),
+        SqlCond::Cmp(a, _, _)
+        | SqlCond::NativeCmp(a, _, _)
+        | SqlCond::IsNotNull(a)
+        | SqlCond::IsNull(a) => f(a),
         SqlCond::StrMatch { col, .. } => f(col),
         SqlCond::Not(c) => collect_cond_cols(c, f),
         SqlCond::And(cs) | SqlCond::Or(cs) => {

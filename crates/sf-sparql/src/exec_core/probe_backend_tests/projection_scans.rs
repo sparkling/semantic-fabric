@@ -19,6 +19,7 @@ fn projected(source: LogicalSource) -> Scan {
                     )],
                     guards: vec![],
                     distinct: true,
+                    native_keys: vec![],
                 },
             }),
             columns: vec![(
@@ -27,6 +28,7 @@ fn projected(source: LogicalSource) -> Scan {
             )],
             guards: vec![SqlCond::IsNotNull(ColRef::new(6, "KEY"))],
             distinct: false,
+            native_keys: vec![],
         },
     }
 }

@@ -806,7 +806,7 @@ impl<'a> Unfolder<'a> {
                     source: (self.copy_source(&parent.source)?).into(),
                 });
                 for j in &r.joins {
-                    branch.where_conds.push(SqlCond::ColEq(
+                    branch.where_conds.push(SqlCond::NativeColEq(
                         crate::iq::ColRef::new(alias, j.child.clone()),
                         crate::iq::ColRef::new(palias, j.parent.clone()),
                     ));
