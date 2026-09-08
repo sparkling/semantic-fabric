@@ -4,6 +4,14 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 pub(super) fn bag(body: &[u8], source_counts: [usize; 2]) -> (Value, Vec<String>) {
+    checked_bag(body, Some(source_counts))
+}
+
+pub(super) fn join_bag(body: &[u8]) -> (Value, Vec<String>) {
+    checked_bag(body, None)
+}
+
+fn checked_bag(body: &[u8], source_counts: Option<[usize; 2]>) -> (Value, Vec<String>) {
     let records: Vec<Value> = std::str::from_utf8(body)
         .unwrap()
         .split('\u{1e}')
@@ -11,7 +19,19 @@ pub(super) fn bag(body: &[u8], source_counts: [usize; 2]) -> (Value, Vec<String>
         .map(|part| serde_json::from_str(part).unwrap())
         .collect();
     let header = &records[0];
-    assert_eq!(header["profile"], "bounded-federated-union-lineage-v1");
+    let join = source_counts.is_none();
+    assert_eq!(
+        header["profile"],
+        if join {
+            "bounded-federated-join-lineage-v1"
+        } else {
+            "bounded-federated-union-lineage-v1"
+        }
+    );
+    if join {
+        assert_eq!(header["maxBuildTriples"], 128);
+        assert_eq!(header["maxProbeTriples"], 4096);
+    }
     assert_eq!(header["rowKeys"], "not-provided");
     assert_eq!(header["sources"].as_array().unwrap().len(), 2);
     assert_ne!(
@@ -20,7 +40,9 @@ pub(super) fn bag(body: &[u8], source_counts: [usize; 2]) -> (Value, Vec<String>
     );
     assert_eq!(records.last().unwrap()["type"], "complete");
     let count = records.len() - 2;
-    assert_eq!(count, source_counts.iter().sum::<usize>());
+    if let Some(counts) = source_counts {
+        assert_eq!(count, counts.iter().sum::<usize>());
+    }
     assert_eq!(records.last().unwrap()["solutions"], count);
     let mut results = Vec::new();
     let mut bundles = BTreeSet::new();
@@ -38,17 +60,30 @@ pub(super) fn bag(body: &[u8], source_counts: [usize; 2]) -> (Value, Vec<String>
             .filter_map(|n| n["sf:sourceId"].as_u64())
             .collect();
         // Counts are known from the fixture, not inferred from returned metadata.
-        let source = usize::from(ordinal >= source_counts[0]);
-        assert_eq!(sources, vec![source as u64]);
+        let expected_sources: Vec<usize> = source_counts.map_or_else(
+            || vec![0, 1],
+            |counts| vec![usize::from(ordinal >= counts[0])],
+        );
+        assert_eq!(
+            sources,
+            expected_sources
+                .iter()
+                .map(|&s| s as u64)
+                .collect::<Vec<_>>()
+        );
         let maps: BTreeSet<_> = nodes
             .iter()
             .filter_map(|n| n["sf:mappingId"].as_str())
             .collect();
-        let expected: BTreeSet<_> = header["sources"][source]["mappingCatalog"]
-            .as_array()
-            .unwrap()
+        let expected: BTreeSet<_> = expected_sources
             .iter()
-            .map(|v| v.as_str().unwrap())
+            .flat_map(|&source| {
+                header["sources"][source]["mappingCatalog"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+            })
             .collect();
         assert_eq!(maps, expected);
         let quads = oxjsonld::JsonLdParser::new()
@@ -73,16 +108,36 @@ pub(super) fn bag(body: &[u8], source_counts: [usize; 2]) -> (Value, Vec<String>
             .filter(|q| q.predicate.as_str() == "http://www.w3.org/ns/prov#used")
             .map(|q| q.object.to_string())
             .collect();
-        assert!(used.contains(&format!(
-            "<{}>",
-            header["sources"][source]["source"].as_str().unwrap()
-        )));
-        assert!(used.contains(&format!(
-            "<{}>",
-            header["sources"][source]["mappingDocument"]
-                .as_str()
-                .unwrap()
-        )));
+        for source in expected_sources {
+            assert!(used.contains(&format!(
+                "<{}>",
+                header["sources"][source]["source"].as_str().unwrap()
+            )));
+            assert!(used.contains(&format!(
+                "<{}>",
+                header["sources"][source]["mappingDocument"]
+                    .as_str()
+                    .unwrap()
+            )));
+            if join {
+                let map = nodes
+                    .iter()
+                    .find(|n| {
+                        n["sf:mappingId"] == header["sources"][source]["mappingCatalog"][0]
+                            && n["sf:source"]["@id"] == header["sources"][source]["source"]
+                    })
+                    .unwrap();
+                assert!(used.contains(&format!("<{}>", map["@id"].as_str().unwrap())));
+                assert!(quads.iter().any(|q| q.predicate.as_str()
+                    == "urn:semantic-fabric:lineage:source"
+                    && q.subject.to_string() == format!("<{}>", map["@id"].as_str().unwrap())
+                    && q.object.to_string()
+                        == format!(
+                            "<{}>",
+                            header["sources"][source]["source"].as_str().unwrap()
+                        )));
+            }
+        }
     }
     stop_matrix::bag(
         &serde_json::to_vec(

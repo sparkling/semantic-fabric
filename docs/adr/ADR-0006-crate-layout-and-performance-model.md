@@ -81,6 +81,14 @@ A parameter-bound conservative reducer is added to the already authorized probe 
 
 Both source leases are acquired before execution. One pinned application generation/security context/budget covers both statements; each database supplies its own source-local statement view, **not a distributed data snapshot or a backend DDL lease**. The complete serialized response is capacity-checked before HTTP 200, so source failure, overflow and observed deadline/cancellation cannot expose a success prefix. Fragments now share ADR-0010's owned native PostgreSQL/MySQL stop/discard guards; required pinned PostgreSQL 16.15/MySQL 8.4.11 TLS CLI tests now cover UNION and both join pattern orders under deadline, disconnect and forced SIGTERM, observe target native stop with server-side granted-lock witnesses, preserve a distinct same-credential CLI sibling, and recover the full exact bag through both cap-one pools. Join timeout remains pre-200; failed streaming UNION has no clean chunked completion. Wider backend/profile combinations, protected source generations and exact-release admission still require ADR-0055 qualification. No total heap bound or database scan-cost proof is inferred from coordinator payload accounting. Required public tests include an independent materialized graph oracle, collation/padding/NULL/bag boundaries, authorization, 128/129 and 4096/4097 limits, failure recovery, real SQLite CLI reload, and encrypted mixed PostgreSQL/MySQL CLI joins.
 
+**Join lineage (2026-09-08):** ADR-0017's explicit media type reuses this exact
+bounded join and its capped pre-200 serializer. Each mandatory direct emitter
+supplies a sealed `(SourceId, mappingId)` pair that follows cost-side swapping;
+only a successful RDF match/projected occurrence records both origins. No witness
+engine, re-query, general join, row-key inference or second result buffer is added.
+Required HTTP and pinned PostgreSQL/MySQL TLS CLI checks retain exact bags,
+source/security/activation identity, caps and native terminal-path evidence.
+
 ### Streaming & bounded memory (the invariant)
 
 Except for the explicitly capped pre-200 join response above, admitted results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw()` → `RowStream`; never the buffer-all `query()`), per-row term generation, and a streamed serializer — **SPARQL 1.2 Results** (SELECT/ASK) or **JSON-LD** (CONSTRUCT/DESCRIBE; expanded/incremental, never framed — ADR-0019). No admitted operator buffers instance data unbounded; blocking operators are pushed to the source or require a separately accepted bounded implementation. Governance (timeouts, caps, backpressure, cancel-on-drop) is ADR-0010.

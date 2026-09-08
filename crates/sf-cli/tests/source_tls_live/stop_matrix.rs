@@ -139,11 +139,15 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
             (join::JOIN, "application/sparql-results+json"),
             (join::REVERSED, "application/sparql-results+json"),
             (UNION, lineage::FORMAT),
+            (join::JOIN, lineage::FORMAT),
+            (join::REVERSED, lineage::FORMAT),
         ] {
             let is_join = query != UNION;
             let is_lineage = format == lineage::FORMAT;
             let checked_bag = |body: &[u8]| {
-                if is_lineage {
+                if is_lineage && is_join {
+                    federated_lineage::join_bag(body)
+                } else if is_lineage {
                     federated_lineage::bag(body, [3, 5])
                 } else {
                     bag(body)
@@ -222,18 +226,28 @@ pub(super) fn assert_federated_stop(fixture: &Fixture, postgres: &Database, mysq
                             .unwrap()
                             .success());
                         let response = wire(stream);
-                        if is_lineage {
+                        if is_lineage && !is_join {
                             lineage_stop::failed_wire(&response);
                         }
                         if is_join {
-                            assert!(!response.starts_with(b"HTTP/1.1 200"));
+                            // A cancelled pre-200 join uses the existing redacted
+                            // Internal mapping; the streaming UNION oracle is
+                            // deliberately inapplicable to this buffered path.
+                            assert!(
+                                response.is_empty()
+                                    || response.starts_with(b"HTTP/1.1 500 ")
+                                    || response.starts_with(b"HTTP/1.1 504 "),
+                                "unexpected shutdown status: {}",
+                                String::from_utf8_lossy(&response)
+                            );
+                            assert!(!response.contains(&0x1e));
                         } else {
                             assert_no_complete_union_success(&response);
                         }
                     }
                     Stop::Deadline => {
                         let response = wire(stream);
-                        if is_lineage {
+                        if is_lineage && !is_join {
                             lineage_stop::failed_wire(&response);
                         }
                         if is_join {

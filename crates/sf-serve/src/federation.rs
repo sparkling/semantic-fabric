@@ -95,12 +95,17 @@ pub(crate) async fn select_union_body(
         return Err(problem::response(ProblemCode::Internal));
     }
     if proof.as_ref().is_some_and(|proof| {
-        join.is_some()
-            || source_ids.iter().zip(&specs).any(|(id, spec)| {
+        if let Some(join) = &join {
+            !proof.matches_join(join, source_ids) || specs.iter().any(Option::is_some)
+        } else {
+            source_ids.iter().zip(&specs).any(|(id, spec)| {
                 spec.as_ref()
                     .is_none_or(|spec| !proof.matches_source(*id, spec))
             })
-    }) || (proof.is_none() && specs.iter().any(Option::is_some))
+        }
+    }) || (proof.is_none()
+        && (specs.iter().any(Option::is_some)
+            || join.as_ref().is_some_and(|j| j.mapping_origins().is_some())))
     {
         let _ = generations.finish().await;
         return Err(problem::response(ProblemCode::Internal));
@@ -154,6 +159,10 @@ pub(crate) async fn select_union_body(
     }
 
     if let Some(join) = join {
+        let format = proof.map_or(
+            stream::SelectFormat::Standard(format),
+            stream::SelectFormat::Lineage,
+        );
         return join::body(acquired, source_ids, join, variables, format, budget).await;
     }
     if let Some(proof) = proof {

@@ -4,10 +4,10 @@ use oxrdf::Variable;
 use sf_core::query_control::{QueryCharge, QueryControlError};
 use sf_core::{BlankNode, SourceId, Term};
 use sf_sparql::federation::BoundedJoin;
-use sparesults::QueryResultsSerializer;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::Mutex;
+mod output;
 
 // Exact per-triple identity inside this merge, not a general DISTINCT operator.
 // The cap and retained-byte admission are independent of source cardinality.
@@ -40,7 +40,7 @@ pub(super) async fn body(
     source_ids: [SourceId; 2],
     join: BoundedJoin,
     variables: Vec<String>,
-    format: QueryResultsFormat,
+    format: stream::SelectFormat,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
     let task_budget = budget.clone();
@@ -64,7 +64,7 @@ async fn execute(
     source_ids: [SourceId; 2],
     join: BoundedJoin,
     variables: Vec<String>,
-    format: QueryResultsFormat,
+    format: stream::SelectFormat,
     budget: RequestBudget,
 ) -> sf_sparql::Result<Vec<u8>> {
     let [build, mut probe]: [AcquiredFragment; 2] = acquired
@@ -127,15 +127,13 @@ async fn execute(
         }
     }
     let vars: Vec<_> = variables.iter().map(Variable::new_unchecked).collect();
-    let writer = QueryResultsSerializer::from_format(format)
-        .serialize_solutions_to_writer(
-            CappedWriter {
-                bytes: Vec::new(),
-                budget: budget.clone(),
-            },
-            vars.clone(),
-        )
-        .map_err(|_| writer_error(&budget))?;
+    let writer = match output::Output::new(format, vars.clone(), budget.clone()) {
+        Ok(writer) => writer,
+        Err(_) => {
+            close_acquired(vec![probe]).await;
+            return Err(writer_error(&budget));
+        }
+    };
     let writer = Arc::new(Mutex::new(Some(writer)));
     let mut sink: RowSink = {
         let writer = writer.clone();
@@ -143,47 +141,44 @@ async fn execute(
         let mut probe_high_water = 0;
         let mut seen = HashSet::new();
         Box::new(move |mut right| {
-            let result =
-                (|| {
-                    budget.checkpoint()?;
-                    let retained = row_bytes(&right)?
-                        .checked_mul(8)
-                        .ok_or(QueryControlError::AccountingOverflow)?;
-                    if retained > probe_high_water {
-                        budget.consume(QueryCharge::RetainedBytes, retained - probe_high_water)?;
-                        probe_high_water = retained;
+            let result = (|| {
+                budget.checkpoint()?;
+                let retained = row_bytes(&right)?
+                    .checked_mul(8)
+                    .ok_or(QueryControlError::AccountingOverflow)?;
+                if retained > probe_high_water {
+                    budget.consume(QueryCharge::RetainedBytes, retained - probe_high_water)?;
+                    probe_high_water = retained;
+                }
+                if !join.accepts_row(1, &right)? {
+                    return Ok(());
+                }
+                scope(&mut right, source_ids[1]);
+                if seen.contains(&right) {
+                    return Ok(());
+                }
+                if seen.len() >= MAX_PROBE_TRIPLES {
+                    return Err(budget
+                        .terminate(QueryControlError::RetainedBytesExceeded)
+                        .into());
+                }
+                budget.consume(QueryCharge::RetainedBytes, retained)?;
+                seen.insert(right.clone());
+                for left in &rows {
+                    budget.consume(QueryCharge::SourceWork, 1)?;
+                    if let Some(row) = join.merge(left, &right)? {
+                        budget.consume(QueryCharge::ResultItems, 1)?;
+                        writer
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .as_mut()
+                            .unwrap()
+                            .serialize(&row, &vars)
+                            .map_err(|_| writer_error(&budget))?;
                     }
-                    if !join.accepts_row(1, &right)? {
-                        return Ok(());
-                    }
-                    scope(&mut right, source_ids[1]);
-                    if seen.contains(&right) {
-                        return Ok(());
-                    }
-                    if seen.len() >= MAX_PROBE_TRIPLES {
-                        return Err(budget
-                            .terminate(QueryControlError::RetainedBytesExceeded)
-                            .into());
-                    }
-                    budget.consume(QueryCharge::RetainedBytes, retained)?;
-                    seen.insert(right.clone());
-                    for left in &rows {
-                        budget.consume(QueryCharge::SourceWork, 1)?;
-                        if let Some(row) = join.merge(left, &right)? {
-                            budget.consume(QueryCharge::ResultItems, 1)?;
-                            writer
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .as_mut()
-                                .unwrap()
-                                .serialize(row.iter().zip(&vars).filter_map(|(t, v)| {
-                                    t.as_ref().map(|t| (v.as_ref(), t.as_ref()))
-                                }))
-                                .map_err(|_| writer_error(&budget))?;
-                        }
-                    }
-                    Ok(())
-                })();
+                }
+                Ok(())
+            })();
             Box::pin(std::future::ready(result))
         })
     };

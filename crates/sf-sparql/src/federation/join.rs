@@ -18,6 +18,7 @@ pub const MAX_BUILD_ROWS: usize = 128;
 /// unprojected keys, survive until exact matching and final projection.
 #[derive(Clone, Debug)]
 pub struct BoundedJoin {
+    origins: Option<[(SourceId, String); 2]>,
     variables: Vec<String>,
     domains: [Vec<usize>; 2],
     shared: Vec<usize>,
@@ -49,6 +50,23 @@ pub(super) fn compile(
     query: Query,
     bindings: [&CompilerBinding; 2],
     control: &dyn QueryControl,
+) -> Result<FederatedPlan> {
+    compile_with_origins(query, bindings, control, false)
+}
+
+pub(super) fn compile_lineage(
+    query: Query,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+) -> Result<FederatedPlan> {
+    compile_with_origins(query, bindings, control, true)
+}
+
+fn compile_with_origins(
+    query: Query,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+    lineage: bool,
 ) -> Result<FederatedPlan> {
     let Query::Select {
         dataset: None,
@@ -84,6 +102,7 @@ pub(super) fn compile(
         .into_iter()
         .collect();
     let mut fragments = Vec::with_capacity(2);
+    let mut origins = Vec::with_capacity(2);
     let mut estimates = Vec::with_capacity(2);
     for triple in patterns {
         control.checkpoint()?;
@@ -122,7 +141,22 @@ pub(super) fn compile(
         {
             return unsupported();
         }
-        restore_base_scan(Arc::make_mut(&mut plan), binding, &arm.triple)?;
+        let origin = restore_base_scan(Arc::make_mut(&mut plan), binding, &arm.triple)?;
+        if lineage {
+            if origin.is_empty()
+                || origin.len() > 1024
+                || binding
+                    .triples_maps()
+                    .iter()
+                    .filter(|m| m.id == origin)
+                    .count()
+                    != 1
+            {
+                return unsupported();
+            }
+            control.consume(sf_core::query_control::QueryCharge::RetainedBytes, 2048)?;
+            origins.push((binding.source_id(), origin.to_owned()));
+        }
         let branch = &plan.branches[0];
         estimates.push(branch.core.first().and_then(|scan| {
             match &scan.source {
@@ -164,6 +198,9 @@ pub(super) fn compile(
         if build == Side::Right {
             fragments.swap(0, 1);
             domains.swap(0, 1);
+            if lineage {
+                origins.swap(0, 1);
+            }
         }
     }
     let key = variables
@@ -183,6 +220,7 @@ pub(super) fn compile(
             )
         })?;
     let join = BoundedJoin {
+        origins: lineage.then(|| origins.try_into().unwrap()),
         domains: domains.map(|domain| {
             variables
                 .iter()
@@ -219,11 +257,11 @@ pub(super) fn compile(
 /// RDF graph-set identity. For this sealed operator only, restore the known
 /// authored base table; its fixed-cap merge performs exact triple-set handling.
 /// Never unwrap authored SQL, joins, unions, computed projections or filters.
-fn restore_base_scan(
+fn restore_base_scan<'a>(
     plan: &mut Plan,
-    binding: &CompilerBinding,
+    binding: &'a CompilerBinding,
     triple: &TriplePattern,
-) -> Result<()> {
+) -> Result<&'a str> {
     let maps: Vec<_> = binding
         .triples_maps()
         .iter()
@@ -287,10 +325,15 @@ fn restore_base_scan(
     }
     plan.distinct = false;
     branch.distinct = false;
-    Ok(())
+    Ok(&map.id)
 }
 
 impl BoundedJoin {
+    /// Each mandatory arm has exactly one validated direct mapping emitter.
+    /// This sealed proof travels with the join, never through a witness driver.
+    pub fn mapping_origins(&self) -> Option<&[(SourceId, String); 2]> {
+        self.origins.as_ref()
+    }
     /// Each admitted arm is a mandatory triple, so its own domain is fully
     /// bound. Variables belonging only to the other arm/final projection may
     /// remain unbound; requiring the whole combined header would drop valid rows.

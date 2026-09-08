@@ -249,8 +249,8 @@ enum CompileMode {
     Uncached,
 }
 
-/// Compile actual origin witnesses for the same sealed two-source UNION shape.
-/// Source affinity is proved with the same RDF/TBox atom compiler as execution.
+/// Compile actual origins for the sealed two-source UNION and join shapes.
+/// UNION uses bounded witnesses; joins prove one direct emitter per mandatory arm.
 pub fn compile_source_affine_union_lineage(
     sparql: &str,
     bindings: [&CompilerBinding; 2],

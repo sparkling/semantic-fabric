@@ -182,3 +182,37 @@ fn federated_lineage_binds_actual_public_origins_and_native_stop_evidence() {
             .advertisable
     );
 }
+
+#[test]
+fn joined_lineage_keeps_sealed_origins_pre200_and_required_native_evidence() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    let cell = catalog
+        .cells
+        .iter()
+        .find(|c| c.id == "bounded-federated-join-lineage-multi-source")
+        .unwrap();
+    assert_eq!(cell.status, Status::Implemented);
+    assert!(cell.semantic_exact && cell.bounded && cell.advertisable);
+    assert!(cell.qualification.contains("pre-200"));
+    assert!(cell.limitation_ids.iter().any(|id| id == "l-lineage"));
+    for (id, command) in [
+        ("e-query-lineage-join-http", "cmd-federated-union-serve"),
+        ("e-query-lineage-join-output", "cmd-federated-union-serve"),
+        ("e-federated-join-admission", "cmd-federated-join-sparql"),
+        (
+            "e-query-lineage-federated-native",
+            "cmd-verified-source-tls-live",
+        ),
+        (
+            "e-query-lineage-federated-native-stop",
+            "cmd-verified-source-tls-live",
+        ),
+    ] {
+        let evidence = catalog.evidence.iter().find(|e| e.id == id).unwrap();
+        assert!(cell.evidence_ids.contains(&evidence.id));
+        assert!(evidence.required);
+        assert_eq!(evidence.verification, Verification::CiRequired);
+        assert_eq!(evidence.command_id.as_deref(), Some(command));
+    }
+}

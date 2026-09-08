@@ -13,6 +13,10 @@ pub(super) fn compile(
     let query = SparqlParser::new()
         .parse_query(sparql)
         .map_err(|e| Error::Parse(e.to_string()))?;
+    if join::is_join(&query) {
+        charge_join_inputs(sparql, bindings, control)?;
+        return join::compile_lineage(query, bindings, control);
+    }
     let parsed = SourceAffineUnion::from_query(query)?;
     let mut fragments = Vec::with_capacity(2);
     for arm in parsed.arms() {
@@ -38,4 +42,41 @@ pub(super) fn compile(
     let right = fragments.pop().unwrap();
     let left = fragments.pop().unwrap();
     FederatedPlan::union_all(parsed.variables().to_vec(), [left, right])
+}
+
+/// Admit finite query/catalog traversal before the legacy join arm compiler.
+/// This is request work accounting, not total parser/optimizer CPU governance.
+fn charge_join_inputs(
+    query: &str,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+) -> Result<()> {
+    let meter = crate::compiler_control::CompileMeter::new(control);
+    meter.reserve_work(meter.checked_usize(query.len())?)?;
+    for binding in bindings {
+        let tbox = binding.tbox();
+        for edges in tbox
+            .sub_classes
+            .values()
+            .chain(tbox.sub_properties.values())
+        {
+            meter.precharge_product(&[2, edges.len().saturating_add(1)])?;
+        }
+        for edges in tbox.inverses.values() {
+            meter.precharge_product(&[2, edges.len().saturating_add(1)])?;
+        }
+        meter.reserve_work(meter.checked_usize(tbox.symmetric.len())?)?;
+        for map in binding.triples_maps() {
+            meter.reserve_work(2)?;
+            meter.reserve_work(meter.checked_usize(map.subject.classes.len())?)?;
+            for pom in &map.predicate_object_maps {
+                meter.precharge_product(&[
+                    2,
+                    pom.predicates.len().saturating_add(1),
+                    pom.objects.len().saturating_add(1),
+                ])?;
+            }
+        }
+    }
+    Ok(())
 }

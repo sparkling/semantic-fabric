@@ -62,6 +62,13 @@ pub(super) fn assert_joins(fixture: &Fixture, postgres: &Database, mysql: &Datab
                 );
             }
         }
+        let (status, body) =
+            request_format(address, query, Some(&fixture.token), lineage::FORMAT).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(
+            federated_lineage::join_bag(&body),
+            stop_matrix::bag(&serde_json::to_vec(&result).unwrap())
+        );
     }
     assert_eq!(request(address, JOIN, None).unwrap().0, 401);
     postgres.assert_encrypted_sessions();

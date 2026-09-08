@@ -16,8 +16,8 @@ implements:
 > The public opt-in constant-mapping/source SELECT and CONSTRUCT profiles emit
 > per-solution PROV-O and native graph reification under the pinned request.
 > A bounded multiple-mapping positive-query profile also carries actual origins.
-> The bounded two-source UNION also carries source-keyed actual origins.
-> Full ADR-0017 remains open: wider multi-origin operators, federated joins,
+> The bounded two-source UNION and join carry source-keyed actual origins.
+> Full ADR-0017 remains open: wider multi-origin operators and federation,
 > declared/verified row-key authority and wider native-profile/release qualification.
 > ADR-0055, not historical ADR-0038, controls v1.
 
@@ -249,6 +249,37 @@ locks, unaffected separately locked sibling, cap-one recovery and bounded clean
 forced exit. This does not qualify federated lineage JOIN/CONSTRUCT, native lineage
 reload, portable/source-RLS cancellation, protected generations, all operators or
 exact-release admission. Full ADR-0017 remains open under ADR-0055.
+
+### Bounded federated join profile (2026-09-08)
+
+`bounded-federated-join-lineage-v1` uses the same explicit media type for the
+already-admitted ADR-0006 two-pattern inner join. The existing base-table proof
+seals exactly one actual direct mapping emitter per mandatory source arm; its
+nonempty, source-unique ID is at most 1,024 bytes. Unused maps are not contributors.
+The source-keyed proof follows cost-based build/probe swapping and the immutable
+security binding; it is not a synthetic UNION witness recipe or a new join engine.
+
+The header names both source catalogs and the pinned snapshot/logical-plan/policy,
+with `maxBuildTriples: 128`, `maxProbeTriples: 4096`, and no row keys. Each exact
+matched/projected bag occurrence emits one activity/result bundle using both
+sources, actual mapping entries and mapping documents. Each mapping entry's
+`sf:source` explicitly identifies its source, even when authored map IDs coincide.
+Hidden keys and filtered/nonmatching rows create no provenance. Empty joins have
+only a header and zero-count completion. Source blank-node scope and exact RDF
+comparison remain unchanged. There is no distributed data-snapshot claim.
+
+Ordinary and lineage results share the existing capped pre-200 serializer and
+source/native cleanup owners. All output bytes, including completion, consume the
+request budget; any overflow, source failure or observed cancellation discards
+the staged response. Completion follows successful cleanup of both fragments.
+Required public tests cover exact/projected bags, both origins, caller isolation,
+blank scope/collation, pinned activation, rejection, caps and cap-one recovery.
+The required pinned PostgreSQL/MySQL TLS CLI aggregate parses both-source PROV-O,
+checks exact twelve-pair bags in both pattern orders, and tests twelve additional
+join-lineage deadline/disconnect/SIGTERM cases with encrypted target, held-lock,
+unaffected sibling, exact cap-one recovery and bounded clean exit witnesses.
+Native lineage reload, portable/source-RLS cancellation, protected generations and
+exact-release qualification remain separate; this does not complete ADR-0017.
 
 ### Consequences
 

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "federated_join_lineage_tests.rs"]
+mod lineage_tests;
 
 const JOIN: &str = "SELECT ?left ?right WHERE { ?left <http://example.test/left> ?key . ?right <http://example.test/right> ?key }";
 

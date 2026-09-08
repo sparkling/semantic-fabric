@@ -60,7 +60,16 @@ their source under shared snapshot/security/budget and native cleanup owners.
 Required HTTP and owned TLS CLI checks cover its bags, entailed source affinity,
 source-scoped blank nodes, portable callers, pinned activation, limits and native
 deadline/disconnect/forced-shutdown failures. ADR-0017 records the exact profile;
-federated joins, row-key authority and broader qualification remain open.
+the following join slice adds coverage; row-key authority and broader qualification
+remain separate.
+The existing bounded two-source join now emits actual origins for both mandatory
+contributors, using compiler-sealed source/map pairs and its existing capped
+pre-200 executor. Explicit map-to-source links disambiguate identical authored IDs;
+hidden keys, filtered rows and empty joins acquire no inferred row provenance.
+Required HTTP tests cover bags, limits, policy, activation and recovery; the pinned
+TLS CLI aggregate adds both-order exact bags and twelve join-lineage native
+deadline/disconnect/forced-shutdown cases. This closes that public wiring slice,
+not native lineage reload/source-RLS coverage, full lineage or exact-release gates.
 The aggregate gate concerns coverage of declared v1 paths, not every historical
 ADR-0017 combination. Row-key transport is conditional on explicitly declared or
 verified authority: ADR-0017 permits mapping/source-only lineage when no authorized
