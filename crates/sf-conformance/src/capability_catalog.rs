@@ -302,16 +302,16 @@ fn validate_cell(
             }
         }
         Status::Planned => {
+            // Implementation state and release scope are independent (ADR-0055).
+            // Deferred work still needs a documented plan, not a fabricated gate.
             if cell.advertisable
-                || !selected_limitations
-                    .iter()
-                    .any(|item| item.release_blocking)
+                || selected_limitations.is_empty()
                 || !selected_evidence
                     .iter()
                     .any(|item| item.domain == EvidenceDomain::ArchitecturePlan)
             {
                 return Err(format!(
-                    "planned cell {} lacks a blocking plan record",
+                    "planned cell {} lacks a documented plan record",
                     cell.id
                 ));
             }

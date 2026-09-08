@@ -12,6 +12,8 @@ use tower::ServiceExt;
 
 const TOKEN: &str = "test-only-rls-credential-0123456789";
 const SELECT: &str = "SELECT ?name WHERE { ?s <http://ex/name> ?name }";
+const GRAPH: &str = "CONSTRUCT { ?s <http://ex/name> ?name } WHERE { ?s <http://ex/name> ?name }";
+const LINEAGE: &str = "application/vnd.semantic-fabric.lineage+json-seq";
 
 #[path = "rls_subjects.rs"]
 mod subjects;
@@ -47,11 +49,16 @@ async fn config(pool: crate::PostgresPool, tenant: &str, mapping: &str) -> Serve
 }
 
 async fn request(cfg: Arc<ServeConfig>, query: &str) -> Response {
+    request_format(cfg, query, "*/*").await
+}
+
+async fn request_format(cfg: Arc<ServeConfig>, query: &str, accept: &str) -> Response {
     crate::router(cfg)
         .oneshot(
             Request::post("/sparql")
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/sparql-query")
+                .header(header::ACCEPT, accept)
                 .body(Body::from(query.to_owned()))
                 .unwrap(),
         )
@@ -179,6 +186,12 @@ async fn exercise(f: Arc<Fixture>) {
         .unwrap();
     assert_eq!(
         request(alice.clone(), SELECT).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request_format(alice.clone(), SELECT, LINEAGE)
+            .await
+            .status(),
         StatusCode::FORBIDDEN
     );
     clean(&f.pool).await;
@@ -384,12 +397,14 @@ async fn exercise_cleanup(f: &Fixture, alice: &Arc<ServeConfig>, bob: &Arc<Serve
     assert_ne!(clean(&f.pool).await, pid);
     // Backpressure ensures there is active work when the HTTP body is dropped.
     f.admin.batch_execute("INSERT INTO public.parent SELECT n, repeat('x',512), 'tenant-a' FROM generate_series(3,20000) n").await.unwrap();
-    let response = request(alice.clone(), SELECT).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    drop(response);
-    let result = text(bob.clone(), SELECT).await;
-    assert!(result.contains("Bob") && !result.contains("Alice"));
-    clean(&f.pool).await;
+    for (query, accept) in [(SELECT, "*/*"), (SELECT, LINEAGE), (GRAPH, LINEAGE)] {
+        let response = request_format(alice.clone(), query, accept).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        let result = text(bob.clone(), SELECT).await;
+        assert!(result.contains("Bob") && !result.contains("Alice"));
+        clean(&f.pool).await;
+    }
     f.admin
         .batch_execute("DELETE FROM public.parent WHERE id > 2")
         .await
@@ -404,21 +419,24 @@ async fn exercise_deadline(f: &Fixture, bob: &Arc<ServeConfig>) {
         RETURN row_tenant=current_setting('app.tenant_id',true); END $$; \
         ALTER POLICY identity ON public.parent USING (public.rls_test_visible(tenant));").await.unwrap();
     for tenant in ["slow", "error"] {
-        let mut cfg = config(f.pool.clone(), tenant, &mapping("parent", "http://ex/name")).await;
-        cfg.timeout = Duration::from_millis(250);
-        let started = tokio::time::Instant::now();
-        let response = request(Arc::new(cfg), SELECT).await;
-        if response.status() == StatusCode::OK {
-            assert!(
-                response.into_body().collect().await.is_err(),
-                "active source failure must error the body"
-            );
-        } else {
-            assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        for (query, accept) in [(SELECT, "*/*"), (SELECT, LINEAGE), (GRAPH, LINEAGE)] {
+            let mut cfg =
+                config(f.pool.clone(), tenant, &mapping("parent", "http://ex/name")).await;
+            cfg.timeout = Duration::from_millis(250);
+            let started = tokio::time::Instant::now();
+            let response = request_format(Arc::new(cfg), query, accept).await;
+            if response.status() == StatusCode::OK {
+                assert!(
+                    response.into_body().collect().await.is_err(),
+                    "active source failure must error the body"
+                );
+            } else {
+                assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            clean(&f.pool).await;
+            assert!(text(bob.clone(), SELECT).await.contains("Bob"));
         }
-        assert!(started.elapsed() < Duration::from_secs(3));
-        clean(&f.pool).await;
-        assert!(text(bob.clone(), SELECT).await.contains("Bob"));
     }
     f.admin.batch_execute("ALTER POLICY identity ON public.parent USING (tenant=current_setting('app.tenant_id',true)); \
         DROP FUNCTION public.rls_test_visible(text);").await.unwrap();

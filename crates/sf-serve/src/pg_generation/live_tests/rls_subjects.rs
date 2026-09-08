@@ -1,6 +1,8 @@
 //! One server, one policy snapshot, multiple authenticated source identities.
 use super::*;
 use crate::{ProvisionedBearerAdmission, ProvisionedBearerSubject};
+#[path = "rls_lineage.rs"]
+mod lineage;
 
 const ALICE: &str = "test-only-alice-credential-0123456789";
 const BOB: &str = "test-only-bob-credential-9876543210";
@@ -32,11 +34,16 @@ fn registry() -> QueryAdmission {
 }
 
 async fn request_as(cfg: Arc<ServeConfig>, token: &str, query: &str) -> Response {
+    request_format(cfg, token, query, "*/*").await
+}
+
+async fn request_format(cfg: Arc<ServeConfig>, token: &str, query: &str, accept: &str) -> Response {
     crate::router(cfg)
         .oneshot(
             Request::post("/sparql")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header(header::CONTENT_TYPE, "application/sparql-query")
+                .header(header::ACCEPT, accept)
                 .header("x-subject-id", "opaque-b")
                 .header("x-tenant-id", "tenant-b")
                 .header("x-postgres-rls-context", r#"{"app.tenant_id":"tenant-b"}"#)
@@ -87,6 +94,20 @@ pub(super) async fn exercise(f: &Fixture) {
                 pid,
                 "clean pool member must be reused"
             );
+            lineage::check(
+                cfg.clone(),
+                token,
+                query,
+                allowed,
+                denied,
+                lineage::Shape::Constant,
+            )
+            .await;
+            assert_eq!(
+                clean(&f.pool).await,
+                pid,
+                "lineage completion reuses the clean member"
+            );
         }
         for (name, expected) in [(allowed, true), (denied, false)] {
             let body = text_as(
@@ -101,13 +122,36 @@ pub(super) async fn exercise(f: &Fixture) {
             );
             assert_eq!(clean(&f.pool).await, pid);
         }
+        lineage::empty(cfg.clone(), token, denied).await;
+        assert_eq!(clean(&f.pool).await, pid);
     }
     // Invalid credentials never fall back to a default registry member.
     assert_eq!(
-        request_as(cfg, "invalid", SELECT).await.status(),
+        request_as(cfg.clone(), "invalid", SELECT).await.status(),
         StatusCode::UNAUTHORIZED
     );
+    assert_eq!(
+        request_format(cfg.clone(), "invalid", SELECT, lineage::FORMAT)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let held = f.pool.get().await.unwrap();
+    assert_eq!(
+        request_format(
+            cfg,
+            ALICE,
+            "ASK { ?s <http://ex/name> ?name }",
+            lineage::FORMAT
+        )
+        .await
+        .status(),
+        StatusCode::NOT_IMPLEMENTED
+    );
+    drop(held);
     assert_eq!(clean(&f.pool).await, pid);
+
+    exercise_multiple(f).await;
 
     let concurrent_pool = pool(f.reader_config(), 2);
     let concurrent = configured(concurrent_pool.clone()).await;
@@ -118,6 +162,24 @@ pub(super) async fn exercise(f: &Fixture) {
         );
         assert!(alice.contains("Alice") && !alice.contains("Bob"));
         assert!(bob.contains("Bob") && !bob.contains("Alice"));
+        tokio::join!(
+            lineage::check(
+                concurrent.clone(),
+                ALICE,
+                SELECT,
+                "Alice",
+                "Bob",
+                lineage::Shape::Constant
+            ),
+            lineage::check(
+                concurrent.clone(),
+                BOB,
+                SELECT,
+                "Bob",
+                "Alice",
+                lineage::Shape::Constant
+            ),
+        );
     }
     let c1 = concurrent_pool.get().await.unwrap();
     let c2 = concurrent_pool.get().await.unwrap();
@@ -131,6 +193,41 @@ pub(super) async fn exercise(f: &Fixture) {
     }
     drop((c1, c2, concurrent, concurrent_pool));
     exercise_union(f).await;
+}
+
+async fn exercise_multiple(f: &Fixture) {
+    let mapped = ["a", "b"]
+        .map(|id| {
+            mapping("parent", "http://ex/name").replace("<#p>", &format!("<urn:rls-map:{id}>"))
+        })
+        .join("\n");
+    let mut cfg = config(f.pool.clone(), "unused", &mapped).await;
+    cfg.set_query_admission(registry());
+    let cfg = Arc::new(cfg);
+    let pid = clean(&f.pool).await;
+    for (token, allowed, denied) in [
+        (ALICE, "Alice", "Bob"),
+        (BOB, "Bob", "Alice"),
+        (ALICE, "Alice", "Bob"),
+    ] {
+        for query in [
+            SELECT,
+            "CONSTRUCT { ?s <http://ex/name> ?name } WHERE { ?s <http://ex/name> ?name }",
+        ] {
+            lineage::check(
+                cfg.clone(),
+                token,
+                query,
+                allowed,
+                denied,
+                lineage::Shape::Multiple,
+            )
+            .await;
+            assert_eq!(clean(&f.pool).await, pid);
+        }
+        lineage::empty(cfg.clone(), token, denied).await;
+        assert_eq!(clean(&f.pool).await, pid);
+    }
 }
 
 async fn exercise_union(f: &Fixture) {
@@ -157,6 +254,7 @@ async fn exercise_union(f: &Fixture) {
     let cfg = Arc::new(cfg);
     let query =
         "SELECT ?name WHERE { { ?s <http://ex/left> ?name } UNION { ?s <http://ex/right> ?name } }";
+    let pids = [clean(&f.pool).await, clean(&second_pool).await];
     for (token, allowed, denied) in [
         (ALICE, "Alice", "Bob"),
         (BOB, "Bob", "Alice"),
@@ -166,7 +264,29 @@ async fn exercise_union(f: &Fixture) {
         let result: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(result["results"]["bindings"].as_array().unwrap().len(), 2);
         assert!(body.contains(allowed) && !body.contains(denied));
-        clean(&f.pool).await;
-        clean(&second_pool).await;
+        lineage::check(
+            cfg.clone(),
+            token,
+            query,
+            allowed,
+            denied,
+            lineage::Shape::Union,
+        )
+        .await;
+        assert_eq!(clean(&f.pool).await, pids[0]);
+        assert_eq!(clean(&second_pool).await, pids[1]);
+        let join =
+            "SELECT ?name WHERE { ?left <http://ex/left> ?name . ?right <http://ex/right> ?name }";
+        lineage::check(
+            cfg.clone(),
+            token,
+            join,
+            allowed,
+            denied,
+            lineage::Shape::Join,
+        )
+        .await;
+        assert_eq!(clean(&f.pool).await, pids[0]);
+        assert_eq!(clean(&second_pool).await, pids[1]);
     }
 }

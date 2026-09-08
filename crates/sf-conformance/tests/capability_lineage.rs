@@ -46,14 +46,13 @@ fn lineage_keeps_full_contract_open_and_only_advertises_the_evidenced_subset() {
     assert_eq!(full.status, Status::Planned);
     assert!(!full.advertisable);
     assert!(full.qualification.contains("conditional"));
-    assert!(
-        catalog
-            .limitations
-            .iter()
-            .find(|limit| limit.id == "l-lineage")
-            .unwrap()
-            .release_blocking
-    );
+    let limitation = catalog
+        .limitations
+        .iter()
+        .find(|limit| limit.id == "l-lineage")
+        .unwrap();
+    assert!(!limitation.release_blocking);
+    assert_eq!(limitation.adr, "ADR-0055");
 }
 
 #[test]
@@ -240,5 +239,56 @@ fn native_lineage_reload_is_required_for_each_qualified_profile() {
                 Some("cmd-verified-source-tls-live")
             );
         }
+    }
+}
+
+#[test]
+fn source_rls_lineage_requires_actual_public_live_proof_not_ordinary_queries() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    for id in [
+        "constant-mapping-source-lineage-postgresql",
+        "bounded-mapping-source-lineage-postgresql",
+        "bounded-federated-union-lineage-multi-source",
+        "bounded-federated-join-lineage-multi-source",
+    ] {
+        let cell = catalog.cells.iter().find(|c| c.id == id).unwrap();
+        for id in [
+            "e-postgresql-rls-live",
+            "e-provisioned-query-rls-live",
+            "e-query-lineage-rls-live",
+        ] {
+            assert!(cell.evidence_ids.iter().any(|e| e == id));
+            let proof = catalog.evidence.iter().find(|e| e.id == id).unwrap();
+            assert!(proof.required);
+            assert_eq!(proof.verification, Verification::CiRequired);
+            assert_eq!(proof.command_id.as_deref(), Some("cmd-postgresql-rls-live"));
+        }
+    }
+}
+
+#[test]
+fn planned_nonblocking_work_still_requires_a_plan_and_cannot_be_advertised() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let original = capability_catalog::load(&root)
+        .expect("documented post-v1 plan is valid")
+        .catalog;
+    for mutation in 0..3 {
+        let mut catalog = original.clone();
+        let cell = catalog
+            .cells
+            .iter_mut()
+            .find(|c| c.id == "query-lineage-generic")
+            .unwrap();
+        match mutation {
+            0 => cell.limitation_ids.clear(),
+            1 => cell.evidence_ids.clear(),
+            _ => {
+                cell.advertisable = true;
+                cell.semantic_exact = true;
+                cell.bounded = true;
+            }
+        }
+        assert!(capability_catalog::validate(&root, &catalog).is_err());
     }
 }

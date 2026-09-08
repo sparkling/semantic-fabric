@@ -75,11 +75,26 @@ documents; invalid input fences new queries while native-held requests complete
 with pre-invalid results/provenance, and repaired input restores readiness.
 Held-query cases are multi-map SELECT on both providers and mixed UNION/forward
 join on PostgreSQL, not every graph/operator/order. This closes that reload evidence
-slice, not source-RLS lineage, full lineage or exact-release gates.
+slice. Required owned PostgreSQL public-router tests now also qualify source-RLS
+lineage: exact A/B/A constant/multi-map SELECT/CONSTRUCT and federated UNION/join,
+actual source/map proof, empty results, concurrent caller isolation and clean cap-one
+pool reuse. Constant-lineage body-drop, policy-error and deadline cases fail terminally
+and recover with isolated caller state. ADR-0017/0018 retain the precise scope;
+these are not every failure permutation, full historical lineage or exact-release gates.
 The aggregate gate concerns coverage of declared v1 paths, not every historical
 ADR-0017 combination. Row-key transport is conditional on explicitly declared or
 verified authority: ADR-0017 permits mapping/source-only lineage when no authorized
 stable key exists. Tested wider operator exclusions are not promoted to v1 gates.
+**Profile qualification (2026-09-08):** the recorded public/native lineage,
+lifecycle, reload and source-RLS evidence closes the declared lineage-profile gate.
+`l-lineage` is now non-blocking; `query-lineage-generic` remains the incomplete,
+non-advertisable historical broader profile. This changes no supported shape,
+backend or conditional row-key authority. Query-budget, backend-admission and
+exact-release gates remain separately blocking.
+The catalog validator keeps implementation state separate from release scope:
+planned work requires a documented limitation and architecture-plan evidence,
+but not a fabricated release blocker. Planned capabilities cannot be advertised;
+required checks and production-admission guards are unchanged.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

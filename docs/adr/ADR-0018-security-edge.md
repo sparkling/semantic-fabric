@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [security, authorization, row-level-security, abac, multi-tenancy, sensitivity, data-sensitivity]
 supersedes: []
 depends-on:
@@ -13,7 +13,7 @@ implements:
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-09-07): accepted, partially implemented.**
+> **Implementation status (2026-09-08): accepted, partially implemented.**
 > `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
 > identities with explicit construction, redacted diagnostics and no default or
 > anonymous context. `a2c25ff` adds a separate plan-cache seam requiring
@@ -112,6 +112,16 @@ and concurrent identities, both UNION fragments, errors/deadlines/body drop,
 normal reuse, abandoned/timeout discard, owner/BYPASSRLS/disabled-RLS rejection
 and catalog-shadow name rejection. CI runs it explicitly; ordinary tests do not
 silently connect to Product Mock or substitute an unavailable database.
+
+On 2026-09-08 the same required public-router fixture also qualifies actual opt-in
+lineage under RLS: A/B/A constant and overlapping-map SELECT/CONSTRUCT, two-source
+UNION and bounded join, exact contributing map/source identities and clean cap-one
+PID reuse after each complete response. It checks denied/empty results, spoofed
+headers, concurrent constant SELECT, invalid credentials and disabled-RLS rejection.
+Constant SELECT/CONSTRUCT lineage also exercises body-drop, slow-policy deadline and
+policy-error cleanup followed by an isolated caller's successful query. ADR-0017
+records the exact result/provenance and transport scope; this is not every failure
+permutation, a new policy engine, TLS evidence or exact-artifact release admission.
 
 ### Implemented provisioned-subject registry (2026-09-07)
 

@@ -306,6 +306,32 @@ are parsed; a header or readiness check alone cannot qualify this slice.
 This is not policy/configuration reload, a distributed data snapshot, a held-query
 test for every graph/operator/order, source-RLS lineage or exact-release admission.
 
+### Native source-RLS qualification (2026-09-08)
+
+The required `pg_generation::live_tests::rls::public_row_security_is_isolated_and_cleans_pool`
+test now requests and parses actual lineage through the public router on an owned
+PostgreSQL 16.15 fixture (5.73 seconds). Alternating A/B/A credentials, including
+spoofed identity headers, return exactly the authorized constant/overlapping-map
+SELECT/CONSTRUCT products and federated UNION/join bags. Returned PROV-O binds
+actual map/source contributors to the header's snapshot/plan/policy; each joined
+mapping entry explicitly identifies its source. No row keys, denied values or raw
+configured identities appear. Empty authorized results create no solution/activity.
+
+Each completed response reuses the same clean cap-one pool member (both independent
+members for federation), with no transaction-local identity or read-only transaction
+left behind. Concurrent constant-origin SELECT also isolates callers. Constant-origin
+SELECT/CONSTRUCT additionally cover body-drop, slow-policy deadline and policy-error
+cleanup/recovery; failures cannot complete the body successfully. Disabled source RLS
+rejects lineage; invalid credentials reject, and unsupported ASK lineage rejects even
+with the pool held. This qualifies these public source-RLS paths, not every failure
+permutation, federated graph forms, policy installation or configuration hot reload.
+The fixture uses local PostgreSQL transport; remote TLS is separately qualified by
+the required native CLI aggregate, not newly inferred here. Exact-release admission
+and remaining ADR-0055 guarantees still require candidate-bound evidence.
+The declared bounded lineage profiles now have the required recorded public/native
+coverage; `l-lineage` is non-blocking under ADR-0055. This does not complete the
+historical broader ADR, authorize row keys or close separate budget/backend/release gates.
+
 ### Consequences
 
 * Good, because source-mapping lineage + provenance with zero stored state and no per-triple bloat; consistent with virtualisation-only; reuses RDF 1.2 reification natively.
