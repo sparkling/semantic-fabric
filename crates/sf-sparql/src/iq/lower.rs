@@ -2025,7 +2025,7 @@ fn remap_term_map(
 /// * a `where_conds` entry that is not a parameter-free `col IS [NOT] NULL`
 ///   guard on the arm's own scan (R2RML §11 NULL-exclusion — the only shape a
 ///   plain candidate-map arm's conditions carry in practice) —
-///   [`render_null_guard`] recognises exactly that shape and nothing else;
+///   the typed projection accepts exactly that shape and nothing else;
 /// * a projected var whose binding is `Const` in some arms but `Derived` in
 ///   others (a disagreeing shape `disjoint_groups`' conservative "not provably
 ///   disjoint" grouping can in principle admit, even though no real R2RML
@@ -2041,7 +2041,7 @@ pub(crate) fn pool_rendered(
     vars: &[String],
     dialect: sf_sql::Dialect,
 ) -> Result<Option<Vec<Branch>>> {
-    use sf_core::ir::{LogicalSource, TermMap, TermType};
+    use sf_core::ir::TermMap;
 
     if arms
         .iter()
@@ -2068,67 +2068,26 @@ pub(crate) fn pool_rendered(
         }
     }
 
-    // Complete every fallible/unsupported check while the owned arms are still
-    // untouched. Once this preflight succeeds, the rewrite below is infallible and
-    // can consume each branch instead of cloning its complete payload.
-    let mut rendered_arms = Vec::with_capacity(arms.len());
+    // Preflight borrows the arms; successful lowering moves their payloads.
     for b in &arms {
         let scan = &b.core[0];
-        let local = format!("sfs{}", scan.alias);
-        // This arm's immediate source text — `crate::cascade::col_is_unquoted_
-        // alias`'s doc comment: when D1 already wrapped this scan (`wrap_scan_
-        // distinct`, PostgreSQL-only), it is THAT wrap's own `<expr> AS <alias>`
-        // output, so the SAME detection re-derives D1's own quoting decision one
-        // layer in (W3C R2RMLTC0011a: a single-arm width mismatch pooled AFTER
-        // D1 already folded one of the arm's columns to lowercase).
-        let Some(source) = scan.source.logical() else {
+        if !scan.source.is_logical_projection()
+            || !b.where_conds.iter().all(|cond| {
+                matches!(cond,
+                SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == scan.alias)
+            })
+        {
             return Ok(None);
-        };
-        let inner_sql = match source {
-            LogicalSource::Table(_) => None,
-            LogicalSource::Query(q) => Some(q.as_str()),
-        };
-        let Some(guards): Option<Vec<String>> = b
-            .where_conds
-            .iter()
-            .map(|c| render_null_guard(c, scan.alias, &local, inner_sql, dialect))
-            .collect()
-        else {
-            return Ok(None);
-        };
-
-        let mut select_items = Vec::with_capacity(vars.len());
-        for (i, v) in vars.iter().enumerate() {
-            // Presence + term-class agreement already checked above.
-            let def = b.bindings.get(v.as_str()).expect("checked above");
-            match def {
-                TermDef::Const(_) => {}
-                TermDef::Derived { term_map, .. } => {
-                    let expr = match term_map {
-                        TermMap::Column(c, _) => crate::emit::render_immediate_source_column(
-                            &local, c, inner_sql, dialect,
-                        ),
-                        TermMap::Template(t, spec) => {
-                            let encode_iri = spec.term_type == TermType::Iri;
-                            crate::emit::render_template_inline(
-                                t.segments(),
-                                &local,
-                                encode_iri,
-                                inner_sql,
-                                dialect,
-                            )?
-                        }
-                        TermMap::Constant(_) => return Ok(None), // unreachable: `def_of` never builds this
-                    };
-                    select_items.push(format!("{expr} AS rv{i}"));
-                }
+        }
+        for v in vars {
+            let term_map = match b.bindings.get(v.as_str()).expect("checked above") {
+                TermDef::Const(_) => continue,
+                TermDef::Derived { term_map, alias } if *alias == scan.alias => term_map,
                 TermDef::R2rmlBlank {
-                    term_map, graph, ..
-                } => {
-                    // The rendered-width fallback can carry a fixed graph scope
-                    // unchanged. A row-dependent graph needs its own rendered
-                    // projection slot; fail closed until that wider pooling shape
-                    // is modelled.
+                    term_map,
+                    alias,
+                    graph,
+                } if *alias == scan.alias => {
                     if matches!(
                         graph,
                         R2rmlGraphScope::Mapped {
@@ -2138,65 +2097,53 @@ pub(crate) fn pool_rendered(
                     ) {
                         return Ok(None);
                     }
-                    let expr = match term_map {
-                        TermMap::Column(c, _) => crate::emit::render_immediate_source_column(
-                            &local, c, inner_sql, dialect,
-                        ),
-                        TermMap::Template(t, _) => crate::emit::render_template_inline(
-                            t.segments(),
-                            &local,
-                            false,
-                            inner_sql,
-                            dialect,
-                        )?,
-                        TermMap::Constant(_) => return Ok(None),
-                    };
-                    select_items.push(format!("{expr} AS rv{i}"));
+                    term_map
                 }
-                _ => return Ok(None), // Coalesce/Concat/Agg/ComposedTriple — not this shape
+                _ => return Ok(None),
+            };
+            match term_map {
+                TermMap::Column(..) => {}
+                TermMap::Template(..) => {
+                    if !matches!(
+                        dialect,
+                        sf_sql::Dialect::Postgres
+                            | sf_sql::Dialect::Sqlite
+                            | sf_sql::Dialect::MySql
+                    ) {
+                        return Err(Error::Unsupported("rendered projection dialect".into()));
+                    }
+                }
+                TermMap::Constant(_) => return Ok(None),
             }
         }
-        let from_inner = match source {
-            LogicalSource::Table(t) => format!("{} {local}", dialect.quote_ident(t)),
-            LogicalSource::Query(q) => format!("({q}) {local}"),
-        };
-        let mut sql = if select_items.is_empty() {
-            // Every var is `Const` in every arm — pathological (nothing to pool on
-            // at all), but still a syntactically valid derived table.
-            format!("SELECT 1 AS __sf_dummy FROM {from_inner}")
-        } else {
-            format!("SELECT {} FROM {from_inner}", select_items.join(", "))
-        };
-        if !guards.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&guards.join(" AND "));
-        }
-        rendered_arms.push((scan.alias, sql));
     }
 
     let mut out = Vec::with_capacity(arms.len());
-    for (mut branch, (alias, sql)) in arms.into_iter().zip(rendered_arms) {
+    for mut branch in arms {
+        let input = branch.core.pop().expect("preflight: one scan");
+        let alias = input.alias;
+        let guards = std::mem::take(&mut branch.where_conds);
         let mut old_bindings = std::mem::take(&mut branch.bindings);
         let mut new_bindings = BTreeMap::new();
+        let mut columns = Vec::new();
         for (i, v) in vars.iter().enumerate() {
-            // A repeated projection name is unusual but the borrowed implementation
-            // accepted it by overwriting the same map entry. Move the definition only
-            // for its last position to preserve that behavior without a clone.
-            if vars[i + 1..].contains(v) {
-                continue;
-            }
-            let def = old_bindings
-                .remove(v.as_str())
-                .expect("rendered-pooling preflight checked binding presence");
+            let last = !vars[i + 1..].contains(v);
+            let def = if last {
+                old_bindings.remove(v.as_str()).expect("preflight binding")
+            } else {
+                old_bindings
+                    .get(v.as_str())
+                    .expect("preflight binding")
+                    .clone()
+            };
             let rewritten = match def {
                 TermDef::Const(term) => TermDef::Const(term),
                 TermDef::Derived { term_map, .. } => {
-                    let spec = match term_map {
-                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec,
-                        TermMap::Constant(_) => {
-                            unreachable!("rendered-pooling preflight rejected constant term maps")
-                        }
+                    let spec = match &term_map {
+                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec.clone(),
+                        _ => unreachable!("preflight term map"),
                     };
+                    columns.push((format!("rv{i}").into(), term_map));
                     TermDef::Derived {
                         term_map: TermMap::Column(format!("rv{i}").into(), spec),
                         alias,
@@ -2205,27 +2152,32 @@ pub(crate) fn pool_rendered(
                 TermDef::R2rmlBlank {
                     term_map, graph, ..
                 } => {
-                    let spec = match term_map {
-                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec,
-                        TermMap::Constant(_) => {
-                            unreachable!("rendered-pooling preflight rejected constant term maps")
-                        }
+                    let spec = match &term_map {
+                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec.clone(),
+                        _ => unreachable!("preflight term map"),
                     };
+                    columns.push((format!("rv{i}").into(), term_map));
                     TermDef::R2rmlBlank {
                         term_map: TermMap::Column(format!("rv{i}").into(), spec),
                         alias,
                         graph,
                     }
                 }
-                _ => unreachable!("rendered-pooling preflight rejected unsupported bindings"),
+                _ => unreachable!("preflight binding shape"),
             };
-            new_bindings.insert(v.clone(), rewritten);
+            if last {
+                new_bindings.insert(v.clone(), rewritten);
+            }
         }
-        branch.core = vec![Scan {
+        branch.core.push(Scan {
             alias,
-            source: (LogicalSource::Query(sql)).into(),
-        }];
-        branch.where_conds.clear();
+            source: crate::iq::ScanSource::Projection {
+                input: Box::new(input),
+                columns,
+                guards,
+                distinct: false,
+            },
+        });
         branch.bindings = new_bindings;
         out.push(branch);
     }
@@ -2265,34 +2217,6 @@ fn term_class(def: &TermDef) -> Option<TermClass> {
                 datatype: spec.datatype.as_ref().map(|n| format!("{n:?}")),
             })
         }
-        _ => None,
-    }
-}
-
-/// Render `cond` as inline SQL text against local alias `local`, IFF it is a
-/// simple, parameter-free `col IS [NOT] NULL` guard on `alias`'s own scan —
-/// [`pool_rendered`]'s doc comment explains why this is the only condition
-/// shape it folds into the wrap. `None` for anything else. `inner_sql` is the
-/// SAME immediate-source-text quoting signal [`render_template_inline`]'s own
-/// doc comment describes (`crate::cascade::col_is_unquoted_alias`) — a NULL
-/// guard on an unquoted view alias must reference it unquoted too, or the
-/// guard itself would name a column PostgreSQL folded away.
-fn render_null_guard(
-    cond: &SqlCond,
-    alias: usize,
-    local: &str,
-    inner_sql: Option<&str>,
-    dialect: sf_sql::Dialect,
-) -> Option<String> {
-    match cond {
-        SqlCond::IsNotNull(c) if c.alias == alias => Some(format!(
-            "{} IS NOT NULL",
-            crate::emit::render_immediate_source_column(local, &c.column, inner_sql, dialect)
-        )),
-        SqlCond::IsNull(c) if c.alias == alias => Some(format!(
-            "{} IS NULL",
-            crate::emit::render_immediate_source_column(local, &c.column, inner_sql, dialect)
-        )),
         _ => None,
     }
 }
@@ -3099,8 +3023,8 @@ fn branch_next_alias(b: &Branch) -> usize {
     let mut aliases: Vec<usize> = Vec::new();
     aliases.extend(b.core.iter().map(|scan| scan.alias));
     aliases.extend(b.opts.iter().map(|join| join.scan.alias));
-    for (a, _) in b.alias_sources() {
-        aliases.push(a);
+    for scan in b.relation_scans() {
+        aliases.push(scan.alias);
     }
     for def in b.bindings.values() {
         for c in def.columns() {
@@ -4401,11 +4325,12 @@ mod tests {
         let rewritten = &pooled[0];
 
         assert_eq!(rewritten.core.len(), 1);
-        let Some(LogicalSource::Query(sql)) = rewritten.core[0].source.logical() else {
-            panic!("rendered pooling must wrap the source in a query")
-        };
-        assert!(sql.contains("SELECT sfs7.\"id\" AS rv0 FROM \"source\" sfs7"));
-        assert!(sql.contains("WHERE sfs7.\"id\" IS NOT NULL"));
+        assert!(rewritten.core[0].source.logical().is_none());
+        let sql = crate::emit::emit_branch(rewritten, sf_sql::Dialect::Sqlite)
+            .unwrap()
+            .sql;
+        assert!(sql.contains("SELECT t7.\"id\" AS \"rv0\" FROM \"source\" t7"));
+        assert!(sql.contains("WHERE t7.\"id\" IS NOT NULL"));
         assert!(rewritten.where_conds.is_empty());
         assert_eq!(rewritten.bindings.len(), 1);
         assert!(rewritten.bindings.contains_key("s"));

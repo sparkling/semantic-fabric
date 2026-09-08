@@ -12,6 +12,8 @@ use crate::{DedupScope, Plan, PlanForm};
 use super::{ask, select};
 #[path = "probe_backend_tests/path_scans.rs"]
 mod path_scans;
+#[path = "probe_backend_tests/projection_scans.rs"]
+mod projection_scans;
 
 struct MockBackend {
     rows: VecDeque<Vec<RawTuple>>,

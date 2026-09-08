@@ -692,7 +692,7 @@ fn pool_rendered_width_mismatch_answers_correctly_with_percent_encoding() {
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(
-        tree_sql.contains("AS rv0"),
+        tree_sql.contains("AS \"rv0\""),
         "expected pool_rendered's own `rv{{i}}` rendered-projection aliasing to fire \
          for the width-mismatched arms: {tree_sql}"
     );

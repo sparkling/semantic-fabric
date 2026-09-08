@@ -1663,8 +1663,12 @@ fn pool_pattern_relation(
                 let gid = *next_alias;
                 *next_alias += 1;
                 for b in &members {
-                    let mut aliases = b.alias_sources().into_iter();
-                    let Some((alias, _)) = aliases.next() else {
+                    let mut aliases = b
+                        .core
+                        .iter()
+                        .chain(b.opts.iter().map(|opt| &opt.scan))
+                        .map(|scan| scan.alias);
+                    let Some(alias) = aliases.next() else {
                         return Err(Error::Unsupported(
                             "D2 shared term-dedup arm has no representative source → 501"
                                 .to_owned(),

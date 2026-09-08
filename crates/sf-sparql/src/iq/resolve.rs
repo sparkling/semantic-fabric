@@ -310,8 +310,12 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                             crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
                             let gid = cx.unfolder.alias();
                             for b in &members {
-                                let mut aliases = b.alias_sources().into_iter();
-                                let Some((alias, _)) = aliases.next() else {
+                                let mut aliases = b
+                                    .core
+                                    .iter()
+                                    .chain(b.opts.iter().map(|opt| &opt.scan))
+                                    .map(|scan| scan.alias);
+                                let Some(alias) = aliases.next() else {
                                     return Err(Error::Unsupported(
                                         "D2 shared term-dedup arm has no representative source → 501"
                                             .to_owned(),

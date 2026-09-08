@@ -45,8 +45,10 @@ preserving each endpoint's own width. Normalized path aliases become text;
 raw SubPlans retain exact recipes only where all arms agree. An explicit compiler
 flag propagates through nested emission; authored SQL never activates callbacks.
 Required duplicate/connectivity, mixed-width and authenticated correlation tests
-pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary translate-time
-folding, ordinary source-collation and general mixed-type identity remain open.
+pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary source-collation
+and general mixed-type identity remain open. ADR-0034 now also retains D1/D2
+wrappers as typed projections until emission; only original sources are probed,
+closing ordinary native folding without exposing table/constraint authority.
 ADR-0015's atom-local NULL guards now remove non-triples before projection and
 correlation; supported OPTIONAL and anti-join behavior is preserved. Equal node shapes alone do not prove all SQL-key/RDF equality;
 historical green fixtures are not total source-work bounds or release admission.

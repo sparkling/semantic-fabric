@@ -139,14 +139,17 @@ impl PortableRowPolicy {
         dialect: Dialect,
         scan: &mut Scan,
     ) -> sf_sparql::Result<Vec<SqlCond>> {
-        let sf_sparql::iq::ScanSource::Logical(logical) = &mut scan.source else {
-            return Err(denied());
-        };
-        let table = match &*logical {
-            LogicalSource::Table(table) => table.clone(),
-            LogicalSource::Query(sql) => {
-                sf_sql::policy_projection::single_table_view_source(sql, dialect)
-                    .map_err(|_| denied())?
+        use sf_sparql::iq::ScanSource;
+        let table = if let Some(table) = scan.source.distinct_table() {
+            table.to_owned()
+        } else {
+            match &scan.source {
+                ScanSource::Logical(LogicalSource::Table(table)) => table.clone(),
+                ScanSource::Logical(LogicalSource::Query(sql)) => {
+                    sf_sql::policy_projection::single_table_view_source(sql, dialect)
+                        .map_err(|_| denied())?
+                }
+                _ => return Err(denied()),
             }
         };
         let matching: Vec<_> = self
@@ -157,11 +160,25 @@ impl PortableRowPolicy {
         if matching.is_empty() {
             return Err(denied());
         }
-        if let LogicalSource::Query(sql) = logical {
+        if let ScanSource::Logical(LogicalSource::Query(sql)) = &mut scan.source {
             let columns: Vec<_> = matching.iter().map(|rule| rule.column.as_ref()).collect();
             *sql =
                 sf_sql::policy_projection::expose_single_table_view_columns(sql, dialect, &columns)
                     .map_err(|_| denied())?;
+        } else if let ScanSource::Projection { columns, .. } = &mut scan.source {
+            // Only the sealed same-named raw-column DISTINCT shape reached here.
+            // Expose policy keys without embedding policy values in generated SQL.
+            for rule in &matching {
+                if !columns.iter().any(|(name, _)| name == &rule.column) {
+                    columns.push((
+                        rule.column.clone(),
+                        sf_core::ir::TermMap::Column(
+                            rule.column.clone(),
+                            sf_core::ir::TermSpec::plain_literal(),
+                        ),
+                    ));
+                }
+            }
         }
         Ok(matching
             .into_iter()

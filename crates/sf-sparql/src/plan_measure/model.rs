@@ -136,6 +136,20 @@ pub(super) fn visit_scan<'a>(
         crate::iq::ScanSource::Path { closure, .. } => {
             walker.push(depth, Work::PathClosure(closure))
         }
+        crate::iq::ScanSource::Projection {
+            input,
+            columns,
+            guards,
+            ..
+        } => {
+            walker.push(depth, Work::Scan(input))?;
+            walker.collection(columns.len())?;
+            for (name, term) in columns {
+                walker.payload(name.len())?;
+                walker.push(depth, Work::TermMap(term))?;
+            }
+            push_conditions(walker, guards, depth)
+        }
     }
 }
 

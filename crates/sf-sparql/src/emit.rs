@@ -244,6 +244,7 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
         match &scan.source {
             crate::iq::ScanSource::Logical(source) => out.push(source),
             crate::iq::ScanSource::Path { closure, .. } => hop_sources(&closure.hop, out),
+            crate::iq::ScanSource::Projection { input, .. } => scan_sources(input, out),
         }
     }
 
@@ -267,6 +268,7 @@ pub(crate) fn validate_live_columns(
         Base(&'a LogicalSource),
         Derived,
         Path,
+        Projection(&'a [(Box<str>, TermMap)]),
     }
 
     fn scan_alias<'a>(
@@ -280,6 +282,15 @@ pub(crate) fn validate_live_columns(
                 validate_hop(&closure.hop, dialect, catalog)?;
                 Ok(AliasSource::Path)
             }
+            crate::iq::ScanSource::Projection {
+                input,
+                columns,
+                guards,
+                ..
+            } => {
+                scan::validate_projection(input, columns, guards, dialect, catalog)?;
+                Ok(AliasSource::Projection(columns))
+            }
         }
     }
 
@@ -291,6 +302,9 @@ pub(crate) fn validate_live_columns(
     ) -> Result<()> {
         if let Some(AliasSource::Base(source)) = aliases.get(&column.alias) {
             catalog.validate_live_column(source, &column.column, dialect)?;
+        }
+        if let Some(AliasSource::Projection(columns)) = aliases.get(&column.alias) {
+            scan::validate_output(columns, &column.column)?;
         }
         if matches!(aliases.get(&column.alias), Some(AliasSource::Path))
             && !matches!(column.column.as_ref(), "sf_s" | "sf_o")
@@ -596,7 +610,7 @@ fn branch_actuals(b: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> Actu
         out.insert(alias, source_actuals(source, catalog));
     }
     for scan in b.core.iter().chain(b.opts.iter().map(|join| &join.scan)) {
-        out.insert(scan.alias, scan_actuals(scan, catalog));
+        out.insert(scan.alias, scan_actuals(scan, dialect, catalog));
     }
     if let Some(path) = &b.path {
         out.insert(path.alias, path_actuals(path, catalog));
@@ -1591,7 +1605,7 @@ fn render_cond(
                 .join(" CROSS JOIN ");
             let mut nested_actuals = actuals.clone();
             for scan in scans {
-                nested_actuals.insert(scan.alias, scan_actuals(scan, catalog));
+                nested_actuals.insert(scan.alias, scan_actuals(scan, dialect, catalog));
             }
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql =
@@ -1734,66 +1748,27 @@ fn render_template_concat(
     }
 }
 
-/// Render one template's segments as a dialect-appropriate SQL string
-/// concatenation with every LITERAL segment INLINED (no bound parameter) — Run 4
-/// Wave C0d Mechanism B's building block (`iq::lower::pool_rendered`'s own doc
-/// comment has the full mechanism), called at TRANSLATE time from `unfold::
-/// pool_group` / `iq::lower::lower_as_subplan`, before any live per-statement
-/// param-binding context exists. [`render_template_concat`] (the FILTER/WHERE
-/// use case) binds each literal as a parameter instead — sound there because it
-/// renders into ONE branch's own emission, where `pidx`/`params` are threaded
-/// end to end; here the rendered expression becomes a SELECT-list column of ONE
-/// arm inside a multi-arm `UNION`, and `emit_subplan_sql` does not renumber a
-/// later arm's own placeholders against an earlier arm's (only SQLite's
-/// unnumbered `?` tolerates that; PostgreSQL's `$N` would collide). Inlining
-/// sidesteps the question rather than depending on a fix outside this
-/// mechanism's scope. A template's literal segments are MAPPING-TRUSTED TEXT
-/// (parsed from the R2RML document, never SPARQL-query-supplied) — inlining as a
-/// properly `''`-escaped SQL string literal is the SAME "trusted mapping text is
-/// inlined, not parameterised" precedent [`Dialect::quote_ident`] already sets
-/// for identifiers (ADR-0010 R2), not a departure from it. `alias` is a bare
-/// local alias STRING (e.g. `"sfs3"`, matching [`crate::cascade::
-/// wrap_scan_distinct`]'s own naming) rather than a numbered scan alias: this
-/// runs before a live [`ColumnCatalog`] exists, so there is no case-fold
-/// resolution to thread through [`colref`]. Reuses [`percent_encode_col`]
-/// verbatim for IRI-kind columns — no second encoder.
+/// Render mapping-trusted template literals inline, with source-aware columns.
+/// No query/policy values enter this parameter-free projection recipe.
 pub(crate) fn render_template_inline(
     segs: &[sf_core::ir::Segment],
-    alias: &str,
     encode_iri: bool,
-    inner_sql: Option<&str>,
     dialect: Dialect,
+    column: impl Fn(&str) -> String,
 ) -> Result<String> {
     use sf_core::ir::Segment;
-    let mut parts = Vec::with_capacity(segs.len());
-    for seg in segs {
-        parts.push(match seg {
-            Segment::Literal(text) => sql_string_literal(text),
-            Segment::Column(c) => {
-                // `crate::cascade::col_is_unquoted_alias`'s doc comment: `inner_sql`
-                // is THIS column's immediate source text (the arm's own `scan.
-                // source`) — when D1 already wrapped that scan, it is `cascade::
-                // wrap_col_ref`'s own output (`<expr> AS <alias>`), so the same
-                // detection composes across the D1-wrap-then-D2-pool nesting W3C
-                // R2RMLTC0011a exercises (a single-arm width mismatch pooled AFTER
-                // D1 already folded one of the arm's columns to lowercase on
-                // PostgreSQL).
-                let col = render_immediate_source_column(alias, c, inner_sql, dialect);
-                if encode_iri {
-                    percent_encode_col(&col, dialect)?
-                } else {
-                    col
-                }
-            }
-        });
-    }
+    let parts = segs
+        .iter()
+        .map(|segment| match segment {
+            Segment::Literal(text) => Ok(sql_string_literal(text)),
+            Segment::Column(name) if encode_iri => percent_encode_col(&column(name), dialect),
+            Segment::Column(name) => Ok(column(name)),
+        })
+        .collect::<Result<Vec<_>>>()?;
     match dialect {
         Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
         Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
-        other => Err(Error::Unsupported(format!(
-            "ADR-0034 D2 rendered-projection pooling (SQL CONCAT fallback) is not implemented \
-             for {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
-        ))),
+        _ => Err(Error::Unsupported("rendered projection dialect".into())),
     }
 }
 
@@ -2249,16 +2224,19 @@ mod tests {
             sf_core::ir::Segment::Literal("urn:row:".into()),
             sf_core::ir::Segment::Column("rowid".into()),
         ];
-        let table_sql =
-            render_template_inline(&template, "sfs0", false, None, Dialect::Postgres).unwrap();
+        let table_sql = render_template_inline(&template, false, Dialect::Postgres, |column| {
+            render_immediate_source_column("sfs0", column, None, Dialect::Postgres)
+        })
+        .unwrap();
         assert!(table_sql.contains("(sfs0.ctid)::text"), "{table_sql}");
-        let query_sql = render_template_inline(
-            &template,
-            "sfs0",
-            false,
-            Some("SELECT 7 AS rowid"),
-            Dialect::Postgres,
-        )
+        let query_sql = render_template_inline(&template, false, Dialect::Postgres, |column| {
+            render_immediate_source_column(
+                "sfs0",
+                column,
+                Some("SELECT 7 AS rowid"),
+                Dialect::Postgres,
+            )
+        })
         .unwrap();
         assert!(query_sql.contains("sfs0.rowid"), "{query_sql}");
         assert!(!query_sql.contains("ctid"), "{query_sql}");

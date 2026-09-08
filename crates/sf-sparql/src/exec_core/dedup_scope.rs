@@ -216,7 +216,8 @@ fn collect_tagged_aliases(
     source_groups: &HashMap<usize, DedupMarker>,
     aliases: &mut BTreeSet<usize>,
 ) {
-    for (alias, _) in branch.alias_sources() {
+    for scan in branch.relation_scans() {
+        let alias = scan.alias;
         if source_groups.contains_key(&alias) {
             aliases.insert(alias);
         }

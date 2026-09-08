@@ -216,9 +216,14 @@ fn pre_d1_authority_ignores_generated_wrapper_text_and_reads_current_bindings() 
     force_distinct_for_dup_safety(&mut branches, &[], Dialect::Postgres);
     let wrappers = branches
         .iter()
-        .map(|branch| match branch.core[0].source.logical() {
-            Some(LogicalSource::Query(query)) => query,
-            other => panic!("D1 did not wrap {other:?}"),
+        .map(|branch| {
+            assert!(matches!(
+                branch.core[0].source,
+                crate::iq::ScanSource::Projection { .. }
+            ));
+            crate::emit::emit_branch(branch, Dialect::Postgres)
+                .unwrap()
+                .sql
         })
         .collect::<Vec<_>>();
     assert_ne!(

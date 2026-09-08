@@ -136,8 +136,31 @@ fn rows(address: SocketAddr, fixture: &Fixture, query: &str) -> Vec<serde_json::
 }
 
 fn assert_joined_paths(address: SocketAddr, fixture: &Fixture) {
-    // Authored regular column references fold to the live native names. A path
-    // joined to an ordinary pattern must not freeze quoted SRC/DST before probe.
+    // Authored regular column references must resolve before a D1 DISTINCT
+    // wrapper is prepared, not only when a typed property path is rendered.
+    let ordinary = rows(
+        address,
+        fixture,
+        &format!("SELECT ?s ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    let expected: BTreeSet<_> = [(0, 1), (0, 2), (1, 3), (2, 3), (3, 0)]
+        .map(|(s, o)| (iri(s), iri(o)))
+        .into_iter()
+        .collect();
+    let actual: BTreeSet<_> = ordinary
+        .iter()
+        .map(|row| {
+            (
+                row["s"]["value"].as_str().unwrap().to_owned(),
+                row["o"]["value"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "ordinary DISTINCT wrapper resolves live native names"
+    );
+    assert_eq!(ordinary.len(), expected.len());
     let joined = rows(
         address,
         fixture,

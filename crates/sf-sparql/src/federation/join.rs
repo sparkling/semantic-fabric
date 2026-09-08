@@ -322,6 +322,9 @@ fn restore_base_scan<'a>(
             }
             scan.source = map.source.clone().into();
         }
+        None if scan.source.distinct_table() == Some(table.as_str()) => {
+            scan.source = map.source.clone().into();
+        }
         _ => return unsupported(),
     }
     plan.distinct = false;

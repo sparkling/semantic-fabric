@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-19
-updated: 2026-09-01
+updated: 2026-09-08
 tags: [set-semantics, bgp-dedup, duplicate-rows, soundness, union-dedup, key-elision]
 supersedes: []
 depends-on:
@@ -13,6 +13,30 @@ implements: []
 ---
 
 # Virtual-graph set semantics: BGP-level dedup for duplicate rows and cross-map same-triple emission
+
+## Current wrapper boundary (2026-09-08)
+
+D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned
+input scan, ordered raw-column/template recipes, parameter-free NULL guards and
+a DISTINCT flag. SQL is emitted only after original Table/Query metadata is
+available. Generated wrappers are not authored queries or catalog/constraint
+authority. Stable quoted output labels carry resolved native columns through
+nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
+
+Raw columns retain native descriptors. Transparent one-column non-IRI templates
+retain those descriptors on PostgreSQL/SQLite; actual concatenations use text
+descriptors. Existing template encoding and query/policy parameter isolation remain.
+Only same-named raw-column DISTINCT over one table may expose portable-policy
+keys or be restored by the existing bounded-join proof; computed/nested wrappers
+gain no such authority. Shared RDF-term dedup follows relation aliases, not
+authored-source authority, and remains source-sized/fail-closed on serving paths.
+
+Required owned TLS public SELECT now resolves mapping SRC/DST against native
+lowercase columns on PostgreSQL16.15/MySQL8.4.11. Boundary tests cover original
+probes, nested/conditional wrappers, missing/ambiguous names before cursors,
+descriptor propagation, parameter separation and clone-work measurement.
+This repairs identifier folding, not ordinary SQL-collation versus RDF identity,
+generic synthetic row identity or total source-work/release qualification.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

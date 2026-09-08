@@ -28,11 +28,12 @@ fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
 
     let mut table_branch = Branch::single(scan(0, "no_pk"));
     wrap_scan_distinct(&mut table_branch, 0, &cols, sf_sql::Dialect::Postgres);
-    let Some(LogicalSource::Query(table_sql)) = table_branch.core[0].source.logical() else {
-        panic!("D1 must wrap a table scan as a query")
-    };
+    assert!(table_branch.core[0].source.logical().is_none());
+    let table_sql = crate::emit::emit_branch(&table_branch, sf_sql::Dialect::Postgres)
+        .unwrap()
+        .sql;
     assert!(
-        table_sql.contains("(sfs0.ctid)::text AS rowid"),
+        table_sql.contains("(t0.ctid)::TEXT AS \"rowid\""),
         "synthetic base-table rowid must use PostgreSQL CTID: {table_sql}"
     );
 
@@ -42,11 +43,11 @@ fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
     };
     let mut query_branch = Branch::single(query_scan);
     wrap_scan_distinct(&mut query_branch, 1, &cols, sf_sql::Dialect::Postgres);
-    let Some(LogicalSource::Query(query_sql)) = query_branch.core[0].source.logical() else {
-        panic!("D1 must preserve a query source as a nested query")
-    };
+    let query_sql = crate::emit::emit_branch(&query_branch, sf_sql::Dialect::Postgres)
+        .unwrap()
+        .sql;
     assert!(
-        query_sql.contains("sfs1.rowid AS rowid"),
+        query_sql.contains("t1.rowid AS \"rowid\""),
         "authored query output rowid must remain an ordinary derived column: {query_sql}"
     );
     assert!(
@@ -64,11 +65,11 @@ fn mysql_d1_quotes_an_unquoted_reserved_output_alias() {
     };
     let mut branch = Branch::single(query_scan);
     wrap_scan_distinct(&mut branch, 0, &cols, sf_sql::Dialect::MySql);
-    let Some(LogicalSource::Query(sql)) = branch.core[0].source.logical() else {
-        panic!("D1 must preserve a query source as a nested query")
-    };
+    let sql = crate::emit::emit_branch(&branch, sf_sql::Dialect::MySql)
+        .unwrap()
+        .sql;
     assert!(
-        sql.contains("sfs0.`ROLE` AS `ROLE`"),
+        sql.contains("t0.`ROLE` AS `ROLE`"),
         "MySQL reserved output aliases require dialect quoting: {sql}"
     );
 }
