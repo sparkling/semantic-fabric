@@ -210,11 +210,16 @@ Both are `application/json`, `no-store`, and `nosniff`; neither reads request
 content, acquires application capacity, or probes a database. SIGTERM and Ctrl-C
 move `Running` to `Draining`, mark readiness administrative not-ready, reject new
 budgets, and stop new ingress while already-admitted requests retain their
-identities and may complete. At the configured positive monotonic-clock bound,
-`Forced` broadcasts cancellation to remaining identities before the server and
-connections are dropped. This is the implemented M3 probe/shutdown slice, not
-source-health polling, reload, the remaining metrics/OTLP catalogue, SLOs, or a
-cross-backend cleanup qualification.
+identities and may complete. HTTP drain and detached work retaining request
+capacity share the original positive monotonic-clock deadline. At that bound,
+`Forced` broadcasts cancellation; a separate three-second allowance keeps the
+runtime alive for owned native stop/discard. Non-quiescence returns `TimedOut`,
+never a clean shutdown. This corrects the earlier drop-serving-future assumption:
+HTTP completion alone does not prove native cleanup completed. Paused-clock
+tests cover grace, retained ownership and bounded failure; owned PostgreSQL
+16.15/MySQL 8.4.11 TLS CLI tests observe native stop, clean exit and closed ingress
+after forced SIGTERM during each of ASK/SELECT/CONSTRUCT. Full federated cleanup,
+source-health policy, remaining metrics/OTLP and release admission remain open.
 
 ### Redaction discipline
 Credentials, result data, PII and bound-parameter values are never logged at any

@@ -24,7 +24,7 @@ Finish the next public-path closure before opening another implementation lane. 
 | Order | Required outcome | Observable acceptance |
 |---|---|---|
 | 1 | Public identity and policy enforcement | Provisioned callers now share one server/policy/pool with distinct trusted RLS settings; public forms/UNION, cache isolation and cleanup pass. Finish portable ABAC, external sensitivity, external identity issuers and policy-aware reload |
-| 2 | Coherent lifecycle and total request controls | Opt-in authored reload now has immediate drift fencing, atomic generation replacement, fixed policy preservation, timeout/worker ownership and real CLI recovery/shutdown evidence across SQLite and encrypted PostgreSQL/MySQL single/mixed UNION. Native PostgreSQL/MySQL stop/discard now has required live timeout/disconnect/cap-one recovery evidence and retains request capacity through cleanup. Protected backend generations, policy/config hot reload and total controls remain open |
+| 2 | Coherent lifecycle and total request controls | Opt-in authored reload now has immediate drift fencing, atomic generation replacement, fixed policy preservation, timeout/worker ownership and real CLI recovery/shutdown evidence across SQLite and encrypted PostgreSQL/MySQL single/mixed UNION. Native PostgreSQL/MySQL stop/discard has required live timeout/disconnect/cap-one recovery and forced ASK/SELECT/CONSTRUCT SIGTERM evidence. Shutdown retains the runtime through owned cleanup under the original drain deadline plus a finite three-second forced allowance; exhaustion fails closed. Protected backend generations, policy/config hot reload and total controls remain open |
 | 3 | Secure configuration and remaining observability | Public configuration/TLS validation, redaction, bounded metrics/traces and required operational tests pass |
 | 4 | Useful bounded cross-source join | Implemented: 128-driving/4,096-probe triple caps, exact RDF merge, public materialized-oracle and encrypted PostgreSQL/MySQL CLI proof, pre-200 overflow/source failure; finish the federated cancellation/forced-shutdown matrix and exact-release admission |
 | 5 | Minimal Rust serving artifact and release | Clean-build live smoke, backend/profile matrix and every ADR-0055 minimum release check verify one immutable artifact |
@@ -311,7 +311,7 @@ Outcomes:
   governance events and integrated three-family default-off Prometheus profile
   without broadening its existing-listener claim; add missing adapter spans and
   pinned OpenTelemetry export;
-- retain implemented `/livez`, snapshot-state `/readyz`, and three-phase bounded SIGTERM/Ctrl-C shutdown (drain preserves admitted work; forced expiry cancels survivors); add automatic source-health/failure policy and complete cross-backend cleanup qualification; and
+- retain implemented `/livez`, snapshot-state `/readyz`, and three-phase bounded SIGTERM/Ctrl-C shutdown (drain preserves admitted work; forced expiry cancels survivors and allows three seconds for owned cleanup, failing on exhaustion); add automatic source-health/failure policy and complete cross-backend cleanup qualification; and
 - publish finite operational limits and alert thresholds; research-grade SLO
   calibration remains post-1.0.
 
@@ -322,7 +322,7 @@ QA gate:
   controlled overhead qualification remains post-1.0;
 - no metric label contains query text, IRIs, source values or other unbounded data;
 - readiness already fails for explicit invalid/not-ready runtime state; automatic unavailable-mandatory-source detection remains open;
-- existing admitted work can complete during drain, newly minted budgets reject, exact forced expiry cancels survivors, and real CLI SIGTERM exits cleanly and closes its listener inside the test bound; complete cross-backend connection/cancellation cleanup qualification remains open.
+- existing admitted work can complete during drain, newly minted budgets reject, exact forced expiry cancels survivors, and owned PostgreSQL/MySQL TLS CLI tests observe stopped native work, clean exit and closed ingress after forced ASK/SELECT/CONSTRUCT SIGTERM; full federated cleanup and backend admission remain open.
 
 ### M4 — V1 standards and live-release profile
 

@@ -294,8 +294,13 @@ tests observe server work stop after ASK timeout and SELECT/CONSTRUCT disconnect
 then prove cap-one pool recovery; a stricter MySQL source timeout is also tested.
 Peer/unit tests cover retained capacity, nullable witnesses and setup exclusions.
 Protected PostgreSQL generation and public RLS isolation/cleanup tests still pass.
-Full forced-shutdown/federated/backend admission qualification, SQLite busy/UDF/
-VFS/I/O, total compiler/database/recursive work and post-200 atomicity remain open.
+The same live fixture observes native stop and clean process exit after forced
+SIGTERM during ASK/SELECT/CONSTRUCT on each backend. HTTP completion alone cannot
+end the runtime while native cleanup retains request capacity. Normal drain uses
+the original signal deadline; Forced cancellation then permits three seconds for
+owned cleanup, returning an error if capacity remains held (ADR-0011).
+Full federated cleanup/backend admission qualification, SQLite busy/UDF/VFS/I/O,
+total compiler/database/recursive work and post-200 atomicity remain open.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

@@ -291,3 +291,93 @@ async fn shutdown_forces_non_draining_ingress_and_releases_capacity_at_bound() {
     assert!(tokio::net::TcpStream::connect(address).await.is_err());
     drop(client);
 }
+
+#[tokio::test(start_paused = true)]
+async fn http_drain_waits_for_detached_owned_work_without_cancelling_it() {
+    let config = config();
+    let mut budget = config.request_budget();
+    budget
+        .retain_admission(
+            config
+                .request_admission_permits()
+                .try_acquire_owned()
+                .unwrap(),
+        )
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (signal, received) = oneshot::channel();
+    let server = tokio::spawn(serve_listener_until_shutdown(
+        listener,
+        router(config.clone()),
+        config.clone(),
+        async move {
+            received.await.unwrap();
+        },
+        Duration::from_secs(5),
+    ));
+    signal.send(()).unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !server.is_finished(),
+        "HTTP completion must not discard active native cleanup"
+    );
+    assert_eq!(
+        budget.checkpoint(),
+        Ok(()),
+        "graceful drain must preserve owned work"
+    );
+    drop(budget);
+    assert_eq!(server.await.unwrap().unwrap(), ShutdownOutcome::Drained);
+}
+
+#[tokio::test(start_paused = true)]
+async fn forced_shutdown_waits_for_cleanup_but_never_waits_unboundedly() {
+    for release in [true, false] {
+        let config = config();
+        let mut budget = config.request_budget();
+        budget
+            .retain_admission(
+                config
+                    .request_admission_permits()
+                    .try_acquire_owned()
+                    .unwrap(),
+            )
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (signal, received) = oneshot::channel();
+        let server = tokio::spawn(serve_listener_until_shutdown(
+            listener,
+            router(config.clone()),
+            config.clone(),
+            async move {
+                received.await.unwrap();
+            },
+            Duration::from_secs(5),
+        ));
+        signal.send(()).unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(budget.checkpoint(), Err(QueryControlError::Cancelled));
+        assert!(
+            !server.is_finished(),
+            "forced signal is not completed cleanup"
+        );
+        if release {
+            drop(budget);
+            assert_eq!(server.await.unwrap().unwrap(), ShutdownOutcome::Forced);
+        } else {
+            tokio::time::advance(Duration::from_secs(3)).await;
+            assert_eq!(
+                server.await.unwrap().unwrap_err().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+        }
+    }
+}

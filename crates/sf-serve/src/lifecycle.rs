@@ -9,8 +9,11 @@ use tokio::sync::oneshot;
 use crate::problem::StartupCause;
 use crate::{RequestDeadlineService, ServeConfig, ServeError};
 
-/// Normal drain window. Expiry forcibly drops the serving future and its connections.
+/// Normal drain window. Expiry signals every admitted request to cancel.
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+/// The native MySQL stop allowance is two seconds (PostgreSQL one). Keep the
+/// runtime alive for those owned attempts plus bounded scheduling/teardown.
+const FORCED_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShutdownPhase {
@@ -95,21 +98,46 @@ where
     let force_config = config.clone();
     let graceful_signal = async move {
         shutdown.await;
+        let started = tokio::time::Instant::now();
         config.begin_shutdown();
-        let _ = started_tx.send(());
+        let _ = started_tx.send(started);
     };
     let server =
         axum::serve(listener, app.into_make_service()).with_graceful_shutdown(graceful_signal);
-    let outcome = finish_with_bound(server.into_future(), started_rx, drain_timeout).await?;
+    let graceful = async {
+        server.into_future().await?;
+        // HTTP drain does not imply detached producers/native cleanup ended.
+        // They already retain the request admission identity until ownership ends.
+        await_owned_work(&force_config).await;
+        Ok(())
+    };
+    let outcome = finish_with_bound(graceful, started_rx, drain_timeout).await?;
     if outcome == ShutdownOutcome::Forced {
         force_config.force_shutdown();
+        tokio::time::timeout(FORCED_CLEANUP_TIMEOUT, await_owned_work(&force_config))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "owned request cleanup exceeded shutdown allowance",
+                )
+            })?;
     }
     Ok(outcome)
 }
 
+async fn await_owned_work(config: &ServeConfig) {
+    let permits = config.request_admission_permits();
+    // No new source work is admissible after shutdown. Count the existing gate
+    // without narrowing its validated usize capacity to acquire_many's u32.
+    while permits.available_permits() != config.max_concurrent_requests() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn finish_with_bound<F>(
     server: F,
-    shutdown_started: oneshot::Receiver<()>,
+    shutdown_started: oneshot::Receiver<tokio::time::Instant>,
     drain_timeout: Duration,
 ) -> Result<ShutdownOutcome, std::io::Error>
 where
@@ -118,8 +146,12 @@ where
     tokio::pin!(server);
     tokio::select! {
         result = &mut server => result.map(|()| ShutdownOutcome::Drained),
-        _ = shutdown_started => {
-            match tokio::time::timeout(drain_timeout, &mut server).await {
+        started = shutdown_started => {
+            let deadline = started.unwrap_or_else(|_| tokio::time::Instant::now())
+                .checked_add(drain_timeout)
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput,
+                    "shutdown deadline is not representable"))?;
+            match tokio::time::timeout_at(deadline, &mut server).await {
                 Ok(result) => result.map(|()| ShutdownOutcome::Drained),
                 Err(_) => Ok(ShutdownOutcome::Forced),
             }
@@ -161,7 +193,9 @@ mod tests {
             started_rx,
             Duration::from_secs(5),
         ));
-        started_tx.send(()).expect("announce shutdown");
+        started_tx
+            .send(tokio::time::Instant::now())
+            .expect("announce shutdown");
         tokio::task::yield_now().await;
         assert!(!task.is_finished());
         tokio::time::advance(Duration::from_secs(5)).await;

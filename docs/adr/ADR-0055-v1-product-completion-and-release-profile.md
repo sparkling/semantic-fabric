@@ -35,9 +35,12 @@ assurance work becomes a labelled post-1.0 backlog.
 Native PostgreSQL/MySQL serving cancellation now holds dirty connections and
 request capacity through bounded stop/discard, with acknowledged cleanup before
 reuse. Required owned TLS CLI tests observe stopped database work and pool
-recovery; PostgreSQL generation/RLS regressions remain green. ADR-0010 records
-the exact endpoint, constructor and timeout limits. This closes that serving
-slice, not total governance, federated/forced-shutdown admission or release.
+recovery, including forced SIGTERM during ASK/SELECT/CONSTRUCT on both backends.
+Shutdown now preserves the runtime for owned cleanup: the original drain deadline
+is followed, only when forced, by a three-second cleanup allowance; exhaustion
+is an error, not a clean exit. PostgreSQL generation/RLS regressions remain green.
+ADR-0010/0011 record the endpoint, constructor and shutdown limits. This closes
+that serving slice, not total governance, federated cleanup admission or release.
 
 This is an explicit priority and evidence-scope change, not an implementation
 claim. Moving an item to post-1.0 does not make it complete, supported, or

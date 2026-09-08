@@ -62,11 +62,14 @@ pub(super) fn assert_native_stop(fixture: &Fixture, database: &Database, postgre
         );
     assert_ne!(original, mapping);
     std::fs::write(&path, mapping).unwrap();
-    for (query, timeout, disconnect, native_policy) in [
-        (ASK, "1", false, false),
-        (SINGLE, "30", true, false),
-        (CONSTRUCT, "30", true, false),
-        (ASK, "30", false, true),
+    for (query, timeout, disconnect, native_policy, forced) in [
+        (ASK, "1", false, false, false),
+        (SINGLE, "30", true, false, false),
+        (CONSTRUCT, "30", true, false, false),
+        (ASK, "30", false, true, false),
+        (ASK, "30", false, false, true),
+        (SINGLE, "30", false, false, true),
+        (CONSTRUCT, "30", false, false, true),
     ] {
         if native_policy && postgres {
             continue;
@@ -76,7 +79,14 @@ pub(super) fn assert_native_stop(fixture: &Fixture, database: &Database, postgre
         }
         database.sql(&format!("UPDATE {table} SET cancel_delay=FALSE"));
         let (mut command, address) = command(fixture, database, None);
-        command.args(["--timeout-secs", timeout, "--pg-pool-size", "1"]);
+        command.args([
+            "--timeout-secs",
+            timeout,
+            "--pg-pool-size",
+            "1",
+            "--shutdown-timeout-secs",
+            "1",
+        ]);
         if !postgres {
             command.env(
                 "SF_TLS_SOURCE",
@@ -110,7 +120,13 @@ pub(super) fn assert_native_stop(fixture: &Fixture, database: &Database, postgre
             wait_active(database, postgres, 1, Duration::from_millis(800));
         }
         let stopped_at = Instant::now();
-        if disconnect {
+        if forced {
+            assert!(Command::new("kill")
+                .args(["-TERM", &server.0.id().to_string()])
+                .status()
+                .unwrap()
+                .success());
+        } else if disconnect {
             stream.shutdown(Shutdown::Both).unwrap();
             drop(stream);
         } else {
@@ -126,6 +142,22 @@ pub(super) fn assert_native_stop(fixture: &Fixture, database: &Database, postgre
             stopped_at.elapsed() < Duration::from_secs(4),
             "statement reached its natural six-second completion"
         );
+        if forced {
+            let exit_bound = stopped_at + Duration::from_secs(4);
+            let status = loop {
+                if let Some(status) = server.0.try_wait().unwrap() {
+                    break status;
+                }
+                assert!(
+                    Instant::now() < exit_bound,
+                    "forced shutdown did not exit within bound"
+                );
+                thread::sleep(Duration::from_millis(20));
+            };
+            assert!(status.success(), "forced shutdown must exit cleanly");
+            assert!(TcpStream::connect(address).is_err());
+            continue;
+        }
         database.sql(&format!("UPDATE {table} SET cancel_delay=FALSE"));
         // Cap-one pool: the stopped statement must not block a fresh exact result.
         let (status, result) = request(address, ASK, Some(&fixture.token)).unwrap();
