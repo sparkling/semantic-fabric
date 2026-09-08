@@ -272,8 +272,6 @@ jobs:
       - name: Rust toolchain (pinned via rust-toolchain.toml)
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      # SQL Server has no lightweight in-container healthcheck tool available to
-      # `options:`, unlike postgres/mysql above — poll the TCP port directly instead.
       - name: wait for SQL Server
         run: |
           for i in $(seq 1 30); do
@@ -305,13 +303,14 @@ jobs:
           test_name='authenticated_public_queries_require_verified_source_tls'
           cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
           cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
-      - name: qualify public PostgreSQL Direct Mapping lifecycle
+      - name: qualify public Direct lifecycle and native query profiles
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          test_name='direct::public_direct_mapping_has_authenticated_tls_startup'
-          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
-          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
+          for test_name in direct::public_direct_mapping_has_authenticated_tls_startup query_profile::native_describe_and_recursive_paths_are_exact; do
+            cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+            cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
+          done
       # ADR-0040 comparison evidence only: default-off, no product admission.
       - name: clippy (sf-sparql secure-spill-prototype)
         run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings

@@ -23,6 +23,8 @@ use futures_util::TryStreamExt;
 
 use crate::error::Result;
 
+mod sqlite_metadata;
+
 // --- SQLite (synchronous cursor) ------------------------------------------
 
 /// Run `sql` (with bound `params`) and invoke `f` for **each row in turn**, over
@@ -60,11 +62,12 @@ pub fn sqlite_column_decltypes(
     sql: &str,
 ) -> Result<Vec<Option<String>>> {
     let stmt = conn.prepare(sql)?;
-    Ok(stmt
+    let declared: Vec<_> = stmt
         .columns()
         .iter()
         .map(|c| c.decl_type().map(str::to_owned))
-        .collect())
+        .collect();
+    sqlite_metadata::recover_collated_decltypes(conn, sql, declared)
 }
 
 /// The result-set column **names** of `sql`, in projection order (R2RML §5.1: an

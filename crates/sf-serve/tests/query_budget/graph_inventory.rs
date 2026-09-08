@@ -80,3 +80,36 @@ async fn named_graph_inventory_and_reflexive_checks_preserve_exact_path_results(
         assert_eq!(actual, expected, "operator {operator}");
     }
 }
+
+#[tokio::test]
+async fn public_collated_sql_projection_preserves_padding_and_date_type() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE edges(s CHARACTER(4), o DATE); INSERT INTO edges VALUES ('a','2026-09-08');",
+    )
+    .unwrap();
+    let mapping = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+        <#Edges> a rr:TriplesMap; rr:logicalTable [rr:sqlQuery "SELECT s COLLATE BINARY AS s, o COLLATE BINARY AS o FROM edges"];
+          rr:subjectMap [rr:template "http://example.test/node/{s}"];
+          rr:predicateObjectMap [rr:predicate <http://example.test/a>;
+            rr:objectMap [rr:column "o"; rr:datatype <http://www.w3.org/2001/XMLSchema#date>]]."#;
+    let mut config = support::serve_config(Backend::sqlite(conn), mapping);
+    config.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    let query = "SELECT ?s ?o WHERE { ?s <http://example.test/a> ?o }";
+    let response = router(Arc::new(config))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        document["results"]["bindings"],
+        serde_json::json!([{
+            "s":{"type":"uri","value":"http://example.test/node/a%20%20%20"},
+            "o":{"type":"literal","value":"2026-09-08","datatype":"http://www.w3.org/2001/XMLSchema#date"}
+        }])
+    );
+}

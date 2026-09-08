@@ -14,6 +14,8 @@ mod lineage;
 mod lineage_stop;
 #[path = "source_tls_live/multiple_lineage.rs"]
 mod multiple_lineage;
+#[path = "source_tls_live/query_profile.rs"]
+mod query_profile;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
 #[path = "source_tls_live/stop_matrix.rs"]
@@ -105,6 +107,16 @@ fn request_format(
     token: Option<&str>,
     accept: &str,
 ) -> Option<(u16, Vec<u8>)> {
+    request_format_bounded(address, query, token, accept, 65536)
+}
+
+fn request_format_bounded(
+    address: SocketAddr,
+    query: &str,
+    token: Option<&str>,
+    accept: &str,
+    max_wire_bytes: u64,
+) -> Option<(u16, Vec<u8>)> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
@@ -117,8 +129,11 @@ fn request_format(
         .unwrap_or_default();
     write!(stream, "POST /sparql HTTP/1.1\r\nHost: {address}\r\n{authorization}Connection: close\r\nContent-Type: application/sparql-query\r\nAccept: {accept}\r\nContent-Length: {}\r\n\r\n{query}", query.len()).unwrap();
     let mut wire = Vec::new();
-    stream.take(65537).read_to_end(&mut wire).unwrap();
-    assert!(wire.len() <= 65536);
+    stream
+        .take(max_wire_bytes + 1)
+        .read_to_end(&mut wire)
+        .unwrap();
+    assert!(wire.len() as u64 <= max_wire_bytes);
     if accept == lineage::FORMAT && wire.starts_with(b"HTTP/1.1 200 ") {
         let end = wire.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         let headers = std::str::from_utf8(&wire[..end])

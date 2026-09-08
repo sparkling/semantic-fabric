@@ -19,9 +19,29 @@ successful `P+` or `P*` query. It does not accept a partial answer at any depth.
 This decision closes the known semantic truncation in the single-source
 compiler. The serving lane now carries one absolute deadline plus finite limits
 for observable probes, opens, pulls, semantic results, and serializer writes.
-Raw/conformance APIs remain explicitly uncontrolled; compiler CPU, database
-rows/recursive SQL and source cost, source-native timeouts/cancellation, cross-
-source closure, production backend admission, and live MySQL remain open.
+Raw/conformance APIs remain explicitly uncontrolled; total compiler/source work,
+native key-collation safety, cross-source closure and backend admission remain open.
+Required native serving cleanup is recorded in ADR-0055, not superseded here.
+
+**2026-09-08 exact query slice:** required owned-TLS CLI checks execute one-hop
+DESCRIBE and `P+`/`P*` on PostgreSQL 16.15/MySQL 8.4.11: a duplicate-edge
+cycle/diamond returns all 16 pairs; a 258-edge chain returns all 33,411/33,670
+pairs, not a depth-limited prefix. These native keys are decimal-digit VARCHARs;
+this does not qualify arbitrary source collations or typed endpoints. A separate
+SQLite NOCASE regression reproduced false reachability and lost case-distinct
+IRIs. The attempted blanket `COLLATE BINARY` path change is NOT integrated:
+it lost CHAR/DATE metadata and rejected existing correlated paths; raw byte keys
+also cannot assume decoder-equivalence across mixed types or padding. The
+separate integrated repair is a guarded prepare-only metadata walk for authored
+collated SQL projections. It removes transparent
+collation only from explicitly aliased columns, preserves column names and
+recovers CHAR padding/DATE types; unsafe unnamed computed outputs reject before
+cursor work. Raw and authenticated HTTP tests preserve CHAR/DATE reconstruction.
+SQLite/native path-key equality is still open. Native text comparison,
+external/correlated comparison precedence, total source-work and exact release
+qualification remain required follow-up. Do not cast every key to text/binary:
+that changes date/binary/numeric decoding. Live type metadata and preserving typed
+composed paths until emission are the identified native correction seams.
 
 ## Context
 
@@ -29,8 +49,8 @@ source closure, production backend admission, and live MySQL remain open.
 complement expansion now use request-owned prospective work and exact term/source
 copy reservations. Public rejection precedes source admission and sufficient work
 preserves exact NPS multiplicity; fixed-point/oracle regression checks pass.
-This does not govern source-side recursive iterations, graph inventory/reflexive
-eligibility or every compiler phase. ADR-0055 controls current v1 release scope;
+Graph inventory/reflexive eligibility now shares those prospective controls.
+Source-side recursive iterations and other compiler phases remain open. ADR-0055 controls current v1 release scope;
 the historical ADR-0038 links below do not add deferred research prerequisites.
 
 The previous recursive CTE keyed rows by `(sf_s, sf_o, sf_d)`, where `sf_d` was
@@ -104,9 +124,10 @@ Required regression evidence includes:
 
 Commit `5c379f6` implements the pair fixed point and rejection boundary. SQLite
 executes the hostile suite, and a local PostgreSQL run produced all 33,411 pairs
-for a 258-edge chain plus all nine pairs for a three-node cycle. MySQL syntax is
-supported by its normative engine documentation, but live MySQL execution is
-still open and no admission follows from SQL-string inspection.
+for a 258-edge chain plus all nine pairs for a three-node cycle. The required
+native CLI command now executes the pinned PostgreSQL/MySQL profile:
+`cargo test --locked -p sf-cli --no-default-features --test source_tls_live query_profile::native_describe_and_recursive_paths_are_exact -- --ignored --exact --nocapture`.
+This is positive profile evidence, not source-collation safety or admission.
 
 ## Consequences
 
@@ -140,7 +161,7 @@ still open and no admission follows from SQL-string inspection.
   complete; post-`200` transport atomicity remains an explicit nonclaim.
 - **R4** — unproved recursive dialects reject before SQL emission or source I/O.
 - **R5** — compiler support never implies backend production admission.
-- **R6** — live MySQL and total resource governance remain explicit open gates.
+- **R6** — native key equality, total resource governance and exact-release qualification remain explicit open gates.
 
 ## Links
 

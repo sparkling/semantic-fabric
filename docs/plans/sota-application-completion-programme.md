@@ -15,9 +15,9 @@ nothing moved to post-1.0 is relabelled implemented, supported, or complete.
 
 ## Immediate delivery queue (2026-09-08)
 
-Recovery integration `458faf1` on `main` passes full locked Rust tests/build,
-formatting, the hardened harness build and focused integration/model contracts.
-This closes fragmented integration, not the remaining public requirements.
+**Current query slice:** owned PostgreSQL 16.15/MySQL 8.4.11 CLI evidence now covers one-hop DESCRIBE and complete numeric-key VARCHAR cycle/258-edge closures. The blanket SQLite path comparison prototype was rejected; the verified metadata repair preserves CHAR/DATE decoding for explicitly collated authored SQL projections. Next: SQLite/native/correlated key-comparison authority, remaining source controls and exact-release qualification; no whole-backend admission or arbitrary deadline follows from these focused results.
+
+Recovery integration `458faf1` on `main` passed full locked Rust tests/build, formatting, the harness build and focused contracts; it closed fragmented integration, not the remaining public requirements.
 One integration owner writes on `main`; independent readers/reviewers may help.
 Finish the next public-path closure before opening another implementation lane. The serving/developer split now builds `sf-cli` alone with defaults disabled, retains SQLite/PostgreSQL/MySQL and all serving controls, and excludes conformance/benchmark dependencies. Required CLI tests include command rejection and live encrypted PostgreSQL/MySQL single-source/mixed UNION execution. Exact artifact smoke, versioning, reference deployment and the minimum release bundle remain open; this does not adopt proposed ADR-0039's post-1.0 gates.
 

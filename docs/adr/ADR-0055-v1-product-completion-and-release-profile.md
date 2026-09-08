@@ -177,6 +177,8 @@ on every v1 commit.
 
 ## Context
 
+**Query-profile delta (2026-09-08):** required owned-TLS PostgreSQL 16.15/MySQL 8.4.11 CLI checks now cover one-hop DESCRIBE graph sets, duplicate-edge cycles and complete 258-edge `P+`/`P*` closures. The native path fixture uses decimal-digit VARCHAR keys, not arbitrary native collation/type qualification. SQLite NOCASE path joins reproduced false reachability and lost IRIs; the blanket comparison prototype was rejected for decoding/correlated-path regressions. The integrated repair instead preserves CHARACTER padding and DATE types in explicitly collated authored SQL projections through guarded, prepare-only alias-preserving metadata recovery. Unnamed computed outputs that make recovery ambiguous fail closed. Path-key comparison remains open. Native/correlated key equality, total source controls and exact release remain open; ADR-0049 records the evidence and limitations.
+
 The application programme mixed three different outcomes:
 
 1. a usable, secure, bounded semantic-fabric product;

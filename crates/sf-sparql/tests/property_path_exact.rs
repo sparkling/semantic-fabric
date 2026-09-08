@@ -179,6 +179,69 @@ fn pair_fixed_point_terminates_and_is_exact_on_a_cycle() {
 }
 
 #[test]
+fn path_key_comparison_preserves_native_character_padding() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE edge(parent CHARACTER(4), child CHARACTER(4)); INSERT INTO edge VALUES ('a','b');").unwrap();
+    let mut maps = edge_mapping();
+    maps[0].source = LogicalSource::Query(
+        "SELECT parent COLLATE BINARY AS parent, child COLLATE BINARY AS child FROM edge".into(),
+    );
+    let ordinary = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}> ?o }}"),
+        &maps,
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let closure = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>+ ?o }}"),
+        &maps,
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let expected = exec::select(&ordinary, &conn).unwrap().rows;
+    assert_eq!(
+        expected[0][0].as_ref().unwrap().to_string(),
+        "<http://ex/n/a%20%20%20>"
+    );
+    assert_eq!(exec::select(&closure, &conn).unwrap().rows, expected);
+}
+
+#[test]
+fn path_key_comparison_preserves_natural_date_type() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE edge(parent TEXT, child DATE); INSERT INTO edge VALUES ('a','2026-09-08');",
+    )
+    .unwrap();
+    let mut maps = edge_mapping();
+    maps[0].source = LogicalSource::Query(
+        "SELECT parent COLLATE BINARY AS parent, child COLLATE BINARY AS child FROM edge".into(),
+    );
+    maps[0].predicate_object_maps[0].objects = vec![ObjectMap::Term(TermMap::Column(
+        "child".into(),
+        TermSpec::plain_literal(),
+    ))];
+    let ordinary = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}> ?o }}"),
+        &maps,
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let alternative = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s (<{REACHES}>|<{REACHES}>) ?o }}"),
+        &maps,
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let expected = exec::select(&ordinary, &conn).unwrap().rows;
+    assert_eq!(
+        expected[0][1].as_ref().unwrap().to_string(),
+        "\"2026-09-08\"^^<http://www.w3.org/2001/XMLSchema#date>"
+    );
+    assert_eq!(exec::select(&alternative, &conn).unwrap().rows, expected);
+}
+
+#[test]
 fn unproven_dialects_reject_recursive_paths_before_emission() {
     let maps = edge_mapping();
     let unproven = [

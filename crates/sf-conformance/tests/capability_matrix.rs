@@ -34,8 +34,8 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let counts = capability_catalog::status_counts(&loaded.catalog);
     assert_eq!(loaded.catalog.cells.len(), 113);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&83));
-    assert_eq!(counts.get(&Status::Planned), Some(&27));
+    assert_eq!(counts.get(&Status::Implemented), Some(&85));
+    assert_eq!(counts.get(&Status::Planned), Some(&25));
     assert_eq!(counts.get(&Status::Unsupported), Some(&3));
     assert!(loaded
         .catalog
@@ -85,7 +85,6 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         assert!(!cell.advertisable);
     }
 }
-
 #[test]
 fn capture_supervisor_kernel_does_not_promote_operational_authority() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
@@ -148,7 +147,6 @@ fn describe_profile_is_exact_versioned_and_backend_scoped() {
         .contains("one parsed target expression"));
     assert!(sqlite.qualification.contains("RDF-graph set union"));
     assert!(sqlite.qualification.contains("retained executor state"));
-
     for id in ["describe-execution-mysql", "describe-execution-postgresql"] {
         let cell = loaded
             .catalog
@@ -156,12 +154,15 @@ fn describe_profile_is_exact_versioned_and_backend_scoped() {
             .iter()
             .find(|cell| cell.id == id)
             .unwrap_or_else(|| panic!("missing {id}"));
-        assert_eq!(cell.status, Status::Planned);
-        assert!(!cell.semantic_exact);
-        assert!(!cell.bounded);
+        assert_eq!(cell.status, Status::Implemented);
+        assert_eq!(cell.verification, Verification::CiRequired);
+        assert!(cell.semantic_exact && cell.bounded);
+        assert!(cell
+            .evidence_ids
+            .iter()
+            .any(|id| id == "e-native-query-profile-cli"));
         assert!(!cell.advertisable);
     }
-
     let limitation = loaded
         .catalog
         .limitations
@@ -169,7 +170,6 @@ fn describe_profile_is_exact_versioned_and_backend_scoped() {
         .find(|limitation| limitation.id == "l-describe")
         .expect("DESCRIBE limitation");
     assert!(limitation.release_blocking);
-
     let compiler_claim = loaded
         .catalog
         .claims
