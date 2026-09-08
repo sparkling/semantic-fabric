@@ -241,8 +241,12 @@ async fn process(
                     .await
                 }
                 PlanForm::Construct { .. } => {
+                    let format = match lineage {
+                        Some(proof) => stream::GraphFormat::Lineage(proof),
+                        None => negotiate_rdf(accept).into(),
+                    };
                     traced_execute(respond_construct(
-                        backend, plan, generation, rls_tables, accept, budget,
+                        backend, plan, generation, rls_tables, format, budget,
                     ))
                     .await
                 }

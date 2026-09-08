@@ -18,6 +18,9 @@ use crate::{
 
 pub(crate) const MEDIA_TYPE: &str = "application/vnd.semantic-fabric.lineage+json-seq";
 
+#[path = "lineage_graph.rs"]
+mod graph;
+
 /// Immutable proof is created from the SAME pinned snapshot and query string as
 /// execution. It never decorates a caller-supplied/mutable plan. Authorization
 /// can only remove rows from this constant-origin profile, not add origins.
@@ -164,7 +167,7 @@ mod tests {
 
     fn proof() -> Arc<Lineage> {
         Arc::new(Lineage {
-            header: json!({"type":"header"}),
+            header: json!({"type":"header", "mappingId":"urn:map", "sourceId":0}),
             request: "test".into(),
             source: "urn:source".into(),
             mapping: "urn:mapping".into(),
@@ -214,6 +217,70 @@ mod tests {
             },
             crate::stream::SelectFormat::Lineage(proof()),
             vec![],
+            budget,
+        );
+        assert_eq!(
+            body.collect().await.unwrap_err().to_string(),
+            "result stream failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn graph_lineage_source_or_cleanup_failure_cannot_complete() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let reached_cleanup = Arc::new(AtomicBool::new(false));
+        let cleanup = reached_cleanup.clone();
+        let budget = RequestBudget::after(
+            Duration::from_secs(30),
+            QueryLimits::new(10000, 10000, 10000, 100000),
+        );
+        let mut body = crate::stream::construct_body_streaming_controlled(
+            move |mut sink| {
+                Box::pin(async move {
+                    let triple = oxrdf::Triple::new(
+                        oxrdf::NamedNode::new("urn:s").unwrap(),
+                        oxrdf::NamedNode::new("urn:p").unwrap(),
+                        oxrdf::Literal::new_simple_literal("x".repeat(20000)),
+                    );
+                    sink(vec![triple]).await?;
+                    cleanup.store(true, Ordering::SeqCst);
+                    Err(sf_sparql::Error::Sql("secret cleanup failure".into()))
+                })
+            },
+            crate::stream::GraphFormat::Lineage(proof()),
+            budget,
+        );
+        let mut prefix = Vec::new();
+        let mut failed = false;
+        while let Some(frame) = body.frame().await {
+            match frame {
+                Ok(frame) => {
+                    if let Ok(data) = frame.into_data() {
+                        prefix.extend_from_slice(&data);
+                    }
+                }
+                Err(error) => {
+                    assert_eq!(error.to_string(), "result stream failed");
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        assert!(failed);
+        assert!(reached_cleanup.load(Ordering::SeqCst));
+        let prefix = String::from_utf8(prefix).unwrap();
+        assert!(!prefix.contains("\"type\":\"complete\"") && !prefix.contains("secret"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn graph_lineage_deadline_terminates_before_a_chunk_is_ready() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(1),
+            QueryLimits::new(10000, 10000, 10000, 100000),
+        );
+        let body = crate::stream::construct_body_streaming_controlled(
+            |_sink| Box::pin(std::future::pending()),
+            crate::stream::GraphFormat::Lineage(proof()),
             budget,
         );
         assert_eq!(

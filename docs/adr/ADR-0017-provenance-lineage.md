@@ -13,11 +13,11 @@ implements:
 # Provenance & lineage — query-time
 
 > **Implementation status (2026-09-08): accepted, partially implemented.**
-> The public opt-in constant-mapping/source SELECT profile below emits actual
-> per-solution PROV-O under the request's pinned snapshot, policy and budget.
+> The public opt-in constant-mapping/source SELECT and CONSTRUCT profiles emit
+> per-solution PROV-O and native graph reification under the pinned request.
 > Full ADR-0017 remains open: dynamic multi-origin operators, federation,
-> graph-result RDF 1.2 reification and declared/verified row-key authority are
-> not implemented by this slice. ADR-0055, not historical ADR-0038, controls v1.
+> declared/verified row-key authority and native-backend lineage qualification.
+> ADR-0055, not historical ADR-0038, controls v1.
 
 ## Context and Problem Statement
 
@@ -55,14 +55,15 @@ SPARQL result media types remain unchanged.
 
 Eligibility is proved before source-generation acquisition: one authored
 TriplesMap (nonempty ID, at most 1,024 bytes), no referencing object maps, and a
-SELECT without dataset clauses over nonempty BGPs with only JOIN, UNION,
-projection, DISTINCT/REDUCED and slicing. The eligibility walk caps combined
-algebra/triple visits at 256; this does not bound parsing or total compiler CPU.
+SELECT or CONSTRUCT without dataset clauses over nonempty BGPs with only JOIN,
+UNION, projection, DISTINCT/REDUCED and slicing. The eligibility walk caps combined
+algebra/triple visits and CONSTRUCT template triples at 256; this does not bound
+parsing, nested term recursion or total compiler CPU.
 All positive witnesses necessarily use the same authored map, including its
 saturated class/predicate variants. Thus final-row annotation remains exact
 after projection, bag UNION, duplicate elimination and LIMIT. A candidate-map
 list is never substituted for actual origins. Ambiguous/multiple maps, OPTIONAL,
-GROUP, FILTER/expressions, paths, graph forms and federation currently reject
+GROUP, FILTER/expressions, paths, ASK/DESCRIBE and federation currently reject
 provenance with `501` before source I/O; ordinary-query support is unaffected.
 
 The response is an RS/LF-framed JSON text sequence. Its first `header` record
@@ -85,6 +86,37 @@ charge the existing request budget, every serialized byte is charged, and the
 existing backpressured terminal-body/cancellation/connection-ownership path is
 retained. These are not a total-heap or total-compiler governance claim.
 
+### Graph profile: constant-mapping-source-graph-v1
+
+The same explicit Accept selects graph lineage for admitted CONSTRUCT queries.
+The header retains the mapping/source/snapshot/logical-plan/policy identities and
+adds `profile: constant-mapping-source-graph-v1`, `blankNodeScope: response`,
+`productGraph: default`, and `datasetFormat: application/n-quads;version=1.2`.
+Each nonempty emitted template solution has a `graph-solution` record with its
+visible `ordinal` and a `dataset` string: a native RDF 1.2 N-Quads fragment.
+Concatenate these fragments in response order and parse as **one RDF dataset**
+with one blank-node scope, not separate RDF documents. Template blank nodes stay
+shared within each solution and fresh between solutions; mapped blank nodes may
+intentionally recur across records. No blank nodes are reminted by provenance.
+
+Only unchanged emitted product triples occupy the default graph. All PROV-O
+metadata, including bundle typing, occupies per-solution named bundle graphs.
+Each emitted triple occurrence has a request/ordinal/index reifier IRI whose
+`rdf:reifies` object is the native triple term and whose `prov:wasGeneratedBy`
+links its solution activity. This repeats only authorized, already-emitted RDF
+terms, including nested terms and language/direction; no unselected columns,
+inferred row keys or raw identities are exposed. Metadata is not a product graph
+and must remain outside SHACL validation of that graph.
+
+Empty templates and invalid/unbound template outputs create no activity or
+ordinal. Repeated product triples retain RDF graph-set semantics; no additional
+whole-result deduplication state is introduced. Final `complete` reports
+nonempty `solutions` and `tripleOccurrences`, **not a unique graph cardinality**.
+As for SELECT, it follows successful execution and cleanup and requires clean
+transport completion. Native RDF escaping precedes direct JSON-string escaping
+through the charged writer; no second whole-dataset buffer or source query is
+created. The existing result, deadline, backpressure and cleanup controls remain.
+
 Required evidence: `cargo test --locked -p sf-serve --test lineage`,
 `cargo test --locked -p sf-serve --lib lineage`, and
 `cargo test --locked -p sf-core --test security_context_contract`. Public SQLite
@@ -92,6 +124,10 @@ tests cover bags, saturation, modifiers, no-PK promotion, row-policy isolation,
 cache/generation identity, pinned reload, rejection and exact byte limits;
 terminal tests cover deadline and source/cleanup failure. PostgreSQL/MySQL use
 the shared serializer but still need their lineage-specific live qualification.
+Graph tests additionally compare the ordinary product graph, parse native
+reification, preserve mapped/template blank nodes and nested/directional terms,
+check empty/invalid/duplicate outputs and template admission, and verify exact
+response bytes and cleanup failure without a successful completion record.
 
 ### Consequences
 

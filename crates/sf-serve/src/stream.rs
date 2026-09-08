@@ -38,8 +38,30 @@ use tokio::sync::mpsc::Sender;
 use crate::budget::RequestBudget;
 use crate::terminal_body;
 
+#[path = "stream_graph_lineage.rs"]
+mod graph_lineage;
 #[path = "stream_lineage.rs"]
 mod lineage;
+
+pub(crate) enum GraphFormat {
+    Standard(RdfFormat),
+    Lineage(Arc<crate::lineage::Lineage>),
+}
+
+impl From<RdfFormat> for GraphFormat {
+    fn from(value: RdfFormat) -> Self {
+        Self::Standard(value)
+    }
+}
+
+impl GraphFormat {
+    pub(crate) fn media_type(&self) -> &'static str {
+        match self {
+            Self::Standard(format) => format.media_type(),
+            Self::Lineage(_) => crate::lineage::MEDIA_TYPE,
+        }
+    }
+}
 
 pub(crate) enum SelectFormat {
     Standard(QueryResultsFormat),
@@ -259,12 +281,16 @@ where
 
 pub(crate) fn construct_body_streaming_controlled<D>(
     drive: D,
-    fmt: RdfFormat,
+    fmt: impl Into<GraphFormat>,
     budget: RequestBudget,
 ) -> Body
 where
     D: FnOnce(TripleStreamSink) -> BoxedResult + Send + 'static,
 {
+    let fmt = match fmt.into() {
+        GraphFormat::Standard(format) => format,
+        GraphFormat::Lineage(proof) => return graph_lineage::body(drive, proof, budget),
+    };
     let (body, producer) =
         terminal_body::spawn(CHANNEL_CAP, budget, move |tx, phase_budget| async move {
             let buf = SharedBuf::new(phase_budget.clone());

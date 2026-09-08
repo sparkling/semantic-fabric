@@ -13,6 +13,13 @@ fn lineage_keeps_full_contract_open_and_only_advertises_the_evidenced_subset() {
         .unwrap();
     assert_eq!(partial.status, Status::Implemented);
     assert!(partial.semantic_exact && partial.bounded && partial.advertisable);
+    for id in [
+        "e-query-lineage-graph",
+        "e-query-lineage-graph-http",
+        "e-query-lineage-graph-stream",
+    ] {
+        assert!(partial.evidence_ids.iter().any(|evidence| evidence == id));
+    }
     let full = catalog
         .cells
         .iter()

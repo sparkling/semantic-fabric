@@ -43,16 +43,29 @@ impl CompilerBinding {
             return Err(unsupported());
         }
         let query = crate::parse_query(sparql)?;
-        let Query::Select {
-            pattern,
-            dataset: None,
-            ..
-        } = &query
-        else {
-            return Err(unsupported());
+        let (pattern, mut work) = match &query {
+            Query::Select {
+                pattern,
+                dataset: None,
+                ..
+            } => (pattern, 0),
+            Query::Construct {
+                pattern,
+                dataset: None,
+                template,
+                ..
+            } => {
+                // Template size is part of lineage eligibility, not merely WHERE
+                // algebra size. This is not a total parser/term-recursion bound.
+                if template.len() > 256 {
+                    return Err(unsupported());
+                }
+                control.consume(QueryCharge::CompilerWork, template.len() as u64)?;
+                (pattern, template.len())
+            }
+            _ => return Err(unsupported()),
         };
         let mut pending = vec![pattern];
-        let mut work = 0usize;
         while let Some(pattern) = pending.pop() {
             control.checkpoint()?;
             control.consume(QueryCharge::CompilerWork, 1)?;

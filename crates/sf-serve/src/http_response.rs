@@ -178,10 +178,10 @@ pub(super) async fn respond_construct(
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
-    accept: Option<&str>,
+    fmt: stream::GraphFormat,
     budget: RequestBudget,
 ) -> Response {
-    let fmt = negotiate_rdf(accept);
+    let media_type = fmt.media_type();
     let body = match backend {
         Backend::Sqlite(pool) => {
             if generation.is_some() {
@@ -236,5 +236,5 @@ pub(super) async fn respond_construct(
             )
         }
     };
-    ok_stream(fmt.media_type(), body)
+    ok_stream(media_type, body)
 }

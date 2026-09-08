@@ -10,7 +10,7 @@ use crate::backend::PgQueryClient;
 use crate::budget::RequestBudget;
 use crate::pg_generation::{PgGenerationError, VerifiedPostgresGenerationLease};
 use crate::problem::{self, ProblemCode};
-use crate::stream::{self, RdfFormat};
+use crate::stream::{self, GraphFormat};
 
 pub(crate) async fn select(
     pool: crate::PostgresPool,
@@ -119,7 +119,7 @@ pub(crate) async fn construct(
     plan: Arc<Plan>,
     generation: Option<VerifiedPostgresGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
-    format: RdfFormat,
+    format: GraphFormat,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
     let drive_budget = budget.clone();

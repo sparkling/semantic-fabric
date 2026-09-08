@@ -122,12 +122,16 @@ async fn provenance_does_not_bypass_portable_row_policy_or_expose_identity() {
     ));
     let app = router(Arc::new(cfg));
     let mut policies = vec![];
+    for query in [
+        "SELECT ?name WHERE { ?s <http://example.test/name> ?name }",
+        "CONSTRUCT { ?s <http://example.test/name> ?name } WHERE { ?s <http://example.test/name> ?name }",
+    ] {
     for (token, present, absent) in [
         (TOKEN, "Alice", "Bob"),
         (second, "Bob", "Alice"),
         (TOKEN, "Alice", "Bob"),
     ] {
-        let mut req = request("SELECT ?name WHERE { ?s <http://example.test/name> ?name }");
+        let mut req = request(query);
         req.headers_mut().insert(
             header::AUTHORIZATION,
             format!("Bearer {token}").parse().unwrap(),
@@ -148,6 +152,7 @@ async fn provenance_does_not_bypass_portable_row_policy_or_expose_identity() {
         }
         let header: Value = serde_json::from_str(text.split('\u{1e}').nth(1).unwrap()).unwrap();
         policies.push(header["policy"].clone());
+    }
     }
     // One configured policy registry, not a public identifier of each subject.
     assert!(policies.windows(2).all(|pair| pair[0] == pair[1]));

@@ -33,11 +33,13 @@ auditable record of the broader SOTA programme; its research and advanced-
 assurance work becomes a labelled post-1.0 backlog.
 
 **Lineage update (2026-09-08):** ADR-0017 now has a public opt-in, compiler-proved
-constant mapping/source SELECT profile with per-solution PROV-O, pinned snapshot,
-logical-plan/policy identifiers and bounded fail-terminal streaming. Its required
+constant mapping/source SELECT and CONSTRUCT profiles with per-solution PROV-O,
+native graph reification, pinned snapshot/logical-plan/policy identifiers and bounded
+fail-terminal streaming. Graph metadata stays in named bundles outside the product
+graph, preserving response-wide blank-node identity. Its required
 SQLite HTTP, isolation, reload and failure tests are an incremental result, not
 full lineage, native-backend lineage qualification or application completion.
-Dynamic multi-origin operators, graph reification and authorized row keys remain
+Dynamic multi-origin operators, federation and authorized row keys remain
 open. The capability catalog separately retains that incomplete release gate.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are

@@ -10,6 +10,8 @@ use serde_json::Value;
 use sf_serve::{router, Backend, BearerQueryAdmission, QueryAdmission, ServeConfig};
 use tower::ServiceExt;
 
+#[path = "lineage/graph.rs"]
+mod graph;
 #[path = "lineage/more.rs"]
 mod more;
 mod support;
@@ -140,7 +142,7 @@ async fn rejects_unproved_operators_and_ambiguous_negotiation_instead_of_fabrica
         "SELECT * WHERE { ?s <http://example.test/name> ?n OPTIONAL { ?x <http://example.test/name> ?y } }",
         "SELECT * WHERE { ?s <http://example.test/name> ?n FILTER(?n = \"Alice\") }",
         "ASK { ?s <http://example.test/name> ?n }",
-        "CONSTRUCT { ?s <http://example.test/name> ?n } WHERE { ?s <http://example.test/name> ?n }",
+        "CONSTRUCT { ?s <http://example.test/name> ?n } WHERE { ?s <http://example.test/name> ?n FILTER(?n = \"Alice\") }",
     ] {
         let response = router(cfg.clone()).oneshot(request(query)).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{query}");
