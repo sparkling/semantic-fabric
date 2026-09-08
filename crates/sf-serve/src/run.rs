@@ -94,6 +94,11 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
         .as_ref()
         .map(|source| source.source.resolve()?.prepare())
         .transpose()?;
+    let parser = sf_sparql::ParserRuntime::current().map_err(|_| {
+        ServeError::new(StartupCause::Configuration {
+            error: "isolated parser runtime could not be prepared".into(),
+        })
+    })?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -103,7 +108,9 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
             })
         })?;
     let result =
-        rt.block_on(async move { crate::reload::serve_async(opts, source, additional).await });
+        rt.block_on(
+            async move { crate::reload::serve_async(opts, source, additional, parser).await },
+        );
     rt.shutdown_timeout(Duration::ZERO);
     result
 }

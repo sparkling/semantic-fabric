@@ -427,6 +427,7 @@ mod pg {
         }
         let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
         let mut cfg = ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap();
+        cfg.set_parser_runtime(support::parser_runtime());
         cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
         let cfg = Arc::new(cfg);
 
@@ -521,6 +522,7 @@ mod pg {
             let ontology = support::ontology_for_mapping(&maps);
             let source = IntrospectedSource::observe_postgres(pool).await.unwrap();
             let mut cfg = ServeConfig::from_authored_r2rml(source, mapping_ttl, ontology).unwrap();
+            cfg.set_parser_runtime(support::parser_runtime());
             cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
             let cfg = Arc::new(cfg);
             let start = std::time::Instant::now();
@@ -625,6 +627,7 @@ mod pg {
             .await
             .unwrap();
         let mut cfg = ServeConfig::from_authored_r2rml(source, &mapping_ttl, ontology).unwrap();
+        cfg.set_parser_runtime(support::parser_runtime());
         cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
         let cfg = Arc::new(cfg);
         let held = pool.get().await.expect("hold the sole PG pool connection");

@@ -209,6 +209,7 @@ pub(super) fn open_pidfd(pid: u32) -> Result<OwnedFd, SupervisorError> {
 
 fn poll_pidfd(pidfd: &OwnedFd, deadline: Instant) -> Result<bool, SupervisorError> {
     loop {
+        crate::parser_isolation::runtime::checkpoint()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Ok(false);
@@ -216,7 +217,9 @@ fn poll_pidfd(pidfd: &OwnedFd, deadline: Instant) -> Result<bool, SupervisorErro
         let millis = remaining.as_millis().saturating_add(u128::from(
             !remaining.subsec_nanos().is_multiple_of(1_000_000),
         ));
-        let timeout_ms = i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX);
+        let timeout_ms = crate::parser_isolation::runtime::poll_timeout(
+            i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX),
+        );
         let mut pollfd = libc::pollfd {
             fd: pidfd.as_raw_fd(),
             events: libc::POLLIN,

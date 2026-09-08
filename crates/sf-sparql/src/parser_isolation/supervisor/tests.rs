@@ -31,11 +31,11 @@ mod linux_tests {
         assert_eq!(identity.byte_len(), metadata.len());
         assert_eq!(identity.mode(), metadata.mode());
         assert_eq!(
-            identity.fingerprint().bytes(),
+            identity.fingerprint().unwrap().bytes(),
             sha256_reader(&mut independent)
         );
         assert_eq!(
-            format!("{:?}", identity.fingerprint()),
+            format!("{:?}", identity.fingerprint().unwrap()),
             "ObservedExecutableFingerprint(<non-authoritative>)"
         );
     }
@@ -58,7 +58,7 @@ mod linux_tests {
 
         assert_ne!(original_identity.inode(), replacement_metadata.ino());
         let expected: [u8; 32] = Sha256::digest(b"original held bytes").into();
-        assert_eq!(original_identity.fingerprint().bytes(), expected);
+        assert_eq!(original_identity.fingerprint().unwrap().bytes(), expected);
         let duplicate = prepared
             .duplicate_for_launch(64)
             .expect("duplicate held inode");

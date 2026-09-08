@@ -49,6 +49,7 @@ fn config_after_schema_change(change: &str) -> ServeConfig {
     let pool = source.sqlite_pool().expect("fixture uses SQLite");
     let mut config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
         .expect("admit fixture before drift");
+    config.set_parser_runtime(support::parser_runtime());
     config.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
     pool.pick()
         .lock()

@@ -135,6 +135,7 @@ pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 ))]
 #[doc(hidden)]
 pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
+pub use parser_isolation::ParserRuntime;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 #[doc(hidden)]
 pub use parser_isolation::QueryV1TransportMutant;
@@ -879,6 +880,9 @@ pub fn parse_and_translate_cached_shared(
 
 fn parse_query(sparql: &str) -> Result<Query> {
     compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Parse, || {
+        if let Some(result) = parser_isolation::runtime::parse_in_scope(sparql) {
+            return result;
+        }
         spargebra::SparqlParser::new()
             .parse_query(sparql)
             .map_err(|error| Error::Parse(error.to_string()))

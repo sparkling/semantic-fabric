@@ -64,6 +64,12 @@ pub fn config(max_query_len: Option<usize>) -> Arc<ServeConfig> {
     let mut config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
         .expect("admit fixture mapping and ontology");
     config.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    config.set_parser_runtime(
+        sf_sparql::ParserRuntime::prepare(std::path::Path::new(env!(
+            "CARGO_BIN_EXE_conformance-parser-host"
+        )))
+        .expect("explicit conformance parser host"),
+    );
     if let Some(maximum) = max_query_len {
         config
             .set_max_query_len(maximum)

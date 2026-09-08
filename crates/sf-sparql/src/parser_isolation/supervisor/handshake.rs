@@ -72,7 +72,6 @@ pub(super) fn launch_parser_observation(
     launch_with(executable, prepared, linux::spawn_parser_observation, None)
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 pub(super) fn launch_parser_query_v1(
     executable: &PreparedParserExecutable,
     prepared: PreparedControlExchange,
@@ -111,6 +110,7 @@ fn launch_with(
     ) -> Result<ParserWorkerProcess, SupervisorError>,
     directive: Option<[u8; 2]>,
 ) -> Result<ControlReadyWorker, SupervisorError> {
+    crate::parser_isolation::runtime::checkpoint()?;
     let mut process = spawn(executable, v1_limits())?;
     if let Some(directive) = directive {
         process.write_all_until_deadline(&directive)?;
@@ -163,6 +163,7 @@ fn generate_nonce() -> Result<HandshakeNonce, SupervisorError> {
     let mut nonce = [0_u8; DIGEST_LEN];
     let mut offset = 0;
     while offset < nonce.len() {
+        crate::parser_isolation::runtime::checkpoint()?;
         let count = unsafe {
             libc::getrandom(nonce[offset..].as_mut_ptr().cast(), nonce.len() - offset, 0)
         };

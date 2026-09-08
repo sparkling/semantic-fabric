@@ -1,4 +1,4 @@
-//! Parser-free, one-shot QueryV1 transport evidence child.
+//! One-shot real parser transport and separately gated parser-free evidence.
 
 use crate::parser_isolation::parse_protocol::{
     allocate_frame_exact, decode_streamed_request_exact_for_nonce, FrameAllocation, ParseRequestV1,
@@ -8,17 +8,11 @@ use crate::parser_isolation::parse_protocol::{
 use crate::parser_isolation::parse_protocol::{
     synthetic_empty_ask_result_header_for, SYNTHETIC_EMPTY_ASK_QUERY_V1,
 };
-#[cfg(feature = "parser-worker-evidence")]
 use crate::parser_isolation::parse_protocol::{ParseRejectionV1, ParseResultV1};
 use crate::parser_isolation::profile::V1_CANDIDATE_MAX_INPUT_BYTES;
 use crate::parser_isolation::protocol::{HandshakeNonce, FRAME_LEN};
-#[cfg(feature = "parser-worker-evidence")]
 use crate::parser_isolation::query_v1::{self, QueryWireError};
 
-#[cfg(any(
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence"
-))]
 use super::write_all;
 use super::{read_exact, require_parent_eof, WorkerFailure};
 
@@ -56,7 +50,6 @@ pub(super) fn run(expected_nonce: HandshakeNonce) -> Result<(), WorkerFailure> {
     )
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 pub(super) fn run_parser_query_v1(expected_nonce: HandshakeNonce) -> Result<(), WorkerFailure> {
     run_with_validated_request(
         expected_nonce,
@@ -114,7 +107,6 @@ fn emit_normal_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure>
     write_all(libc::STDOUT_FILENO, &SYNTHETIC_EMPTY_ASK_QUERY_V1)
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 fn emit_parser_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure> {
     let query = match spargebra::SparqlParser::new().parse_query(request.source()) {
         Ok(query) => query,

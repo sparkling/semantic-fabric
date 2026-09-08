@@ -70,10 +70,13 @@ impl Fixture {
     }
 
     async fn config(&self) -> Arc<ServeConfig> {
-        let (config, baseline) =
+        let (mut config, baseline) =
             crate::startup::build_config(&self.opts, self.source.clone(), None)
                 .await
                 .unwrap();
+        // These unit fixtures exercise generation ownership, not the separately
+        // qualified CLI parser process. Never enable an implicit runtime fallback.
+        config.use_in_process_test_parser();
         *self.baseline.lock().unwrap() = Some(Arc::new(baseline));
         Arc::new(config)
     }

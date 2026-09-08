@@ -1,13 +1,11 @@
-//! Parser-worker isolation protocol foundations (ADR-0053).
+//! Rust parser isolation reused by the ADR-0055 public serving profile.
 //!
-//! A held-descriptor supervisor can exercise a post-exec control envelope and
-//! exact Hello/Ready/EOF exchange through a non-default evidence feature. A raw
-//! or malformed reserved invocation fails closed. The policy and profile are
-//! control-ready candidates only. Private canonical request/result and QueryV1
-//! codecs connect to both a parser-free fixed-fixture peer and a sealed-corpus
-//! real-parser evidence peer. A separate aggregate-only peer observes terminal
-//! parser outcomes. Neither grants a qualified policy, admission witness,
-//! permit, cache, or serving authority.
+//! An explicit prepared runtime owns a held executable and scopes synchronous
+//! serving compilation to fresh bounded parser workers. Exact reap and bounded
+//! QueryV1 validation precede parent AST ownership; source text is not reparsed
+//! in the parent. Malformed private invocations fail closed. Non-default corpus
+//! and transport evidence remain separate; none grants GovernedV1, full syscall
+//! qualification, a credential boundary, or exact-artifact release authority.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod build_identity;
@@ -19,8 +17,10 @@ pub(crate) mod protocol;
 mod query_v1;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 mod query_v1_mutant;
+pub(crate) mod runtime;
 mod supervisor;
 mod worker;
+pub use runtime::ParserRuntime;
 
 #[cfg(feature = "parser-worker-evidence")]
 mod alpha_equivalence;

@@ -277,10 +277,10 @@ Outcomes:
 - preserve the shared fail-fast active-work gate: finite default 64, startup range `1..=Semaphore::MAX_PERMITS` before I/O, shedding in `call` before Router/body polling, deadline/control precedence, stable `503 service-overloaded` plus `Retry-After: 1`, and closed-gate `500`;
 - retain its permit through active producer/compiler/backend clones but not completed-byte draining; keep terminal state out-of-band so a full channel finishes at its deadline and a streamed failure yields buffered prefix, one stable `result stream failed` error and fused EOF without `Content-Length`;
 - retain the 2026-09-08 compiler-input floor: decoded UTF-8 bytes are precharged at every public compilation entry, including lineage, preflight and authenticated cache hits; exact-bound HTTP and cumulative two-pass tests pass. Public tree compilation also now meters normalization/lowering/nested-cascade clones and checked tree inner-join candidate products/left-branch copies plus atom-resolution candidates/logical-source copies and path mapping-search/complement work with exact term/source copies, with cancellation, cache isolation and exact-result tests; cache hits avoid clone replay. Finish required admitted-profile compiler/catalog-growth and source-work controls without equating fuel to exact CPU; raw/conformance extensions are not silently v1 prerequisites under ADR-0055;
-- keep lexical and direct-IRI scanners diagnostic. ADR-0053's parser-worker
-  transport evidence remains non-shipped and moves to post-1.0; v1 instead
-  requires strict ingress caps, deadline/cancellation, deterministic parser and
-  compiler work controls, and exact release-profile differentials in Rust;
+- keep lexical/direct-IRI scanners diagnostic. The reproduced server parser abort
+  now requires the Rust isolated runtime under ADR-0055: public ordinary/lineage,
+  preflight and federation use bounded QueryV1, request cancellation and exact reap;
+  cap-one survival/exact recovery pass. Full ELF/syscall attestation stays post-1.0;
 - admit post-parse algebra before bounded canonical rendering, then reserve every mapping/product/normalization/lowering/cascade/plan-build operation and unavoidable recursive copy through one shared `CompileContext` before work;
 - physically isolate governed cache capacity, propagate `Arc<Plan>` without deep hit/insert copies, and prospectively contain eviction and recursive destruction. Source/configuration/scope may locate an initial candidate, but exact validated AST/wire decides equality; stable cross-parse hits require a versioned scope-aware alpha canonicalizer;
 - add cooperative cancellation/work bounds to the current cap-four compiler admission without activating `GovernedV1` until parser, owned-phase, cache and calibration gates all pass;
@@ -292,8 +292,8 @@ QA gate:
 
 - for active application work, one deadline covers Tower `Service::call` after request-target parsing but before Axum route/method dispatch, then admission, parse, compile, acquire, execute and serialize; fixed health and query-less discovery metadata remain available without entering that work path;
 - timeout/disconnect releases worker and connection capacity within the declared
-  bound for every advertised in-process path; parser process-isolation and
-  kill/reap qualification remain post-1.0;
+  bound for every advertised path; focused parser cancellation/reap is required
+  defect-repair evidence, not the deferred full containment-attestation programme;
 - exact `0`, `N` and `N+1` parser/algebra/build/work/cache tests plus focused
   release-profile differential and malformed-input proofs pass; long corpus
   fuzzing and cross-process alpha-equivalence expansion remain post-1.0;
@@ -468,7 +468,7 @@ stores or synchronization.
 |---|---|---|
 | Draft SPARQL 1.2 changes | Moving conformance target | Pin dated snapshot; publish delta; separate stable R2RML claims |
 | Path/global-operator repair changes answers | New correctness regressions | Generated oracle, mutation and >256/cycle corpus before refactor |
-| External scanner or raw cross-parse equality diverges from the pinned parser | False admission, rejection or cache miss classification before source I/O | No scanner authority; v1 uses exact parsed-algebra validation and release-profile differentials; ADR-0053 process isolation remains post-1.0 |
+| External scanner or raw cross-parse equality diverges from the pinned parser | False admission, rejection or cache miss classification before source I/O | No scanner authority; ADR-0055 parser-lifetime repair uses isolated parsing, bounded QueryV1 and focused release-profile differentials; full ELF/syscall attestation stays post-1.0 |
 | Federation becomes a rewrite | Schedule and semantic drift | Preserve compiler; introduce SourceId/registry/physical plan behind ports |
 | Spill substrate conflicts with ADR-0006 | Hidden architecture reversal | Separate design-lock ADR and benchmark both implementation choices |
 | Backend behavior diverges | One green dialect masks another | Shared backend contract plus fail-closed live matrix |

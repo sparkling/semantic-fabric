@@ -45,6 +45,7 @@ pub(crate) async fn serve_async(
     opts: ServeOptions,
     source: PreparedSource,
     additional: Option<PreparedSource>,
+    parser: sf_sparql::ParserRuntime,
 ) -> Result<(), ServeError> {
     let opts = Arc::new(opts);
     let build_opts = Arc::clone(&opts);
@@ -53,7 +54,7 @@ pub(crate) async fn serve_async(
     let handle = tokio::runtime::Handle::current();
     // All regular-file capture, parsing and semantic validation run away from
     // request executors. Source I/O retains its existing startup deadlines.
-    let (config, baseline) = tokio::task::spawn_blocking(move || {
+    let (mut config, baseline) = tokio::task::spawn_blocking(move || {
         handle.block_on(crate::startup::build_config(
             &build_opts,
             build_source,
@@ -66,6 +67,7 @@ pub(crate) async fn serve_async(
             error: "startup worker failed".into(),
         })
     })??;
+    config.set_parser_runtime(parser);
     let config = Arc::new(config);
     let supervisor = (!opts.reload_interval.is_zero()).then(|| {
         Supervisor::start(

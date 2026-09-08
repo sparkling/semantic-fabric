@@ -15,15 +15,7 @@ use crate::parser_isolation::parse_protocol::{
     allocate_frame_exact, FrameAllocation, PreparedParseRequestV1, ResultHeaderV1,
     RESULT_HEADER_LEN,
 };
-#[cfg(any(
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence"
-))]
 use crate::parser_isolation::parse_protocol::{ParseRequestV1, ParseResultV1};
-#[cfg(any(
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence"
-))]
 use crate::parser_isolation::protocol::FRAME_LEN;
 #[cfg(any(
     feature = "parser-worker-evidence",
@@ -54,6 +46,26 @@ pub(super) struct ReapedTransport {
     pub(super) status: ExitStatus,
     pub(super) sent_bytes: u64,
     pub(super) received_bytes: u64,
+}
+
+/// Move the bounded decoded query only after complete output and exact reap.
+/// Unlike corpus evidence, serving never reparses the original source here.
+pub(super) fn finish_public(
+    worker: ControlReadyWorker,
+) -> Result<spargebra::Query, SupervisorError> {
+    let reaped = capture_reaped(worker).map_err(TransportFailure::into_error)?;
+    if !reaped.status.success() {
+        return Err(SupervisorError::InvalidState(
+            "parser did not exit successfully",
+        ));
+    }
+    crate::parser_isolation::runtime::checkpoint()?;
+    verify_dynamic_accounting(&reaped)?;
+    reaped.prepared_request.verify_exact()?;
+    let request = ParseRequestV1::decode_exact(reaped.prepared_request.encoded())?;
+    let result = ParseResultV1::decode_exact_for(&reaped.encoded_result, &request)?;
+    crate::parser_isolation::runtime::checkpoint()?;
+    result.into_query().map_err(SupervisorError::ParseRejected)
 }
 
 /// Closed evidence for a transport failure after containment was attempted.
@@ -147,7 +159,6 @@ fn finish_parser_case(
     )
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 fn verify_dynamic_accounting(reaped: &ReapedTransport) -> Result<(), SupervisorError> {
     let expected_input = FRAME_LEN
         .checked_add(reaped.prepared_request.encoded().len())

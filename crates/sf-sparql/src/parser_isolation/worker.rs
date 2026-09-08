@@ -5,10 +5,9 @@
 //! On qualified Linux, the worker verifies and repairs its inherited kernel
 //! envelope, stacks a default-kill control-ready policy candidate, and only then
 //! reads Hello. Unprepared or malformed reserved invocations terminate silently
-//! and cannot fall through to the public CLI. The parser peer accepts no parse
-//! request. Independently gated peers return a fixed parser-free QueryV1 fixture,
-//! a real parser-produced QueryV1 for the internally sealed corpus, or an
-//! aggregate-only parser observation. All remain qualification evidence.
+//! and cannot fall through to the public CLI. The real-parser tuple returns one
+//! bounded QueryV1 result for the explicit serving runtime. Independently gated
+//! synthetic/corpus/mutant peers remain diagnostic evidence, not public modes.
 
 use std::ffi::{OsStr, OsString};
 
@@ -262,21 +261,11 @@ fn run_parser_observation_worker_v1() -> ! {
 }
 
 fn run_parser_query_v1_worker_v1() -> ! {
-    #[cfg(all(
-        feature = "parser-worker-evidence",
-        target_os = "linux",
-        target_arch = "x86_64",
-        target_env = "gnu"
-    ))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     {
         linux::run_parser_query_v1()
     }
-    #[cfg(not(all(
-        feature = "parser-worker-evidence",
-        target_os = "linux",
-        target_arch = "x86_64",
-        target_env = "gnu"
-    )))]
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
     reject_private_invocation()
 }
 

@@ -77,79 +77,81 @@ pub(crate) async fn prepare(
     };
     let query = query.to_owned();
     let result = deadline::run_compiler(budget.clone(), cfg.compiler_permits(), move |control| {
-        let binding = snapshot
-            .snapshot()
-            .registry()
-            .binding(source_id)
-            .ok_or_else(|| {
-                sf_sparql::Error::Unsupported("lineage source is not admitted".into())
-            })?;
-        let (mapping_id, mapping_ids) =
-            match binding.compiler().constant_mapping_origin(&query, &control) {
-                Ok(id) => (Some(id), Vec::new()),
-                Err(sf_sparql::Error::Unsupported(_)) => {
-                    let (_, spec) = binding.compiler().compile_lineage(&query, &control)?;
-                    (None, spec.mapping_ids().to_vec())
-                }
-                Err(error) => return Err(error),
-            };
-        // Fixed metadata is bounded independently of source/result size; charge
-        // it before construction. Every serialized byte is charged by SharedBuf.
-        control.consume(QueryCharge::RetainedBytes, 32768)?;
-        if mapping_id.is_none() {
-            control.consume(QueryCharge::RetainedBytes, 262144)?;
-        }
-        let scope = binding.compiler().scope();
-        let digests = scope.digests();
-        let epoch = scope.epoch().0.to_be_bytes();
-        let source_index = (source_id.index() as u64).to_be_bytes();
-        let snapshot = identifier(
-            "snapshot",
-            &[
-                snapshot.snapshot().lineage_identity().as_bytes(),
-                &epoch,
-                &source_index,
-                digests.mapping().as_bytes(),
-                digests.ontology().as_bytes(),
-                digests.semantic_admission().as_bytes(),
-                digests.schema().as_bytes(),
-                digests.constraint_policy().as_bytes(),
-                digests.capability().as_bytes(),
-            ],
-        );
-        let policy = control
-            .security_context()
-            .map(|context| identifier("policy", &[&context.policy_lineage_digest()]))
-            .unwrap_or_else(|| "urn:semantic-fabric:policy:unrestricted-development-v1".into());
-        // This is the logical compiler-input identity, not an attestation of
-        // physical SQL, row-policy parameters, source contents or a release.
-        let plan = identifier(
-            "logical-plan",
-            &[snapshot.as_bytes(), query.as_bytes(), policy.as_bytes()],
-        );
-        let source = identifier("source", &[snapshot.as_bytes(), &source_index]);
-        let mapping = identifier("mapping-document", &[digests.mapping().as_bytes()]);
-        let mut header = json!({"type":"header", "profile":"constant-mapping-source-v1",
+        cfg.with_parser(&control, || {
+            let binding = snapshot
+                .snapshot()
+                .registry()
+                .binding(source_id)
+                .ok_or_else(|| {
+                    sf_sparql::Error::Unsupported("lineage source is not admitted".into())
+                })?;
+            let (mapping_id, mapping_ids) =
+                match binding.compiler().constant_mapping_origin(&query, &control) {
+                    Ok(id) => (Some(id), Vec::new()),
+                    Err(sf_sparql::Error::Unsupported(_)) => {
+                        let (_, spec) = binding.compiler().compile_lineage(&query, &control)?;
+                        (None, spec.mapping_ids().to_vec())
+                    }
+                    Err(error) => return Err(error),
+                };
+            // Fixed metadata is bounded independently of source/result size; charge
+            // it before construction. Every serialized byte is charged by SharedBuf.
+            control.consume(QueryCharge::RetainedBytes, 32768)?;
+            if mapping_id.is_none() {
+                control.consume(QueryCharge::RetainedBytes, 262144)?;
+            }
+            let scope = binding.compiler().scope();
+            let digests = scope.digests();
+            let epoch = scope.epoch().0.to_be_bytes();
+            let source_index = (source_id.index() as u64).to_be_bytes();
+            let snapshot = identifier(
+                "snapshot",
+                &[
+                    snapshot.snapshot().lineage_identity().as_bytes(),
+                    &epoch,
+                    &source_index,
+                    digests.mapping().as_bytes(),
+                    digests.ontology().as_bytes(),
+                    digests.semantic_admission().as_bytes(),
+                    digests.schema().as_bytes(),
+                    digests.constraint_policy().as_bytes(),
+                    digests.capability().as_bytes(),
+                ],
+            );
+            let policy = control
+                .security_context()
+                .map(|context| identifier("policy", &[&context.policy_lineage_digest()]))
+                .unwrap_or_else(|| "urn:semantic-fabric:policy:unrestricted-development-v1".into());
+            // This is the logical compiler-input identity, not an attestation of
+            // physical SQL, row-policy parameters, source contents or a release.
+            let plan = identifier(
+                "logical-plan",
+                &[snapshot.as_bytes(), query.as_bytes(), policy.as_bytes()],
+            );
+            let source = identifier("source", &[snapshot.as_bytes(), &source_index]);
+            let mapping = identifier("mapping-document", &[digests.mapping().as_bytes()]);
+            let mut header = json!({"type":"header", "profile":"constant-mapping-source-v1",
             "mappingId":mapping_id, "sourceId":source_id.index(), "snapshot":snapshot,
             "logicalPlan":plan, "policy":policy, "rowKeys":"not-provided"});
-        let multi_origin = mapping_id.is_none();
-        if multi_origin {
-            header["profile"] = "bounded-mapping-source-v1".into();
-            header.as_object_mut().unwrap().remove("mappingId");
-            header["mappingCatalog"] = json!(mapping_ids);
-            header["maxWitnessesPerRelation"] = sf_sparql::lineage::MAX_WITNESSES.into();
-        }
-        Ok(Arc::new(Lineage {
-            federated: None,
-            multi_origin,
-            header,
-            request: control.correlation_id().as_str().into(),
-            source,
-            mapping,
-            snapshot,
-            plan,
-            policy,
-        }))
+            let multi_origin = mapping_id.is_none();
+            if multi_origin {
+                header["profile"] = "bounded-mapping-source-v1".into();
+                header.as_object_mut().unwrap().remove("mappingId");
+                header["mappingCatalog"] = json!(mapping_ids);
+                header["maxWitnessesPerRelation"] = sf_sparql::lineage::MAX_WITNESSES.into();
+            }
+            Ok(Arc::new(Lineage {
+                federated: None,
+                multi_origin,
+                header,
+                request: control.correlation_id().as_str().into(),
+                source,
+                mapping,
+                snapshot,
+                plan,
+                policy,
+            }))
+        })
     })
     .await;
     match result {

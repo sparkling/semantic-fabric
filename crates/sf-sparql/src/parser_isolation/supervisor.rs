@@ -3,12 +3,10 @@
 //! This is intentionally separate from `sf-conformance`'s run-to-exit evidence
 //! capture: a parser worker is an interactive control-protocol peer with
 //! materially different descriptor, lifecycle, and containment invariants.
-//! Nothing outside `parser_isolation` can launch this worker. The public binary
-//! has a fail-closed private entry discriminator, and only a non-default Rust
-//! evidence seam can reach the Hello/Ready/EOF exchange. The parser peer remains
-//! control-only. Independently gated peers exercise a fixed parser-free QueryV1
-//! transport, a sealed-corpus real-parser QueryV1 differential, and closed
-//! transport mutants. None has admission authority.
+//! The explicit ParserRuntime uses a fail-closed private entry discriminator
+//! and the real-parser QueryV1 exchange. Independently gated peers retain the
+//! parser-free transport, corpus differential and mutation diagnostics. None
+//! grants GovernedV1, credential or release authority.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -20,7 +18,7 @@
 //! handshake and synthetic frame. The default-allow stage-one filter is safe
 //! only because the worker verifies its inherited state and stacks a default-kill
 //! control-ready candidate before reading peer-controlled bytes. That candidate
-//! is not parser-qualified and grants no query admission.
+//! is not a complete syscall/dependency qualification or credential boundary.
 
 use std::fmt;
 use std::io as std_io;
@@ -56,22 +54,13 @@ mod parser_observation;
     target_env = "gnu"
 ))]
 mod query_v1_mutant;
-#[cfg(all(
-    any(
-        feature = "parser-worker-evidence",
-        feature = "query-v1-transport-evidence",
-        feature = "query-v1-transport-mutant-evidence"
-    ),
-    target_os = "linux",
-    target_arch = "x86_64",
-    target_env = "gnu"
-))]
-mod query_v1_transport;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+pub(super) mod query_v1_transport;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod seccomp;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
-use executable::PreparedParserExecutable;
+pub(super) use executable::PreparedParserExecutable;
 
 /// Closed failure categories for the private supervisor boundary.
 #[derive(Debug)]
@@ -85,6 +74,8 @@ pub(crate) enum SupervisorError {
     #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     ParseFrame(ParseFrameError),
     DeadlineExceeded,
+    RequestControl(sf_core::query_control::QueryControlError),
+    ParseRejected(super::parse_protocol::ParseRejectionV1),
     Operation {
         operation: &'static str,
         source: std_io::Error,
@@ -100,6 +91,8 @@ impl SupervisorError {
 impl fmt::Display for SupervisorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RequestControl(_) => formatter.write_str("parser request terminated"),
+            Self::ParseRejected(_) => formatter.write_str("parser rejected query"),
             Self::UnsupportedPlatform => {
                 formatter.write_str("parser supervisor requires qualified GNU x86-64 Linux")
             }
@@ -171,13 +164,19 @@ impl PreparedParserExecutable {
         handshake::launch_parser_observation(self, prepared)
     }
 
-    #[cfg(feature = "parser-worker-evidence")]
     fn launch_parser_query_v1(
         &self,
         source: &str,
     ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
         let prepared = handshake::prepare(self, source)?;
         handshake::launch_parser_query_v1(self, prepared)
+    }
+
+    pub(in crate::parser_isolation) fn parse_public(
+        &self,
+        source: &str,
+    ) -> Result<spargebra::Query, SupervisorError> {
+        query_v1_transport::finish_public(self.launch_parser_query_v1(source)?)
     }
 
     #[cfg(feature = "query-v1-transport-evidence")]
@@ -316,11 +315,19 @@ pub(super) fn exercise_query_v1_request_eof_order_for_evidence(
 
 /// Buildable fail-closed stub for every unqualified target.
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
-struct PreparedParserExecutable;
+pub(super) struct PreparedParserExecutable;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
 impl PreparedParserExecutable {
-    fn current() -> Result<Self, SupervisorError> {
+    pub(super) fn current() -> Result<Self, SupervisorError> {
+        Err(SupervisorError::UnsupportedPlatform)
+    }
+
+    pub(super) fn current_for_runtime() -> Result<Self, SupervisorError> {
+        Err(SupervisorError::UnsupportedPlatform)
+    }
+
+    pub(super) fn parse_public(&self, _: &str) -> Result<spargebra::Query, SupervisorError> {
         Err(SupervisorError::UnsupportedPlatform)
     }
 }
@@ -329,3 +336,6 @@ impl PreparedParserExecutable {
 mod io_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+mod runtime_control_tests;

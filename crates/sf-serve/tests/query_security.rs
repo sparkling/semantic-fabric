@@ -309,3 +309,42 @@ async fn public_embedding_defaults_to_deny() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn missing_parser_runtime_is_not_ready_and_never_uses_in_process_fallback() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch("CREATE TABLE people(id INTEGER, name TEXT)")
+        .unwrap();
+    let source = sf_serve::IntrospectedSource::observe_sqlite(Backend::sqlite(connection)).unwrap();
+    let mapping = sf_mapping::parse_r2rml(MAPPING).unwrap();
+    let mut cfg =
+        ServeConfig::from_authored_r2rml(source, MAPPING, support::ontology_for_mapping(&mapping))
+            .unwrap();
+    cfg.set_query_admission(QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+    ));
+    cfg.query_limits = sf_core::query_control::QueryLimits::new(10000, 0, 10000, 10000);
+    let app = router(Arc::new(cfg));
+    let ready = app
+        .clone()
+        .oneshot(Request::get("/readyz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = app
+        .oneshot(
+            Request::post("/sparql")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/sparql-query")
+                .body(Body::from(
+                    "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(!String::from_utf8_lossy(&body).contains("parser runtime"));
+}

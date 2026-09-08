@@ -84,6 +84,7 @@ async fn saturation_keeps_the_authored_mapping_identity() {
     .unwrap();
     let source = sf_serve::IntrospectedSource::observe_sqlite(Backend::sqlite(conn)).unwrap();
     let mut cfg = ServeConfig::from_authored_r2rml(source, &mapping, ontology).unwrap();
+    cfg.set_parser_runtime(support::parser_runtime());
     cfg.set_query_admission(QueryAdmission::Bearer(
         BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
     ));

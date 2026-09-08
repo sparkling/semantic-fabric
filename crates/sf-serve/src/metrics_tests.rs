@@ -56,6 +56,7 @@ fn config() -> ServeConfig {
     )
     .unwrap();
     let mut config = ServeConfig::from_authored_r2rml(source, MAPPING, ontology).unwrap();
+    config.use_in_process_test_parser();
     config.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
     config
 }

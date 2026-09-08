@@ -48,7 +48,7 @@ NULL / left-join rules the base translation obeys:
 
 ### Pipeline (`sf-sparql`)
 
-1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`.
+1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`. Since 2026-09-08 public serving uses an explicit prepared Rust process and bounded QueryV1 transfer before parent AST ownership (ADR-0055 parser-lifetime repair); raw diagnostic APIs retain their caller-owned contract. Existing semantic/compiler/cache profiles are not promoted to `GovernedV1`.
 2. **Algebra pre-optimizer — unwired.** `sparopt` compiles as a transitive evidence dependency, but `sf-sparql` neither depends on nor invokes it. The order-disciplined cascade below is the sole product optimizer; `sparopt` is reference material, not an opt-in current stage.
 3. **Unfold** — replace each triple pattern with the SQL sub-expressions of the matching mapping-IR entries → an IQ-style relational tree (the ISWC-2018 base translation).
 4. **Tier-0 elimination (up front)** — a refObjectMap with no `rr:joinCondition` ⇒ inline the parent's subject IRI (no join); parent == child triples-map on a PK ⇒ collapse to a scan (redundant self-join elimination).

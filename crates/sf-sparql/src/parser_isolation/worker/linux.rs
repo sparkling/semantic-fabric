@@ -19,11 +19,6 @@ use crate::parser_isolation::protocol::{
 mod parser_observation;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 mod query_v1_mutant;
-#[cfg(any(
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence",
-    feature = "query-v1-transport-mutant-evidence"
-))]
 mod query_v1_transport;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,7 +66,6 @@ pub(super) fn run_parser_observation() -> ! {
     }
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 pub(super) fn run_parser_query_v1() -> ! {
     match prepare_for_hello() {
         Ok(prepared) => {

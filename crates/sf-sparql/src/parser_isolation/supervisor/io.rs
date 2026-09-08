@@ -344,6 +344,7 @@ impl BoundedWorkerIo {
 }
 
 fn ensure_before_deadline(deadline: Instant) -> Result<(), SupervisorError> {
+    crate::parser_isolation::runtime::checkpoint()?;
     if Instant::now() >= deadline {
         Err(SupervisorError::DeadlineExceeded)
     } else {
@@ -377,6 +378,7 @@ fn wait_ready(
     allow_worker_exit: bool,
 ) -> Result<(), SupervisorError> {
     loop {
+        crate::parser_isolation::runtime::checkpoint()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(SupervisorError::DeadlineExceeded);
@@ -384,7 +386,9 @@ fn wait_ready(
         let millis = remaining.as_millis().saturating_add(u128::from(
             !remaining.subsec_nanos().is_multiple_of(1_000_000),
         ));
-        let timeout = i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX);
+        let timeout = crate::parser_isolation::runtime::poll_timeout(
+            i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX),
+        );
         let mut descriptors = [
             libc::pollfd {
                 fd: descriptor,
@@ -412,6 +416,7 @@ fn wait_ready(
         }
         // poll uses a millisecond ceiling. Never accept readiness observed only
         // after the immutable deadline because that rounded timeout elapsed.
+        crate::parser_isolation::runtime::checkpoint()?;
         if Instant::now() >= deadline {
             return Err(SupervisorError::DeadlineExceeded);
         }

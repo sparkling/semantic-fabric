@@ -371,7 +371,24 @@ Graph-variable inventory, reflexive eligibility, shape/rewrite construction,
 TBox/unifier internals and other phases still lack complete controls; this is not
 total compiler CPU, source-recursion governance or release admission.
 
+### Public parser lifetime (2026-09-08)
+
+The accepted ADR-0055 bounded-execution contract now reuses the Rust process
+boundary for every public parse, rather than leaving a recursive upstream parser
+inside an uninterruptible server thread. The CLI prepares its held dispatcher
+before readiness; embeddings install an explicit `ParserRuntime`. Missing setup
+never falls back to raw parsing. Request control interrupts parent pipe/pidfd
+waits; owned process cleanup/reap completes before the compiler releases its permit.
+Parent QueryV1 decode validates finite bytes/records/edges/scalars and depth 256
+before recursive AST construction. It never reparses the original text.
+Syntax is redacted 400, structural envelope 429, resource allocation 503, deadline
+504 and infrastructure/protocol/abnormal worker exit 500; an abnormal exit is not
+mislabelled query fuel exhaustion. Cap-one CLI survival/recovery, exact ordinary
+bindings, normal/lineage inputs, scope restoration and owned pipe cancellation
+tests cover this slice. Wider compiler/source work and release qualification stay open.
+
 ## More Information
+
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
 

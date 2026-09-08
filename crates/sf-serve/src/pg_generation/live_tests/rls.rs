@@ -44,6 +44,7 @@ async fn config(pool: crate::PostgresPool, tenant: &str, mapping: &str) -> Serve
     let ontology = crate::test_support::ontology(&[], &["http://ex/name"]);
     let mut cfg = ServeConfig::from_authored_r2rml(source, mapping, ontology)
         .unwrap_or_else(|error| panic!("RLS fixture admission: {}", error.internal_cause()));
+    cfg.use_in_process_test_parser();
     cfg.set_query_admission(profile(tenant));
     cfg
 }

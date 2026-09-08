@@ -21,7 +21,21 @@ pub fn serve_config(backend: Backend, mapping_turtle: &str) -> ServeConfig {
     let mut cfg = ServeConfig::from_authored_r2rml(source, mapping_turtle, ontology)
         .expect("test mapping has matching test-only ontology declarations");
     cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    cfg.set_parser_runtime(parser_runtime());
     cfg
+}
+
+#[allow(dead_code)]
+pub fn parser_runtime() -> sf_sparql::ParserRuntime {
+    static PARSER: std::sync::OnceLock<sf_sparql::ParserRuntime> = std::sync::OnceLock::new();
+    PARSER
+        .get_or_init(|| {
+            sf_sparql::ParserRuntime::prepare(std::path::Path::new(env!(
+                "CARGO_BIN_EXE_semantic-fabric-parser"
+            )))
+            .expect("the explicit Rust parser host must be available")
+        })
+        .clone()
 }
 
 pub fn ontology_for_mapping(mapping: &[TriplesMap]) -> SemanticOntology {

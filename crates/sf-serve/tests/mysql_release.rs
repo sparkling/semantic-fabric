@@ -116,6 +116,7 @@ async fn mysql_stream_releases_connection_on_early_drop() {
         .expect("observe serving source");
     let mut cfg = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
         .expect("admit authored mapping");
+    cfg.set_parser_runtime(support::parser_runtime());
     cfg.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
     let cfg = Arc::new(cfg);
 

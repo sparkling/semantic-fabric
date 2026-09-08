@@ -15,9 +15,9 @@ use crate::parser_isolation::profile::V1_CANDIDATE_RLIMIT_FSIZE_BYTES;
 use crate::parser_isolation::protocol::ParserWorkerLimits;
 #[cfg(feature = "parser-worker-evidence")]
 use crate::parser_isolation::worker::{
-    PRIVATE_PARSER_OBSERVATION_MODE, PRIVATE_PARSER_OBSERVATION_NAME, PRIVATE_PARSER_QUERY_V1_MODE,
-    PRIVATE_PARSER_QUERY_V1_NAME,
+    PRIVATE_PARSER_OBSERVATION_MODE, PRIVATE_PARSER_OBSERVATION_NAME,
 };
+use crate::parser_isolation::worker::{PRIVATE_PARSER_QUERY_V1_MODE, PRIVATE_PARSER_QUERY_V1_NAME};
 #[cfg(feature = "query-v1-transport-evidence")]
 use crate::parser_isolation::worker::{
     PRIVATE_QUERY_V1_TRANSPORT_MODE, PRIVATE_QUERY_V1_TRANSPORT_NAME,
@@ -125,7 +125,6 @@ pub(super) fn spawn_parser_observation(
     )
 }
 
-#[cfg(feature = "parser-worker-evidence")]
 pub(super) fn spawn_parser_query_v1(
     executable: &PreparedParserExecutable,
     limits: ParserWorkerLimits,

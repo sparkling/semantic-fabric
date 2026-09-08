@@ -102,7 +102,7 @@ including authenticated cache hits, under the same cumulative request budget.
 Required HTTP/unit tests cover exact bounds, security precedence, no first-pass
 source admission and two-pass permit recovery. This closes a reproduced zero-budget
 bypass, not total compiler CPU/catalog-growth governance; `l-query-budget` remains
-blocking. No dormant parser-worker or governed-cache profile is activated.
+blocking. The later parser-lifetime correction below leaves governed-cache admission dormant.
 Public tree compilation now also carries existing owned normalization/lowering/
 nested-cascade clone metering through ordinary/security misses, preflight and
 bounded federation. Public `EXISTS` tests prove input-only work cannot fund tree
@@ -124,6 +124,22 @@ negated paths charge complement comparisons/visits and preserve exact duplicate
 pairs. Required pre-source rejection, cancellation, cache and raw-equivalence checks
 pass. Graph inventory/reflexive checks, shape construction, TBox/unifier internals
 and other payload copies/phases remain unqualified; the total-work gate stays open.
+
+**Parser-lifetime correction (2026-09-08):** an authenticated, sub-ingress-limit
+query reproduced a server-process abort. Public compilation now uses a prepared
+Rust parser process on Linux x86_64 GNU, including security, lineage, preflight
+and bounded federation. The held executable is verified before readiness;
+embeddings explicitly supply `ParserRuntime`, or readiness/compilation fail closed.
+Exact EOF, process cleanup/reap and bounded canonical QueryV1 validation precede
+parent AST ownership; the parent never reparses source text. Request control
+interrupts pipe/exit waits while existing compiler/request permits retain ownership.
+Required local CLI tests cover nested, Unicode-created, additive and malformed
+inputs on ordinary/lineage paths, server survival and cap-one exact-result recovery.
+Focused tests cover scope restoration, typed errors and owned cancellation/reap.
+This is necessary defect repair under this accepted contract, not promotion of
+proposed ADR-0052/0053, GovernedV1, a complete syscall sandbox or release admission.
+Full dependency/ELF attestation remains post-1.0; required remaining compiler/source
+work controls and exact release qualification remain blockers.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

@@ -16,12 +16,6 @@ use super::query_v1;
 mod binary;
 mod header;
 mod prepared;
-#[cfg(any(
-    test,
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence",
-    feature = "query-v1-transport-mutant-evidence"
-))]
 mod streaming;
 #[cfg(any(
     test,
@@ -33,12 +27,6 @@ mod synthetic;
 pub(crate) use prepared::PreparedParseRequestV1;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 pub(crate) use prepared::RequestEofCorruption;
-#[cfg(any(
-    test,
-    feature = "parser-worker-evidence",
-    feature = "query-v1-transport-evidence",
-    feature = "query-v1-transport-mutant-evidence"
-))]
 pub(crate) use streaming::decode_streamed_request_exact_for_nonce;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 pub(crate) use synthetic::{
@@ -388,6 +376,11 @@ impl ParseResultV1 {
 
     pub(crate) fn query(&self) -> Option<&Query> {
         self.query.as_ref()
+    }
+
+    pub(crate) fn into_query(self) -> Result<Query, ParseRejectionV1> {
+        self.query
+            .ok_or_else(|| self.rejection.expect("validated result outcome"))
     }
 
     pub(crate) const fn rejection(&self) -> Option<ParseRejectionV1> {

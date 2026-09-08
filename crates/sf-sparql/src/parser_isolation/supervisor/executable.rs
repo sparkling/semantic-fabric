@@ -49,7 +49,7 @@ pub(super) struct HeldExecutableIdentity {
     modified_nanoseconds: i64,
     changed_seconds: i64,
     changed_nanoseconds: i64,
-    fingerprint: ObservedExecutableFingerprint,
+    fingerprint: Option<ObservedExecutableFingerprint>,
     build_identity: BuildIdentityDigest,
 }
 
@@ -70,7 +70,7 @@ impl HeldExecutableIdentity {
         self.mode
     }
 
-    pub(super) const fn fingerprint(self) -> ObservedExecutableFingerprint {
+    pub(super) const fn fingerprint(self) -> Option<ObservedExecutableFingerprint> {
         self.fingerprint
     }
 
@@ -83,13 +83,13 @@ impl HeldExecutableIdentity {
 ///
 /// `/proc/self/exe` is opened exactly once. Launches duplicate this descriptor;
 /// they never read the symlink target or reopen a derived filesystem path.
-pub(super) struct PreparedParserExecutable {
+pub(in crate::parser_isolation) struct PreparedParserExecutable {
     file: File,
     identity: HeldExecutableIdentity,
 }
 
 impl PreparedParserExecutable {
-    pub(super) fn current() -> Result<Self, SupervisorError> {
+    pub(in crate::parser_isolation) fn current() -> Result<Self, SupervisorError> {
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
         {
             return Err(SupervisorError::UnsupportedPlatform);
@@ -103,6 +103,23 @@ impl PreparedParserExecutable {
                 .map_err(SupervisorError::operation("open current executable"))?;
             Self::prepare(file, true)
         }
+    }
+
+    pub(in crate::parser_isolation) fn current_for_runtime() -> Result<Self, SupervisorError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open("/proc/self/exe")
+            .map_err(SupervisorError::operation("open current executable"))?;
+        Self::from_file_for_runtime(file)
+    }
+
+    /// Serving needs the held identity and bounded build-ID handshake, not a
+    /// non-authoritative whole-file SHA diagnostic. Evidence retains that SHA.
+    pub(in crate::parser_isolation) fn from_file_for_runtime(
+        file: File,
+    ) -> Result<Self, SupervisorError> {
+        Self::prepare_with_diagnostic(file, true, false)
     }
 
     pub(super) const fn identity(&self) -> HeldExecutableIdentity {
@@ -141,6 +158,14 @@ impl PreparedParserExecutable {
     }
 
     fn prepare(file: File, require_elf: bool) -> Result<Self, SupervisorError> {
+        Self::prepare_with_diagnostic(file, require_elf, true)
+    }
+
+    fn prepare_with_diagnostic(
+        file: File,
+        require_elf: bool,
+        record_sha: bool,
+    ) -> Result<Self, SupervisorError> {
         require_cloexec(file.as_raw_fd())?;
         let before = metadata_identity(file.as_raw_fd())?;
         if before.byte_len == 0 || before.mode & libc::S_IFMT != libc::S_IFREG {
@@ -178,7 +203,9 @@ impl PreparedParserExecutable {
             // GNU build ID before descriptor launch.
             BuildIdentityDigest::new([0; 32])
         };
-        let fingerprint = fingerprint(&file, before.byte_len)?;
+        let fingerprint = record_sha
+            .then(|| fingerprint(&file, before.byte_len))
+            .transpose()?;
         let after = metadata_identity(file.as_raw_fd())?;
         if before != after {
             return Err(SupervisorError::InvalidExecutable(
@@ -223,11 +250,6 @@ impl PreparedParserExecutable {
         Self::prepare(file, require_elf)
     }
 
-    #[cfg(any(
-        feature = "parser-worker-evidence",
-        feature = "query-v1-transport-evidence",
-        feature = "query-v1-transport-mutant-evidence"
-    ))]
     pub(in crate::parser_isolation) fn from_file_for_evidence(
         file: File,
     ) -> Result<Self, SupervisorError> {

@@ -29,6 +29,9 @@ use crate::telemetry::CorrelationId;
 use crate::Backend;
 use crate::{IntrospectedSource, SemanticOntology, ServeError};
 
+mod parser;
+use parser::ParserSetup;
+
 /// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
 const FORM_QUERY_FIELD_OVERHEAD: usize = 16;
 
@@ -72,6 +75,7 @@ impl QueryMode {
 /// source or the sealed bounded two-source UNION/join profiles; request-governance
 /// knobs remain configurable.
 pub struct ServeConfig {
+    parser: ParserSetup,
     pub(crate) query_admission: crate::QueryAdmission,
     runtime: Arc<RuntimeManager>,
     query_mode: QueryMode,
@@ -105,6 +109,7 @@ impl ServeConfig {
             RuntimeSource::new(source, mapping),
         )?;
         let mut cfg = Self::from_snapshot(QueryMode::Single(source_id), snapshot);
+        cfg.use_in_process_test_parser();
         cfg.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
         Ok(cfg)
     }
@@ -123,10 +128,9 @@ impl ServeConfig {
             });
         }
         let snapshot = RuntimeSnapshot::new(Epoch::default(), ontology, Vec::from(sources))?;
-        Ok(Self::from_snapshot(
-            QueryMode::SourceAffineUnion(source_ids),
-            snapshot,
-        ))
+        let mut cfg = Self::from_snapshot(QueryMode::SourceAffineUnion(source_ids), snapshot);
+        cfg.use_in_process_test_parser();
+        Ok(cfg)
     }
 
     pub(crate) fn from_runtime_source(
@@ -161,6 +165,7 @@ impl ServeConfig {
             .expect("default query length has a representable form-body limit");
         let (shutdown, _) = watch::channel(ShutdownPhase::Running);
         Self {
+            parser: ParserSetup::Missing,
             query_admission: crate::QueryAdmission::Deny,
             runtime: Arc::new(RuntimeManager::new(snapshot)),
             query_mode,
@@ -288,7 +293,15 @@ impl ServeConfig {
 
     /// Current redacted readiness, generation identity, and opaque state revision.
     pub fn runtime_readiness(&self) -> Result<RuntimeReadiness, ActivationError> {
-        self.runtime.readiness()
+        let readiness = self.runtime.readiness()?;
+        if matches!(self.parser, ParserSetup::Missing) {
+            return Ok(RuntimeReadiness::NotReady {
+                activation_id: readiness.activation_id(),
+                revision: readiness.state_revision(),
+                cause: ReadinessCause::Administrative,
+            });
+        }
+        Ok(readiness)
     }
 
     /// Warning-level findings admitted for `source_id` in the active semantic

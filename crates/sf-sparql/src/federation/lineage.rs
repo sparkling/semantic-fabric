@@ -10,9 +10,7 @@ pub(super) fn compile(
         return unsupported();
     }
     control.checkpoint()?;
-    let query = SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = crate::parse_query(sparql)?;
     if join::is_join(&query) {
         charge_join_inputs(sparql, bindings, control)?;
         return join::compile_lineage(query, bindings, control);

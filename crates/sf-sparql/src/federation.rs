@@ -14,7 +14,9 @@ use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, Term};
 use spargebra::algebra::GraphPattern;
 use spargebra::term::{NamedNodePattern, TriplePattern, Variable};
-use spargebra::{Query, SparqlParser};
+use spargebra::Query;
+#[cfg(test)]
+use spargebra::SparqlParser;
 
 use crate::{CompilerBinding, Error, Plan, PlanForm, Result};
 
@@ -270,9 +272,7 @@ fn compile_source_affine_union_with(
             "federated compiler bindings must have distinct source identities".to_owned(),
         ));
     }
-    let query = SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|error| Error::Parse(error.to_string()))?;
+    let query = crate::parse_query(sparql)?;
     if join::is_join(&query) {
         return join::compile(query, bindings, control);
     }

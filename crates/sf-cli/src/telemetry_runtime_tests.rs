@@ -142,7 +142,10 @@ fn exercise(level: TelemetryLevel) -> String {
                     .set_max_query_len(usize::MAX)
                     .expect_err("unrepresentable public limit")
                     .record_telemetry();
-                config.query_limits = QueryLimits::new(u64::MAX, u64::MAX, 0, u64::MAX);
+                // This subscriber fixture exercises input-budget rejection,
+                // before parser/source admission. Isolated parsing is exercised
+                // by the real CLI integration tests, not a libtest executable.
+                config.query_limits = QueryLimits::new(0, u64::MAX, u64::MAX, u64::MAX);
                 let response = router(Arc::new(config))
                     .oneshot(
                         Request::builder()

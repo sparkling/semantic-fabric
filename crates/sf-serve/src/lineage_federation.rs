@@ -11,7 +11,7 @@ pub(super) async fn prepare(
 ) -> Result<Arc<Lineage>, Response> {
     let query = query.to_owned();
     let policy_id = cfg.query_admission.policy();
-    let result = deadline::run_compiler(budget.clone(), cfg.compiler_permits(), move |control| {
+    let result = deadline::run_compiler(budget.clone(), cfg.compiler_permits(), move |control| cfg.with_parser(&control, || {
         let bound = snapshot.snapshot().compile_federated_lineage(sources, &query, &control, policy_id)?;
         // Two bounded source catalogs plus their serialized header/temporary
         // PROV-O objects; the same cumulative request budget covers both arms.
@@ -59,7 +59,7 @@ pub(super) async fn prepare(
             multi_origin:true, header, request:control.correlation_id().as_str().into(),
             source:String::new(), mapping:String::new(), snapshot:snapshot_id, plan:plan_id, policy,
         }))
-    }).await;
+    })).await;
     match result {
         Ok(Ok(proof)) => Ok(proof),
         Ok(Err(error)) => Err(problem::response_for_sparql(&error)),

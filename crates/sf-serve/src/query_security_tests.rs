@@ -42,6 +42,7 @@ pub(super) fn config() -> ServeConfig {
       rr:subjectMap [rr:template "http://ex/{id}"];
       rr:predicateObjectMap [rr:predicate <http://ex/name>; rr:objectMap [rr:column "name"]]."#;
     let mut cfg = ServeConfig::from_authored_r2rml(source, mapping, ontology).unwrap();
+    cfg.use_in_process_test_parser();
     cfg.set_query_admission(profile(TOKEN));
     cfg
 }

@@ -222,6 +222,12 @@ async fn exact_live_style_window_is_http_200_and_matches_ordered_sql_rows() {
     let mut serve = ServeConfig::from_authored_r2rml(observed, &gold.r2rml, ontology)
         .expect("admit authored Product Mock mapping against ontology and source");
     serve.set_query_admission(sf_serve::QueryAdmission::UnrestrictedDevelopment);
+    serve.set_parser_runtime(
+        sf_sparql::ParserRuntime::prepare(std::path::Path::new(env!(
+            "CARGO_BIN_EXE_conformance-parser-host"
+        )))
+        .expect("explicit conformance parser host"),
+    );
     serve.set_max_order_rows(support::STYLE_WINDOW_LIMIT);
     let (status, content_type, body) = response(serve, support::STYLE_SPARQL_QUERY)
         .await

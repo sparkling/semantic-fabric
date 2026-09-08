@@ -55,7 +55,7 @@ are tested. Path search/complement candidates and exact term/source copies are m
 graph inventory/reflexive checks, shape construction, TBox/unifier and other phases
 remain open. Verified-generation preflight retains its permit
 across lease acquisition; live SELECT/ASK/CONSTRUCT keep the 34/33 metadata gate.
-Parser/destruction, other owned phases, cache eviction and provisional limits remain open.
+ADR-0055 now reuses process isolation/QueryV1 for public parser survival and bounded AST ownership; other owned phases, governed-cache admission/eviction and calibration stay open.
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
 Product implementation and deployable dependencies remain Rust/Cargo
@@ -462,7 +462,7 @@ candidate, parser-free mutation evidence and sealed-corpus real parsing into
 `QueryV1`. Inner wire replay and a fresh direct alpha comparison pass for that
 starter corpus. Complete parser/dependency/syscall qualification, comprehensive
 paired-corpus receipts, cancellation linkage and an opaque witness remain
-blockers for `compile_controlled` and every parser-inclusive boundedness claim.
+blockers for this proposed whole-compiler `compile_controlled` profile, not ADR-0055's separately verified public parser-lifetime repair with cancellation/reap and cap-one exact recovery.
 A post-parse-only mode would not be whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database

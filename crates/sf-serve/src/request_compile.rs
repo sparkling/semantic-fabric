@@ -46,27 +46,29 @@ pub(crate) async fn preflight(
     let max_order_rows = cfg.max_order_rows();
     let permits = cfg.compiler_permits();
     let (compiled, reservation) =
-        deadline::run_compiler_retaining(budget, permits, move |worker_budget| match mode {
-            QueryMode::Single(source_id) => {
-                let plan = snapshot.preflight_compile(source_id, &query, &worker_budget)?;
-                crate::admission::admit(&plan, max_order_rows).map_err(|_| {
-                    sf_sparql::Error::Unsupported("query shape is not admitted".into())
-                })?;
-                if matches!(plan.form, sf_sparql::PlanForm::Ask) {
-                    worker_budget.preflight_ask_result()?;
-                }
-                Ok(())
-            }
-            QueryMode::SourceAffineUnion(source_ids) => {
-                let plan =
-                    snapshot.preflight_federated_union(source_ids, &query, &worker_budget)?;
-                for fragment in plan.fragments() {
-                    crate::admission::admit(fragment.plan(), max_order_rows).map_err(|_| {
+        deadline::run_compiler_retaining(budget, permits, move |worker_budget| {
+            cfg.with_parser(&worker_budget, || match mode {
+                QueryMode::Single(source_id) => {
+                    let plan = snapshot.preflight_compile(source_id, &query, &worker_budget)?;
+                    crate::admission::admit(&plan, max_order_rows).map_err(|_| {
                         sf_sparql::Error::Unsupported("query shape is not admitted".into())
                     })?;
+                    if matches!(plan.form, sf_sparql::PlanForm::Ask) {
+                        worker_budget.preflight_ask_result()?;
+                    }
+                    Ok(())
                 }
-                Ok(())
-            }
+                QueryMode::SourceAffineUnion(source_ids) => {
+                    let plan =
+                        snapshot.preflight_federated_union(source_ids, &query, &worker_budget)?;
+                    for fragment in plan.fragments() {
+                        crate::admission::admit(fragment.plan(), max_order_rows).map_err(|_| {
+                            sf_sparql::Error::Unsupported("query shape is not admitted".into())
+                        })?;
+                    }
+                    Ok(())
+                }
+            })
         })
         .await
         .map_err(map_compiler_run_error)?;
@@ -92,36 +94,38 @@ pub(crate) async fn compile(
     let permits = cfg.compiler_permits();
     let policy = cfg.query_admission.policy();
     let portable_rows = budget.portable_rows().cloned();
-    let work = move |worker_budget: RequestBudget| match mode {
-        QueryMode::SourceAffineUnion(source_ids) if multi_origin => snapshot
-            .snapshot()
-            .compile_federated_lineage(source_ids, &query, &worker_budget, policy)
-            .map(Box::new)
-            .map(BoundQuery::Federated),
-        QueryMode::Single(source_id) if multi_origin => snapshot
-            .snapshot()
-            .registry()
-            .binding(source_id)
-            .ok_or_else(|| sf_sparql::Error::Mapping("lineage source is missing".into()))?
-            .compile_lineage(&query, &worker_budget, policy)
-            .map(Box::new)
-            .map(BoundQuery::Single),
-        QueryMode::Single(source_id) if policy.is_some() => snapshot
-            .compile_secured(source_id, &query, &worker_budget, policy.unwrap())
-            .map(Box::new)
-            .map(BoundQuery::Single),
-        QueryMode::SourceAffineUnion(source_ids) if policy.is_some() => snapshot
-            .compile_federated_secured(source_ids, &query, &worker_budget, policy.unwrap())
-            .map(Box::new)
-            .map(BoundQuery::Federated),
-        QueryMode::Single(source_id) => snapshot
-            .compile(source_id, &query, &worker_budget)
-            .map(Box::new)
-            .map(BoundQuery::Single),
-        QueryMode::SourceAffineUnion(source_ids) => snapshot
-            .compile_federated_union(source_ids, &query, &worker_budget)
-            .map(Box::new)
-            .map(BoundQuery::Federated),
+    let work = move |worker_budget: RequestBudget| {
+        cfg.with_parser(&worker_budget, || match mode {
+            QueryMode::SourceAffineUnion(source_ids) if multi_origin => snapshot
+                .snapshot()
+                .compile_federated_lineage(source_ids, &query, &worker_budget, policy)
+                .map(Box::new)
+                .map(BoundQuery::Federated),
+            QueryMode::Single(source_id) if multi_origin => snapshot
+                .snapshot()
+                .registry()
+                .binding(source_id)
+                .ok_or_else(|| sf_sparql::Error::Mapping("lineage source is missing".into()))?
+                .compile_lineage(&query, &worker_budget, policy)
+                .map(Box::new)
+                .map(BoundQuery::Single),
+            QueryMode::Single(source_id) if policy.is_some() => snapshot
+                .compile_secured(source_id, &query, &worker_budget, policy.unwrap())
+                .map(Box::new)
+                .map(BoundQuery::Single),
+            QueryMode::SourceAffineUnion(source_ids) if policy.is_some() => snapshot
+                .compile_federated_secured(source_ids, &query, &worker_budget, policy.unwrap())
+                .map(Box::new)
+                .map(BoundQuery::Federated),
+            QueryMode::Single(source_id) => snapshot
+                .compile(source_id, &query, &worker_budget)
+                .map(Box::new)
+                .map(BoundQuery::Single),
+            QueryMode::SourceAffineUnion(source_ids) => snapshot
+                .compile_federated_union(source_ids, &query, &worker_budget)
+                .map(Box::new)
+                .map(BoundQuery::Federated),
+        })
     };
     let compiled = match reservation {
         Some(reservation) => deadline::run_reserved_compiler(budget, reservation, work).await,
@@ -378,6 +382,17 @@ mod tests {
                 StatusCode::TOO_MANY_REQUESTS
             );
             assert_eq!(calls.load(Ordering::SeqCst), 0);
+            // The sticky terminal can wake the waiter before the blocking
+            // closure finishes dropping its owned state. Require bounded full
+            // recovery, not a scheduler-dependent immediate permit count.
+            let recovered = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                cfg.compiler_permits().acquire_many_owned(4),
+            )
+            .await
+            .expect("all compiler workers must finish")
+            .unwrap();
+            drop(recovered);
             assert_eq!(cfg.compiler_permits().available_permits(), 4);
             drop(held);
         }

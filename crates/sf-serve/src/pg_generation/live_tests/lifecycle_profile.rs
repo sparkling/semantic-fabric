@@ -98,6 +98,7 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
         .expect("the rebuilt successor generation reobserves exactly");
 
     let (mut config, expectation) = crate::ServeConfig::from_initial_pg_direct(rebuilt);
+    config.use_in_process_test_parser();
     // This private lifecycle fixture is not testing credential admission.
     config.set_query_admission(crate::QueryAdmission::UnrestrictedDevelopment);
     let config = Arc::new(config);
