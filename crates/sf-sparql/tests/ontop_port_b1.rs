@@ -39,7 +39,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -199,7 +199,7 @@ fn self_join_elim2_pk_collapse_with_constant() {
         "self-join on PK col2 collapses to one table2 scan"
     );
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "table2"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "table2"),
         "table2 is the surviving scan"
     );
     assert_eq!(binding_alias(b, "Y"), 0, "?Y rebinds onto the kept scan");
@@ -368,7 +368,7 @@ fn fk_pk_elim_single_column() {
         "TABLE1 (parent, reached only for its PK) is eliminated"
     );
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "TABLE2"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "TABLE2"),
         "TABLE2 (child, carrying the FK) is the surviving scan"
     );
     assert!(b.where_conds.is_empty(), "the FK join equality is dropped");
@@ -436,7 +436,7 @@ fn fk_pk_elim_composite_key() {
         "TABLE3 eliminated via the composite FK/PK join"
     );
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "TABLE4"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "TABLE4"),
         "TABLE4 is the surviving scan"
     );
     assert_eq!(binding_alias(b, "A"), 1, "?A rebinds onto TABLE4.col2");

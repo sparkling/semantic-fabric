@@ -193,7 +193,7 @@ fn all_iq_variants() -> Vec<IqNode> {
     ];
     let scan = Scan {
         alias: 1,
-        source: LogicalSource::Table("items".to_owned()),
+        source: (LogicalSource::Table("items".to_owned())).into(),
     };
     let relation = HopRelation {
         source: LogicalSource::Query("select s, o from edges".to_owned()),

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-19
-updated: 2026-07-19
+updated: 2026-09-08
 tags: [property-paths, join-composition, derived-table, sql-emission, tree-ir, sound-501-lift]
 supersedes: []
 depends-on:
@@ -13,6 +13,31 @@ implements: []
 ---
 
 # Join-onto-path composition: path branches as alias-preserving derived tables
+
+## Current implementation (2026-09-08)
+
+Joined paths now retain `ScanSource::Path` (the typed closure and a separate
+internal CTE alias) through lowering. They become SQL only during catalog-aware
+emission. This refines the original `LogicalSource::Query` storage decision below,
+without changing source-native CTE execution, outer aliases, raw reconstruction,
+correlated EXISTS/MINUS, or NPS bag semantics. Authored Table/Query sources use the
+distinct `ScanSource::Logical` variant; generated paths cannot inherit table
+constraint or portable-row-policy authority. Ordinary scan constructors wrap their
+logical source with `.into()`; no second source representation is retained.
+
+Live preflight probes and validates each physical path leaf in core, OPTIONAL,
+EXISTS/NOT EXISTS and nested SubPlans before any cursor. Missing output columns
+reject; retained recipes participate in existing compiler-clone/resource checks.
+Required owned PostgreSQL/MySQL CLI evidence exercises two joined closures with
+mapping `SRC`/`DST` references over native lowercase columns. The former frozen-SQL
+implementation fails this check; typed live emission passes. Existing correlated
+and multiplicity regression checks remain required.
+
+This closes path catalog-blindness (risk 2) only. Ordinary translate-time DISTINCT
+wrappers can still fail on native column folding, and RDF-key equality under
+collation/padding/mixed native types is still open under ADR-0049. Equal node
+shapes alone do not prove SQL-key/RDF-term equality. Historical green fixtures
+below must not be read as general exactness or release admission.
 
 ## Implementation status (2026-07-19, same day)
 

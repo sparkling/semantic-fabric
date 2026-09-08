@@ -84,7 +84,7 @@ fn scan_leaf(alias: usize, source: &str) -> IqNode {
     IqNode::Extensional {
         scan: Scan {
             alias,
-            source: LogicalSource::Query(source.to_owned()),
+            source: (LogicalSource::Query(source.to_owned())).into(),
         },
         bind: BTreeMap::new(),
     }

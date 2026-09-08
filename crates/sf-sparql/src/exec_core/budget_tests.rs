@@ -74,7 +74,7 @@ fn row(value: &str) -> RawTuple {
 fn column_branch(alias: usize) -> Branch {
     let mut branch = Branch::single(Scan {
         alias,
-        source: LogicalSource::Table("items".to_owned()),
+        source: (LogicalSource::Table("items".to_owned())).into(),
     });
     branch.bindings.insert(
         "v".to_owned(),

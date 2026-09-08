@@ -40,7 +40,7 @@ fn envelope_error() -> CompileEnvelopeError {
 fn branch_forest() -> Vec<Branch> {
     vec![Branch::single(Scan {
         alias: 1,
-        source: LogicalSource::Table("source".to_owned()),
+        source: (LogicalSource::Table("source".to_owned())).into(),
     })]
 }
 
@@ -108,8 +108,11 @@ fn compile_context_binds_exact_measure_reservation_and_one_clone() {
     let cloned = exact_context.clone_branch_forest(&source).unwrap();
     assert_eq!(cloned.len(), source.len());
     assert_eq!(cloned[0].core[0].alias, source[0].core[0].alias);
-    match (&cloned[0].core[0].source, &source[0].core[0].source) {
-        (LogicalSource::Table(actual), LogicalSource::Table(expected)) => {
+    match (
+        cloned[0].core[0].source.logical(),
+        source[0].core[0].source.logical(),
+    ) {
+        (Some(LogicalSource::Table(actual)), Some(LogicalSource::Table(expected))) => {
             assert_eq!(actual, expected)
         }
         _ => panic!("branch forest fixture must retain its table source"),

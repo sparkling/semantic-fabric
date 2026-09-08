@@ -115,8 +115,10 @@ distinct base Table/Query source recursively reachable through correlated
 conditions and nested SubPlans is probed, missing/duplicate/ambiguous live
 columns reject, and all branches are emitted before the first cursor opens.
 Fresh derived aliases are allocated above aliases hidden in nested IQ/SQL
-conditions. Live nested emission overlays probed catalogs for base-source
-references. Offline/synthetic derived aliases and translate-time immediate
+conditions. Composed paths retain typed scan recipes until live emission
+(ADR-0033, 2026-09-08), which resolves their recursively probed leaf columns;
+their outer aliases confer no table or portable-policy authority. Live nested
+emission overlays probed catalogs for base-source references. Offline/synthetic derived aliases and translate-time immediate
 wrappers retain the bounded `col_is_unquoted_alias` lexical heuristic, which is
 not SQL-token-aware and never live metadata authority. Probe and emission errors therefore cannot
 produce a partial multi-branch result. SELECT/CONSTRUCT executor failures expose
@@ -128,25 +130,22 @@ synthetic `rowid` sentinel; the D1 Table→Query wrapper preserves the logical
 `rowid` output name and only base-table aliases read `ctid`. This removes the
 known nonexistent-`rowid` emission for those shapes, but is not a general row
 identity proof: a real PostgreSQL table column named `rowid` is still
-indistinguishable from the sentinel, `ctid` is snapshot-local, and live
-PostgreSQL property-path execution is not evidenced.
+indistinguishable from the sentinel and `ctid` is snapshot-local. Required owned
+native query fixtures now cover decimal-digit VARCHAR paths and joined-column
+folding, not this no-PK identity profile or general key equality (ADR-0049).
 
-The structural/type lifecycle remains open: probes are sequential, can race DDL
-after preflight, and do not establish one coherent generation; SQLite metadata
-preparation also uses non-cancellable blocking work. There is no digest, watcher,
-readiness transition or atomic replacement path. A future
-verified-constraint mode requires an unforgeable backend lease that covers a
-coherent revalidation, compilation, and the entire streamed cursor; a digest
-precheck alone has a time-of-check/time-of-use gap. Replacement activates a new
-runtime binding and cache namespace rather than mutating the current one; no
-automatic replacement path exists yet.
+Ordinary probes are sequential, can race DDL after preflight and do not establish
+a coherent generation. Authored reload now fences observed drift and activates
+an immutable replacement binding/cache namespace; the closed PostgreSQL Direct
+profile adds a verified backend lease (ADR-0050/0055). Neither gives every source
+or authored query a DDL-stable lease. General structural/type lifecycle and total
+metadata work controls remain open; a digest alone cannot close the DDL race.
 
-Direct Mapping is a separate lifecycle. Current serving accepts authored R2RML
-and does not generate it. Frozen conformance/development callers may derive a
-mapping from an explicit schema, but a future live generator must bind the
-PK/FK-dependent mapping generation to the same verified execution generation;
-redacting optimiser facts after generation is insufficient. That work also needs
-a typed synthetic-row identity instead of the current `rowid` string convention.
+Direct Mapping remains a separate lifecycle. `serve --direct-mapping-base` now
+generates mappings for the closed PostgreSQL 16.9/16.15 PK-backed profile under
+its verified generation owner; authored serving remains separate (ADR-0055).
+No-PK synthetic identity and additional Direct backends remain open. Redacting
+optimizer facts after generation cannot replace a mapping-generation lease.
 
 ### Correctness anchor
 

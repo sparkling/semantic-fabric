@@ -34,7 +34,7 @@ fn exists_body(alias: usize, marker: &str) -> (IqNode, u64) {
     let node = IqNode::Extensional {
         scan: Scan {
             alias,
-            source: LogicalSource::Query(format!("SELECT 1 /* {marker} */")),
+            source: (LogicalSource::Query(format!("SELECT 1 /* {marker} */"))).into(),
         },
         bind: BTreeMap::new(),
     };

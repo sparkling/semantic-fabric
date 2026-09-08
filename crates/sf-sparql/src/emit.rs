@@ -36,6 +36,8 @@ use crate::iq::{
     PathClosure, PathKind, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
+mod scan;
+use scan::{scan_actuals, scan_ref};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
 /// regular-identifier column references resolve to the column the live DBMS truly
@@ -164,7 +166,9 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
                 }
             }
             SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
-                out.extend(scans.iter().map(|scan| &scan.source));
+                for scan in scans {
+                    scan_sources(scan, out);
+                }
                 for condition in conds {
                     condition_sources(condition, out);
                 }
@@ -180,8 +184,13 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
     }
 
     fn branch_sources<'a>(branch: &'a Branch, out: &mut Vec<&'a LogicalSource>) {
-        out.extend(branch.core.iter().map(|scan| &scan.source));
-        out.extend(branch.opts.iter().map(|join| &join.scan.source));
+        for scan in branch
+            .core
+            .iter()
+            .chain(branch.opts.iter().map(|join| &join.scan))
+        {
+            scan_sources(scan, out);
+        }
         if let Some(path) = &branch.path {
             hop_sources(&path.hop, out);
         }
@@ -200,6 +209,13 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
             for inner in &subplan.plan.branches {
                 branch_sources(inner, out);
             }
+        }
+    }
+
+    fn scan_sources<'a>(scan: &'a crate::iq::Scan, out: &mut Vec<&'a LogicalSource>) {
+        match &scan.source {
+            crate::iq::ScanSource::Logical(source) => out.push(source),
+            crate::iq::ScanSource::Path { closure, .. } => hop_sources(&closure.hop, out),
         }
     }
 
@@ -222,6 +238,21 @@ pub(crate) fn validate_live_columns(
     enum AliasSource<'a> {
         Base(&'a LogicalSource),
         Derived,
+        Path,
+    }
+
+    fn scan_alias<'a>(
+        scan: &'a crate::iq::Scan,
+        dialect: Dialect,
+        catalog: &ColumnCatalog,
+    ) -> Result<AliasSource<'a>> {
+        match &scan.source {
+            crate::iq::ScanSource::Logical(source) => Ok(AliasSource::Base(source)),
+            crate::iq::ScanSource::Path { closure, .. } => {
+                validate_hop(&closure.hop, dialect, catalog)?;
+                Ok(AliasSource::Path)
+            }
+        }
     }
 
     fn validate_ref(
@@ -232,6 +263,13 @@ pub(crate) fn validate_live_columns(
     ) -> Result<()> {
         if let Some(AliasSource::Base(source)) = aliases.get(&column.alias) {
             catalog.validate_live_column(source, &column.column, dialect)?;
+        }
+        if matches!(aliases.get(&column.alias), Some(AliasSource::Path))
+            && !matches!(column.column.as_ref(), "sf_s" | "sf_o")
+        {
+            return Err(Error::Sql(
+                "path relation has no required output column".into(),
+            ));
         }
         Ok(())
     }
@@ -287,7 +325,7 @@ pub(crate) fn validate_live_columns(
                 // outer positional `cN` look like a base-table column.
                 let mut nested = aliases.clone();
                 for scan in scans {
-                    nested.insert(scan.alias, AliasSource::Base(&scan.source));
+                    nested.insert(scan.alias, scan_alias(scan, dialect, catalog)?);
                 }
                 for condition in conds {
                     validate_condition(condition, &nested, dialect, catalog)?;
@@ -330,10 +368,10 @@ pub(crate) fn validate_live_columns(
     fn validate_branch(branch: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> Result<()> {
         let mut aliases = HashMap::new();
         for scan in &branch.core {
-            aliases.insert(scan.alias, AliasSource::Base(&scan.source));
+            aliases.insert(scan.alias, scan_alias(scan, dialect, catalog)?);
         }
         for join in &branch.opts {
-            aliases.insert(join.scan.alias, AliasSource::Base(&join.scan.source));
+            aliases.insert(join.scan.alias, scan_alias(&join.scan, dialect, catalog)?);
         }
         for subplan in &branch.subplan_joins {
             // The derived table exposes positional `cN` columns, not live base
@@ -520,6 +558,9 @@ fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> ActualColumns {
     let mut out = HashMap::new();
     for (alias, source) in b.alias_sources() {
         out.insert(alias, source_actuals(source, catalog));
+    }
+    for scan in b.core.iter().chain(b.opts.iter().map(|join| &join.scan)) {
+        out.insert(scan.alias, scan_actuals(scan, catalog));
     }
     // SubPlan derived-table aliases: their columns are the positional names the
     // inner `emit_branch` assigns (`c0`, `c1`, …), NOT the SPARQL variable names.
@@ -1196,7 +1237,7 @@ fn render_from(
         let mut from = "(SELECT 1) t_empty".to_owned();
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
+            from.push_str(&scan_ref(&opt.scan, dialect, catalog)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -1224,14 +1265,14 @@ fn render_from(
     } else {
         let mut scans = b.core.iter();
         let first = scans.next().expect("core non-empty — checked above");
-        let mut from = scan_ref(&first.source, first.alias, dialect);
+        let mut from = scan_ref(first, dialect, catalog)?;
         for s in scans {
             from.push_str(" CROSS JOIN ");
-            from.push_str(&scan_ref(&s.source, s.alias, dialect));
+            from.push_str(&scan_ref(s, dialect, catalog)?);
         }
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
+            from.push_str(&scan_ref(&opt.scan, dialect, catalog)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -1352,13 +1393,6 @@ fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<Strin
         }
     }
     Ok(out)
-}
-
-fn scan_ref(source: &LogicalSource, alias: usize, dialect: Dialect) -> String {
-    match source {
-        LogicalSource::Table(t) => format!("{} t{alias}", dialect.quote_ident(t)),
-        LogicalSource::Query(q) => format!("({q}) t{alias}"),
-    }
 }
 
 fn render_where(
@@ -1492,17 +1526,12 @@ fn render_cond(
             let neg = matches!(cond, SqlCond::NotExists { .. });
             let from = scans
                 .iter()
-                .enumerate()
-                .fold(String::new(), |mut acc, (i, s)| {
-                    if i > 0 {
-                        acc.push_str(" CROSS JOIN ");
-                    }
-                    acc.push_str(&scan_ref(&s.source, s.alias, dialect));
-                    acc
-                });
+                .map(|scan| scan_ref(scan, dialect, catalog))
+                .collect::<Result<Vec<_>>>()?
+                .join(" CROSS JOIN ");
             let mut nested_actuals = actuals.clone();
             for scan in scans {
-                nested_actuals.insert(scan.alias, source_actuals(&scan.source, catalog));
+                nested_actuals.insert(scan.alias, scan_actuals(scan, catalog));
             }
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql =
@@ -2005,7 +2034,7 @@ mod tests {
     fn branch_with(cond: SqlCond) -> Branch {
         let mut b = Branch::single(Scan {
             alias: 0,
-            source: LogicalSource::Table("emp".to_owned()),
+            source: (LogicalSource::Table("emp".to_owned())).into(),
         });
         b.where_conds.push(cond);
         b
@@ -2056,7 +2085,7 @@ mod tests {
     fn emit_branch_with_resolves_folded_identifier() {
         let mut b = Branch::single(Scan {
             alias: 0,
-            source: LogicalSource::Table("Student".to_owned()),
+            source: (LogicalSource::Table("Student".to_owned())).into(),
         });
         b.where_conds
             .push(SqlCond::IsNotNull(ColRef::new(0, "StudentId")));
@@ -2076,7 +2105,7 @@ mod tests {
     fn live_validation_preserves_physical_row_identifier_exceptions() {
         let mut branch = Branch::single(Scan {
             alias: 0,
-            source: LogicalSource::Table("no_pk".to_owned()),
+            source: (LogicalSource::Table("no_pk".to_owned())).into(),
         });
         branch.bindings.insert(
             "s".to_owned(),
@@ -2114,7 +2143,7 @@ mod tests {
     fn postgres_rowid_rewrite_stops_at_a_derived_query_boundary() {
         let mut table = Branch::single(Scan {
             alias: 0,
-            source: LogicalSource::Table("no_pk".to_owned()),
+            source: (LogicalSource::Table("no_pk".to_owned())).into(),
         });
         table
             .where_conds
@@ -2124,9 +2153,10 @@ mod tests {
 
         let mut query = Branch::single(Scan {
             alias: 0,
-            source: LogicalSource::Query(
+            source: (LogicalSource::Query(
                 "SELECT (sfs0.ctid)::text AS rowid FROM no_pk sfs0".to_owned(),
-            ),
+            ))
+            .into(),
         });
         query
             .where_conds

@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 

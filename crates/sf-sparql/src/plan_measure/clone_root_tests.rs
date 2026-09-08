@@ -62,7 +62,7 @@ fn scalar_condition_expression_path_and_graph_schedules_are_pinned() {
     let condition = SqlCond::NotExists {
         scans: vec![Scan {
             alias: 1,
-            source: LogicalSource::Table("t".to_owned()),
+            source: (LogicalSource::Table("t".to_owned())).into(),
         }],
         conds: vec![SqlCond::IsNull(ColRef::new(1, "x"))],
     };

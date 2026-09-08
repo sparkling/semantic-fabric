@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> crate::iq::Scan {
     crate::iq::Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -123,7 +123,7 @@ fn ontop_fk_optimization_single_col() {
         "TABLE1 eliminated — T2.col2 FK to T1.col1 guarantees a match"
     );
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "TABLE2"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "TABLE2"),
         "T2 is the surviving scan"
     );
     assert!(b.where_conds.is_empty(), "FK ColEq dropped");
@@ -384,7 +384,7 @@ fn ontop_fk_opt_composite_key() {
     let b = &out[0];
     assert_eq!(b.core.len(), 1, "TABLE3 eliminated by composite FK/PK join");
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "TABLE4"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "TABLE4"),
         "TABLE4 is the surviving scan"
     );
     // A now references TABLE4 (alias 1).

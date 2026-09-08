@@ -10,7 +10,7 @@ use crate::iq::Scan;
 fn scan(alias: usize) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(format!("table_{alias}")),
+        source: (LogicalSource::Table(format!("table_{alias}"))).into(),
     }
 }
 

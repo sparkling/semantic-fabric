@@ -376,6 +376,12 @@ and `?` results when paid. Shape/rewrite construction, TBox/unifier internals an
 other phases still lack complete controls; this is not
 total compiler CPU, source-recursion governance or release admission.
 
+**Typed path transport (2026-09-08):** joined paths retain their source recipes
+until live preflight/emission. Existing clone measurement traverses those retained
+trees; resource admission still sees them as source-backed, and portable policies
+reject them without partial source authorization. This preserves the controls
+while fixing folded-column execution, not total path work or RDF-key equality.
+
 ### Public parser lifetime (2026-09-08)
 
 The accepted ADR-0055 bounded-execution contract now reuses the Rust process

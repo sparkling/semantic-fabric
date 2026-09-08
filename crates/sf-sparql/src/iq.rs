@@ -513,13 +513,8 @@ impl CmpOp {
     }
 }
 
-/// One `FROM` relation: a base table (`rr:tableName`) or an R2RML view
-/// (`rr:sqlQuery`), bound to a scan alias.
-#[derive(Debug, Clone)]
-pub struct Scan {
-    pub alias: usize,
-    pub source: LogicalSource,
-}
+mod scan;
+pub use scan::{Scan, ScanSource};
 
 /// A single OPTIONAL right side rendered as a SQL `LEFT JOIN` (ADR-0007 R1–R5).
 ///
@@ -741,10 +736,14 @@ impl Branch {
     pub fn alias_sources(&self) -> Vec<(usize, &LogicalSource)> {
         let mut out: Vec<(usize, &LogicalSource)> = Vec::new();
         for s in &self.core {
-            out.push((s.alias, &s.source));
+            if let Some(source) = s.source.logical() {
+                out.push((s.alias, source));
+            }
         }
         for o in &self.opts {
-            out.push((o.scan.alias, &o.scan.source));
+            if let Some(source) = o.scan.source.logical() {
+                out.push((o.scan.alias, source));
+            }
         }
         // A MINUS anti-join carries the right (minuend) pattern's scans inside a
         // `NotExists` WHERE condition; surface them so the executor probes their
@@ -876,7 +875,9 @@ fn collect_not_exists_scans<'a>(cond: &'a SqlCond, out: &mut Vec<(usize, &'a Log
     match cond {
         SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
             for s in scans {
-                out.push((s.alias, &s.source));
+                if let Some(source) = s.source.logical() {
+                    out.push((s.alias, source));
+                }
             }
             for c in conds {
                 collect_not_exists_scans(c, out);

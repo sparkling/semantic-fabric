@@ -382,12 +382,9 @@ fn distinct_over_joined_path_actually_dedups() {
 }
 
 /// Surface 5, structural half: after lowering, the Plan's sole branch must
-/// carry TWO DISTINCT `Scan`s with `LogicalSource::Query` (one per path
-/// occurrence), with DISTINCT outer aliases (`pc.alias`, assigned uniquely
-/// by RESOLVE to each `IqNode::Path` leaf independently of
-/// `convert_path_branches`) and DISTINCT embedded SQL text (each closure's
-/// SQL is rebased onto its own fresh internal CTE alias by
-/// `path_as_derived_table_sql`). A Rust-level proof alongside the row-level
+/// carry TWO DISTINCT typed path scans (one per path occurrence), with distinct
+/// outer aliases and separately allocated internal CTE aliases. Recipes remain
+/// typed until `path_as_derived_table_sql` receives the live catalog. A Rust-level proof alongside the row-level
 /// proof (`two_path_occurrences_shared_subject_cross_product_not_collapsed`)
 /// that there is no aliasing collision, not just correct output.
 #[test]
@@ -406,27 +403,32 @@ fn two_path_scans_get_distinct_aliases_structural_check() {
     let query_scans: Vec<&Scan> = b
         .core
         .iter()
-        .filter(|s| matches!(s.source, sf_core::ir::LogicalSource::Query(_)))
+        .filter(|s| matches!(s.source, sf_sparql::iq::ScanSource::Path { .. }))
         .collect();
     assert_eq!(
         query_scans.len(),
         2,
-        "expected exactly 2 converted-path Query scans, got {query_scans:#?}"
+        "expected exactly 2 retained typed path scans, got {query_scans:#?}"
     );
     assert_ne!(
         query_scans[0].alias, query_scans[1].alias,
         "the two path occurrences' OUTER scan aliases must differ (else the SQL FROM \
          clause has a duplicate table alias — a crash, not a silent bug)"
     );
-    let (sf_core::ir::LogicalSource::Query(sql0), sf_core::ir::LogicalSource::Query(sql1)) =
-        (&query_scans[0].source, &query_scans[1].source)
+    let (
+        sf_sparql::iq::ScanSource::Path {
+            cte_alias: first, ..
+        },
+        sf_sparql::iq::ScanSource::Path {
+            cte_alias: second, ..
+        },
+    ) = (&query_scans[0].source, &query_scans[1].source)
     else {
-        unreachable!("filtered to Query sources above");
+        unreachable!("filtered to typed paths above");
     };
     assert_ne!(
-        sql0, sql1,
-        "the two closures' embedded derived-table SQL must be rebased onto DISTINCT \
-         internal CTE aliases"
+        first, second,
+        "the two retained closures must own DISTINCT internal CTE aliases"
     );
 }
 

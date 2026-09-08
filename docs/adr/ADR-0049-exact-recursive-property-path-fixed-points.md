@@ -43,6 +43,17 @@ qualification remain required follow-up. Do not cast every key to text/binary:
 that changes date/binary/numeric decoding. Live type metadata and preserving typed
 composed paths until emission are the identified native correction seams.
 
+**Typed composition delta (2026-09-08):** ADR-0033 now retains composed paths as
+typed scan recipes until live emission, including correlated scan positions.
+The required PostgreSQL/MySQL CLI fixture proves joined closures resolve folded
+native column names; the old frozen-SQL variant fails the same check. Metadata
+preflight, derived-output validation and clone/resource accounting cover the new
+representation. No comparison semantics changed and the NOCASE defect remains
+open. Its regression is retained as an explicitly failing release check (opt-in
+`--ignored --exact`, not a successful workspace-test claim). Ordinary early SQL
+wrappers have a separate reproduced PostgreSQL folding defect. Neither gap is
+waived by positive native fixtures or this necessary typed-transport repair.
+
 ## Context
 
 **Compiler-side update (2026-09-08):** predicate-hop mapping searches and negated

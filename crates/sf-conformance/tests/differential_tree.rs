@@ -1661,7 +1661,7 @@ fn agg_over_union_self_join_eliminated_on_shared_table() {
         let m_scans = b
             .core
             .iter()
-            .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "m"))
+            .filter(|s| matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == "m"))
             .count();
         assert_eq!(
             m_scans, 1,
@@ -1726,7 +1726,7 @@ fn agg_over_union_self_join_eliminated_via_rust_group() {
         let sj_scans = b
             .core
             .iter()
-            .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "sj"))
+            .filter(|s| matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == "sj"))
             .count();
         assert_eq!(
             sj_scans, 1,
@@ -1796,7 +1796,7 @@ fn single_branch_group_by_self_join_collapses_to_one_scan() {
     let m_scans = b
         .core
         .iter()
-        .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "m"))
+        .filter(|s| matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == "m"))
         .count();
     assert_eq!(
         m_scans, 1,
@@ -1924,7 +1924,7 @@ fn join_transfer_not_exists_self_join_eliminated() {
                 SqlCond::NotExists { scans, .. } | SqlCond::Exists { scans, .. } => scans
                     .iter()
                     .filter(|s| {
-                        matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "dept")
+                        matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == "dept")
                     })
                     .count(),
                 SqlCond::Not(c) => dept_scans_in_not_exists(std::slice::from_ref(c)),
@@ -2056,7 +2056,7 @@ fn table_scans_in(conds: &[SqlCond], table: &str) -> usize {
                 scans
                     .iter()
                     .filter(
-                        |s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == table),
+                        |s| matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == table),
                     )
                     .count()
                     + table_scans_in(conds, table)
@@ -2378,7 +2378,7 @@ fn adversarial_branch_level_continue_finds_later_self_join_past_opt_alias() {
             .core
             .iter()
             .filter(
-                |s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "emp_dept"),
+                |s| matches!(s.source.logical(), Some(sf_core::ir::LogicalSource::Table(t)) if t == "emp_dept"),
             )
             .count();
         assert_eq!(

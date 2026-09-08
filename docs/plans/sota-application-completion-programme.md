@@ -15,7 +15,7 @@ nothing moved to post-1.0 is relabelled implemented, supported, or complete.
 
 ## Immediate delivery queue (2026-09-08)
 
-**Current query slice:** owned PostgreSQL 16.15/MySQL 8.4.11 CLI evidence now covers one-hop DESCRIBE and complete numeric-key VARCHAR cycle/258-edge closures. The blanket SQLite path comparison prototype was rejected; the verified metadata repair preserves CHAR/DATE decoding for explicitly collated authored SQL projections. Next: SQLite/native/correlated key-comparison authority, remaining source controls and exact-release qualification; no whole-backend admission or arbitrary deadline follows from these focused results.
+**Current query slice:** owned PostgreSQL 16.15/MySQL 8.4.11 CLI evidence now covers one-hop DESCRIBE and complete numeric-key VARCHAR cycle/258-edge closures. The blanket SQLite path comparison prototype was rejected; the verified metadata repair preserves CHAR/DATE decoding for explicitly collated authored SQL projections. Typed composed paths now reach live emission without frozen SQL; required native joined-path folding checks pass, while the explicit NOCASE release regression still fails. Next: SQLite/native/correlated key-comparison authority, ordinary early-wrapper native folding, remaining source controls and exact-release qualification; no whole-backend admission or arbitrary deadline follows from these focused results.
 
 Recovery integration `458faf1` on `main` passed full locked Rust tests/build, formatting, the harness build and focused contracts; it closed fragmented integration, not the remaining public requirements.
 One integration owner writes on `main`; independent readers/reviewers may help.

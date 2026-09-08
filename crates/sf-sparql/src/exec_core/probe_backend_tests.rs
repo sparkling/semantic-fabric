@@ -10,12 +10,15 @@ use crate::iq::{
 use crate::{DedupScope, Plan, PlanForm};
 
 use super::{ask, select};
+#[path = "probe_backend_tests/path_scans.rs"]
+mod path_scans;
 
 struct MockBackend {
     rows: VecDeque<Vec<RawTuple>>,
     metadata: VecDeque<sf_sql::Result<Vec<String>>>,
     probes: Vec<String>,
     opens: usize,
+    sql: Vec<String>,
 }
 struct MockStream {
     iter: std::vec::IntoIter<RawTuple>,
@@ -34,8 +37,9 @@ impl SqlBackend for MockBackend {
         self.probes.push(probe.to_owned());
         self.metadata.pop_front().unwrap_or_else(|| Ok(Vec::new()))
     }
-    async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> sf_sql::Result<MockStream> {
+    async fn open_branch(&mut self, sql: &str, _params: &[String]) -> sf_sql::Result<MockStream> {
         self.opens += 1;
+        self.sql.push(sql.to_owned());
         Ok(MockStream {
             iter: self.rows.pop_front().unwrap_or_default().into_iter(),
         })
@@ -71,6 +75,7 @@ fn send_future_monomorphizes_and_spawns() {
             metadata: VecDeque::new(),
             probes: Vec::new(),
             opens: 0,
+            sql: Vec::new(),
         };
         let fut = async move {
             let mut b = backend;
@@ -82,7 +87,10 @@ fn send_future_monomorphizes_and_spawns() {
 }
 
 fn column_branch(alias: usize, source: LogicalSource, column: &str) -> Branch {
-    let mut branch = Branch::single(Scan { alias, source });
+    let mut branch = Branch::single(Scan {
+        alias,
+        source: source.into(),
+    });
     branch.bindings.insert(
         "v".to_owned(),
         TermDef::Derived {
@@ -116,6 +124,7 @@ fn backend_with(metadata: Vec<sf_sql::Result<Vec<String>>>) -> MockBackend {
         metadata: metadata.into(),
         probes: Vec::new(),
         opens: 0,
+        sql: Vec::new(),
     }
 }
 
@@ -178,7 +187,7 @@ fn mutated_shared_dedup_scope_fails_before_metadata_io() {
     for (index, branch) in plan.branches.iter_mut().enumerate() {
         branch.core.push(Scan {
             alias: 10 + index,
-            source: LogicalSource::Table("injected_join".to_owned()),
+            source: (LogicalSource::Table("injected_join".to_owned())).into(),
         });
     }
     let mut backend = backend_with(Vec::new());
@@ -191,7 +200,7 @@ fn mutated_shared_dedup_scope_fails_before_metadata_io() {
 fn pattern_branch(alias: usize, table: &str) -> Branch {
     let mut branch = Branch::single(Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     });
     for (variable, column) in [("s", "s_col"), ("o", "o_col")] {
         branch.bindings.insert(
@@ -301,7 +310,7 @@ fn nested_path_exists_plan(nested_column: &str) -> Plan {
         conds: vec![SqlCond::Exists {
             scans: vec![Scan {
                 alias: 2,
-                source: LogicalSource::Table("nested_source".to_owned()),
+                source: (LogicalSource::Table("nested_source".to_owned())).into(),
             }],
             conds: vec![SqlCond::IsNotNull(ColRef::new(2, nested_column))],
         }],
@@ -456,7 +465,7 @@ fn repeated_logical_source_is_probed_once() {
 fn later_branch_emission_error_opens_no_branch() {
     let mut invalid = Branch::single(Scan {
         alias: 1,
-        source: LogicalSource::Query("this is not valid SQL".to_owned()),
+        source: (LogicalSource::Query("this is not valid SQL".to_owned())).into(),
     });
     invalid.bindings.clear();
     let plan = select_plan(vec![

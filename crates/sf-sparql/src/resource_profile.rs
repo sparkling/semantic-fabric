@@ -123,6 +123,8 @@ fn plan_reads_source(plan: &Plan) -> bool {
 
 fn branch_reads_source(branch: &crate::iq::Branch) -> bool {
     branch.path.is_some()
+        || !branch.core.is_empty()
+        || !branch.opts.is_empty()
         || !branch.alias_sources().is_empty()
         || branch.where_conds.iter().any(condition_reads_source)
         || branch
@@ -170,7 +172,7 @@ mod tests {
     fn branch(alias: usize) -> Branch {
         Branch::single(Scan {
             alias,
-            source: LogicalSource::Table("items".to_owned()),
+            source: (LogicalSource::Table("items".to_owned())).into(),
         })
     }
 

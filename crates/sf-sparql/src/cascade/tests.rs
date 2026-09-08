@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> crate::iq::Scan {
     crate::iq::Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -28,7 +28,7 @@ fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
 
     let mut table_branch = Branch::single(scan(0, "no_pk"));
     wrap_scan_distinct(&mut table_branch, 0, &cols, sf_sql::Dialect::Postgres);
-    let LogicalSource::Query(table_sql) = &table_branch.core[0].source else {
+    let Some(LogicalSource::Query(table_sql)) = table_branch.core[0].source.logical() else {
         panic!("D1 must wrap a table scan as a query")
     };
     assert!(
@@ -38,11 +38,11 @@ fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
 
     let query_scan = crate::iq::Scan {
         alias: 1,
-        source: LogicalSource::Query("SELECT 7 AS rowid".to_owned()),
+        source: (LogicalSource::Query("SELECT 7 AS rowid".to_owned())).into(),
     };
     let mut query_branch = Branch::single(query_scan);
     wrap_scan_distinct(&mut query_branch, 1, &cols, sf_sql::Dialect::Postgres);
-    let LogicalSource::Query(query_sql) = &query_branch.core[0].source else {
+    let Some(LogicalSource::Query(query_sql)) = query_branch.core[0].source.logical() else {
         panic!("D1 must preserve a query source as a nested query")
     };
     assert!(
@@ -60,11 +60,11 @@ fn mysql_d1_quotes_an_unquoted_reserved_output_alias() {
     let cols = vec![Box::<str>::from("ROLE")];
     let query_scan = crate::iq::Scan {
         alias: 0,
-        source: LogicalSource::Query("SELECT 'worker' AS ROLE".to_owned()),
+        source: (LogicalSource::Query("SELECT 'worker' AS ROLE".to_owned())).into(),
     };
     let mut branch = Branch::single(query_scan);
     wrap_scan_distinct(&mut branch, 0, &cols, sf_sql::Dialect::MySql);
-    let LogicalSource::Query(sql) = &branch.core[0].source else {
+    let Some(LogicalSource::Query(sql)) = branch.core[0].source.logical() else {
         panic!("D1 must preserve a query source as a nested query")
     };
     assert!(

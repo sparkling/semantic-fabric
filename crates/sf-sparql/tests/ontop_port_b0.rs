@@ -138,7 +138,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -305,9 +305,9 @@ fn ontop_self_left_join_collapses_with_extra_core_scan() {
     assert_eq!(b.core.len(), 2, "kept TABLE1 scan + the inert TABLE3 scan");
     assert!(
         b.core.iter().any(|s| s.alias == 0)
-            && b.core
-                .iter()
-                .any(|s| matches!(&s.source, LogicalSource::Table(t) if t == "TABLE3")),
+            && b.core.iter().any(
+                |s| matches!(s.source.logical(), Some(LogicalSource::Table(t)) if t == "TABLE3")
+            ),
         "both the kept TABLE1 (alias 0) and TABLE3 survive"
     );
     assert!(

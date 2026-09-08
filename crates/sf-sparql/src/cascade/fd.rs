@@ -77,7 +77,7 @@ pub fn infer_functional_dependencies(b: &Branch, schema: &[TableSchema]) -> Fds 
     let mut fds = Fds::default();
     // Seed: every single-column unique key (PK or UNIQUE) determines its row.
     for scan in &b.core {
-        if let LogicalSource::Table(t) = &scan.source {
+        if let Some(LogicalSource::Table(t)) = scan.source.logical() {
             if let Some(ts) = schema.iter().find(|s| &s.name == t) {
                 for col in single_col_keys(ts) {
                     fds.add(ColRef::new(scan.alias, col), scan.alias);

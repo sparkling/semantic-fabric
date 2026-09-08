@@ -48,7 +48,7 @@ pub(super) fn lj_to_ij_fk_downgrade(b: &mut Branch, schema: &[TableSchema]) {
 /// referential integrity is declared in the schema.
 fn opt_is_fk_guaranteed(b: &Branch, opt_idx: usize, schema: &[TableSchema]) -> bool {
     let opt = &b.opts[opt_idx];
-    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+    let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
         return false;
     };
     let opt_alias = opt.scan.alias;

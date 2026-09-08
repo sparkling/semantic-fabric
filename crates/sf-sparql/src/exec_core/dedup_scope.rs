@@ -269,7 +269,7 @@ mod tests {
     fn leaf(alias: usize) -> Branch {
         let mut branch = Branch::single(Scan {
             alias,
-            source: LogicalSource::Table(format!("source_{alias}")),
+            source: (LogicalSource::Table(format!("source_{alias}"))).into(),
         });
         branch.bindings.insert(
             "v".to_owned(),
@@ -391,7 +391,7 @@ mod tests {
         let mut joined = wrap(leaf(1), 11);
         joined.core.push(Scan {
             alias: 3,
-            source: LogicalSource::Table("other".to_owned()),
+            source: (LogicalSource::Table("other".to_owned())).into(),
         });
         let error = lift_dedup_scopes(
             &[joined, wrap(leaf(2), 12)],

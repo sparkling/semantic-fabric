@@ -192,7 +192,7 @@ fn representative_plan_graph_is_deterministic_across_deep_clone() {
     };
     let scan = Scan {
         alias: 1,
-        source: source("things"),
+        source: (source("things")).into(),
     };
     let nested = empty_plan(PlanForm::Select {
         vars: vec!["inner".to_owned()],

@@ -50,7 +50,7 @@ fn order_by_spans_multiple_batches_correctly() {
     let n = 2 * TERM_GEN_BATCH_SIZE + 137;
     let mut branch = Branch::single(Scan {
         alias: 0,
-        source: LogicalSource::Table("t".to_owned()),
+        source: (LogicalSource::Table("t".to_owned())).into(),
     });
     branch.bindings.insert(
         "v".to_owned(),
@@ -118,7 +118,7 @@ fn finite_order_window_compacts_across_multiple_batches_without_changing_slice()
     let n = 3 * TERM_GEN_BATCH_SIZE + 137;
     let mut branch = Branch::single(Scan {
         alias: 0,
-        source: LogicalSource::Table("t".to_owned()),
+        source: (LogicalSource::Table("t".to_owned())).into(),
     });
     branch.bindings.insert(
         "v".to_owned(),

@@ -160,8 +160,8 @@ fn compile_with_origins(
         }
         let branch = &plan.branches[0];
         estimates.push(branch.core.first().and_then(|scan| {
-            match &scan.source {
-                LogicalSource::Table(name) => binding
+            match scan.source.logical() {
+                Some(LogicalSource::Table(name)) => binding
                     .schema()
                     .iter()
                     .find(|table| table.name == *name)
@@ -304,9 +304,9 @@ fn restore_base_scan<'a>(
     let [scan] = branch.core.as_mut_slice() else {
         return unsupported();
     };
-    match &scan.source {
-        LogicalSource::Table(name) if name == table => {}
-        LogicalSource::Query(sql) => {
+    match scan.source.logical() {
+        Some(LogicalSource::Table(name)) if name == table => {}
+        Some(LogicalSource::Query(sql)) => {
             let source = sf_sql::policy_projection::single_table_view_source(sql, plan.dialect)
                 .map_err(|_| Error::Unsupported("bounded join source projection".into()))?;
             // This helper checks every expression is the same-named qualified
@@ -320,7 +320,7 @@ fn restore_base_scan<'a>(
             if source != *table {
                 return unsupported();
             }
-            scan.source = map.source.clone();
+            scan.source = map.source.clone().into();
         }
         _ => return unsupported(),
     }

@@ -67,7 +67,7 @@ use sf_sql::{Column, ForeignKey, FunctionalDep, TableSchema};
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 

@@ -22,7 +22,7 @@ fn synth_arm(binds: &[(&str, &str, usize)], scan_alias: usize) -> IqNode {
         child: Box::new(IqNode::Extensional {
             scan: Scan {
                 alias: scan_alias,
-                source: LogicalSource::Table("t".to_owned()),
+                source: (LogicalSource::Table("t".to_owned())).into(),
             },
             bind: BTreeMap::new(),
         }),
@@ -131,7 +131,7 @@ fn disjoint_shared_var_prunes_the_arm() {
         child: Box::new(IqNode::Extensional {
             scan: Scan {
                 alias: 1,
-                source: LogicalSource::Table("t".to_owned()),
+                source: (LogicalSource::Table("t".to_owned())).into(),
             },
             bind: BTreeMap::new(),
         }),

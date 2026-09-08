@@ -14,6 +14,39 @@ use sf_sql::Dialect;
 
 const REACHES: &str = "http://ex/reaches";
 
+#[test]
+#[ignore = "known ADR-0049 RDF-key collation defect; required explicit release check remains failing"]
+fn path_keys_do_not_inherit_case_insensitive_source_collation() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE edge(parent TEXT COLLATE NOCASE, child TEXT COLLATE NOCASE); INSERT INTO edge VALUES ('a','B'),('b','c'),('A','B');").unwrap();
+    for operator in ["+", "*", "?", "|<http://ex/reaches>"] {
+        let query = format!("SELECT ?s ?o WHERE {{ ?s (<{REACHES}>{operator}) ?o }}");
+        let plan = parse_and_translate(&query, &edge_mapping(), Dialect::Sqlite).unwrap();
+        let rows = exec::select(&plan, &conn).unwrap().rows;
+        let actual: std::collections::BTreeSet<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row[0].as_ref().unwrap().to_string(),
+                    row[1].as_ref().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let mut expected: std::collections::BTreeSet<_> = [("a", "B"), ("b", "c"), ("A", "B")]
+            .map(|(s, o)| (format!("<http://ex/n/{s}>"), format!("<http://ex/n/{o}>")))
+            .into_iter()
+            .collect();
+        if matches!(operator, "*" | "?") {
+            expected.extend(
+                ["a", "A", "b", "B", "c"]
+                    .map(|n| (format!("<http://ex/n/{n}>"), format!("<http://ex/n/{n}>"))),
+            );
+        }
+        assert_eq!(actual, expected, "RDF key identity for {operator}");
+        assert_eq!(rows.len(), expected.len());
+    }
+}
+
 fn edge_mapping() -> Vec<TriplesMap> {
     vec![TriplesMap {
         id: "EDGE".to_owned(),

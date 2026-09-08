@@ -37,7 +37,7 @@ use sf_sql::{Column, TableSchema};
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -92,9 +92,9 @@ fn core_tables(b: &Branch) -> Vec<String> {
     let mut ts: Vec<String> = b
         .core
         .iter()
-        .filter_map(|s| match &s.source {
-            LogicalSource::Table(t) => Some(t.clone()),
-            LogicalSource::Query(_) => None,
+        .filter_map(|s| match s.source.logical() {
+            Some(LogicalSource::Table(t)) => Some(t.clone()),
+            _ => None,
         })
         .collect();
     ts.sort();

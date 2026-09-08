@@ -72,7 +72,7 @@ fn find_same_terms_eliminable(
     let is_projected = |var: &str| project.is_none_or(|p| p.iter().any(|v| v == var));
 
     for i in 0..b.core.len() {
-        let LogicalSource::Table(ti) = &b.core[i].source else {
+        let Some(LogicalSource::Table(ti)) = b.core[i].source.logical() else {
             continue;
         };
         let keep = b.core[i].alias;
@@ -81,7 +81,7 @@ fn find_same_terms_eliminable(
             if i == j {
                 continue;
             }
-            let LogicalSource::Table(tj) = &b.core[j].source else {
+            let Some(LogicalSource::Table(tj)) = b.core[j].source.logical() else {
                 continue;
             };
             if ti != tj {

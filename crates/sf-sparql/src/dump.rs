@@ -73,7 +73,7 @@ fn class_atoms(tm: &TriplesMap, out: &mut Vec<Branch>) {
         for &gt in &targets {
             let mut b = Branch::single(Scan {
                 alias: CHILD,
-                source: tm.source.clone(),
+                source: (tm.source.clone()).into(),
             });
             b.bindings.insert(
                 VAR_S.to_owned(),
@@ -104,7 +104,7 @@ fn pom_branch(
 ) -> Option<Branch> {
     let mut b = Branch::single(Scan {
         alias: CHILD,
-        source: tm.source.clone(),
+        source: (tm.source.clone()).into(),
     });
     b.bindings.insert(
         VAR_S.to_owned(),
@@ -117,7 +117,7 @@ fn pom_branch(
             let parent = maps.iter().find(|m| m.id == r.parent_triples_map)?;
             b.core.push(Scan {
                 alias: PARENT,
-                source: parent.source.clone(),
+                source: (parent.source.clone()).into(),
             });
             for j in &r.joins {
                 b.where_conds.push(SqlCond::ColEq(

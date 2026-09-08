@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize) -> crate::iq::Scan {
     crate::iq::Scan {
         alias,
-        source: LogicalSource::Table("T1_AR3".to_owned()),
+        source: (LogicalSource::Table("T1_AR3".to_owned())).into(),
     }
 }
 

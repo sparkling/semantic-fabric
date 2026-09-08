@@ -46,7 +46,7 @@ impl SqlBackend for ReadyBackend {
 fn discarded_ready_rows_reach_a_pull_side_cooperative_checkpoint() {
     let mut branch = Branch::single(Scan {
         alias: 0,
-        source: LogicalSource::Table("t".to_owned()),
+        source: (LogicalSource::Table("t".to_owned())).into(),
     });
     branch.bindings.insert(
         "v".to_owned(),

@@ -754,7 +754,7 @@ impl<'a> Unfolder<'a> {
         let alias = self.alias();
         let mut branch = Branch::single(Scan {
             alias,
-            source: self.copy_source(&tm.source)?,
+            source: (self.copy_source(&tm.source)?).into(),
         });
 
         // Capture the ACTUAL target graph for generated blank-node identity. In
@@ -803,7 +803,7 @@ impl<'a> Unfolder<'a> {
                 let palias = self.alias();
                 branch.core.push(Scan {
                     alias: palias,
-                    source: self.copy_source(&parent.source)?,
+                    source: (self.copy_source(&parent.source)?).into(),
                 });
                 for j in &r.joins {
                     branch.where_conds.push(SqlCond::ColEq(
@@ -890,7 +890,7 @@ impl<'a> Unfolder<'a> {
             let alias = self.alias();
             let mut branch = Branch::single(Scan {
                 alias,
-                source: self.copy_source(&tm.source)?,
+                source: (self.copy_source(&tm.source)?).into(),
             });
             if let Some((var, gm)) = graph_binding {
                 if !bind_variable(&mut branch, var, gm, alias)? {

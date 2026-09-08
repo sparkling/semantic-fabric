@@ -475,7 +475,7 @@ fn find_composite_pk_self_join_in(
     schema: &SchemaMap,
 ) -> Option<(usize, usize, Vec<usize>)> {
     for i in 0..scans.len() {
-        let LogicalSource::Table(ti) = &scans[i].source else {
+        let Some(LogicalSource::Table(ti)) = scans[i].source.logical() else {
             continue;
         };
         let ai = scans[i].alias;
@@ -486,7 +486,7 @@ fn find_composite_pk_self_join_in(
             continue; // single-column handled by find_self_join_in
         }
         for scan_j in scans.iter().skip(i + 1) {
-            let LogicalSource::Table(tj) = &scan_j.source else {
+            let Some(LogicalSource::Table(tj)) = scan_j.source.logical() else {
                 continue;
             };
             if ti != tj {
@@ -582,7 +582,7 @@ fn lj_contradiction_elim(b: &mut Branch, schema: &SchemaMap) {
 /// constant on the same column (same physical cell, impossible value).
 fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &SchemaMap) -> bool {
     let opt = &b.opts[opt_idx];
-    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+    let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
         return false;
     };
     let opt_alias = opt.scan.alias;
@@ -656,7 +656,7 @@ fn find_self_left_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, 
             continue;
         }
         // The right side must be a single base-table scan.
-        let LogicalSource::Table(opt_table) = &opt.scan.source else {
+        let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
             continue;
         };
         // Exactly one shared-key compatibility condition, same column on both sides.
@@ -708,9 +708,9 @@ fn scan_table_in(scans: &[Scan], alias: usize) -> Option<String> {
     scans
         .iter()
         .find(|s| s.alias == alias)
-        .and_then(|s| match &s.source {
-            LogicalSource::Table(t) => Some(t.clone()),
-            LogicalSource::Query(_) => None,
+        .and_then(|s| match s.source.logical() {
+            Some(LogicalSource::Table(t)) => Some(t.clone()),
+            _ => None,
         })
 }
 
@@ -1003,7 +1003,7 @@ fn find_fd_self_left_join(b: &Branch, schema: &SchemaMap, opt_idx: usize) -> Opt
     } else {
         return None;
     };
-    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+    let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
         return None;
     };
     if scan_table(b, core_alias).as_deref() != Some(opt_table.as_str()) {
@@ -1045,8 +1045,8 @@ fn find_fd_self_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, us
     for i in 0..b.core.len() {
         for j in (i + 1)..b.core.len() {
             let (alias_i, alias_j) = (b.core[i].alias, b.core[j].alias);
-            let (LogicalSource::Table(tbl_i), LogicalSource::Table(tbl_j)) =
-                (&b.core[i].source, &b.core[j].source)
+            let (Some(LogicalSource::Table(tbl_i)), Some(LogicalSource::Table(tbl_j))) =
+                (b.core[i].source.logical(), b.core[j].source.logical())
             else {
                 continue;
             };
@@ -1225,7 +1225,7 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
     let projected = |var: &str| project.is_none_or(|p| p.iter().any(|v| v == var));
     if b.core.len() == 1 {
         let scan = &b.core[0];
-        let LogicalSource::Table(table) = &scan.source else {
+        let Some(LogicalSource::Table(table)) = scan.source.logical() else {
             return;
         };
         let Some(ts) = schema_map_get(schema, table.as_str()) else {
@@ -1290,7 +1290,7 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
         // (any two rows that agree on all projected variables must share the same PK on
         // every scan ⇒ they ARE the same row combination ⇒ no duplicates).
         let redundant_multi = b.core.iter().all(|scan| {
-            let LogicalSource::Table(table) = &scan.source else {
+            let Some(LogicalSource::Table(table)) = scan.source.logical() else {
                 return false;
             };
             let Some(ts) = schema_map_get(schema, table.as_str()) else {
@@ -1666,7 +1666,11 @@ struct PoolSourceAuthorityEntry {
 
 impl PoolSourceAuthority {
     pub(crate) fn capture(branch: &Branch) -> Self {
-        let core_count = branch.core.len();
+        let core_count = branch
+            .core
+            .iter()
+            .filter(|scan| scan.source.logical().is_some())
+            .count();
         let mut sources = Vec::new();
         for (position, (alias, source)) in branch.alias_sources().into_iter().enumerate() {
             if sources
@@ -1711,7 +1715,7 @@ fn pool_core_source<'a>(
             .core
             .iter()
             .find(|scan| scan.alias == alias)
-            .map(|scan| &scan.source)
+            .and_then(|scan| scan.source.logical())
     }
 }
 
@@ -1859,7 +1863,7 @@ fn scan_key_covered(
     schema: &SchemaMap,
     bindings: &std::collections::BTreeMap<String, TermDef>,
 ) -> bool {
-    let LogicalSource::Table(table) = &scan.source else {
+    let Some(LogicalSource::Table(table)) = scan.source.logical() else {
         return false;
     };
     let Some(ts) = schema_map_get(schema, table.as_str()) else {
@@ -1957,7 +1961,10 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
     // scans its OWN text for [`col_is_unquoted_alias`] below; a `Table` scan has
     // no such text (there is nothing to be an unquoted ALIAS of — a base-table
     // column reference is never itself an alias declaration).
-    let inner_sql = match &scan.source {
+    let Some(source) = scan.source.logical() else {
+        return;
+    };
+    let inner_sql = match source {
         LogicalSource::Table(_) => None,
         LogicalSource::Query(q) => Some(q.clone()),
     };
@@ -1966,7 +1973,7 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
         .map(|c| wrap_col_ref(&src_alias, c, inner_sql.as_deref(), dialect))
         .collect::<Vec<_>>()
         .join(", ");
-    let from = match &scan.source {
+    let from = match source {
         LogicalSource::Table(t) => format!("{} {src_alias}", dialect.quote_ident(t)),
         // A view (`rr:sqlQuery`) source is already a derived table; nest it
         // under the same local alias — PostgreSQL/MySQL require every
@@ -1974,7 +1981,7 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
         // one).
         LogicalSource::Query(q) => format!("({q}) {src_alias}"),
     };
-    scan.source = LogicalSource::Query(format!("SELECT DISTINCT {select_list} FROM {from}"));
+    scan.source = LogicalSource::Query(format!("SELECT DISTINCT {select_list} FROM {from}")).into();
 }
 
 /// Render one `<expr> AS <alias>` SELECT-list item for [`wrap_scan_distinct`].

@@ -19,7 +19,7 @@ use crate::{
 fn column_branch(alias: usize, table: &str, column: &str) -> Branch {
     let mut branch = Branch::single(Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     });
     branch.bindings.insert(
         "value".to_owned(),

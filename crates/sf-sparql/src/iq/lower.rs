@@ -617,19 +617,11 @@ fn lower_node(
     }
 }
 
-/// Convert every path-carrying branch (`b.path = Some(pc)`) into an ordinary
-/// scan-based branch (ADR-0033 join-onto-path composition): render the closure
-/// as a self-contained derived-table SQL string via
-/// [`crate::emit::path_as_derived_table_sql`] (a FRESH internal alias for the
-/// recursive CTE — never `pc.alias`) and push `Scan { alias: pc.alias, source:
-/// LogicalSource::Query(sql) }` onto `b.core`. The OUTER alias stays
-/// `pc.alias` — UNCHANGED — so every pre-existing binding/condition
-/// referencing `t{pc.alias}.sf_s` / `.sf_o` resolves against the derived
-/// table's identically-named output columns with ZERO cross-tree rewriting. A
-/// path-free branch passes through untouched. Catalog-blind
-/// (`ColumnCatalog::default()`) — LOWER has no live catalog yet, the same
-/// pre-existing limitation `lower_as_subplan` already carries for every other
-/// derived-table rendering at this stage (ADR-0033 risk 2).
+/// Convert every path branch into a typed scan (ADR-0033/0049 composition).
+/// Keep the outer `pc.alias` and canonical `sf_s`/`sf_o` outputs unchanged;
+/// allocate a separate internal CTE alias. Live emission receives the retained
+/// recipe and authoritative leaf metadata, rather than a catalog-blind SQL
+/// string frozen during LOWER. Path-free branches pass through untouched.
 ///
 /// `pub(crate)`: also called by [`crate::unfold`]'s own `GraphPattern::Join`
 /// arm, the flat-engine mirror of this file's `IqNode::InnerJoin` arm — flat
@@ -638,7 +630,7 @@ fn lower_node(
 /// on both engines; there is deliberately only one copy of it.
 pub(crate) fn convert_path_branches(
     branches: &mut [Branch],
-    dialect: sf_sql::Dialect,
+    _dialect: sf_sql::Dialect,
     next_alias: &mut usize,
 ) -> Result<()> {
     for b in branches.iter_mut() {
@@ -650,15 +642,12 @@ pub(crate) fn convert_path_branches(
         }
         let cte_alias = *next_alias;
         *next_alias += 1;
-        let sql = crate::emit::path_as_derived_table_sql(
-            &pc,
-            cte_alias,
-            dialect,
-            &crate::emit::ColumnCatalog::default(),
-        )?;
         b.core.push(Scan {
             alias: pc.alias,
-            source: sf_core::ir::LogicalSource::Query(sql),
+            source: crate::iq::ScanSource::Path {
+                closure: Box::new(pc),
+                cte_alias,
+            },
         });
     }
     Ok(())
@@ -2092,7 +2081,10 @@ pub(crate) fn pool_rendered(
         // output, so the SAME detection re-derives D1's own quoting decision one
         // layer in (W3C R2RMLTC0011a: a single-arm width mismatch pooled AFTER
         // D1 already folded one of the arm's columns to lowercase).
-        let inner_sql = match &scan.source {
+        let Some(source) = scan.source.logical() else {
+            return Ok(None);
+        };
+        let inner_sql = match source {
             LogicalSource::Table(_) => None,
             LogicalSource::Query(q) => Some(q.as_str()),
         };
@@ -2164,7 +2156,7 @@ pub(crate) fn pool_rendered(
                 _ => return Ok(None), // Coalesce/Concat/Agg/ComposedTriple — not this shape
             }
         }
-        let from_inner = match &scan.source {
+        let from_inner = match source {
             LogicalSource::Table(t) => format!("{} {local}", dialect.quote_ident(t)),
             LogicalSource::Query(q) => format!("({q}) {local}"),
         };
@@ -2231,7 +2223,7 @@ pub(crate) fn pool_rendered(
         }
         branch.core = vec![Scan {
             alias,
-            source: LogicalSource::Query(sql),
+            source: (LogicalSource::Query(sql)).into(),
         }];
         branch.where_conds.clear();
         branch.bindings = new_bindings;
@@ -3105,6 +3097,8 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
 /// derive it from the branch so the synthetic alias never collides with a base scan).
 fn branch_next_alias(b: &Branch) -> usize {
     let mut aliases: Vec<usize> = Vec::new();
+    aliases.extend(b.core.iter().map(|scan| scan.alias));
+    aliases.extend(b.opts.iter().map(|join| join.scan.alias));
     for (a, _) in b.alias_sources() {
         aliases.push(a);
     }
@@ -3399,16 +3393,16 @@ mod tests {
         let source_pointer = source.as_ptr() as usize;
         let left = Branch::single(Scan {
             alias: 1,
-            source: LogicalSource::Query(source),
+            source: (LogicalSource::Query(source)).into(),
         });
         let right = vec![
             Branch::single(Scan {
                 alias: 2,
-                source: LogicalSource::Table("right-first".to_owned()),
+                source: (LogicalSource::Table("right-first".to_owned())).into(),
             }),
             Branch::single(Scan {
                 alias: 3,
-                source: LogicalSource::Table("right-second".to_owned()),
+                source: (LogicalSource::Table("right-second".to_owned())).into(),
             }),
         ];
 
@@ -3427,7 +3421,7 @@ mod tests {
             "match multiplicity and no-match tail order are exact"
         );
         for (index, branch) in branches.iter().enumerate() {
-            let LogicalSource::Query(source) = &branch.core[0].source else {
+            let Some(LogicalSource::Query(source)) = branch.core[0].source.logical() else {
                 panic!("left source must remain the leading scan")
             };
             assert_eq!(
@@ -3585,7 +3579,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -3673,7 +3667,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -3730,7 +3724,7 @@ mod tests {
         let arm = |alias: usize| {
             let mut branch = Branch::single(Scan {
                 alias,
-                source: LogicalSource::Table(format!("t{alias}")),
+                source: (LogicalSource::Table(format!("t{alias}"))).into(),
             });
             for (var, column) in [("s", "id"), ("o", "value"), ("unused", "extra")] {
                 branch.bindings.insert(
@@ -3800,7 +3794,7 @@ mod tests {
         let arm = |alias: usize, extra_guard: bool| {
             let mut branch = Branch::single(Scan {
                 alias,
-                source: LogicalSource::Table(format!("t{alias}")),
+                source: (LogicalSource::Table(format!("t{alias}"))).into(),
             });
             branch.bindings.insert(
                 "s".to_owned(),
@@ -3848,7 +3842,7 @@ mod tests {
         let arm = |alias: usize| {
             let mut branch = Branch::single(Scan {
                 alias,
-                source: LogicalSource::Table(format!("t{alias}")),
+                source: (LogicalSource::Table(format!("t{alias}"))).into(),
             });
             for var in ["s", "o"] {
                 branch.bindings.insert(
@@ -3931,7 +3925,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -4027,7 +4021,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -4093,7 +4087,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -4165,7 +4159,7 @@ mod tests {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
                         alias,
-                        source: LogicalSource::Table("t".to_owned()),
+                        source: (LogicalSource::Table("t".to_owned())).into(),
                     },
                     bind: BTreeMap::new(),
                 }),
@@ -4349,7 +4343,7 @@ mod tests {
             let mut branch = Branch::empty();
             branch.core.push(Scan {
                 alias,
-                source: LogicalSource::Table(format!("t{alias}")),
+                source: (LogicalSource::Table(format!("t{alias}"))).into(),
             });
             branch.bindings.insert(
                 "s".to_owned(),
@@ -4373,7 +4367,7 @@ mod tests {
     fn rendered_pooling_rewrites_owned_arm_and_preserves_metadata() {
         let mut arm = Branch::single(Scan {
             alias: 7,
-            source: LogicalSource::Table("source".to_owned()),
+            source: (LogicalSource::Table("source".to_owned())).into(),
         });
         arm.bindings.insert(
             "s".to_owned(),
@@ -4407,7 +4401,7 @@ mod tests {
         let rewritten = &pooled[0];
 
         assert_eq!(rewritten.core.len(), 1);
-        let LogicalSource::Query(sql) = &rewritten.core[0].source else {
+        let Some(LogicalSource::Query(sql)) = rewritten.core[0].source.logical() else {
             panic!("rendered pooling must wrap the source in a query")
         };
         assert!(sql.contains("SELECT sfs7.\"id\" AS rv0 FROM \"source\" sfs7"));

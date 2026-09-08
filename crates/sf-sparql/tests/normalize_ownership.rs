@@ -42,7 +42,7 @@ fn data_arm(source: String) -> (IqNode, usize) {
         IqNode::Extensional {
             scan: Scan {
                 alias: 17,
-                source: LogicalSource::Query(source),
+                source: (LogicalSource::Query(source)).into(),
             },
             bind: BTreeMap::new(),
         },
@@ -52,10 +52,11 @@ fn data_arm(source: String) -> (IqNode, usize) {
 
 fn query_source_parts(node: &IqNode) -> (&str, usize) {
     let IqNode::Extensional {
-        scan: Scan {
-            source: LogicalSource::Query(source),
-            ..
-        },
+        scan:
+            Scan {
+                source: sf_sparql::iq::ScanSource::Logical(LogicalSource::Query(source)),
+                ..
+            },
         ..
     } = node
     else {
@@ -68,7 +69,7 @@ fn scan_leaf(alias: usize, source: &str) -> IqNode {
     IqNode::Extensional {
         scan: Scan {
             alias,
-            source: LogicalSource::Table(source.to_owned()),
+            source: (LogicalSource::Table(source.to_owned())).into(),
         },
         bind: BTreeMap::new(),
     }
@@ -76,10 +77,11 @@ fn scan_leaf(alias: usize, source: &str) -> IqNode {
 
 fn scan_parts(node: &IqNode) -> (usize, &str, usize) {
     let IqNode::Extensional {
-        scan: Scan {
-            alias,
-            source: LogicalSource::Table(source),
-        },
+        scan:
+            Scan {
+                alias,
+                source: sf_sparql::iq::ScanSource::Logical(LogicalSource::Table(source)),
+            },
         ..
     } = node
     else {

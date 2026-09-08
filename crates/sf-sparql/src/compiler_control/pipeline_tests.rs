@@ -26,7 +26,7 @@ fn budget(max_compiler_work: u64) -> QueryBudget {
 fn branch(alias: usize) -> Branch {
     Branch::single(Scan {
         alias,
-        source: LogicalSource::Table(format!("source_{alias}")),
+        source: (LogicalSource::Table(format!("source_{alias}"))).into(),
     })
 }
 
@@ -98,7 +98,7 @@ fn extensional_arm(alias: usize) -> IqNode {
     IqNode::Extensional {
         scan: Scan {
             alias,
-            source: LogicalSource::Table(format!("source_{alias}")),
+            source: (LogicalSource::Table(format!("source_{alias}"))).into(),
         },
         bind: BTreeMap::new(),
     }

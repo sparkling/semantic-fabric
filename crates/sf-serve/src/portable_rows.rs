@@ -139,7 +139,10 @@ impl PortableRowPolicy {
         dialect: Dialect,
         scan: &mut Scan,
     ) -> sf_sparql::Result<Vec<SqlCond>> {
-        let table = match &scan.source {
+        let sf_sparql::iq::ScanSource::Logical(logical) = &mut scan.source else {
+            return Err(denied());
+        };
+        let table = match &*logical {
             LogicalSource::Table(table) => table.clone(),
             LogicalSource::Query(sql) => {
                 sf_sql::policy_projection::single_table_view_source(sql, dialect)
@@ -154,7 +157,7 @@ impl PortableRowPolicy {
         if matching.is_empty() {
             return Err(denied());
         }
-        if let LogicalSource::Query(sql) = &mut scan.source {
+        if let LogicalSource::Query(sql) = logical {
             let columns: Vec<_> = matching.iter().map(|rule| rule.column.as_ref()).collect();
             *sql =
                 sf_sql::policy_projection::expose_single_table_view_columns(sql, dialect, &columns)

@@ -19,7 +19,10 @@ fn bind_column(branch: &mut Branch, variable: &str, alias: usize, column: &str) 
 }
 
 fn core_branch(alias: usize, source: LogicalSource) -> Branch {
-    let mut branch = Branch::single(Scan { alias, source });
+    let mut branch = Branch::single(Scan {
+        alias,
+        source: source.into(),
+    });
     bind_column(&mut branch, "value", alias, "value");
     branch
 }
@@ -27,7 +30,10 @@ fn core_branch(alias: usize, source: LogicalSource) -> Branch {
 fn optional_branch(alias: usize, source: LogicalSource) -> Branch {
     let mut branch = Branch::empty();
     branch.opts.push(OptJoin {
-        scan: Scan { alias, source },
+        scan: Scan {
+            alias,
+            source: source.into(),
+        },
         on: Vec::new(),
         extra: Vec::new(),
     });
@@ -38,7 +44,10 @@ fn optional_branch(alias: usize, source: LogicalSource) -> Branch {
 fn condition_branch(alias: usize, source: LogicalSource) -> Branch {
     let mut branch = Branch::empty();
     branch.where_conds.push(SqlCond::Exists {
-        scans: vec![Scan { alias, source }],
+        scans: vec![Scan {
+            alias,
+            source: source.into(),
+        }],
         conds: Vec::new(),
     });
     bind_column(&mut branch, "value", alias, "value");
@@ -109,7 +118,7 @@ fn captured_sources_keep_alias_first_match_and_non_core_lookup_semantics() {
     prioritized.opts.push(OptJoin {
         scan: Scan {
             alias: 0,
-            source: LogicalSource::Table("later-optional".to_owned()),
+            source: (LogicalSource::Table("later-optional".to_owned())).into(),
         },
         on: Vec::new(),
         extra: Vec::new(),
@@ -117,7 +126,7 @@ fn captured_sources_keep_alias_first_match_and_non_core_lookup_semantics() {
     prioritized.where_conds.push(SqlCond::NotExists {
         scans: vec![Scan {
             alias: 0,
-            source: LogicalSource::Query("later-condition".to_owned()),
+            source: (LogicalSource::Query("later-condition".to_owned())).into(),
         }],
         conds: Vec::new(),
     });
@@ -207,9 +216,9 @@ fn pre_d1_authority_ignores_generated_wrapper_text_and_reads_current_bindings() 
     force_distinct_for_dup_safety(&mut branches, &[], Dialect::Postgres);
     let wrappers = branches
         .iter()
-        .map(|branch| match &branch.core[0].source {
-            LogicalSource::Query(query) => query,
-            LogicalSource::Table(table) => panic!("D1 did not wrap {table}"),
+        .map(|branch| match branch.core[0].source.logical() {
+            Some(LogicalSource::Query(query)) => query,
+            other => panic!("D1 did not wrap {other:?}"),
         })
         .collect::<Vec<_>>();
     assert_ne!(

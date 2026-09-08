@@ -62,7 +62,7 @@ use std::collections::BTreeMap;
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -290,7 +290,7 @@ fn self_join_elim_secondary_unique_key_col3() {
         "self-join on secondary UNIQUE key col3 must collapse to one table6 scan"
     );
     assert!(
-        matches!(&b.core[0].source, LogicalSource::Table(t) if t == "table6"),
+        matches!(b.core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "table6"),
         "table6 is the surviving scan"
     );
     assert_eq!(

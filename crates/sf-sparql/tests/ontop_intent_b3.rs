@@ -59,7 +59,7 @@ use sf_sql::{Column, ForeignKey, FunctionalDep, TableSchema};
 fn scan(alias: usize, table: &str) -> Scan {
     Scan {
         alias,
-        source: LogicalSource::Table(table.to_owned()),
+        source: (LogicalSource::Table(table.to_owned())).into(),
     }
 }
 
@@ -151,7 +151,7 @@ fn fd_seeding_pk_enables_fk_pk_elimination() {
     );
     // The surviving scan must be the child (emp), alias 0.
     assert!(
-        matches!(&out[0].core[0].source, LogicalSource::Table(t) if t == "emp"),
+        matches!(out[0].core[0].source.logical(), Some(LogicalSource::Table(t)) if t == "emp"),
         "surviving scan must be emp (the child)"
     );
 }

@@ -131,7 +131,12 @@ pub(super) fn visit_scan<'a>(
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
     let Scan { alias: _, source } = scan;
-    walker.push(depth, Work::LogicalSource(source))
+    match source {
+        crate::iq::ScanSource::Logical(source) => walker.push(depth, Work::LogicalSource(source)),
+        crate::iq::ScanSource::Path { closure, .. } => {
+            walker.push(depth, Work::PathClosure(closure))
+        }
+    }
 }
 
 pub(super) fn visit_opt_join<'a>(

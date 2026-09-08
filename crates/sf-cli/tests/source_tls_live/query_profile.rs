@@ -135,6 +135,30 @@ fn rows(address: SocketAddr, fixture: &Fixture, query: &str) -> Vec<serde_json::
         .clone()
 }
 
+fn assert_joined_paths(address: SocketAddr, fixture: &Fixture) {
+    // Authored regular column references fold to the live native names. A path
+    // joined to an ordinary pattern must not freeze quoted SRC/DST before probe.
+    let joined = rows(
+        address,
+        fixture,
+        &format!("SELECT DISTINCT ?s ?o WHERE {{ ?s <{EDGE}>+ ?o . ?s <{EDGE}>+ ?direct }}"),
+    );
+    let actual: BTreeSet<_> = joined
+        .iter()
+        .map(|row| {
+            (
+                row["s"]["value"].as_str().unwrap().to_owned(),
+                row["o"]["value"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expected: BTreeSet<_> = (0..4)
+        .flat_map(|s| (0..4).map(move |o| (iri(s), iri(o))))
+        .collect();
+    assert_eq!(actual, expected, "joined path uses live native columns");
+    assert_eq!(joined.len(), 16);
+}
+
 fn assert_paths(address: SocketAddr, fixture: &Fixture, database: &Database) {
     for operator in ['+', '*'] {
         let query = format!("SELECT ?s ?o WHERE {{ ?s <{EDGE}>{operator} ?o }}");
@@ -194,9 +218,17 @@ fn native_describe_and_recursive_paths_are_exact() {
         let database = Database::start(&fixture, postgres);
         sql(&database, "ALTER TABLE items ADD COLUMN id INTEGER PRIMARY KEY DEFAULT 0; ALTER TABLE items ADD COLUMN src VARCHAR(32); ALTER TABLE items ADD COLUMN dst VARCHAR(32)");
         seed(&database, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 0), (0, 1)]);
-        let (_server, address) = start(&fixture, &database);
+        let (server, address) = start(&fixture, &database);
         assert_describe(address, &fixture, &database);
         assert_paths(address, &fixture, &database);
+        drop(server);
+        seed(&database, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 0), (0, 1)]);
+        fixture.write(
+            "first.ttl",
+            &MAPPING.replace("{src}", "{SRC}").replace("{dst}", "{DST}"),
+        );
+        let (_server, address) = start(&fixture, &database);
+        assert_joined_paths(address, &fixture);
         database.assert_encrypted_sessions();
         eprintln!(
             "exact native DESCRIBE/path profile: {}",
