@@ -17,8 +17,8 @@ implements: []
 ## Current wrapper boundary (2026-09-08)
 
 D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned
-input scan, ordered raw-column/template recipes, parameter-free NULL guards and
-a DISTINCT flag. SQL is emitted only after original Table/Query metadata is
+input scan, ordered raw-column/template recipes, NULL or bound native-equality
+guards and a DISTINCT flag. SQL is emitted only after original Table/Query metadata is
 available. Generated wrappers are not authored queries or catalog/constraint
 authority. Stable quoted output labels carry resolved native columns through
 nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
@@ -26,9 +26,11 @@ nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
 Raw columns retain native descriptors. Live-proven text template operands now
 normalize to decoder text; transparent non-text operands retain their descriptors
 on PostgreSQL/SQLite. Template encoding and parameter isolation remain.
-Only same-named raw-column DISTINCT over one table may expose portable-policy
-keys or be restored by the existing bounded-join proof; computed/nested wrappers
-gain no such authority. Shared RDF-term dedup follows relation aliases, not
+Only guard-free same-named raw-column DISTINCT over one table may receive portable
+policy predicates or be restored by the existing bounded-join proof. Authorization
+adds same-input native-equality guards before dedup, without widening RDF outputs
+or keys; nonempty guards revoke restore authority. Computed/nested wrappers gain
+no such authority. Shared RDF-term dedup follows relation aliases, not
 authored-source authority, and remains source-sized/fail-closed on serving paths.
 
 Required owned TLS public SELECT now resolves mapping SRC/DST against native
@@ -64,8 +66,18 @@ cover folded columns, SELECT/DISTINCT/COUNT, fixed values and correlations. The
 rejected universal SubPlan experiment remains unintegrated. These proofs cover
 fixed injective templates with decoder-proven text/CHAR keys, not universal term
 identity: base-resolved column IRIs and general mixed/natural scalar keys remain
-open, as do ordinary policy-consumer set identity, synthetic row identity, total
-source-work controls and exact-release qualification. No broad admission is promoted.
+open, as do synthetic row identity, total source-work controls and exact-release
+qualification. No broad admission is promoted.
+
+**Ordinary policy correction (2026-09-08):** native row equality runs inside the
+existing D1 projection before raw representative selection. The newly enabled
+policy window requires live text/CHAR proof for every projected key; unknown or
+mixed keys retain raw D1. Public SELECT/COUNT, projection bags, correlations and
+policy-before-representative checks pass, as do owned PostgreSQL16.15/MySQL8.4.11
+text/CHAR policy queries. Missing guard columns and wrong operators/aliases reject
+before cursors; parameters follow SQL order through nested/conditional projections.
+A virtual-column fixture verifies native signed-zero values and catches removal
+of the all-key gate. Raw descriptors remain intact; general key identity is not closed.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

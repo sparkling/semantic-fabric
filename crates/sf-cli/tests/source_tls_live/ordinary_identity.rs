@@ -103,3 +103,82 @@ pub(super) fn assert_references(fixture: &Fixture, database: &Database, postgres
     drop(server);
     fixture.write("first.ttl", MAPPING);
 }
+
+pub(super) fn assert_policies(fixture: &Fixture, database: &Database, postgres: bool) {
+    let registry = serde_json::json!({"schemaVersion":2,"subjects":[{
+        "subjectRef":"identity-reader", "credentialEnv":"SF_TLS_BEARER",
+        "portableRows":[{"sourceIndex":0,"table":"items","column":"value","valueEnv":"SF_POLICY_VALUE"}]
+    }]});
+    if postgres {
+        sql(
+            database,
+            "ALTER TABLE items ALTER COLUMN value TYPE VARCHAR(32) COLLATE path_ci",
+        );
+    } else {
+        sql(database, "ALTER TABLE items MODIFY value VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    }
+    sql(database, "DELETE FROM items; INSERT INTO items(id,src,dst,value) VALUES (0,'a','B','other'),(1,'a','B','same'),(2,'A','B','same'),(3,'b','c','same'),(4,'s','a ','same'),(5,'a','z','same'),(6,'a','B','SAME'),(7,'denied','secret','other')");
+    let open = || {
+        let (mut command, address) = command_with_admission(
+            fixture,
+            database,
+            None,
+            &["--auth-subjects-env", "SF_POLICY_SUBJECTS"],
+        );
+        command
+            .env("SF_POLICY_SUBJECTS", registry.to_string())
+            .env("SF_POLICY_VALUE", "same");
+        start_command(fixture, command, address)
+    };
+    let (server, address) = open();
+    assert_ordinary(address, fixture);
+    let projected = rows(
+        address,
+        fixture,
+        &format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    assert_eq!(projected.len(), 5);
+    assert_eq!(
+        projected
+            .iter()
+            .filter(|r| r["o"]["value"] == "http://example.test/n/B")
+            .count(),
+        2
+    );
+    database.assert_encrypted_sessions();
+    drop(server);
+    sql(database, "DELETE FROM items");
+    if postgres {
+        sql(database, "ALTER TABLE items ALTER COLUMN src TYPE CHAR(4); ALTER TABLE items ALTER COLUMN dst TYPE CHAR(4)");
+    } else {
+        sql(database, "ALTER TABLE items MODIFY src CHAR(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, MODIFY dst CHAR(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    }
+    sql(database, "INSERT INTO items(id,src,dst,value) VALUES (0,'a','b','other'),(1,'a','b','same'),(2,'a ','b ','SAME'),(3,'A','b','same'),(4,'x','z','other')");
+    let (server, address) = open();
+    let query = format!("SELECT ?s ?o WHERE {{ ?s <{EDGE}> ?o }}");
+    let answer = rows(address, fixture, &query);
+    let suffix = if postgres { "%20%20%20" } else { "" };
+    let mut subjects = answer
+        .iter()
+        .map(|r| {
+            assert_eq!(r["o"]["value"], format!("http://example.test/n/b{suffix}"));
+            r["s"]["value"].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    subjects.sort();
+    assert_eq!(
+        subjects,
+        vec![
+            format!("http://example.test/n/A{suffix}"),
+            format!("http://example.test/n/a{suffix}")
+        ]
+    );
+    let count = rows(
+        address,
+        fixture,
+        &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    assert_eq!(count[0]["n"]["value"], "2");
+    database.assert_encrypted_sessions();
+    drop(server);
+}

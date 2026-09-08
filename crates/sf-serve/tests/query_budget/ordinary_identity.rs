@@ -1,5 +1,7 @@
 //! Ordinary public queries use RDF identity, not source SQL collation.
 use super::*;
+#[path = "policy_identity.rs"]
+mod policy_identity;
 
 const MAP: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .

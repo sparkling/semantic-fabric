@@ -75,7 +75,7 @@ impl ScanSource {
     }
 
     /// The sealed same-named raw-column D1 shape, not arbitrary projections.
-    /// This proof permits existing policy-column exposure / bounded-join restore;
+    /// This proof permits policy-guard insertion / guard-free bounded-join restore;
     /// it does not confer general optimizer or source metadata authority.
     pub fn distinct_table(&self) -> Option<&str> {
         match self {

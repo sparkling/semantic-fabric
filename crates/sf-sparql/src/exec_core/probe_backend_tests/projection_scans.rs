@@ -169,6 +169,82 @@ fn reference_projection() -> Scan {
     }
 }
 
+fn policy_projection() -> Scan {
+    let mut scan = projected(LogicalSource::Table("items".into()));
+    let ScanSource::Projection { input, .. } = &mut scan.source else {
+        unreachable!()
+    };
+    let ScanSource::Projection { input, guards, .. } = &mut input.source else {
+        unreachable!()
+    };
+    guards.push(SqlCond::NativeCmp(
+        ColRef::new(input.alias, "TENANT"),
+        crate::iq::CmpOp::Eq,
+        "policy-'value".into(),
+    ));
+    scan
+}
+
+#[test]
+fn policy_guards_validate_original_columns_before_open_and_do_not_widen_outputs() {
+    for position in 0..4 {
+        for valid in [false, true] {
+            let names = if valid {
+                vec!["key".into(), "tenant".into()]
+            } else {
+                vec!["key".into()]
+            };
+            let mut backend = backend_with(vec![Ok(names)]);
+            let result = run_select(&plan(policy_projection(), position), &mut backend);
+            assert_eq!(result.is_ok(), valid);
+            assert_eq!(backend.opens, usize::from(valid));
+            assert_eq!(
+                backend.probes,
+                vec![Dialect::Postgres.probe_sql(&LogicalSource::Table("items".into()))]
+            );
+            if valid {
+                assert!(backend.sql[0].contains("t5.\"tenant\" = $1"));
+                assert!(!backend.sql[0].contains("AS \"TENANT\""));
+                assert!(!backend.sql[0].contains("policy-'value"));
+            }
+        }
+    }
+}
+
+#[test]
+fn policy_guards_revoke_table_restore_and_reject_other_operators_or_aliases() {
+    for guard in [
+        SqlCond::NativeCmp(
+            ColRef::new(99, "TENANT"),
+            crate::iq::CmpOp::Eq,
+            "private".into(),
+        ),
+        SqlCond::NativeCmp(
+            ColRef::new(5, "TENANT"),
+            crate::iq::CmpOp::Ne,
+            "private".into(),
+        ),
+        SqlCond::Cmp(
+            ColRef::new(5, "TENANT"),
+            crate::iq::CmpOp::Eq,
+            "private".into(),
+        ),
+    ] {
+        let mut scan = policy_projection();
+        let ScanSource::Projection { input, .. } = &mut scan.source else {
+            unreachable!()
+        };
+        assert!(input.source.distinct_table().is_none());
+        let ScanSource::Projection { guards, .. } = &mut input.source else {
+            unreachable!()
+        };
+        guards[0] = guard;
+        let mut backend = backend_with(vec![Ok(vec!["key".into(), "tenant".into()])]);
+        assert!(run_select(&plan(scan, 0), &mut backend).is_err());
+        assert_eq!(backend.opens, 0);
+    }
+}
+
 #[test]
 fn ref_atom_probes_original_leaves_in_every_scan_position_before_open() {
     for position in 0..4 {
@@ -202,9 +278,14 @@ fn ref_atom_probes_original_leaves_in_every_scan_position_before_open() {
 
 #[test]
 fn ref_atom_parameters_follow_core_optional_and_existential_sql_order() {
+    assert_parameter_order(reference_projection);
+    assert_parameter_order(policy_projection);
+}
+
+fn assert_parameter_order(project: fn() -> Scan) {
     for position in 0..4 {
         for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::MySql] {
-            let mut p = plan(reference_projection(), position);
+            let mut p = plan(project(), position);
             let query_column = if position < 2 {
                 ColRef::new(7, "value")
             } else {

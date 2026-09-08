@@ -40,7 +40,15 @@ fn seed(database: &Database, edges: &[(u32, u32)]) {
 }
 
 fn start(fixture: &Fixture, database: &Database) -> (Server, SocketAddr) {
-    let (mut command, address) = command(fixture, database, None);
+    let (command, address) = command(fixture, database, None);
+    start_command(fixture, command, address)
+}
+
+fn start_command(
+    fixture: &Fixture,
+    mut command: Command,
+    address: SocketAddr,
+) -> (Server, SocketAddr) {
     command.args([
         "--pg-pool-size",
         "1",
@@ -461,6 +469,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         drop(server);
         drop(assert_collated_paths(&fixture, &database, postgres));
         ordinary_identity::assert_references(&fixture, &database, postgres);
+        ordinary_identity::assert_policies(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
         let _server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();

@@ -170,29 +170,18 @@ impl PortableRowPolicy {
             *sql =
                 sf_sql::policy_projection::expose_single_table_view_columns(sql, dialect, &columns)
                     .map_err(|_| denied())?;
-        } else if let ScanSource::Projection {
-            columns,
-            native_keys,
-            ..
-        } = &mut scan.source
-        {
-            // Only the sealed same-named raw-column DISTINCT shape reached here.
-            // Expose policy keys without embedding policy values in generated SQL.
-            for rule in &matching {
-                let existing = columns.iter().any(|(name, _)| name == &rule.column);
-                if !native_keys.iter().any(|(name, _)| name == &rule.column) {
-                    native_keys.push((rule.column.clone(), existing));
-                }
-                if !columns.iter().any(|(name, _)| name == &rule.column) {
-                    columns.push((
-                        rule.column.clone(),
-                        sf_core::ir::TermMap::Column(
-                            rule.column.clone(),
-                            sf_core::ir::TermSpec::plain_literal(),
-                        ),
-                    ));
-                }
-            }
+        } else if let ScanSource::Projection { input, guards, .. } = &mut scan.source {
+            // The existing same-named base-table D1 proof authorized this edit.
+            // Filter raw rows BEFORE RDF dedup; policy-only columns are not RDF
+            // keys. Nonempty guards deliberately revoke table-restore authority.
+            guards.extend(matching.into_iter().map(|rule| {
+                SqlCond::NativeCmp(
+                    ColRef::new(input.alias, rule.column.clone()),
+                    CmpOp::Eq,
+                    rule.value.to_string(),
+                )
+            }));
+            return Ok(Vec::new());
         }
         Ok(matching
             .into_iter()

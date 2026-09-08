@@ -1,6 +1,6 @@
 //! Rendering of typed scan relations. No generated SQL is a live source authority.
 use super::*;
-use crate::iq::{Scan, ScanSource};
+use crate::iq::{CmpOp, Scan, ScanSource};
 
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
     match &scan.source {
@@ -110,12 +110,21 @@ fn projection_sql(
     if items.is_empty() {
         items.push("1 AS __sf_dummy".into());
     }
-    // Native joins/policies retain their original raw relation until an atom-level
-    // equivalence proof can preserve every consumer (including OPTIONAL/EXISTS).
+    // Residual native consumers retain their raw relation. Policies inside this
+    // projection already filtered raw rows; their newly enabled window needs
+    // decoder proof for EVERY RDF key, never SQL numeric equality for +/-0.
+    let policy_guarded = guards.iter().any(|g| matches!(g, SqlCond::NativeCmp(..)));
     let window = distinct
         && native_keys.is_empty()
         && !columns.is_empty()
-        && !actuals[&input.alias].text_columns.is_empty();
+        && if policy_guarded {
+            columns.iter().all(|(_, term)| {
+                matches!(term, TermMap::Column(raw, _) if path_comparison::column_text(
+                    &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
+            })
+        } else {
+            !actuals[&input.alias].text_columns.is_empty()
+        };
     let mut rank = "__sf_rank".to_owned();
     while columns
         .iter()
@@ -187,6 +196,9 @@ fn projection_sql(
             SqlCond::IsNotNull(c) if c.alias == input.alias => {
                 Ok(format!("{} IS NOT NULL", column(&c.column)))
             }
+            SqlCond::NativeCmp(c, CmpOp::Eq, _) if c.alias == input.alias => {
+                render_cond(guard, dialect, catalog, &actuals, params, pidx)
+            }
             _ => Err(Error::Unsupported("projection guard shape".into())),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -249,7 +261,9 @@ pub(super) fn validate_projection(
     }
     for guard in guards {
         match guard {
-            SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == input.alias => {
+            SqlCond::IsNull(c) | SqlCond::IsNotNull(c) | SqlCond::NativeCmp(c, CmpOp::Eq, _)
+                if c.alias == input.alias =>
+            {
                 validate_input_column(input, &c.column, dialect, catalog)?
             }
             _ => return Err(Error::Unsupported("projection guard shape".into())),

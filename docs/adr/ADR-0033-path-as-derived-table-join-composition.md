@@ -48,7 +48,8 @@ Required duplicate/connectivity, mixed-width and authenticated correlation tests
 pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary non-native-consumer
 text comparisons/dedup and live-proven text/CHAR template-based native Ref atoms
 now have public/native evidence (ADR-0034); unknown Ref keys retain prior D1.
-General term keys and ordinary policy-consumer set identity remain open.
+Ordinary text/CHAR policy consumers now filter before D1 dedup with public/native
+evidence; general term keys remain open.
 ADR-0034 retains D1/D2
 wrappers as typed projections until emission; only original sources are probed,
 closing ordinary native folding without exposing table/constraint authority.

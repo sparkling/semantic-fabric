@@ -177,16 +177,22 @@ The profile authorizes direct base-table scans and the compiler's validated
 single-table projection view. Every base table reached by a plan must have a
 matching rule for that source. The AST projection admits only one aliased table,
 column-to-same-name projections, and no join, filter, grouping, ordering, limit,
-CTE, table-function or other authored SQL feature; a policy column omitted by
-the compiler is added to that inner projection before the outer bound predicate.
+CTE, table-function or other authored SQL feature. Authored simple views retain
+policy-column exposure before the outer bound predicate. For a typed compiler D1
+projection, bound native-equality guards now filter the original table before
+deduplication; policy-only columns never widen its RDF key. Guarded projections
+lose table-restore authority, and computed/nested shapes gain no policy authority.
 Recursive property-path sources and every unproved source-query shape return a
 redacted `403` before pool acquisition. Verified Direct Mapping generation is
 also excluded from this authored-mapping profile.
 
 Required Rust evidence covers SQLite public SELECT/ASK/CONSTRUCT isolation for
 two callers, two-source SQLite UNION isolation, fail-before-source-I/O denial,
-and SQLite/PostgreSQL/MySQL dialect emission with bound values. This does not
-claim live PostgreSQL/MySQL portable-policy qualification, general Boolean ABAC,
+and SQLite/PostgreSQL/MySQL dialect emission with bound values. Required owned
+PostgreSQL16.15/MySQL8.4.11 CLI checks now cover ordinary text/CHAR policy-filtered
+set identity, denied-row controls and projection bags. Newly enabled dedup needs
+live decoder proof for every key; mixed/natural identity remains open. These
+specific native checks do not qualify every portable-policy shape or general Boolean ABAC,
 ontology/sensitivity attributes, masking, policy installation, external identity
 issuance or policy-aware reload. The broader three-layer ADR remains incomplete.
 

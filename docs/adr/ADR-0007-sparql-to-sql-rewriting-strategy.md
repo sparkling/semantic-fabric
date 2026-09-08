@@ -69,6 +69,9 @@ before per-atom dedup when every key has live text/CHAR decoder proof; other
 families retain prior per-source D1. Policy values remain bound inside the relation.
 Their established OPTIONAL decomposition is retained. Raw output descriptors and
 blank-node graph scope survive; general term-key limits remain in ADR-0034.
+Ordinary D1 policy predicates now run as bound native guards before decoded
+representative selection, without adding policy-only columns to the RDF key.
+Every newly enabled policy key needs live text/CHAR proof; raw outputs stay native.
 
 ### Pipeline (`sf-sparql`)
 
