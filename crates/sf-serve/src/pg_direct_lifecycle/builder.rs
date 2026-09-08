@@ -23,7 +23,7 @@ const SINGLE_SOURCE_ID: usize = 0;
 #[derive(Clone)]
 pub(crate) struct PgDirectLifecycleSpec {
     pools: PgDirectPools,
-    ontology: SemanticOntology,
+    ontology: Arc<SemanticOntology>,
     base_iri: Arc<str>,
     operation_timeout: Duration,
 }
@@ -50,7 +50,7 @@ impl PgDirectLifecycleSpec {
             .map_err(|_| ReadinessCause::CapabilityDrift)?;
         Ok(Self {
             pools,
-            ontology,
+            ontology: Arc::new(ontology),
             base_iri: Arc::from(base_iri),
             operation_timeout,
         })
@@ -98,7 +98,12 @@ impl PgDirectLifecycleSpec {
         )
         .await
         .map_err(generation_cause)?;
-        finish_snapshot(built, &self.ontology, epoch)
+        let ontology = Arc::clone(&self.ontology);
+        crate::pg_generation::candidate_work::run(&budget, move || {
+            finish_snapshot(built, &ontology, epoch)
+        })
+        .await
+        .map_err(generation_cause)?
     }
 
     fn control_budget(&self) -> RequestBudget {

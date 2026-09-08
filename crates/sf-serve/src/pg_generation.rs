@@ -20,6 +20,7 @@ use crate::schema_observation::SourceSchemaObservationV1;
 use crate::semantic_admission::{MappingOrigin, SemanticAdmissionError, ValidatedMapping};
 use crate::telemetry::{self, Stage};
 
+pub(crate) mod candidate_work;
 mod context;
 mod error;
 mod execution;
@@ -350,39 +351,32 @@ async fn build_direct_candidate(
     let row_identity = sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey;
     let base_iri_owned = base_iri.to_owned();
     let generation_span = telemetry::stage_span(Stage::GenerationBuild);
-    let generated = match budget
-        .run(tokio::task::spawn_blocking(move || {
-            generation_span.in_scope(|| {
-                let mapping = sf_mapping::direct_mapping_for_source_with_row_identity(
-                    &tables,
-                    &base_iri_owned,
-                    source_id,
-                    row_identity,
-                );
-                (tables, mapping)
-            })
-        }))
-        .await
-    {
-        Err(error) => return Err(error.into()),
-        Ok(Err(_)) => return observed.reject(PgGenerationError::Internal).await,
+    let generated = candidate_work::run(budget, move || {
+        generation_span.in_scope(|| {
+            let mapping = sf_mapping::direct_mapping_for_source_with_row_identity(
+                &tables,
+                &base_iri_owned,
+                source_id,
+                row_identity,
+            )?;
+            let generation = Arc::new(PostgresDirectGeneration {
+                source_id,
+                base_iri: Arc::from(base_iri_owned),
+                row_identity,
+                mapping_digest: MappingDigest::from_mapping(&mapping),
+                identity,
+                session,
+                tables: tables.clone().into(),
+            });
+            Ok::<_, sf_core::Error>((tables, mapping, generation))
+        })
+    })
+    .await;
+    let (tables, mapping, generation) = match generated {
+        Err(error) => return observed.reject(error).await,
+        Ok(Err(error)) => return observed.reject(PgGenerationError::Mapping(error)).await,
         Ok(Ok(generated)) => generated,
     };
-    let (tables, mapping) = generated;
-    let mapping = match mapping {
-        Ok(mapping) => mapping,
-        Err(error) => return observed.reject(PgGenerationError::Mapping(error)).await,
-    };
-    let mapping_digest = MappingDigest::from_mapping(&mapping);
-    let generation = Arc::new(PostgresDirectGeneration {
-        source_id,
-        base_iri: Arc::from(base_iri),
-        row_identity,
-        mapping_digest,
-        identity,
-        session,
-        tables: tables.clone().into(),
-    });
     let (lease, observation) = observed.promote_candidate(Arc::clone(&generation)).await?;
     lease.finish_bounded(budget).await?;
     Ok(PostgresDirectCandidate {

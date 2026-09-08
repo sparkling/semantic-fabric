@@ -248,6 +248,7 @@ async fn run_coordinator<C>(
 where
     C: LifecycleControl,
 {
+    let control = Arc::new(control);
     let start = Instant::now() + policy.poll_interval;
     let mut ticks = tokio::time::interval_at(start, policy.poll_interval);
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -286,14 +287,19 @@ where
                 ..
             } => {}
             RuntimeReadiness::NotReady { .. } => {
-                let result = tokio::select! {
-                    biased;
-                    stopped = &mut stop => {
-                        return if stopped.is_ok() { WorkerExit::Planned } else { WorkerExit::Unexpected };
-                    }
-                    result = tokio::time::timeout(policy.operation_timeout, control.build(expected)) => {
-                        result.unwrap_or(Err(ReadinessCause::SourceUnavailable))
-                    }
+                let result = match build_once(
+                    Arc::clone(&control),
+                    expected,
+                    &runtime,
+                    &authority,
+                    policy,
+                    &mut stop,
+                )
+                .await
+                {
+                    Ok(Some(result)) => result,
+                    Ok(None) => continue,
+                    Err(exit) => return exit,
                 };
                 match result {
                     Ok((candidate, successor)) => {
@@ -307,6 +313,73 @@ where
                         if transition_failure(&runtime, &authority, expected, cause).is_err() {
                             return WorkerExit::Unexpected;
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A deadline revokes publication; it cannot stop a native blocking builder.
+/// Keep the task through actual completion before permitting another attempt.
+async fn build_once<C: LifecycleControl>(
+    control: Arc<C>,
+    expected: RuntimeReadiness,
+    runtime: &RuntimeManager,
+    authority: &RuntimeTransitionAuthority,
+    policy: PgDirectCoordinatorPolicy,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<Option<Result<(ValidatedRuntimeCandidate, C::Generation), ReadinessCause>>, WorkerExit>
+{
+    let deadline = Instant::now() + policy.operation_timeout;
+    let mut worker = tokio::spawn(async move { control.build(expected).await });
+    let result = tokio::select! {
+        biased;
+        stopped = &mut *stop => {
+            return Err(if worker.await.is_ok() && stopped.is_ok() {
+                WorkerExit::Planned
+            } else {
+                WorkerExit::Unexpected
+            });
+        }
+        result = tokio::time::timeout_at(deadline, &mut worker) => result,
+    };
+    match result {
+        Ok(Ok(result)) if Instant::now() < deadline => Ok(Some(result)),
+        Ok(Ok(_)) => {
+            transition_failure(
+                runtime,
+                authority,
+                expected,
+                ReadinessCause::SourceUnavailable,
+            )
+            .map_err(|_| WorkerExit::Unexpected)?;
+            Ok(None)
+        }
+        Ok(Err(_)) => Err(WorkerExit::Unexpected),
+        Err(_) => {
+            let fenced = transition_failure(
+                runtime,
+                authority,
+                expected,
+                ReadinessCause::SourceUnavailable,
+            );
+            // Neither a late success nor an ordinary error is a new observation.
+            // A late panic remains terminal, including during planned shutdown.
+            tokio::select! {
+                biased;
+                stopped = stop => {
+                    Err(if worker.await.is_ok() && stopped.is_ok() && fenced.is_ok() {
+                        WorkerExit::Planned
+                    } else {
+                        WorkerExit::Unexpected
+                    })
+                }
+                joined = &mut worker => {
+                    if joined.is_err() || fenced.is_err() {
+                        Err(WorkerExit::Unexpected)
+                    } else {
+                        Ok(None)
                     }
                 }
             }

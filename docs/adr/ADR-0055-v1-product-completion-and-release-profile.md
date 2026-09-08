@@ -32,6 +32,8 @@ definition of product completion and release work for v1. ADR-0038 remains an
 auditable record of the broader SOTA programme; its research and advanced-
 assurance work becomes a labelled post-1.0 backlog.
 
+**2026-09-08 Direct lifecycle prerequisite:** candidate timeouts now fence while retaining native work until completion, prohibit overlapping retries and reject late publication, including simultaneous completion/expiry. Panic is terminal; shutdown preserves ownership. Mapping/digest and semantic-validation stages run off the request executor. Focused native-worker and coordinator regressions cover this private prerequisite; public Direct Mapping admission and exact-backend qualification remain open. No hard CPU-preemption or bounded graceful-join claim is made.
+
 **Lineage update (2026-09-08):** ADR-0017 now has a public opt-in, compiler-proved
 constant mapping/source SELECT and CONSTRUCT profiles with per-solution PROV-O,
 native graph reification, pinned snapshot/logical-plan/policy identifiers and bounded

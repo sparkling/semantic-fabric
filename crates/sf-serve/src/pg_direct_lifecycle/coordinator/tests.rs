@@ -20,6 +20,7 @@ enum Event {
 enum Action {
     Succeed,
     Fail(ReadinessCause),
+    Panic,
 }
 
 struct ScriptedControl {
@@ -82,10 +83,14 @@ impl ScriptedControl {
         match self.actions.lock().await.recv().await {
             Some(Action::Succeed) => Ok(()),
             Some(Action::Fail(cause)) => Err(cause),
+            Some(Action::Panic) => panic!("candidate worker fault"),
             None => Err(ReadinessCause::SourceUnavailable),
         }
     }
 }
+
+#[path = "ownership_tests.rs"]
+mod ownership;
 
 impl LifecycleControl for Arc<ScriptedControl> {
     type Generation = u64;
