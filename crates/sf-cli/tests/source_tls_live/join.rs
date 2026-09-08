@@ -1,7 +1,7 @@
 //! Required encrypted mixed-driver join proof, both triple-pattern orders.
 use super::*;
-const JOIN: &str = "SELECT ?left ?right WHERE { ?left <http://example.test/left> ?key . ?right <http://example.test/right> ?key }";
-const REVERSED: &str = "SELECT ?left ?right WHERE { ?right <http://example.test/right> ?key . ?left <http://example.test/left> ?key }";
+pub(super) const JOIN: &str = "SELECT ?left ?right WHERE { ?left <http://example.test/left> ?key . ?right <http://example.test/right> ?key }";
+pub(super) const REVERSED: &str = "SELECT ?left ?right WHERE { ?right <http://example.test/right> ?key . ?left <http://example.test/left> ?key }";
 
 pub(super) fn assert_joins(fixture: &Fixture, postgres: &Database, mysql: &Database) {
     postgres.sql("ALTER TABLE public.items ADD COLUMN id TEXT; DELETE FROM public.items; INSERT INTO public.items(value,id) VALUES ('A /%','p1'),('A /%','p2'),('A /%','p3');");

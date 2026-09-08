@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -39,8 +39,12 @@ recovery, including forced SIGTERM during ASK/SELECT/CONSTRUCT on both backends.
 Shutdown now preserves the runtime for owned cleanup: the original drain deadline
 is followed, only when forced, by a three-second cleanup allowance; exhaustion
 is an error, not a clean exit. PostgreSQL generation/RLS regressions remain green.
+Required mixed-source UNION/join CLI tests also observe both providers stop under
+timeout/disconnect/SIGTERM while server-side lock witnesses remain held, preserve
+separate same-credential CLI siblings and recover full cap-one federated results.
 ADR-0010/0011 record the endpoint, constructor and shutdown limits. This closes
-that serving slice, not total governance, federated cleanup admission or release.
+the pinned native cancellation slice, not wider backend qualification, total
+governance, protected generations or exact-artifact release admission.
 
 This is an explicit priority and evidence-scope change, not an implementation
 claim. Moving an item to post-1.0 does not make it complete, supported, or

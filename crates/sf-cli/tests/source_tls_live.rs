@@ -6,6 +6,8 @@ mod cancellation;
 mod join;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
+#[path = "source_tls_live/stop_matrix.rs"]
+mod stop_matrix;
 #[path = "source_tls_live/support.rs"]
 mod support;
 
@@ -85,6 +87,10 @@ fn request(address: SocketAddr, query: &str, token: Option<&str>) -> Option<(u16
     let mut wire = Vec::new();
     stream.take(65537).read_to_end(&mut wire).unwrap();
     assert!(wire.len() <= 65536);
+    Some(decode_response(wire))
+}
+
+fn decode_response(wire: Vec<u8>) -> (u16, Vec<u8>) {
     let boundary = wire.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let headers = std::str::from_utf8(&wire[..boundary]).unwrap();
     let status = headers.split_whitespace().nth(1).unwrap().parse().unwrap();
@@ -110,7 +116,7 @@ fn request(address: SocketAddr, query: &str, token: Option<&str>) -> Option<(u16
         }
         body = decoded;
     }
-    Some((status, body))
+    (status, body)
 }
 
 fn assert_serves(
@@ -291,6 +297,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     wrong_second_ca.env("SF_TLS_ROOTS_2", &postgres.roots);
     assert_rejects(wrong_second_ca, address, &fixture);
     join::assert_joins(&fixture, &postgres, &mysql);
+    stop_matrix::assert_federated_stop(&fixture, &postgres, &mysql);
     eprintln!(
         "Live TLS providers: PostgreSQL {}; MySQL {}",
         postgres.sql("SHOW server_version"),

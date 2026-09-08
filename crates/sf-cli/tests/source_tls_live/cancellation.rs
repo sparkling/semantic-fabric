@@ -26,7 +26,7 @@ fn wait_active(database: &Database, postgres: bool, expected: usize, bound: Dura
         thread::sleep(Duration::from_millis(20));
     }
 }
-fn begin(address: SocketAddr, query: &str, token: &str) -> TcpStream {
+pub(super) fn begin(address: SocketAddr, query: &str, token: &str) -> TcpStream {
     let mut stream = TcpStream::connect(address).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(4)))

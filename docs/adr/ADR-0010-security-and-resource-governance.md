@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -261,7 +261,7 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > busy/UDF/VFS/I/O pre-emption, PostgreSQL/MySQL native cancellation, response
 > atomicity after `200`, per-request fairness, or production backend admission.
 
-### Native serving cancellation status (2026-09-07)
+### Native serving cancellation status (2026-09-08)
 
 Ordinary PostgreSQL and MySQL serving SELECT/ASK/CONSTRUCT and source fragments
 now own a dirty connection before query setup. Success requires an acknowledged
@@ -299,8 +299,17 @@ SIGTERM during ASK/SELECT/CONSTRUCT on each backend. HTTP completion alone canno
 end the runtime while native cleanup retains request capacity. Normal drain uses
 the original signal deadline; Forced cancellation then permits three seconds for
 owned cleanup, returning an error if capacity remains held (ADR-0011).
-Full federated cleanup/backend admission qualification, SQLite busy/UDF/VFS/I/O,
-total compiler/database/recursive work and post-200 atomicity remain open.
+Required mixed PostgreSQL/MySQL CLI evidence now covers UNION and both join
+pattern orders under deadline, pre-header join disconnect and forced SIGTERM.
+Each provider is deliberately blocked; native session IDs and granted-lock
+witnesses prove target work stops while its lock remains held. An independent
+public CLI process with the same database credentials retains its distinct
+blocked query and completes exactly after release. Both cap-one source pools
+recover the full federated bag after timeout/disconnect. Join deadlines return
+504 before success; a streamed UNION failure cannot complete its chunked 200.
+This is the pinned session-affine TLS profile, not raw-pool/proxy, every backend
+combination, source-generation or exact-release admission. SQLite busy/UDF/VFS/
+I/O, total compiler/database/recursive work and post-200 atomicity remain open.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -218,8 +218,11 @@ never a clean shutdown. This corrects the earlier drop-serving-future assumption
 HTTP completion alone does not prove native cleanup completed. Paused-clock
 tests cover grace, retained ownership and bounded failure; owned PostgreSQL
 16.15/MySQL 8.4.11 TLS CLI tests observe native stop, clean exit and closed ingress
-after forced SIGTERM during each of ASK/SELECT/CONSTRUCT. Full federated cleanup,
-source-health policy, remaining metrics/OTLP and release admission remain open.
+after forced SIGTERM during each of ASK/SELECT/CONSTRUCT and mixed UNION/joins.
+Server-side lock/session witnesses distinguish real stop from future drop;
+separate same-credential CLI siblings remain unaffected. Wider backend/proxy
+qualification, source-health policy, remaining metrics/OTLP and release admission
+remain open.
 
 ### Redaction discipline
 Credentials, result data, PII and bound-parameter values are never logged at any

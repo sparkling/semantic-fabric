@@ -1,9 +1,9 @@
 //! Owned, disposable providers only: no externally supplied database endpoint.
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -127,7 +127,126 @@ pub struct Database {
     password: String,
 }
 
+/// Own one interactive, test-only lock session until the assertion releases it.
+pub struct TableLock<'a> {
+    process: Child,
+    release: &'static str,
+    database: &'a Database,
+    table: String,
+    session: u64,
+}
+impl TableLock<'_> {
+    pub fn assert_held(&mut self) {
+        assert!(
+            self.process.try_wait().unwrap().is_none(),
+            "fixture lock owner exited"
+        );
+        let query = if self.database.postgres {
+            format!("SELECT count(*) FROM pg_locks WHERE pid={} AND relation='public.{}'::regclass AND mode='AccessExclusiveLock' AND granted", self.session, self.table)
+        } else {
+            format!("SELECT count(*) FROM performance_schema.metadata_locks l JOIN performance_schema.threads t ON l.OWNER_THREAD_ID=t.THREAD_ID WHERE t.PROCESSLIST_ID={} AND l.OBJECT_SCHEMA='sf_tls' AND l.OBJECT_NAME='{}' AND l.LOCK_STATUS='GRANTED' AND l.LOCK_TYPE IN ('SHARED_NO_READ_WRITE','EXCLUSIVE')", self.session, self.table)
+        };
+        assert!(
+            self.database.sql(&query).parse::<usize>().unwrap() > 0,
+            "native locker no longer holds the table"
+        );
+    }
+}
+impl Drop for TableLock<'_> {
+    fn drop(&mut self) {
+        if let Some(mut stdin) = self.process.stdin.take() {
+            let _ = writeln!(stdin, "{}", self.release);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while matches!(self.process.try_wait(), Ok(None)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
+}
+
 impl Database {
+    pub fn hold_table(&self, table: &str) -> TableLock<'_> {
+        // Closed fixture identifiers only; this cannot address external data.
+        assert!(matches!(table, "items" | "healthy"));
+        let mut command = Command::new("docker");
+        command.args(["--host", "unix:///var/run/docker.sock", "exec", "-i"]);
+        let (lock, release) = if self.postgres {
+            command.args([
+                &self.id,
+                "psql",
+                "-XAtq",
+                "-U",
+                "postgres",
+                "-d",
+                "postgres",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ]);
+            (
+                format!("BEGIN; LOCK TABLE public.{table} IN ACCESS EXCLUSIVE MODE;"),
+                "ROLLBACK;",
+            )
+        } else {
+            command.args([
+                "--env",
+                &format!("MYSQL_PWD={}", self.password),
+                &self.id,
+                "mysql",
+                "--user=root",
+                "--batch",
+                "--raw",
+                "--skip-column-names",
+                "--unbuffered",
+            ]);
+            (
+                format!("LOCK TABLES sf_tls.{table} WRITE;"),
+                "UNLOCK TABLES;",
+            )
+        };
+        let mut owned = TableLock {
+            process: command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            release,
+            database: self,
+            table: table.to_owned(),
+            session: 0,
+        };
+        let output = owned.process.stdout.take().unwrap();
+        let (sent, received) = std::sync::mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let ready = BufReader::new(output).lines().take(8).find_map(|line| {
+                line.ok()?
+                    .strip_prefix("sf-lock-held:")?
+                    .parse::<u64>()
+                    .ok()
+            });
+            let _ = sent.send(ready);
+        });
+        writeln!(
+            owned.process.stdin.as_mut().unwrap(),
+            "{lock} SELECT {};",
+            if self.postgres {
+                "'sf-lock-held:' || pg_backend_pid()"
+            } else {
+                "CONCAT('sf-lock-held:', CONNECTION_ID())"
+            }
+        )
+        .unwrap();
+        owned.session = received
+            .recv_timeout(Duration::from_secs(3))
+            .expect("fixture lock deadline")
+            .expect("fixture lock not acquired");
+        assert!(owned.session > 0);
+        owned.assert_held();
+        owned
+    }
+
     pub fn start(fixture: &Fixture, postgres: bool) -> Self {
         let prefix = if postgres { "pg" } else { "mysql" };
         let roots = fixture.certificates(prefix);
