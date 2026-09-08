@@ -213,3 +213,32 @@ fn postgres_and_portable_row_policy_families_are_mutually_exclusive() {
         .with_postgres_rls(claims)
         .is_err());
 }
+
+#[test]
+fn direct_mapping_admits_read_all_but_never_row_policy_profiles() {
+    assert!(QueryAdmission::Deny.permits_direct_mapping());
+    assert!(QueryAdmission::UnrestrictedDevelopment.permits_direct_mapping());
+    assert!(profile(TOKEN).permits_direct_mapping());
+    let rls = crate::PostgresRlsClaims::new(std::collections::BTreeMap::from([(
+        "app.tenant_id".into(),
+        "a".into(),
+    )]))
+    .unwrap();
+    let rows = crate::PortableRowPolicy::new(vec![crate::PortableRowRule::new(
+        0, "people", "tenant", "a",
+    )
+    .unwrap()])
+    .unwrap();
+    for principal in [
+        BearerQueryAdmission::for_service_principal(TOKEN)
+            .unwrap()
+            .with_postgres_rls(rls)
+            .unwrap(),
+        BearerQueryAdmission::for_service_principal(TOKEN)
+            .unwrap()
+            .with_portable_rows(rows)
+            .unwrap(),
+    ] {
+        assert!(!QueryAdmission::Bearer(principal).permits_direct_mapping());
+    }
+}

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-02
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -34,7 +34,7 @@ The public Rust diagnostic collects a complete legacy projection and publishes e
 Clean pre-legacy mismatches remain pending unavailability; rich failures may downgrade only after successful savepoint recovery, while transaction, legacy or commit failures remain fatal.
 The evidence executor publishes an ordered receipt pair atomically only after both exact-patch replays and the cross-patch laws pass. Until that valid tracked pair exists it fails closed; a valid pair promotes only this observation profile.
 Existing legacy entry points are unchanged. For authored mappings, `sf-serve` carries the committed availability state bound to backend and `SourceId` only as a non-authorizing diagnostic.
-A distinct private Direct-Mapping foundation consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
+A distinct crate-private Direct-Mapping lease, now consumed by the public ADR-0050 startup path, consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
 It marks a pool member dirty before `BEGIN`, locks the exact public-table set before the first repeatable-read snapshot, and binds the identity, complete rich tables, database, role, session and policy context.
 A primary-key-backed candidate is generated under that protection, rechecked, rolled back and stored only as an inseparable generation expectation.
 For each internal verified request, one compiler permit is reserved before source I/O, retained across lease acquisition without requeue, and used for authoritative compilation after exact reobservation. The request reserves exactly 34 source-work units from typed executable inventories; 33 rejects before pool I/O.
@@ -42,7 +42,7 @@ Required-live evidence carries mapped SELECT, ASK and CONSTRUCT through request 
 The same required-live path now rejects any runtime login that is an owner, can inherit or change roles, carries elevated or mutation privileges, or lacks the exact CONNECT, `public`-schema USAGE, mapped-table SELECT and collation-probe execution capabilities; it also proves the permitted reads and denied `SET ROLE`, DDL and DML against a disposable database.
 The PostgreSQL 16.15 gate also covers lock-before-snapshot, DDL barriers, old-generation coherence, successor drift, policy mutation, cancellation and dirty replacement.
 The identity remains forgeable content equality and does not itself grant type, constraint, mapping, cache, readiness or execution authority; compiler facts remain `Unverified`.
-Public startup still rejects every Direct Mapping selection before connector I/O. Qualification receipts do not alter startup and grant no reload lifecycle or backend admission.
+Public Direct startup is separately qualified on 2026-09-08 by ADR-0050's owned-TLS CLI lifecycle check on both exact patches. This observation ADR and its receipts remain non-authorizing; they do not themselves enable startup, grant a generation lease or confer production admission.
 Qualification never silently extends to another patch; SQLite and MySQL remain unavailable. Product code is Rust, while Node/MetaHarness remains development evidence with learning, evolution and promotion disabled.
 
 ## Context

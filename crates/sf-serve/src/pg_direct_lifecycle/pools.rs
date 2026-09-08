@@ -17,10 +17,25 @@ pub(crate) struct PgDirectPools {
 }
 
 impl PgDirectPools {
+    #[cfg(test)]
     pub(crate) fn from_resolved_config(
         config: tokio_postgres::Config,
         request_maximum: usize,
         wait_timeout: Duration,
+    ) -> Result<Self, PgDirectPoolError> {
+        Self::with_tls(
+            config,
+            request_maximum,
+            wait_timeout,
+            crate::source_tls::client_config(None).expect("built-in roots"),
+        )
+    }
+
+    pub(crate) fn with_tls(
+        config: tokio_postgres::Config,
+        request_maximum: usize,
+        wait_timeout: Duration,
+        tls: rustls::ClientConfig,
     ) -> Result<Self, PgDirectPoolError> {
         if request_maximum == 0
             || wait_timeout.is_zero()
@@ -28,9 +43,14 @@ impl PgDirectPools {
         {
             return Err(PgDirectPoolError::InvalidConfiguration);
         }
-        let request = crate::pg_pool::build(config.clone(), request_maximum, wait_timeout)
-            .map_err(|_| PgDirectPoolError::PoolBuild)?;
-        let control = crate::pg_pool::build(config, CONTROL_POOL_SIZE, wait_timeout)
+        let request = crate::pg_pool::build_with_tls(
+            config.clone(),
+            request_maximum,
+            wait_timeout,
+            tls.clone(),
+        )
+        .map_err(|_| PgDirectPoolError::PoolBuild)?;
+        let control = crate::pg_pool::build_with_tls(config, CONTROL_POOL_SIZE, wait_timeout, tls)
             .map_err(|_| PgDirectPoolError::PoolBuild)?;
         Ok(Self { request, control })
     }

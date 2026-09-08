@@ -40,6 +40,7 @@ impl From<deadpool_postgres::Pool> for PostgresPool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build(
     config: tokio_postgres::Config,
     maximum: usize,

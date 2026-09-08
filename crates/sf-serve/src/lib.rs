@@ -77,6 +77,7 @@ mod source_tls;
 pub use pg_pool::PostgresPool;
 mod sqlite_admission;
 mod startup;
+mod startup_direct;
 mod startup_inputs;
 mod telemetry;
 mod telemetry_body;

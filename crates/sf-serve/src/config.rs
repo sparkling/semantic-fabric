@@ -92,6 +92,7 @@ pub struct ServeConfig {
     request_admission_permits: Arc<Semaphore>,
     shutdown: watch::Sender<ShutdownPhase>,
     pg_direct_lifecycle_claimed: AtomicBool,
+    pub(crate) control_work: Option<Arc<Semaphore>>,
 }
 
 impl ServeConfig {
@@ -142,13 +143,9 @@ impl ServeConfig {
         Ok(Self::from_snapshot(QueryMode::Single(source_id), snapshot))
     }
 
-    /// Consume the sealed initial output of the dormant PostgreSQL Direct
+    /// Consume the sealed initial output of the closed PostgreSQL Direct
     /// lifecycle. This is initial construction only; runtime publication still
     /// requires the validated-candidate and transition-authority pair.
-    #[allow(
-        dead_code,
-        reason = "the sealed profile remains disconnected pending independent admission review"
-    )]
     pub(crate) fn from_initial_pg_direct(
         initial: crate::pg_direct_lifecycle::InitialPgDirectGeneration,
     ) -> (Self, crate::pg_generation::PostgresDirectExpectation) {
@@ -179,6 +176,7 @@ impl ServeConfig {
             request_admission_permits: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_REQUESTS)),
             shutdown,
             pg_direct_lifecycle_claimed: AtomicBool::new(false),
+            control_work: None,
         }
     }
 
@@ -428,6 +426,10 @@ impl ServeConfig {
         if began {
             let _ = self.runtime.mark_current_administratively_not_ready();
         }
+    }
+
+    pub(crate) fn shutdown_observer(&self) -> watch::Receiver<ShutdownPhase> {
+        self.shutdown.subscribe()
     }
 
     /// Cancel identities that did not complete within the graceful drain bound.

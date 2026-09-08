@@ -22,14 +22,12 @@ fn mutated(mutator: impl FnOnce(&mut Value)) -> Result<capability_catalog::Catal
 fn array<'a>(value: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
     value[key].as_array_mut().expect("catalog array")
 }
-
 fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
     values
         .iter_mut()
         .find(|value| value["id"] == id)
         .expect("catalog id")
 }
-
 #[test]
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
@@ -45,7 +43,6 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
         .iter()
         .all(|standard| standard.url.contains("/TR/") && standard.byte_length > 0));
 }
-
 #[test]
 fn bounded_slices_do_not_promote_broad_programme_profiles() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
@@ -430,6 +427,10 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
             "e-postgresql-verified-generation-live",
             "e-postgresql-verified-generation-request-route",
             "e-postgresql-verified-generation-runtime-role",
+            "e-public-direct-control-ownership",
+            "e-public-direct-lifecycle-ci",
+            "e-public-direct-lifecycle-cli",
+            "e-public-direct-startup",
         ]
     );
     let command = loaded

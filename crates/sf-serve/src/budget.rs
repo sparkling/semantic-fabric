@@ -90,10 +90,13 @@ impl RequestBudget {
         request
     }
 
-    /// Mint a bounded internal control-plane budget with no request admission
-    /// or shutdown identity. The lifecycle supervisor owns cancellation.
-    pub(crate) fn for_control(timeout: Duration, limits: QueryLimits) -> Self {
-        Self::build(timeout, limits, None, CorrelationId::generate(), false)
+    /// Internal control work observes forced shutdown without request telemetry.
+    pub(crate) fn for_control_with_shutdown(
+        timeout: Duration,
+        limits: QueryLimits,
+        shutdown: Option<watch::Receiver<ShutdownPhase>>,
+    ) -> Self {
+        Self::build(timeout, limits, shutdown, CorrelationId::generate(), false)
     }
 
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {

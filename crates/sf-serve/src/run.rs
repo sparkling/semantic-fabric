@@ -40,7 +40,7 @@ pub struct ServeOptions {
     pub sqlite_pool_size: usize,
     /// Maximum time to drain active requests after SIGTERM or Ctrl-C.
     pub shutdown_timeout: Duration,
-    /// Periodic authored-generation observation/reload; zero disables the worker.
+    /// Authored reload interval (zero disables); Direct observation (zero selects 5s).
     pub reload_interval: Duration,
     /// Optional Prometheus renderer. `None` keeps `/metrics` absent.
     pub metrics: Option<crate::MetricsEndpoint>,
@@ -107,18 +107,19 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
                 error: error.to_string(),
             })
         })?;
-    let result =
-        rt.block_on(
-            async move { crate::reload::serve_async(opts, source, additional, parser).await },
-        );
+    let result = rt.block_on(async move {
+        if matches!(opts.mapping, MappingRef::Direct { .. }) {
+            crate::startup_direct::serve_async(opts, source, additional, parser).await
+        } else {
+            crate::reload::serve_async(opts, source, additional, parser).await
+        }
+    });
     rt.shutdown_timeout(Duration::ZERO);
     result
 }
 
 /// Open the prepared backend and pair it with its observed base-table schema.
-/// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
-/// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
-/// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
+/// PostgreSQL sizing follows ADR-0010 §C/ADR-0027; SQLite sizes its read-only pool.
 pub(crate) async fn open_backend(
     source: PreparedSource,
     pg_pool_size: usize,

@@ -55,7 +55,7 @@ The publication primitive is crate-private and deliberately non-authorizing.
 The construction path requires bounded sealed `M ⋈ T` validation before a
 binding, and its policy-v2 receipt partitions compile/cache identity. The
 all-or-nothing registry validates every source before constructing any binding.
-The closed `PgDirectLifecycleV1` has an off-path candidate builder and one automatic coordinator; no backend profile is production-admitted. The 2026-09-08 ownership correction retains native mapping/digest/semantic-validation work through completion after timeout, fences immediately, forbids overlapping retries and discards late candidates, including a completed task polled at its deadline. Late panic is terminal; planned shutdown joins without publication. This is ownership preservation, not hard CPU preemption or a bounded graceful join, and public Direct Mapping remains disabled pending admission.
+The closed `PgDirectLifecycleV1` is promoted to public Rust/CLI startup on 2026-09-08, with independent review and required owned-TLS CLI qualification on exact PostgreSQL 16.9/16.15. `--direct-mapping-base` selects the one-source PK-backed profile below. It uses fixed startup ontology/base/configuration, independent request/control TLS pools, mandatory five-second observation (nonzero `--reload-interval-secs` overrides), a 30-second control budget and a 60-second startup acceptance deadline. Candidate timeout retains native work, forbids overlap/late publication and makes panic terminal. Control discovery, probes and native cleanup retain a cap-one ownership permit. Shutdown joins the coordinator and counts request/control owners under the existing drain plus three-second forced allowance; exhaustion errors, without a hard CPU-preemption claim. This is public profile qualification, not general backend or production admission.
 
 The 2026-09-07 authored profile exposes `--reload-interval-secs` (zero/off by default, otherwise 1–86400 seconds). One serialized off-path worker captures bounded regular-file bytes, rebuilds all configured bindings and sealed semantic admission, rechecks the captured files, then publishes by exact readiness CAS. Changed bytes fence before parsing/source I/O; changed schema fences immediately after that source observation, before remaining validation or the next source. Unchanged observations keep readiness while rebuilding. Fresh pools are a new resource identity even with equal schema, so SQLite replacement cannot keep an old inode through a digest no-op.
 A 60-second attempt deadline fences readiness; the coordinator retains a timed-out worker until actual completion rather than queueing replacements. Panic, including after timeout, is terminal; shutdown cannot be healed. Source endpoints, resolved credentials/TLS trust, caller policies, source slots and service limits remain fixed. Required tests exercise old/new public request results, immediate drift fencing, invalid-input recovery, portable row-policy preservation, FIFO rejection, timeout ownership, actual CLI reload/shutdown, and encrypted PostgreSQL/MySQL single/mixed-source reload.
@@ -82,11 +82,7 @@ cancel and detaches the pool object instead of recycling uncertain state. Isolat
 live gates exercise lock-before-snapshot, clean close, incompatible DDL
 exclusion, compatible additive-FK old-generation coherence followed by
 next-acquisition drift, policy mutation, cancellation and dirty-member
-replacement. Public startup nevertheless rejects every Direct Mapping selection
-before connector I/O. Capability promotion, general reload/drift/source
-health, no-PK identity, other backend
-leases and production admission remain open. Canonical commit `c701352` adds the dormant
-closed-profile lifecycle described below; this is not general Phase 5 or Phase 6 completion.
+replacement. Public startup now consumes this same sealed path; the required owned-TLS CLI check adds exact authenticated SELECT/ASK/CONSTRUCT and lineage, traffic-independent drift/rebuild, unchanged startup ontology, NOWAIT DDL conflict/recovery, bounded shutdown and wrong-CA/no-PK startup rejection on both patches. Other backend leases, no-PK identity and production admission remain open; this is not general Phase 5 or Phase 6 completion.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -327,12 +323,11 @@ persist across generations.
 #### Initial PostgreSQL lifecycle profile
 
 `PgDirectLifecycleV1` is the only initial live Direct-Mapping profile. Its
-complete private builder and coordinator passed independent code review, but it
-remains disabled pending explicit promotion and admission evidence. It admits exactly one PostgreSQL source using
+builder, coordinator and public integration passed independent review and the required exact-patch public check. It admits exactly one PostgreSQL source using
 ADR-0051's qualified `Postgres16PublicBaseV1` observation profile, permanent
 `public` base tables, a primary key for every mapped table, one immutable
 ontology, one validated absolute base IRI and one immutable resolved source
-configuration. Authored-plus-Direct mapping mixtures, RLS, raw SQL, no-PK
+configuration. Plain read-all bearer, default-deny and explicitly unrestricted development admission remain available. Portable row policies and provisioned row-policy subjects reject at startup, alongside authored-plus-Direct mapping mixtures, RLS, raw SQL, no-PK
 tables, federation, additional sources and other backends reject.
 
 The profile has three closed source-failure classes. Connection, checkout,
@@ -379,17 +374,17 @@ reload and no hot reload of source credentials, files or configuration.
    retain one compiler permit across preflight and lease acquisition, then bind
    one dirty, protected transaction through authoritative compilation and mapped
    SELECT/ASK/CONSTRUCT, final recheck and acknowledged rollback. Public profile
-   qualification and version receipts remain open.
+   qualification is now recorded for the closed Direct profile; other profiles remain open.
 5. **Atomic activation and drift (closed profile implemented 2026-09-06):** the
    immutable registry, opaque validated-candidate publication, body-lifetime
    leases and full-state CAS are joined to one serialized `PgDirectLifecycleV1`
    coordinator. It skips missed ticks, fences only completed control failures,
    retries while not ready, heals only from a completely rebuilt candidate and
-   fails closed on abnormal worker exit. General/public reload remains open.
-6. **Typed row identity and Direct Mapping (private PK-backed foundation
-   implemented 2026-09-06):** validate/generate the PostgreSQL candidate from
-   its leased schema and reacquire the exact expectation for each request.
-   Startup admission, no-PK identity and per-backend promotion remain open.
+   fails closed on abnormal worker exit. Public Direct and authored reload are qualified separately; general lifecycle remains open.
+6. **Typed row identity and Direct Mapping (public PK-backed profile promoted
+   2026-09-08):** validate/generate the PostgreSQL candidate from its leased schema
+   and reacquire the exact expectation for each request. No-PK identity and other
+   backend promotion remain open.
 
 Phases 1 and 2 do not add reload, verified authority or live Direct Mapping.
 Phase 1 completion therefore grants no source, compiler, serving, cache or
@@ -428,7 +423,7 @@ instance. The PostgreSQL 16.15 lifecycle gate closes the listed lock ordering,
 same-generation execution, final-recheck, cancellation and dirty-cleanup
 foundations. The separate exact 16.9/16.15 pair receipt closes only the
 observation-profile qualification gate; neither evidence closes reload, public
-Direct Mapping, backend admission or production admission. Adversarial redaction tests seed public
+Direct Mapping, backend admission or production admission by itself. Public promotion instead requires `cargo test --locked -p sf-cli --no-default-features --test source_tls_live direct::public_direct_mapping_has_authenticated_tls_startup -- --ignored --exact --nocapture`, alongside focused startup, lifecycle ownership and existing generation checks. Adversarial redaction tests seed public
 errors, debug output, readiness and metrics with credentials, paths, raw SQL,
 names and values and require that none escape.
 

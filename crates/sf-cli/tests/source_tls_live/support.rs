@@ -76,7 +76,7 @@ impl Fixture {
         path
     }
 
-    fn certificates(&self, prefix: &str) -> String {
+    pub(super) fn certificates(&self, prefix: &str) -> String {
         use rcgen::{
             BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
             KeyUsagePurpose,
@@ -248,6 +248,21 @@ impl Database {
     }
 
     pub fn start(fixture: &Fixture, postgres: bool) -> Self {
+        Self::start_image(fixture, postgres, POSTGRES)
+    }
+
+    pub fn postgres_patch(fixture: &Fixture, patch: &str) -> Self {
+        let image = match patch {
+            "16.15" => POSTGRES,
+            "16.9" => {
+                "postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f"
+            }
+            _ => panic!("unqualified fixture patch"),
+        };
+        Self::start_image(fixture, true, image)
+    }
+
+    fn start_image(fixture: &Fixture, postgres: bool, postgres_image: &str) -> Self {
         let prefix = if postgres { "pg" } else { "mysql" };
         let roots = fixture.certificates(prefix);
         fixture.write("pg_hba.conf", "local all all trust\nhostssl all all 0.0.0.0/0 scram-sha-256\nhost all all 0.0.0.0/0 reject\nhostssl all all ::/0 scram-sha-256\nhost all all ::/0 reject\n");
@@ -291,7 +306,7 @@ impl Database {
             &credential,
             "--entrypoint",
             "/bin/sh",
-            if postgres { POSTGRES } else { MYSQL },
+            if postgres { postgres_image } else { MYSQL },
             "-c",
             entry,
         ]));

@@ -2,6 +2,8 @@
 #![cfg(unix)]
 #[path = "source_tls_live/cancellation.rs"]
 mod cancellation;
+#[path = "source_tls_live/direct.rs"]
+mod direct;
 #[path = "source_tls_live/federated_lineage.rs"]
 mod federated_lineage;
 #[path = "source_tls_live/join.rs"]
@@ -270,9 +272,9 @@ fn assert_rejects(mut command: Command, address: SocketAddr, fixture: &Fixture) 
     assert_eq!(failure["event"], "startup.failed");
     assert_eq!(failure["failure"], "startup-source");
     for event in &events {
-        assert_eq!(event["schema"], "semantic-fabric.telemetry.v1");
         assert!(
-            event["event"] == "startup.failed" || event["event"] == "source.schema_observation"
+            is_startup_record(event),
+            "unexpected startup telemetry record"
         );
     }
     assert!(result.stderr.len() < 1024);
@@ -283,6 +285,41 @@ fn assert_rejects(mut command: Command, address: SocketAddr, fixture: &Fixture) 
         );
     }
     assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+}
+
+fn is_startup_record(event: &serde_json::Value) -> bool {
+    const SCHEMA: &str = "semantic-fabric.telemetry.v1";
+    if event["schema"] == SCHEMA {
+        return event["event"] == "startup.failed" || event["event"] == "source.schema_observation";
+    }
+    // Production tracing emits span closure with schema inside `span`, not
+    // flattened into the event. Startup runs only the parser handshake.
+    event["message"] == "close"
+        && event["span"]["schema"] == SCHEMA
+        && event["span"]["name"] == "sf.compiler.stage"
+        && event["span"]["stage"] == "parse"
+}
+
+#[test]
+fn startup_telemetry_oracle_accepts_only_versioned_events_and_compiler_closure() {
+    let mut close = serde_json::json!({"message":"close","span":{
+        "schema":"semantic-fabric.telemetry.v1","name":"sf.compiler.stage","stage":"parse"
+    }});
+    assert!(is_startup_record(&close));
+    close["span"]["stage"] = "rewrite".into();
+    assert!(!is_startup_record(&close));
+    close["span"]["stage"] = "unknown".into();
+    assert!(!is_startup_record(&close));
+    close["span"]["stage"] = "parse".into();
+    close["span"]["schema"] = "foreign".into();
+    assert!(!is_startup_record(&close));
+    assert!(!is_startup_record(&serde_json::json!({"message":"close"})));
+    assert!(is_startup_record(
+        &serde_json::json!({"schema":"semantic-fabric.telemetry.v1","event":"startup.failed"})
+    ));
+    assert!(!is_startup_record(
+        &serde_json::json!({"schema":"semantic-fabric.telemetry.v1","event":"unknown"})
+    ));
 }
 
 #[test]

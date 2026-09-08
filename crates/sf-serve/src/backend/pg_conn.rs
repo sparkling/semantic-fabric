@@ -57,6 +57,12 @@ impl PgConn {
         self.recyclable.store(true, Ordering::Release);
     }
 
+    /// Unique-owner borrow for a committed schema transaction. The guard stays
+    /// dirty until the caller has observed that transaction's successful commit.
+    pub(crate) fn discovery_client(&mut self) -> &mut tokio_postgres::Client {
+        self.object.as_mut().expect("active PostgreSQL connection")
+    }
+
     pub(crate) async fn bound_statement(&self, budget: &RequestBudget) -> sf_sparql::Result<()> {
         let millis = budget
             .remaining_duration()?

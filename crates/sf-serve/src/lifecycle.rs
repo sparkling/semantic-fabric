@@ -52,6 +52,19 @@ pub(crate) async fn serve(
     config: Arc<ServeConfig>,
     drain_timeout: Duration,
 ) -> Result<(), ServeError> {
+    serve_with_background(bind, app, config, drain_timeout, std::future::ready(Ok(()))).await
+}
+
+pub(crate) async fn serve_with_background<B>(
+    bind: &str,
+    app: RequestDeadlineService,
+    config: Arc<ServeConfig>,
+    drain_timeout: Duration,
+    background: B,
+) -> Result<(), ServeError>
+where
+    B: Future<Output = Result<(), std::io::Error>> + Send + 'static,
+{
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|error| {
         ServeError::new(StartupCause::Bind {
             bind: bind.to_owned(),
@@ -65,12 +78,13 @@ pub(crate) async fn serve(
     })?;
     println!("semantic-fabric: SPARQL 1.2 endpoint listening on http://{addr}/sparql");
 
-    let outcome = serve_listener_until_shutdown(
+    let outcome = serve_listener_with_background(
         listener,
         app,
         config,
         production_shutdown_signal(),
         drain_timeout,
+        background,
     )
     .await
     .map_err(|error| {
@@ -84,6 +98,7 @@ pub(crate) async fn serve(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn serve_listener_until_shutdown<F>(
     listener: tokio::net::TcpListener,
     app: RequestDeadlineService,
@@ -93,6 +108,29 @@ pub(crate) async fn serve_listener_until_shutdown<F>(
 ) -> Result<ShutdownOutcome, std::io::Error>
 where
     F: Future<Output = ()> + Send + 'static,
+{
+    serve_listener_with_background(
+        listener,
+        app,
+        config,
+        shutdown,
+        drain_timeout,
+        std::future::ready(Ok(())),
+    )
+    .await
+}
+
+pub(crate) async fn serve_listener_with_background<F, B>(
+    listener: tokio::net::TcpListener,
+    app: RequestDeadlineService,
+    config: Arc<ServeConfig>,
+    shutdown: F,
+    drain_timeout: Duration,
+    background: B,
+) -> Result<ShutdownOutcome, std::io::Error>
+where
+    F: Future<Output = ()> + Send + 'static,
+    B: Future<Output = Result<(), std::io::Error>> + Send + 'static,
 {
     let (started_tx, started_rx) = oneshot::channel();
     let force_config = config.clone();
@@ -104,33 +142,55 @@ where
     };
     let server =
         axum::serve(listener, app.into_make_service()).with_graceful_shutdown(graceful_signal);
+    // Retain the background owner independently when the HTTP drain is forced.
+    tokio::pin!(background);
+    let mut background_done = false;
     let graceful = async {
-        server.into_future().await?;
+        tokio::try_join!(server.into_future(), async {
+            let result = background.as_mut().await;
+            background_done = true;
+            result
+        })?;
         // HTTP drain does not imply detached producers/native cleanup ended.
         // They already retain the request admission identity until ownership ends.
         await_owned_work(&force_config).await;
         Ok(())
     };
-    let outcome = finish_with_bound(graceful, started_rx, drain_timeout).await?;
-    if outcome == ShutdownOutcome::Forced {
+    let outcome = finish_with_bound(graceful, started_rx, drain_timeout).await;
+    if !matches!(outcome, Ok(ShutdownOutcome::Drained)) {
+        // An early background/server failure must not bypass owned cleanup.
+        force_config.begin_shutdown();
         force_config.force_shutdown();
-        tokio::time::timeout(FORCED_CLEANUP_TIMEOUT, await_owned_work(&force_config))
-            .await
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "owned request cleanup exceeded shutdown allowance",
-                )
-            })?;
+        tokio::time::timeout(FORCED_CLEANUP_TIMEOUT, async {
+            let result = if background_done {
+                Ok(())
+            } else {
+                background.as_mut().await
+            };
+            await_owned_work(&force_config).await;
+            result
+        })
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "owned request cleanup exceeded shutdown allowance",
+            )
+        })??;
     }
-    Ok(outcome)
+    outcome
 }
 
 async fn await_owned_work(config: &ServeConfig) {
     let permits = config.request_admission_permits();
     // No new source work is admissible after shutdown. Count the existing gate
     // without narrowing its validated usize capacity to acquire_many's u32.
-    while permits.available_permits() != config.max_concurrent_requests() {
+    while permits.available_permits() != config.max_concurrent_requests()
+        || config
+            .control_work
+            .as_ref()
+            .is_some_and(|gate| gate.available_permits() != 1)
+    {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }

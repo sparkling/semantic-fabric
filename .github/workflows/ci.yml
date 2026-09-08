@@ -282,9 +282,7 @@ jobs:
           done
           echo "::warning::SQL Server did not become reachable in time — differential_mssql will skip gracefully"
       # Dependency vulnerability gate (F2 item 3, ADR-0010 closeout receipt):
-      # `cargo audit` reads .cargo/audit.toml's documented ignore-list (advisories
-      # confirmed unfixable without an upstream crate's own version bump) and fails
-      # the build on anything not on it — a real gate, not `|| true`.
+      # Audit fails except for the documented upstream-only .cargo/audit.toml dispositions.
       - name: install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: cargo audit
@@ -307,8 +305,14 @@ jobs:
           test_name='authenticated_public_queries_require_verified_source_tls'
           cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
           cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
-      # Private ADR-0040 comparison evidence only. The feature stays default-off
-      # and this gate does not admit the substrate into product execution.
+      - name: qualify public PostgreSQL Direct Mapping lifecycle
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          test_name='direct::public_direct_mapping_has_authenticated_tls_startup'
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
+      # ADR-0040 comparison evidence only: default-off, no product admission.
       - name: clippy (sf-sparql secure-spill-prototype)
         run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings
       - name: test (sf-sparql secure-spill-prototype)
@@ -316,8 +320,7 @@ jobs:
       - name: test required-live PostgreSQL verified-generation lifecycle
         timeout-minutes: 5
         env:
-          # This administrator endpoint exists only inside the ephemeral CI
-          # service and provisions a unique database plus restricted reader.
+          # Ephemeral CI-only admin provisions a unique database and restricted reader.
           SF_PG_GENERATION_TEST_URL: "host=127.0.0.1 port=5432 user=sftest password=sftest dbname=sftest"
         run: |
           set -euo pipefail
@@ -337,10 +340,7 @@ jobs:
           test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
           cargo test --locked -p sf-serve --lib "$test_name" -- \
             --ignored --exact --test-threads=1 --nocapture
-      # DuckDB backend (embedded, `bundled` feature — no external service needed).
-      # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
-      # crate in the dependency graph turns it on, so these tests never ran in CI
-      # until this dedicated step was added.
+      # Embedded DuckDB is absent from default features; qualify it explicitly.
       - name: test (sf-sql duckdb-backend)
         run: cargo test --locked -p sf-sql --features duckdb-backend
       # SAP HANA marshalling/quoting unit tests only (backend::hana::tests::with_driver) —

@@ -381,3 +381,97 @@ async fn forced_shutdown_waits_for_cleanup_but_never_waits_unboundedly() {
         }
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn background_completion_or_error_never_bypasses_owned_control_cleanup() {
+    for fails in [false, true] {
+        let mut config = config();
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        Arc::get_mut(&mut config).unwrap().control_work = Some(gate.clone());
+        let permit = gate.try_acquire_owned().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = tokio::spawn(crate::lifecycle::serve_listener_with_background(
+            listener,
+            router(config.clone()),
+            config.clone(),
+            async {},
+            Duration::from_secs(1),
+            async move {
+                if fails {
+                    Err(std::io::Error::other("fixture background failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        ));
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!server.is_finished());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !server.is_finished(),
+            "completed background is not completed native cleanup"
+        );
+        assert_eq!(
+            *config.shutdown_observer().borrow(),
+            crate::lifecycle::ShutdownPhase::Forced
+        );
+        drop(permit);
+        let result = server.await.unwrap();
+        if fails {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "fixture background failure"
+            );
+        } else {
+            assert_eq!(result.unwrap(), ShutdownOutcome::Forced);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn incomplete_background_is_retained_only_through_shared_forced_allowance() {
+    for release in [true, false] {
+        let config = config();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (done, completion) = oneshot::channel();
+        let server = tokio::spawn(crate::lifecycle::serve_listener_with_background(
+            listener,
+            router(config.clone()),
+            config.clone(),
+            async {},
+            Duration::from_secs(1),
+            async move {
+                completion.await.unwrap();
+                Ok(())
+            },
+        ));
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            *config.shutdown_observer().borrow(),
+            crate::lifecycle::ShutdownPhase::Forced
+        );
+        assert!(!server.is_finished());
+        if release {
+            done.send(()).unwrap();
+            assert_eq!(server.await.unwrap().unwrap(), ShutdownOutcome::Forced);
+        } else {
+            tokio::time::advance(Duration::from_secs(3)).await;
+            assert_eq!(
+                server.await.unwrap().unwrap_err().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+            assert!(done.send(()).is_err());
+        }
+    }
+}

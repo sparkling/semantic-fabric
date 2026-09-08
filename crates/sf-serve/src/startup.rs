@@ -36,7 +36,11 @@ pub(crate) async fn build_config(
         crate::config::QueryMode::Single(source_id(0))
     };
     let mut config = ServeConfig::from_snapshot(mode, snapshot);
+    configure(opts, &mut config)?;
+    Ok((config, crate::reload::Baseline::new(inputs, observations)))
+}
 
+pub(crate) fn configure(opts: &ServeOptions, config: &mut ServeConfig) -> Result<(), ServeError> {
     config.timeout = opts.timeout;
     config.set_query_admission(opts.query_admission.clone());
     config.set_max_query_len(opts.max_query_len)?;
@@ -49,7 +53,7 @@ pub(crate) async fn build_config(
         opts.max_serialized_bytes,
     )
     .with_max_retained_bytes(opts.max_order_bytes);
-    Ok((config, crate::reload::Baseline::new(inputs, observations)))
+    Ok(())
 }
 
 pub(crate) async fn build_snapshot(
@@ -229,8 +233,8 @@ impl PreparedMapping {
     }
 }
 
-/// Admit only the closed live profile for which a source-generation lease can
-/// be proven: one PostgreSQL source. SQLite's hidden row identity is shadowable,
+/// Keep authored assembly separate from the leased Direct lifecycle assembler.
+/// SQLite's hidden row identity is shadowable,
 /// MySQL has no qualified DDL-generation law, and Direct Mapping federation has
 /// neither a qualified multi-source lease nor a source-scoped blank-node law.
 /// This boundary runs after pure source parsing but before connector I/O.
@@ -261,7 +265,7 @@ fn admit_mapping_profile(
         ));
     }
     Err(configuration_error(
-        "live Direct Mapping is unavailable until the exact PostgreSQL-16 qualification receipts are accepted",
+        "live Direct Mapping requires its dedicated leased lifecycle assembler",
     ))
 }
 
@@ -361,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn unaccepted_direct_mapping_rejects_every_profile_before_connector_io() {
+    fn authored_assembler_rejects_direct_mapping_before_connector_io() {
         let sqlite = SourceRef::inline("sqlite:/path/that/must/not/be/created.db")
             .resolve()
             .unwrap()
@@ -384,7 +388,7 @@ mod tests {
             assert_eq!(error.code(), "startup-configuration");
         }
         let error = admit_mapping_profile(&direct(), &postgres, None, None)
-            .expect_err("the complete profile remains withheld pending independent review");
+            .expect_err("Direct requires its dedicated leased lifecycle assembler");
         assert_eq!(error.code(), "startup-configuration");
 
         let postgres = SourceRef::inline("pg:host=database.invalid user=test")

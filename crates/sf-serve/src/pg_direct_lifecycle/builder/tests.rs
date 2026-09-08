@@ -100,3 +100,38 @@ fn generation_failures_map_only_to_the_closed_readiness_algebra() {
         ReadinessCause::CapabilityDrift
     );
 }
+
+#[tokio::test]
+async fn control_cleanup_retains_capacity_and_observes_only_forced_shutdown() {
+    use crate::lifecycle::ShutdownPhase;
+    use sf_core::query_control::{QueryControl, QueryControlError};
+    let mut spec = PgDirectLifecycleSpec::from_resolved_config(
+        resolved_config(),
+        1,
+        Duration::from_secs(2),
+        ontology(),
+        "https://example.test/direct/",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let (signal, receiver) = tokio::sync::watch::channel(ShutdownPhase::Running);
+    spec.observe_shutdown(receiver);
+    let first = spec.control_budget().unwrap();
+    let cleanup = first.clone();
+    drop(first);
+    assert!(matches!(
+        spec.control_budget(),
+        Err(ReadinessCause::SourceUnavailable)
+    ));
+    assert_eq!(spec.control_permits().available_permits(), 0);
+    signal.send_replace(ShutdownPhase::Draining);
+    assert_eq!(cleanup.checkpoint(), Ok(()));
+    signal.send_replace(ShutdownPhase::Forced);
+    assert_eq!(cleanup.checkpoint(), Err(QueryControlError::Cancelled));
+    drop(cleanup);
+    assert_eq!(spec.control_permits().available_permits(), 1);
+    assert_eq!(
+        spec.control_budget().unwrap().checkpoint(),
+        Err(QueryControlError::Cancelled)
+    );
+}

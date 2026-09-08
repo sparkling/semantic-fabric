@@ -26,11 +26,34 @@ pub(crate) struct PgDirectLifecycleSpec {
     ontology: Arc<SemanticOntology>,
     base_iri: Arc<str>,
     operation_timeout: Duration,
+    control_permits: Arc<tokio::sync::Semaphore>,
+    shutdown: Option<tokio::sync::watch::Receiver<crate::lifecycle::ShutdownPhase>>,
 }
 
 impl PgDirectLifecycleSpec {
+    #[cfg(test)]
     pub(crate) fn from_resolved_config(
         config: tokio_postgres::Config,
+        request_pool_size: usize,
+        pool_wait: Duration,
+        ontology: SemanticOntology,
+        base_iri: &str,
+        operation_timeout: Duration,
+    ) -> Result<Self, ReadinessCause> {
+        Self::with_tls(
+            config,
+            crate::source_tls::client_config(None).expect("built-in roots"),
+            request_pool_size,
+            pool_wait,
+            ontology,
+            base_iri,
+            operation_timeout,
+        )
+    }
+
+    pub(crate) fn with_tls(
+        config: tokio_postgres::Config,
+        tls: rustls::ClientConfig,
         request_pool_size: usize,
         pool_wait: Duration,
         ontology: SemanticOntology,
@@ -46,13 +69,15 @@ impl PgDirectLifecycleSpec {
         }
         sf_mapping::validate_direct_mapping_base(base_iri)
             .map_err(|_| ReadinessCause::CapabilityDrift)?;
-        let pools = PgDirectPools::from_resolved_config(config, request_pool_size, pool_wait)
+        let pools = PgDirectPools::with_tls(config, request_pool_size, pool_wait, tls)
             .map_err(|_| ReadinessCause::CapabilityDrift)?;
         Ok(Self {
             pools,
             ontology: Arc::new(ontology),
             base_iri: Arc::from(base_iri),
             operation_timeout,
+            control_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+            shutdown: None,
         })
     }
 
@@ -77,7 +102,7 @@ impl PgDirectLifecycleSpec {
         &self,
         expectation: &PostgresDirectExpectation,
     ) -> Result<(), ReadinessCause> {
-        let budget = self.control_budget();
+        let budget = self.control_budget()?;
         crate::pg_generation::probe_direct_expectation(&self.pools.control(), expectation, &budget)
             .await
             .map_err(generation_cause)
@@ -87,7 +112,7 @@ impl PgDirectLifecycleSpec {
         &self,
         epoch: Epoch,
     ) -> Result<(RuntimeSnapshot, PostgresDirectExpectation), ReadinessCause> {
-        let budget = self.control_budget();
+        let budget = self.control_budget()?;
         let observed = observe_on_control(&self.pools, &budget).await?;
         let built = crate::pg_generation::build_and_bind_direct_candidate_on_control(
             observed,
@@ -106,11 +131,30 @@ impl PgDirectLifecycleSpec {
         .map_err(generation_cause)?
     }
 
-    fn control_budget(&self) -> RequestBudget {
-        RequestBudget::for_control(
+    fn control_budget(&self) -> Result<RequestBudget, ReadinessCause> {
+        let permit = Arc::clone(&self.control_permits)
+            .try_acquire_owned()
+            .map_err(|_| ReadinessCause::SourceUnavailable)?;
+        let mut budget = RequestBudget::for_control_with_shutdown(
             self.operation_timeout,
             QueryLimits::new(0, PG_DIRECT_CONTROL_SOURCE_WORK_V1, 0, 0),
-        )
+            self.shutdown.clone(),
+        );
+        budget
+            .retain_admission(permit)
+            .map_err(|_| ReadinessCause::SourceUnavailable)?;
+        Ok(budget)
+    }
+
+    pub(crate) fn control_permits(&self) -> Arc<tokio::sync::Semaphore> {
+        Arc::clone(&self.control_permits)
+    }
+
+    pub(crate) fn observe_shutdown(
+        &mut self,
+        shutdown: tokio::sync::watch::Receiver<crate::lifecycle::ShutdownPhase>,
+    ) {
+        self.shutdown = Some(shutdown);
     }
 
     pub(super) const fn operation_timeout(&self) -> Duration {
@@ -195,16 +239,30 @@ async fn observe_on_control(
     budget: &RequestBudget,
 ) -> Result<crate::IntrospectedSource, ReadinessCause> {
     let control_pool = pools.control();
-    let mut connection = budget
+    let object = budget
         .run(control_pool.get())
         .await
         .map_err(|_| ReadinessCause::SourceUnavailable)?
         .map_err(|_| ReadinessCause::SourceUnavailable)?;
-    let snapshot = budget
-        .run(sf_sql::introspect::introspect_postgres_public_observed_snapshot(&mut connection))
+    let mut connection = budget
+        .run(crate::backend::PgConn::checked_for_request(
+            object,
+            control_pool.tls.clone(),
+            budget.clone(),
+        ))
         .await
         .map_err(|_| ReadinessCause::SourceUnavailable)?
         .map_err(|_| ReadinessCause::SourceUnavailable)?;
+    let snapshot = budget
+        .run(
+            sf_sql::introspect::introspect_postgres_public_observed_snapshot(
+                connection.discovery_client(),
+            ),
+        )
+        .await
+        .map_err(|_| ReadinessCause::SourceUnavailable)?
+        .map_err(|_| ReadinessCause::SourceUnavailable)?;
+    connection.mark_recyclable();
     drop(connection);
     crate::IntrospectedSource::observed_postgres_direct(pools.request(), snapshot)
         .map_err(generation_cause)
