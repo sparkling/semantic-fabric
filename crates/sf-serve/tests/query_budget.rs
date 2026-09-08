@@ -13,6 +13,8 @@ mod support;
 
 const TOKEN: &str = "test-only-compiler-budget-credential-123456";
 const SELECT: &str = "SELECT ?value WHERE { ?item <http://example.test/value> ?value }";
+const CLONING: &str =
+    "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
 
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -203,6 +205,48 @@ async fn zero_compiler_work_is_a_pre_response_429() {
     )
     .await;
     assert_budget_problem(response).await;
+}
+
+#[tokio::test]
+async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
+    let query = CLONING;
+    let response = router(Arc::new(protected(query.len() as u64)))
+        .oneshot(authenticated(query))
+        .await
+        .unwrap();
+    assert_budget_problem(response).await;
+}
+
+#[tokio::test]
+async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_replay() {
+    for protected_profile in [false, true] {
+        let mut cfg = Arc::new(if protected_profile {
+            protected(10_000)
+        } else {
+            config(QueryLimits::new(10_000, u64::MAX, u64::MAX, u64::MAX))
+        });
+        for warm in [false, true] {
+            if warm {
+                Arc::get_mut(&mut cfg).unwrap().query_limits =
+                    QueryLimits::new(CLONING.len() as u64, u64::MAX, u64::MAX, u64::MAX);
+            }
+            let response = router(cfg.clone())
+                .oneshot(authenticated(CLONING))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let mut values: Vec<_> = json["results"]["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["x"]["value"].as_str().unwrap())
+                .collect();
+            values.sort();
+            assert_eq!(values, ["1", "2", "3"]);
+        }
+    }
 }
 
 #[tokio::test]

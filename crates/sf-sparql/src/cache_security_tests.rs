@@ -300,3 +300,64 @@ fn cache_and_error_diagnostics_do_not_render_identity_material() {
     assert!(matches!(mismatch, SecurityCompileError::PolicyMismatch));
     assert_eq!(compiler.expected_policy(), context.policy_snapshot());
 }
+
+#[test]
+fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let query = "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
+    let control = |work| QueryBudget::new(QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX));
+    let binding = binding();
+    let cache = security_cache();
+    let compiler = binding.for_security_policy(policy(1), &cache);
+    let alice = context(1, 2, 3);
+    assert!(compiler
+        .compile_shared_with_work_control(&alice, query, &control(0))
+        .is_err());
+    assert_eq!(cache.len(), 0);
+    let paid = control(u64::MAX);
+    let first = compiler
+        .compile_shared_with_work_control(&alice, query, &paid)
+        .unwrap();
+    assert!(paid.consumed(QueryCharge::CompilerWork) > 0);
+    let hit_control = control(0);
+    let hit = compiler
+        .compile_shared_with_work_control(&alice, query, &hit_control)
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &hit));
+    assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), 0);
+    assert!(compiler
+        .compile_shared_with_work_control(&context(1, 4, 3), query, &control(0))
+        .is_err());
+    assert!(compiler
+        .compile_shared_with_work_control(&context(1, 2, 4), query, &control(0))
+        .is_err());
+    assert_eq!(cache.len(), 1);
+    assert_eq!(binding.cache_len(), 0);
+}
+
+#[test]
+fn policy_mismatch_precedes_cancelled_control_and_cancelled_hits_cannot_escape() {
+    use sf_core::query_control::{QueryBudget, QueryControlError, QueryLimits};
+    let binding = binding();
+    let cache = security_cache();
+    let compiler = binding.for_security_policy(policy(1), &cache);
+    let context = context(1, 2, 3);
+    compiler.compile_shared(&context, QUERY).unwrap();
+    let control = QueryBudget::new(QueryLimits::new(0, 0, 0, 0));
+    control.terminate(QueryControlError::Cancelled);
+    cache.reset_access_counts();
+    assert!(matches!(
+        compiler.compile_shared_with_work_control(&context, QUERY, &control),
+        Err(SecurityCompileError::Compiler(crate::Error::QueryControl(
+            QueryControlError::Cancelled
+        )))
+    ));
+    assert_eq!(cache.access_counts(), (0, 0));
+    assert!(matches!(
+        binding
+            .for_security_policy(policy(2), &cache)
+            .compile_shared_with_work_control(&context, "invalid query", &control),
+        Err(SecurityCompileError::PolicyMismatch)
+    ));
+    assert_eq!(cache.access_counts(), (0, 0));
+}

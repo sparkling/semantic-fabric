@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use sf_core::query_control::{QueryControl, UncontrolledQueryControl};
 use sf_core::security_context::{PolicySnapshotId, SecurityCacheIdentity, SecurityContext};
 use spargebra::Query;
 
@@ -225,16 +226,38 @@ impl SecurityScopedCompiler<'_> {
         context: &SecurityContext,
         sparql: &str,
     ) -> Result<Arc<Plan>, SecurityCompileError> {
+        self.compile_shared_impl(context, sparql, None)
+    }
+
+    /// Meter the same owned compiler operations as the unscoped work-control
+    /// entry, preserving the separate security cache and policy-first failure.
+    /// This is partial work accounting, not a governed parser/cache profile.
+    pub fn compile_shared_with_work_control(
+        &self,
+        context: &SecurityContext,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> Result<Arc<Plan>, SecurityCompileError> {
+        self.compile_shared_impl(context, sparql, Some(control))
+    }
+
+    fn compile_shared_impl(
+        &self,
+        context: &SecurityContext,
+        sparql: &str,
+        work_control: Option<&dyn QueryControl>,
+    ) -> Result<Arc<Plan>, SecurityCompileError> {
         if !context.matches_policy_snapshot(self.expected_policy) {
             return Err(SecurityCompileError::PolicyMismatch);
         }
-
+        let control = work_control.unwrap_or(&UncontrolledQueryControl);
+        control.checkpoint().map_err(crate::Error::from)?;
         let query = crate::parse_query(sparql)?;
         let profile = CompileProfileId::Uncontrolled;
         let security_identity = context.cache_identity();
         let key =
             SecurityPlanKey::from_query(&query, self.binding.scope(), profile, security_identity);
-
+        control.checkpoint().map_err(crate::Error::from)?;
         if let Some(cached) = self.cache.get(&key) {
             if cached.scope != self.binding.scope() {
                 return Err(SecurityCompileError::CacheScopeMismatch);
@@ -245,10 +268,17 @@ impl SecurityScopedCompiler<'_> {
             if cached.security_identity != security_identity {
                 return Err(SecurityCompileError::CacheIdentityMismatch);
             }
+            control.checkpoint().map_err(crate::Error::from)?;
             return Ok(cached.shared_plan());
         }
 
-        let plan = self.binding.compile_parsed_uncached_shared(&query)?;
+        let plan = match work_control {
+            Some(control) => self
+                .binding
+                .compile_parsed_uncached_shared_with_work_control(&query, control)?,
+            None => self.binding.compile_parsed_uncached_shared(&query)?,
+        };
+        control.checkpoint().map_err(crate::Error::from)?;
         self.cache.put(
             key,
             SecurityCachedPlan::from_shared(
@@ -258,6 +288,7 @@ impl SecurityScopedCompiler<'_> {
                 Arc::clone(&plan),
             ),
         );
+        control.checkpoint().map_err(crate::Error::from)?;
         Ok(plan)
     }
 

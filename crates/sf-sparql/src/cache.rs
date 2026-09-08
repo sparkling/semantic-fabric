@@ -24,7 +24,7 @@ use crate::compiler_schema::{
     ColumnTypeAuthority, ColumnTypeUse, CompilerSchema, ConstraintAuthority,
 };
 use crate::runtime_identity::CompileDigests;
-use crate::{federation::SourceAffineUnionArm, Plan, Result, Tbox};
+use crate::{Plan, Result, Tbox};
 
 #[path = "cache_profile.rs"]
 mod profile;
@@ -273,32 +273,8 @@ impl CompilerBinding {
         self.compile_parsed_uncached_shared(&query)
     }
 
-    /// Compile one arm from a query that was parsed and structurally admitted
-    /// once by the narrow federation boundary.
-    pub(crate) fn compile_union_arm_shared(&self, arm: &SourceAffineUnionArm) -> Result<Arc<Plan>> {
-        crate::translate_cached_shared(arm.query(), self)
-    }
-
-    /// Uncached arm for preflight or authoritative protected federation under
-    /// admitted generation/security leases. Never populates either plan cache.
-    pub(crate) fn compile_union_arm_uncached_shared(
-        &self,
-        arm: &SourceAffineUnionArm,
-    ) -> Result<Arc<Plan>> {
-        self.compile_parsed_uncached_shared(arm.query())
-    }
-
     fn compile_parsed_uncached_shared(&self, query: &Query) -> Result<Arc<Plan>> {
-        crate::translate_tree_with_column_type_use(
-            query,
-            self.triples_maps(),
-            self.tbox(),
-            self.dialect(),
-            self.schema(),
-            self.column_type_use(),
-            crate::CompilerWorkMode::Uncontrolled,
-        )
-        .map(Arc::new)
+        self.compile_parsed_with_work_mode(query, crate::CompilerWorkMode::Uncontrolled)
     }
 
     pub const fn source_id(&self) -> SourceId {

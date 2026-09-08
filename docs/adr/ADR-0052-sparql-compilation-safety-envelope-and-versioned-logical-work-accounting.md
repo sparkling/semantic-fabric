@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-03
-updated: 2026-09-06
+updated: 2026-09-08
 tags: [sparql, compiler, resource-governance, cancellation, cache, dos]
 supersedes: []
 depends-on: [ADR-0004, ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
@@ -16,9 +16,9 @@ This ADR is **proposed**. Implemented foundations include the compiler-work
 `QueryControl::terminate`, exact request-budget handoff and compiler-permit
 retention, profile-keyed cache entries, and active serving reuse of `Arc<Plan>`.
 The raw cache and dormant zero-capacity governed shard are physically distinct.
-Private dormant primitives provide fallible algebra/Plan measurement, bounded
-canonical key rendering, compiler reservations and exact clone roots. Five
-fan-out/rollback sites privately meter each retained clone operation by binding
+Primitives provide fallible algebra/Plan measurement, bounded canonical rendering,
+compiler reservations and exact clone roots. On 2026-09-08 public serving tree
+compilation connects five fan-out/rollback clone sites to request control, binding
 checkpoint, exact measurement, reservation and exactly one clone:
 nested-subplan rollback branch forests; FILTER-over-UNION preceding-arm
 conditions; InnerJoin-over-UNION preceding-arm IQ-node collections and
@@ -30,8 +30,8 @@ SubPlans and nested `EXISTS`. For `B` resulting branches, a borrowed `EXISTS`
 body is cloned only for the preceding `B-1` branches and the final branch owns
 the original; rejection of a later clone retains completed earlier charges.
 Compiler-measurement work-stack allocation failure has a distinct typed cause
-and a dormant redacted `503` mapping without `Retry-After`; no public controlled
-compiler path serves it.
+and a redacted `503` mapping without `Retry-After`. Public operation-local clone
+limits do not grant whole-plan validity or activate the dormant governed profile.
 
 ADR-0053's normal control-only parser peer, selector-free parser-free peer and separately feature-gated parser-free mutant peer use exact private tuples, the same held ELF, cumulative-cap nonblocking pipes and one immutable spawn deadline. Evidence commits `e55fccd` and `ce5487e` implement the closed child/parent mutant matrix, `d103438` tracks its sources in the development harness, and `fa9d977` proves live request-EOF ordering; these commits are integrated evidence, not shipment or release qualification.
 
@@ -396,12 +396,12 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    present without changing the serving binding's `N`-entry aggregate bound.
    Add the admitted witness, explicit calibrated governed capacity, governed
    writer activation, stored final measurement and eviction/drop control.
-5. **Serving — partial:** a finite placeholder value, typed/redacted error
-   mapping, exact worker `RequestBudget` handoff and permit retention are present.
-   The private verified-generation path also retains one preflight reservation
-   across source acquisition and authoritative compilation without upgrading it
-   to `GovernedV1`. Add the calibrated CLI/config limit and call only the future
-   governed API after the parser, owned-work and cache gates pass.
+5. **Serving — partial:** decoded input charging and owned clone metering now
+   use the request control in ordinary/security misses, preflight and federation.
+   Exact-limit/cancellation/public-result tests pass; hits share plans without
+   clone replay, clone failures cannot populate caches, and preflight retains its permit
+   across source acquisition. Parser/build/resolve/remaining work stays open;
+   `GovernedV1` still requires the parser, owned-work and cache gates to pass.
 6. **Claims:** update capability and operational documentation only after all
    relevant gates pass; keep this ADR proposed until its constants and work
    model receive explicit maintainer acceptance.

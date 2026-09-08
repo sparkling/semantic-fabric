@@ -1,16 +1,107 @@
-//! Semantic-identity construction and redacted diagnostics for compiler bindings.
+//! Bound compiler work control, semantic identity and redacted diagnostics.
 
 use std::fmt;
+use std::sync::Arc;
 
+use sf_core::query_control::QueryControl;
 use sf_core::SourceMapping;
 use sf_sql::{Dialect, TableSchema};
+use spargebra::Query;
 
-use super::{CompilerBinding, Epoch};
+use super::{CachedPlan, CompileProfileId, CompilerBinding, Epoch};
+use crate::compiler_control::CompileContext;
 use crate::compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
 use crate::runtime_identity::{CompileDigests, SemanticIdentity};
-use crate::Tbox;
+use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 
 impl CompilerBinding {
+    /// Carry request control into the already-metered normalization, lowering
+    /// and nested-cascade operations on a cache miss. Parsing, key rendering,
+    /// build/resolve and cache destruction are not fully governed by this seam.
+    /// Cache identity and semantics are unchanged: this does not activate
+    /// `GovernedV1`. A shared hit performs no recursive plan clone to charge.
+    /// Measurement limits protect each performed clone, not whole-plan admission.
+    pub fn compile_shared_with_work_control(
+        &self,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> Result<Arc<Plan>> {
+        control.checkpoint()?;
+        let query = crate::parse_query(sparql)?;
+        self.compile_parsed_shared_with_work_control(&query, control)
+    }
+
+    /// Uncached counterpart for structural preflight. The request retains the
+    /// same cumulative control for its later authoritative compilation.
+    pub fn compile_uncached_shared_with_work_control(
+        &self,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> Result<Arc<Plan>> {
+        control.checkpoint()?;
+        let query = crate::parse_query(sparql)?;
+        self.compile_parsed_uncached_shared_with_work_control(&query, control)
+    }
+
+    pub(crate) fn compile_parsed_shared_with_work_control(
+        &self,
+        query: &Query,
+        control: &dyn QueryControl,
+    ) -> Result<Arc<Plan>> {
+        control.checkpoint()?;
+        let profile = CompileProfileId::Uncontrolled;
+        let key = super::plan_key_for_profile(query, self.scope(), profile);
+        control.checkpoint()?;
+        if let Some(cached) = self.cache().get(&key) {
+            if cached.scope() != self.scope() || cached.profile() != profile {
+                return Err(Error::Mapping(
+                    "compiled-plan cache identity mismatch".into(),
+                ));
+            }
+            control.checkpoint()?;
+            return Ok(cached.shared_plan());
+        }
+        let plan = self.compile_parsed_uncached_shared_with_work_control(query, control)?;
+        control.checkpoint()?;
+        self.cache().put(
+            key,
+            CachedPlan::from_shared(self.scope(), profile, Arc::clone(&plan)),
+        );
+        control.checkpoint()?;
+        Ok(plan)
+    }
+
+    pub(crate) fn compile_parsed_uncached_shared_with_work_control(
+        &self,
+        query: &Query,
+        control: &dyn QueryControl,
+    ) -> Result<Arc<Plan>> {
+        control.checkpoint()?;
+        let result = self.compile_parsed_with_work_mode(
+            query,
+            CompilerWorkMode::Metered(CompileContext::new(control)),
+        );
+        control.checkpoint()?;
+        result
+    }
+
+    pub(super) fn compile_parsed_with_work_mode(
+        &self,
+        query: &Query,
+        work: CompilerWorkMode<'_>,
+    ) -> Result<Arc<Plan>> {
+        crate::translate_tree_with_column_type_use(
+            query,
+            self.triples_maps(),
+            self.tbox(),
+            self.dialect(),
+            self.schema(),
+            self.column_type_use(),
+            work,
+        )
+        .map(Arc::new)
+    }
+
     /// Prove the constant mapping origin of every emitted solution for the
     /// initial on-demand lineage profile. This is a query/input proof, NOT an
     /// execution capability for an independently mutable `Plan`.
@@ -142,5 +233,205 @@ impl fmt::Debug for CompilerBinding {
             .field("tbox_empty", &self.tbox.is_empty())
             .field("cache_entries", &self.cache().len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+    use crate::iq::node::{IqCond, IqNode};
+    use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+    use sf_core::{
+        query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits},
+        SourceId,
+    };
+
+    pub(crate) const QUERY: &str =
+        "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
+
+    fn binding() -> CompilerBinding {
+        CompilerBinding::from_unverified_observation(
+            SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
+            Dialect::Sqlite,
+            Tbox::default(),
+            vec![],
+            Epoch::default(),
+            8,
+        )
+    }
+
+    fn budget(work: u64) -> QueryBudget {
+        QueryBudget::new(QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX))
+    }
+
+    fn clone_work() -> u64 {
+        let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
+            panic!()
+        };
+        let IqNode::Construction { child, .. } = crate::build::build_tree(&pattern, None).unwrap()
+        else {
+            panic!()
+        };
+        let IqNode::Filter { cond, .. } = *child else {
+            panic!()
+        };
+        let [IqCond::Exists(inner)] = cond.as_slice() else {
+            panic!()
+        };
+        measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(inner))
+            .unwrap()
+            .deep_clone_work
+    }
+
+    #[test]
+    fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
+        let binding = binding();
+        let work = clone_work();
+        let short = budget(2 * work - 1);
+        assert!(matches!(
+            binding.compile_shared_with_work_control(QUERY, &short),
+            Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
+        ));
+        assert_eq!(short.consumed(QueryCharge::CompilerWork), work);
+        assert_eq!(binding.cache_len(), 0);
+        let exact = budget(2 * work);
+        let plan = binding
+            .compile_shared_with_work_control(QUERY, &exact)
+            .unwrap();
+        assert_eq!(exact.consumed(QueryCharge::CompilerWork), 2 * work);
+        assert_eq!(binding.cache_len(), 1);
+        assert_eq!(
+            format!("{plan:?}"),
+            format!("{:?}", binding.compile_uncached_shared(QUERY).unwrap())
+        );
+        let hit_control = budget(0);
+        let hit = binding
+            .compile_shared_with_work_control(QUERY, &hit_control)
+            .unwrap();
+        assert!(Arc::ptr_eq(&plan, &hit));
+        assert!(Arc::ptr_eq(&plan, &binding.compile_shared(QUERY).unwrap()));
+        assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), 0);
+        hit_control.terminate(QueryControlError::Cancelled);
+        assert!(matches!(
+            binding.compile_shared_with_work_control(QUERY, &hit_control),
+            Err(Error::QueryControl(QueryControlError::Cancelled))
+        ));
+    }
+
+    #[test]
+    fn uncached_preflight_charges_each_pass_without_populating_cache() {
+        let binding = binding();
+        let work = clone_work();
+        for allowance in [4 * work - 1, 4 * work] {
+            let control = budget(allowance);
+            binding
+                .compile_uncached_shared_with_work_control(QUERY, &control)
+                .unwrap();
+            let second = binding.compile_uncached_shared_with_work_control(QUERY, &control);
+            assert_eq!(second.is_ok(), allowance == 4 * work);
+            assert_eq!(
+                control.consumed(QueryCharge::CompilerWork),
+                if second.is_ok() { 4 * work } else { 3 * work }
+            );
+            assert_eq!(binding.cache_len(), 0);
+        }
+    }
+
+    struct CancelAfterClone(QueryBudget);
+    impl QueryControl for CancelAfterClone {
+        fn checkpoint(&self) -> std::result::Result<(), QueryControlError> {
+            self.0.checkpoint()
+        }
+        fn consume(
+            &self,
+            charge: QueryCharge,
+            amount: u64,
+        ) -> std::result::Result<(), QueryControlError> {
+            self.0.consume(charge, amount)?;
+            if charge == QueryCharge::CompilerWork && amount > 0 {
+                self.0.terminate(QueryControlError::Cancelled);
+            }
+            Ok(())
+        }
+        fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+            self.0.terminate(reason)
+        }
+    }
+
+    #[test]
+    fn cancellation_between_clone_operations_prevents_cache_insertion() {
+        let binding = binding();
+        let control = CancelAfterClone(budget(u64::MAX));
+        assert!(matches!(
+            binding.compile_shared_with_work_control(QUERY, &control),
+            Err(Error::QueryControl(QueryControlError::Cancelled))
+        ));
+        assert_eq!(control.0.consumed(QueryCharge::CompilerWork), clone_work());
+        assert_eq!(binding.cache_len(), 0);
+    }
+
+    #[test]
+    fn metered_cache_hits_still_check_scope_and_profile() {
+        for wrong_profile in [false, true] {
+            let binding = binding();
+            let parsed = crate::parse_query(QUERY).unwrap();
+            let plan = binding.compile_uncached_shared(QUERY).unwrap();
+            let scope = if wrong_profile {
+                binding.scope()
+            } else {
+                super::super::test_scope(SourceId::new(1).unwrap(), Dialect::Sqlite, Epoch(1))
+            };
+            let profile = if wrong_profile {
+                CompileProfileId::GovernedV1
+            } else {
+                CompileProfileId::Uncontrolled
+            };
+            binding.cache().put(
+                super::super::plan_key(&parsed, binding.scope()),
+                CachedPlan::from_shared(scope, profile, plan),
+            );
+            assert!(matches!(
+                binding.compile_shared_with_work_control(QUERY, &budget(0)),
+                Err(Error::Mapping(_))
+            ));
+        }
+    }
+
+    struct CancelAfterInsertion<'a>(&'a CompilerBinding, QueryBudget);
+    impl QueryControl for CancelAfterInsertion<'_> {
+        fn checkpoint(&self) -> std::result::Result<(), QueryControlError> {
+            if self.0.cache_len() != 0 {
+                self.1.terminate(QueryControlError::Cancelled);
+            }
+            self.1.checkpoint()
+        }
+        fn consume(
+            &self,
+            charge: QueryCharge,
+            amount: u64,
+        ) -> std::result::Result<(), QueryControlError> {
+            self.1.consume(charge, amount)
+        }
+        fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+            self.1.terminate(reason)
+        }
+    }
+
+    #[test]
+    fn cancellation_after_insertion_can_retain_only_the_completed_valid_plan() {
+        let binding = binding();
+        let control = CancelAfterInsertion(&binding, budget(u64::MAX));
+        assert!(matches!(
+            binding.compile_shared_with_work_control(QUERY, &control),
+            Err(Error::QueryControl(QueryControlError::Cancelled))
+        ));
+        assert_eq!(binding.cache_len(), 1);
+        let cached = binding
+            .compile_shared_with_work_control(QUERY, &budget(0))
+            .unwrap();
+        assert_eq!(
+            format!("{cached:?}"),
+            format!("{:?}", binding.compile_uncached_shared(QUERY).unwrap())
+        );
     }
 }

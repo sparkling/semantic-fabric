@@ -294,8 +294,12 @@ fn compile_source_affine_union_with(
         let binding = candidates[0];
         control.checkpoint()?;
         let plan = match mode {
-            CompileMode::Cached => binding.compile_union_arm_shared(arm),
-            CompileMode::Uncached => binding.compile_union_arm_uncached_shared(arm),
+            CompileMode::Cached => {
+                binding.compile_parsed_shared_with_work_control(arm.query(), control)
+            }
+            CompileMode::Uncached => {
+                binding.compile_parsed_uncached_shared_with_work_control(arm.query(), control)
+            }
         }?;
         control.checkpoint()?;
         selected.push(SourceFragment::new(binding.source_id(), plan)?);

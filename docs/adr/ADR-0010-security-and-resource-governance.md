@@ -330,6 +330,21 @@ closes the ignored compiler-input allowance, not total parser/optimizer CPU,
 catalog/product growth, recursive destruction or the broader governance gate.
 The raw compiler and dormant governed pipeline are not promoted by this change.
 
+**Owned clone-work update (2026-09-08):** ordinary and security-scoped serving
+misses, uncached preflight and bounded federation tree compilation now carry
+the same control through existing normalization/lowering/nested-cascade clone
+operations. Each performed clone is measured and reserved before copying; its
+operation-local limits are not a whole-plan admission profile. Cache hits retain
+their existing identity and share `Arc<Plan>` without charging for avoided clones.
+Clone failures or cancellation observed before insertion cannot populate caches;
+checkpoints bracket key lookup, hits and insertion. A cancellation racing after
+insertion may retain the completed valid plan, but cannot return it to that caller.
+Tests prove exact/N-1 charging, cumulative uncached passes, cancellation,
+security partitioning and public `EXISTS` rejection before source admission with
+exact sufficient-budget results. Parsing, key rendering, build/resolve, remaining
+products/copies and destruction still require controls; `l-query-budget` remains
+open. Direct multi-origin unfolding keeps its separate existing meter.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.

@@ -103,6 +103,13 @@ Required HTTP/unit tests cover exact bounds, security precedence, no first-pass
 source admission and two-pass permit recovery. This closes a reproduced zero-budget
 bypass, not total compiler CPU/catalog-growth governance; `l-query-budget` remains
 blocking. No dormant parser-worker or governed-cache profile is activated.
+Public tree compilation now also carries existing owned normalization/lowering/
+nested-cascade clone metering through ordinary/security misses, preflight and
+bounded federation. Public `EXISTS` tests prove input-only work cannot fund tree
+cloning and sufficient work preserves the exact bag; cache hits avoid clone replay.
+Operation-local measurement limits grant no whole-plan admission authority.
+Required exact-bound, cancellation, no-cache-on-clone-failure and partition checks
+protect this wiring; parsing/build/resolve and remaining work stay open.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

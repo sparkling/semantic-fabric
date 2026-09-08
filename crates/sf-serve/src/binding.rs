@@ -154,17 +154,18 @@ impl RuntimeBinding {
         TEST_BINDING_CONSTRUCTIONS.with(std::cell::Cell::get)
     }
 
-    /// Compile through the raw cache path while carrying the request control
-    /// identity into the blocking worker. The checkpoints bound handoff only;
-    /// compiler-work governance remains dormant until the controlled pipeline
-    /// is complete.
+    /// Carry the request identity through the existing owned compiler-operation
+    /// meter. Raw-profile cache identity remains unchanged; this is not total
+    /// parser/compiler governance or promotion of the dormant governed profile.
     pub(crate) fn compile(
         &self,
         sparql: &str,
         control: &dyn QueryControl,
     ) -> sf_sparql::Result<BoundPlan> {
         control.checkpoint()?;
-        let compiled = self.compiler.compile_shared(sparql);
+        let compiled = self
+            .compiler
+            .compile_shared_with_work_control(sparql, control);
         control.checkpoint()?;
         compiled.map(|plan| BoundPlan {
             lineage: None,
@@ -184,7 +185,9 @@ impl RuntimeBinding {
         control: &dyn QueryControl,
     ) -> sf_sparql::Result<Arc<Plan>> {
         control.checkpoint()?;
-        let compiled = self.compiler.compile_uncached_shared(sparql);
+        let compiled = self
+            .compiler
+            .compile_uncached_shared_with_work_control(sparql, control);
         control.checkpoint()?;
         compiled
     }
@@ -204,7 +207,7 @@ impl RuntimeBinding {
         let compiled = self
             .compiler
             .for_security_policy(policy, &self.security_cache)
-            .compile_shared(&context, sparql)
+            .compile_shared_with_work_control(&context, sparql, budget)
             .map_err(|error| match error {
                 SecurityCompileError::Compiler(error) => error,
                 _ => sf_sparql::Error::Mapping("security partition mismatch".into()),

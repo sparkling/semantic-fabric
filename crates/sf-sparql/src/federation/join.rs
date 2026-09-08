@@ -129,7 +129,8 @@ fn compile_with_origins(
         };
         // Federation authorization is applied later; do not introduce a raw
         // cache path for secured joins.
-        let mut plan = binding.compile_union_arm_uncached_shared(&arm)?;
+        let mut plan =
+            binding.compile_parsed_uncached_shared_with_work_control(arm.query(), control)?;
         if plan.branches.len() != 1 || !plan.source_sized_states().is_empty() {
             return unsupported();
         }

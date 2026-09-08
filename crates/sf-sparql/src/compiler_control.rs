@@ -90,8 +90,8 @@ impl<'control> CompileMeter<'control> {
 
 /// Shared compiler-phase access to one request's accounting identity.
 ///
-/// This is a dormant coordination primitive: it does not admit a query,
-/// activate a governed compile profile, or establish parser safety. Copies keep
+/// Serving uses this view for selected owned compiler operations. It does not
+/// admit a query, activate a governed profile, or establish parser safety. Copies keep
 /// the same [`CompileMeter`] and therefore the same sticky terminal state and
 /// compiler-work counter.
 #[derive(Clone, Copy)]
