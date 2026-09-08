@@ -15,7 +15,6 @@ use sf_sql::Dialect;
 const REACHES: &str = "http://ex/reaches";
 
 #[test]
-#[ignore = "known ADR-0049 RDF-key collation defect; required explicit release check remains failing"]
 fn path_keys_do_not_inherit_case_insensitive_source_collation() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE edge(parent TEXT COLLATE NOCASE, child TEXT COLLATE NOCASE); INSERT INTO edge VALUES ('a','B'),('b','c'),('A','B');").unwrap();
@@ -68,6 +67,38 @@ fn edge_mapping() -> Vec<TriplesMap> {
             graphs: vec![],
         }],
     }]
+}
+
+#[test]
+#[ignore = "ADR-0049 required release check: many-to-one decoded key identity remains open"]
+fn decoded_character_keys_deduplicate_as_rdf_nodes() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE edge(parent CHARACTER(4), child CHARACTER(4)); INSERT INTO edge VALUES ('a','b'),('a ','b');").unwrap();
+    let plan = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>+ ?o }}"),
+        &edge_mapping(),
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let rows = exec::select(&plan, &conn).unwrap().rows;
+    let distinct: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|term| term.as_ref().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        distinct.len(),
+        1,
+        "both source keys decode to the same padded RDF node"
+    );
+    assert_eq!(
+        rows.len(),
+        distinct.len(),
+        "recursive identity must not retain duplicate decoded RDF pairs"
+    );
 }
 
 fn rowid_reflexive_mapping() -> Vec<TriplesMap> {

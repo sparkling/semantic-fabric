@@ -242,8 +242,8 @@ where
         }
         let probe = ctx.dialect.probe_sql(source);
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
-        let names = b.column_names(&probe).await.map_err(map_sql_err)?;
-        catalog.insert_live(source, names)?;
+        let columns = b.result_columns(&probe).await.map_err(map_sql_err)?;
+        catalog.insert_live_result(source, columns)?;
     }
     ctx.control.checkpoint()?;
     emit::validate_live_columns(branches, ctx.dialect, &catalog)?;
@@ -311,7 +311,7 @@ where
         // The ONLY bind site: `e.params` bound as N positional params by the adapter.
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let mut s = b
-            .open_branch(&e.sql, &e.params)
+            .open_branch_with_metadata(&e.sql, &e.params, e.metadata_sql.as_deref())
             .await
             .map_err(map_sql_err)?;
         // Buffer -> term-gen (parallel only when `ctx.parallel_term_gen`, see

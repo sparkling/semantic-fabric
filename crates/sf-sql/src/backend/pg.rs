@@ -369,6 +369,21 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
         Ok(stmt.columns().iter().map(|c| c.name().to_owned()).collect())
     }
 
+    async fn result_columns(
+        &mut self,
+        probe_sql: &str,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        let stmt = self.client.prepare(probe_sql).await?;
+        Ok(stmt
+            .columns()
+            .iter()
+            .map(|column| crate::backend::ResultColumn {
+                name: column.name().to_owned(),
+                varying_text: matches!(*column.type_(), Type::TEXT | Type::VARCHAR),
+            })
+            .collect())
+    }
+
     async fn open_branch(&mut self, sql: &str, lexical_params: &[String]) -> Result<PgRowStream> {
         // Each emitted `$n` value is a lexical string, but a FILTER constant may
         // bind against a typed column (INT4/FLOAT8/BOOL/…); `LexicalParam` parses

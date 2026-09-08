@@ -238,6 +238,16 @@ impl SqlBackend for SqliteOwnedBackend {
         sql: &str,
         lexical_params: &[String],
     ) -> Result<SqliteReceiverStream> {
+        self.open_branch_with_metadata(sql, lexical_params, None)
+            .await
+    }
+
+    async fn open_branch_with_metadata(
+        &mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+    ) -> Result<SqliteReceiverStream> {
         // cap-1, FIFO (=_bag-preserving) channel: at most one buffered row in flight
         // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
@@ -246,6 +256,7 @@ impl SqlBackend for SqliteOwnedBackend {
         let control = self.control.clone();
         let observer = self.observer.clone();
         let sql = sql.to_owned();
+        let metadata_sql = metadata_sql.map(str::to_owned);
         let params: Vec<String> = lexical_params.to_vec();
         // The `!Send` Connection / Statement / Rows live ONLY on this blocking
         // thread; `blocking_send` on the cap-1 channel blocks the cursor until the
@@ -274,17 +285,18 @@ impl SqlBackend for SqliteOwnedBackend {
                 }
                 None => None,
             };
-            let (decl_codes, pads, nproj) = match column_meta(&guard, &sql) {
-                Ok(m) => m,
-                Err(e) => {
-                    let error = match cancellation.as_ref() {
-                        Some(cancellation) => cancellation.map_error(e),
-                        None => e,
-                    };
-                    send_error(&tx, control.as_deref(), error);
-                    return;
-                }
-            };
+            let (decl_codes, pads, nproj) =
+                match column_meta(&guard, metadata_sql.as_deref().unwrap_or(&sql)) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let error = match cancellation.as_ref() {
+                            Some(cancellation) => cancellation.map_error(e),
+                            None => e,
+                        };
+                        send_error(&tx, control.as_deref(), error);
+                        return;
+                    }
+                };
             observer.observe(SqliteCancellationEvent::MetadataReady);
             if let Some(control) = control.as_ref() {
                 if let Err(error) = control.checkpoint() {
@@ -303,6 +315,14 @@ impl SqlBackend for SqliteOwnedBackend {
                     return;
                 }
             };
+            if stmt.column_count() != nproj {
+                send_error(
+                    &tx,
+                    control.as_deref(),
+                    Error::Emit("SQLite metadata twin projection mismatch".into()),
+                );
+                return;
+            }
             let mut rows = match stmt.query(rusqlite::params_from_iter(params.iter())) {
                 Ok(r) => r,
                 Err(e) => {

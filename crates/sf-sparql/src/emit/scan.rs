@@ -19,9 +19,6 @@ pub(super) fn scan_ref(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -
 pub(super) fn scan_actuals(scan: &Scan, catalog: &ColumnCatalog) -> AliasActuals {
     match &scan.source {
         ScanSource::Logical(source) => source_actuals(source, catalog),
-        ScanSource::Path { .. } => AliasActuals {
-            source_kind: AliasSourceKind::Derived,
-            columns: vec!["sf_s".into(), "sf_o".into()],
-        },
+        ScanSource::Path { closure, .. } => path_actuals(closure, catalog),
     }
 }

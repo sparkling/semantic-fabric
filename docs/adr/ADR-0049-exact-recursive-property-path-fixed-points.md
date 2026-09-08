@@ -20,39 +20,49 @@ This decision closes the known semantic truncation in the single-source
 compiler. The serving lane now carries one absolute deadline plus finite limits
 for observable probes, opens, pulls, semantic results, and serializer writes.
 Raw/conformance APIs remain explicitly uncontrolled; total compiler/source work,
-native key-collation safety, cross-source closure and backend admission remain open.
+general decoded-key equality, cross-source closure and backend admission remain open.
 Required native serving cleanup is recorded in ADR-0055, not superseded here.
 
 **2026-09-08 exact query slice:** required owned-TLS CLI checks execute one-hop
 DESCRIBE and `P+`/`P*` on PostgreSQL 16.15/MySQL 8.4.11: a duplicate-edge
 cycle/diamond returns all 16 pairs; a 258-edge chain returns all 33,411/33,670
-pairs, not a depth-limited prefix. These native keys are decimal-digit VARCHARs;
-this does not qualify arbitrary source collations or typed endpoints. A separate
-SQLite NOCASE regression reproduced false reachability and lost case-distinct
-IRIs. The attempted blanket `COLLATE BINARY` path change is NOT integrated:
-it lost CHAR/DATE metadata and rejected existing correlated paths; raw byte keys
-also cannot assume decoder-equivalence across mixed types or padding. The
-separate integrated repair is a guarded prepare-only metadata walk for authored
-collated SQL projections. It removes transparent
-collation only from explicitly aliased columns, preserves column names and
-recovers CHAR padding/DATE types; unsafe unnamed computed outputs reject before
-cursor work. Raw and authenticated HTTP tests preserve CHAR/DATE reconstruction.
-SQLite/native path-key equality is still open. Native text comparison,
-external/correlated comparison precedence, total source-work and exact release
-qualification remain required follow-up. Do not cast every key to text/binary:
-that changes date/binary/numeric decoding. Live type metadata and preserving typed
-composed paths until emission are the identified native correction seams.
+pairs, not a depth-limited prefix. Joined paths retain typed recipes until live
+emission (ADR-0033); folded native identifiers resolve before cursor work.
 
-**Typed composition delta (2026-09-08):** ADR-0033 now retains composed paths as
-typed scan recipes until live emission, including correlated scan positions.
-The required PostgreSQL/MySQL CLI fixture proves joined closures resolve folded
-native column names; the old frozen-SQL variant fails the same check. Metadata
-preflight, derived-output validation and clone/resource accounting cover the new
-representation. No comparison semantics changed and the NOCASE defect remains
-open. Its regression is retained as an explicitly failing release check (opt-in
-`--ignored --exact`, not a successful workspace-test claim). Ordinary early SQL
-wrappers have a separate reproduced PostgreSQL folding defect. Neither gap is
-waived by positive native fixtures or this necessary typed-transport repair.
+**Text-comparison repair (2026-09-08):** SQLite NOCASE, PostgreSQL
+nondeterministic ICU and MySQL case-insensitive PAD SPACE fixtures now preserve
+case-distinct and trailing-space-distinct RDF nodes for `+`, `*`, `?` and
+alternatives. SQLite comparison uses storage-preserving `COLLATE BINARY`;
+native prepare-time varying-text facts authorize PostgreSQL `COLLATE "C"` or
+MySQL text `CONVERT(... USING utf8mb4) COLLATE utf8mb4_0900_bin`. MySQL's
+[NO PAD text collation](https://dev.mysql.com/doc/refman/8.4/en/charset-mysql.html)
+preserves trailing spaces without changing the result decoder to binary/hex.
+Fixed-width, numeric, date and unknown native types are not blanket-cast.
+
+The rejected blanket SQLite prototype lost CHAR/DATE metadata. The integrated
+compiler instead emits a prepare-only, same-IR metadata twin omitting only its
+own comparison decorations; projection and parameter vectors must match.
+Authored SQL is untouched, including implicit expression names. Borrowing and
+owned SQLite retain DATE types, CHAR padding, original bound parameters and
+the existing admission/cancellation owner; only actual SQL executes. The earlier
+guarded authored-collation metadata recovery remains separate and unchanged.
+
+External key comparisons decorate both sides, retaining NULL/unbound guards.
+Authenticated SQLite JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS tests reject false
+case-insensitive correlations. Native metadata propagates through standalone and
+joined paths and SubPlans; aggregate SQL and metadata share one actual column
+layout, including SQLite AVG's metadata operand. Twenty nested two-column plans
+require 21 metadata visits, not width-exponential recursion. These are specific
+tested profiles, not every native outer correlation or a total compiler-work proof.
+
+**Remaining exactness gate:** storage equality is still not general decoded RDF
+identity. The required `decoded_character_keys_deduplicate_as_rdf_nodes` check
+currently fails: differently padded CHARACTER(4) keys decode to one RDF node but
+produce two path rows. `cmd-property-path-key-equality` runs it explicitly with
+`--ignored --exact`; default-suite green does not close it. Many-to-one decoding,
+mixed-type identity, ordinary early-wrapper native folding, total source-work
+and exact release remain open. No semantic-exact, bounded or admission flag is
+promoted by the text repair.
 
 ## Context
 
@@ -138,7 +148,7 @@ executes the hostile suite, and a local PostgreSQL run produced all 33,411 pairs
 for a 258-edge chain plus all nine pairs for a three-node cycle. The required
 native CLI command now executes the pinned PostgreSQL/MySQL profile:
 `cargo test --locked -p sf-cli --no-default-features --test source_tls_live query_profile::native_describe_and_recursive_paths_are_exact -- --ignored --exact --nocapture`.
-This is positive profile evidence, not source-collation safety or admission.
+This qualifies the described native text profile, not all typed-key equality or admission.
 
 ## Consequences
 

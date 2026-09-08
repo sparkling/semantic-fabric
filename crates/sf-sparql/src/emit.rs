@@ -38,6 +38,10 @@ use crate::iq::{
 use crate::{Error, Result};
 mod scan;
 use scan::{scan_actuals, scan_ref};
+mod aggregate_projection;
+mod path_comparison;
+use aggregate_projection::{aggregate_projection, AggregateProjection};
+use path_comparison::{path_actuals, path_key_expression, render_key_equality, subplan_actuals};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
 /// regular-identifier column references resolve to the column the live DBMS truly
@@ -45,15 +49,36 @@ use scan::{scan_actuals, scan_ref};
 /// names). Built by the executor from the connection ([`crate::exec`] /
 /// [`crate::exec_pg`]); an empty catalog disables resolution (every reference is
 /// emitted as written — the dialect-neutral [`emit_branch`] path).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ColumnCatalog {
     by_source: HashMap<String, Vec<String>>,
+    text_by_source: HashMap<String, HashSet<String>>,
+    suppress_path_collation: bool,
 }
 
 impl ColumnCatalog {
     /// Record `source`'s actual result-column names (in any order).
     pub fn insert(&mut self, source: &LogicalSource, columns: Vec<String>) {
+        self.text_by_source.remove(&source_key(source));
         self.by_source.insert(source_key(source), columns);
+    }
+
+    pub(crate) fn insert_live_result(
+        &mut self,
+        source: &LogicalSource,
+        columns: Vec<sf_sql::backend::ResultColumn>,
+    ) -> Result<()> {
+        let text = columns
+            .iter()
+            .filter(|column| column.varying_text)
+            .map(|column| column.name.clone())
+            .collect();
+        self.insert_live(
+            source,
+            columns.into_iter().map(|column| column.name).collect(),
+        )?;
+        self.text_by_source.insert(source_key(source), text);
+        Ok(())
     }
 
     /// Record one live source's metadata, rejecting an unusable result schema
@@ -534,6 +559,8 @@ enum AliasSourceKind {
 struct AliasActuals {
     source_kind: AliasSourceKind,
     columns: Vec<String>,
+    path: bool,
+    text_columns: HashSet<String>,
 }
 
 type ActualColumns = HashMap<usize, AliasActuals>;
@@ -545,6 +572,12 @@ fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActua
             LogicalSource::Query(_) => AliasSourceKind::Query,
         },
         columns: catalog.columns(source).unwrap_or_default().to_vec(),
+        path: false,
+        text_columns: catalog
+            .text_by_source
+            .get(&source_key(source))
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
@@ -554,7 +587,7 @@ fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActua
 /// from the nested Plan's `PlanForm::Select { vars }` (the names the derived table
 /// exposes). SubPlan aliases are NOT in `alias_sources()` (they have no catalog
 /// entry), so they are wired up here directly.
-fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> ActualColumns {
+fn branch_actuals(b: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> ActualColumns {
     let mut out = HashMap::new();
     for (alias, source) in b.alias_sources() {
         out.insert(alias, source_actuals(source, catalog));
@@ -562,20 +595,14 @@ fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> ActualColumns {
     for scan in b.core.iter().chain(b.opts.iter().map(|join| &join.scan)) {
         out.insert(scan.alias, scan_actuals(scan, catalog));
     }
+    if let Some(path) = &b.path {
+        out.insert(path.alias, path_actuals(path, catalog));
+    }
     // SubPlan derived-table aliases: their columns are the positional names the
     // inner `emit_branch` assigns (`c0`, `c1`, …), NOT the SPARQL variable names.
     // The outer branch's bindings use `ColRef(sp_alias, "c{i}")` after remapping.
     for sp in &b.subplan_joins {
-        if let crate::PlanForm::Select { vars } = &sp.plan.form {
-            let positional: Vec<String> = (0..vars.len()).map(|i| format!("c{i}")).collect();
-            out.insert(
-                sp.alias,
-                AliasActuals {
-                    source_kind: AliasSourceKind::Derived,
-                    columns: positional,
-                },
-            );
-        }
+        out.insert(sp.alias, subplan_actuals(&sp.plan, dialect, catalog));
     }
     out
 }
@@ -583,6 +610,9 @@ fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> ActualColumns {
 /// A branch rendered to one parameterised SQL `SELECT`.
 pub struct EmittedBranch {
     pub sql: String,
+    /// Prepare-only same-IR SQL without engine-added collation decorations.
+    /// Never executed; preserves SQLite native result decoding through COLLATE.
+    pub metadata_sql: Option<String>,
     /// The result-set schema: column `i` is `projection[i]` (positional — the
     /// reconstruction reads by position, not by the cosmetic `AS c{i}` label).
     pub projection: Vec<ColRef>,
@@ -604,7 +634,32 @@ pub fn emit_branch_with(
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<EmittedBranch> {
-    let actuals = branch_actuals(b, catalog);
+    let mut emitted = emit_branch_inner(b, dialect, catalog)?;
+    if dialect == Dialect::Sqlite
+        && !catalog.suppress_path_collation
+        && path_comparison::branch_has_path(b)
+    {
+        let mut metadata_catalog = catalog.clone();
+        metadata_catalog.suppress_path_collation = true;
+        let metadata = emit_branch_inner(b, dialect, &metadata_catalog)?;
+        if metadata.projection != emitted.projection || metadata.params != emitted.params {
+            return Err(Error::Sql(
+                "path metadata twin changed projection or parameters".into(),
+            ));
+        }
+        if metadata.sql != emitted.sql {
+            emitted.metadata_sql = Some(metadata.sql);
+        }
+    }
+    Ok(emitted)
+}
+
+fn emit_branch_inner(
+    b: &Branch,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> Result<EmittedBranch> {
+    let actuals = branch_actuals(b, dialect, catalog);
     if let Some(pc) = &b.path {
         return emit_path_branch(b, pc, dialect, catalog);
     }
@@ -706,6 +761,7 @@ pub fn emit_branch_with(
         .map_err(|e| Error::Sql(e.to_string()))?;
     Ok(EmittedBranch {
         sql,
+        metadata_sql: None,
         projection,
         params,
     })
@@ -913,7 +969,7 @@ fn emit_path_branch(
     // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
     // columns, so the outer projection / WHERE resolve against an empty catalog.
     let cte = format!("t{}", pc.alias);
-    let outer_actuals = ActualColumns::new();
+    let outer_actuals = HashMap::from([(pc.alias, path_actuals(pc, catalog))]);
     let with = path_with_prelude(pc, dialect, catalog)?;
 
     let select_list = projection
@@ -943,6 +999,7 @@ fn emit_path_branch(
         .map_err(|e| Error::Sql(e.to_string()))?;
     Ok(EmittedBranch {
         sql,
+        metadata_sql: None,
         projection,
         params,
     })
@@ -997,38 +1054,21 @@ fn emit_agg_branch(
 
     // The projection + SELECT list, in lockstep: grouping-key raw columns first
     // (also the GROUP BY columns), then each aggregate expression.
-    let mut projection: Vec<ColRef> = Vec::new();
+    let layout = aggregate_projection(agg, dialect);
+    let projection: Vec<ColRef> = layout.iter().map(|item| item.column().clone()).collect();
     let mut select_items: Vec<String> = Vec::new();
     let mut group_cols: Vec<String> = Vec::new();
-    for key in &agg.keys {
-        for col in &key.cols {
-            let i = projection.len();
-            let rendered = colref(col, dialect, actuals);
-            select_items.push(format!("{rendered} AS c{i}"));
-            group_cols.push(rendered);
-            projection.push(col.clone());
-        }
-    }
-    for a in &agg.aggs {
-        let i = projection.len();
-        let expr = agg_expr_sql(a, dialect, actuals);
-        select_items.push(format!("{expr} AS c{i}"));
-        projection.push(a.out.clone());
-        // AVG result datatype (§11.4) follows the OPERAND numeric type. SQLite's
-        // `AVG` always returns a `REAL` (storage class double), erasing an integer/
-        // decimal operand's type — so project the operand bare alongside, letting
-        // reconstruction read its preserved §10 decltype (SQLite keeps a grouped
-        // column's decltype). PostgreSQL's `avg()` already returns the promoted
-        // type natively and rejects a bare non-grouped column, so this is
-        // SQLite-only (the value is read for its type, never its row).
-        if dialect == Dialect::Sqlite && a.kind == AggKind::Avg {
-            if let Some(operand) = &a.arg {
-                let j = projection.len();
-                let rendered = colref(operand, dialect, actuals);
-                select_items.push(format!("{rendered} AS c{j}"));
-                projection.push(operand.clone());
+    for (i, item) in layout.iter().enumerate() {
+        let expression = match item {
+            AggregateProjection::Key(column) => {
+                let rendered = colref(column, dialect, actuals);
+                group_cols.push(rendered.clone());
+                rendered
             }
-        }
+            AggregateProjection::Aggregate(aggregate) => agg_expr_sql(aggregate, dialect, actuals),
+            AggregateProjection::AvgOperand(column) => colref(column, dialect, actuals),
+        };
+        select_items.push(format!("{expression} AS c{i}"));
     }
     let select_list = select_items.join(", ");
 
@@ -1055,6 +1095,7 @@ fn emit_agg_branch(
         .map_err(|e| Error::Sql(e.to_string()))?;
     Ok(EmittedBranch {
         sql,
+        metadata_sql: None,
         projection,
         params,
     })
@@ -1102,6 +1143,8 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
             let src = source_sql(&rel.source, dialect);
             let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
             let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
+            let s = path_key_expression(s, &rel.source, &rel.subj_col, dialect, catalog);
+            let o = path_key_expression(o, &rel.source, &rel.obj_col, dialect, catalog);
             format!(
                 "SELECT {s} AS {sf_s}, {o} AS {sf_o} FROM {src} h0 \
                  WHERE {s} IS NOT NULL AND {o} IS NOT NULL"
@@ -1165,6 +1208,8 @@ fn reflexive_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Re
     let src = source_sql(&rel.source, dialect);
     let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
     let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
+    let s = path_key_expression(s, &rel.source, &rel.subj_col, dialect, catalog);
+    let o = path_key_expression(o, &rel.source, &rel.obj_col, dialect, catalog);
     let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
     Ok(format!(
         "SELECT {s} AS {sf_s}, {s} AS {sf_o} FROM {src} h0 \
@@ -1312,6 +1357,7 @@ fn emit_subplan_sql(
 ) -> Result<(String, Vec<String>)> {
     let branches = plan.prepared_branches();
     let mut catalog = synthetic_subplan_catalog(&branches);
+    catalog.suppress_path_collation = live_catalog.suppress_path_collation;
     // Live top-level execution has already probed every recursively reachable
     // base source. Overlay those authoritative names so nested SubPlan emission
     // does not depend on the offline lexical alias-folding heuristic. The
@@ -1320,11 +1366,16 @@ fn emit_subplan_sql(
     for source in live_metadata_sources(&branches) {
         if let Some(columns) = live_catalog.columns(source) {
             catalog.insert(source, columns.to_vec());
+            if let Some(text) = live_catalog.text_by_source.get(&source_key(source)) {
+                catalog
+                    .text_by_source
+                    .insert(source_key(source), text.clone());
+            }
         }
     }
     let emitted = branches
         .iter()
-        .map(|branch| emit_branch_with(branch, dialect, &catalog))
+        .map(|branch| emit_branch_inner(branch, dialect, &catalog))
         .collect::<Result<Vec<_>>>()?;
     if emitted.is_empty() {
         // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
@@ -1439,16 +1490,11 @@ fn render_cond(
     pidx: &mut usize,
 ) -> Result<String> {
     Ok(match cond {
-        SqlCond::ColEq(a, b) => {
-            format!(
-                "{} = {}",
-                colref(a, dialect, actuals),
-                colref(b, dialect, actuals)
-            )
-        }
+        SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals),
         SqlCond::NullSafeEq(a, b) => {
             let (la, lb) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
-            format!("({la} = {lb} OR {la} IS NULL OR {lb} IS NULL)")
+            let equal = render_key_equality(a, b, dialect, catalog, actuals);
+            format!("({equal} OR {la} IS NULL OR {lb} IS NULL)")
         }
         SqlCond::Cmp(a, op, val) => {
             params.push(val.clone());
@@ -1552,13 +1598,7 @@ fn render_cond(
         SqlCond::PathExists { pc, conds, negated } => {
             let with = path_with_prelude(pc, dialect, catalog)?;
             let mut nested_actuals = actuals.clone();
-            nested_actuals.insert(
-                pc.alias,
-                AliasActuals {
-                    source_kind: AliasSourceKind::Derived,
-                    columns: vec!["sf_s".to_owned(), "sf_o".to_owned()],
-                },
-            );
+            nested_actuals.insert(pc.alias, path_actuals(pc, catalog));
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql =
                 render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx)?;

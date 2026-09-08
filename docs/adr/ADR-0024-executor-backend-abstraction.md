@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
-updated: 2026-09-03
+updated: 2026-09-08
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -126,6 +126,18 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > mutex nor already-submitted/running blocking work is cancellable. Busy,
 > UDF/VFS/I/O, other backends, compiler/raw/conformance work, and production
 > admission remain outside this slice.
+
+> **Comparison metadata refinement (2026-09-08).** The existing charged source
+> probe now returns `ResultColumn` names plus a conservative varying-text fact
+> from native PostgreSQL/MySQL prepared metadata. Unknown/fixed-width types stay
+> unproved; no schema constraint or cache-generation authority is inferred.
+> `open_branch_with_metadata` accepts a compiler-generated prepare-only SQL twin
+> for SQLite; other adapters retain native result metadata. Both SQLite adapters
+> validate projection width, bind original parameters and execute only actual
+> SQL. The owned worker retains the same admission and cancellation lifetime.
+> Tests cover CHAR/DATE, non-evaluation, mismatch rejection and public path
+> correlations. This extends thin adapters, not per-provider executors; general
+> decoded-key equality and total source controls remain open under ADR-0049.
 
 ## More Information
 

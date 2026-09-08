@@ -40,6 +40,15 @@ pub struct RawTuple {
     pub codes: Vec<Option<XsdTypeCode>>,
 }
 
+/// Live prepare-time evidence for comparison decoration, not schema constraints.
+#[derive(Clone, Debug)]
+pub struct ResultColumn {
+    pub name: String,
+    /// The native decoder preserves a varying-text value without padding or
+    /// numeric/date conversion. Unknown and fixed-width types are never guessed.
+    pub varying_text: bool,
+}
+
 /// A bounded pull cursor over ONE emitted branch `SELECT`. One row in flight; the
 /// signature CANNOT return a `Vec<Row>`, so no impl can buffer the full result set
 /// (ADR-0006 / ADR-0010 §C "bounded by shape").
@@ -72,6 +81,32 @@ pub trait SqlBackend {
     /// which also validates missing, duplicate, and case-fold-ambiguous live columns
     /// before opening any branch cursor.
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>>;
+
+    /// Same metadata-only probe, optionally retaining native varying-text facts.
+    async fn result_columns(&mut self, probe_sql: &str) -> Result<Vec<ResultColumn>> {
+        Ok(self
+            .column_names(probe_sql)
+            .await?
+            .into_iter()
+            .map(|name| ResultColumn {
+                name,
+                varying_text: false,
+            })
+            .collect())
+    }
+
+    /// `metadata_sql` is a compiler-generated, prepare-only twin with identical
+    /// output positions, omitting only engine-added comparison decorations.
+    /// SQLite uses it because COLLATE otherwise erases declared result types.
+    /// Other adapters retain their native result metadata and ignore the twin.
+    async fn open_branch_with_metadata<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        _metadata_sql: Option<&str>,
+    ) -> Result<Self::Stream<'s>> {
+        self.open_branch(sql, lexical_params).await
+    }
 
     /// Open a server-side cursor for one emitted branch and bind `lexical_params`
     /// (= `EmittedBranch::params`, every value a `&str`) as N positional params.

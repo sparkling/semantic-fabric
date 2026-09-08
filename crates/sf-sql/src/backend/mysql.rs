@@ -169,6 +169,32 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
         crate::stream::mysql_column_names(self.conn.borrow_mut(), probe_sql).await
     }
 
+    async fn result_columns(
+        &mut self,
+        probe_sql: &str,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        let stmt = self.conn.borrow_mut().prep(probe_sql).await?;
+        stmt.columns()
+            .iter()
+            .map(|column| {
+                let varying_text = matches!(
+                    column.column_type(),
+                    ColumnType::MYSQL_TYPE_VARCHAR
+                        | ColumnType::MYSQL_TYPE_VAR_STRING
+                        | ColumnType::MYSQL_TYPE_TINY_BLOB
+                        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                        | ColumnType::MYSQL_TYPE_LONG_BLOB
+                        | ColumnType::MYSQL_TYPE_BLOB
+                ) && mysql_xsd_code(column, self.type_profile)?
+                    == Some(XsdTypeCode::String);
+                Ok(crate::backend::ResultColumn {
+                    name: column.name_str().into_owned(),
+                    varying_text,
+                })
+            })
+            .collect()
+    }
+
     async fn open_branch<'s>(
         &'s mut self,
         sql: &str,

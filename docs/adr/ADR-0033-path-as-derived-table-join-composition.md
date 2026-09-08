@@ -33,11 +33,18 @@ mapping `SRC`/`DST` references over native lowercase columns. The former frozen-
 implementation fails this check; typed live emission passes. Existing correlated
 and multiplicity regression checks remain required.
 
-This closes path catalog-blindness (risk 2) only. Ordinary translate-time DISTINCT
-wrappers can still fail on native column folding, and RDF-key equality under
-collation/padding/mixed native types is still open under ADR-0049. Equal node
-shapes alone do not prove SQL-key/RDF-term equality. Historical green fixtures
-below must not be read as general exactness or release admission.
+The subsequent ADR-0049 text repair uses live varying-text facts for native
+comparison decorations and a same-IR SQLite metadata twin preserving decoding.
+External JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS comparisons decorate both sides;
+NULL/unbound behavior remains tested. SubPlan text facts follow the actual shared
+aggregate projection layout (including SQLite AVG metadata), retain standalone
+path aliases and visit each nested plan once per metadata walk.
+
+Ordinary translate-time DISTINCT wrappers can still fail on native column folding.
+Many-to-one padding and mixed-type RDF identity remain open; the explicit required
+CHARACTER-padding check fails. Equal node shapes alone do not prove SQL-key/RDF
+term equality. Historical green fixtures below and the new text cases are not
+general exactness, total source-work bounds or release admission.
 
 ## Implementation status (2026-07-19, same day)
 

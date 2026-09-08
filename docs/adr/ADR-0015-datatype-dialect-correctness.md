@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-06
+updated: 2026-09-08
 tags: [datatype, dialect, r2rml-section-10, canonicalization, oxsdatatypes, sqlite-affinity, correctness]
 supersedes: []
 depends-on:
@@ -39,6 +39,18 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 **MySQL — explicit profile boundary.** `MysqlTypeProfile::Native` is the product law: ambiguous `BOOL`/`TINYINT(1)` remains `xsd:integer`, including value `2`. Only the sealed W3C runner selects `MysqlTypeProfile::W3cSql2008`, whose versioned identity `mysql-w3c-sql-2008-v1` applies the suite's SQL-2008 logical-boolean convention. An explicit `rr:datatype` is authoritative in either profile. MySQL-only aliases remain outside dialect-neutral `natural_xsd`, so neither SQLite nor PostgreSQL admission changes. The selected profile participates in receipt outcome identity; this convention is not native-product type provenance.
 
 **`sqlparser` is SQL syntax only** — used for SQL emission and parsing `rr:sqlQuery`; it contributes nothing to type semantics, which is this separate subsystem. **NULL** in any referenced column ⇒ no RDF term (R2RML §11), enforced in Rust (not via SQL concat NULL-semantics).
+
+> **Path comparison refinement (2026-09-08).** Comparison decorations do not
+> replace Rust reconstruction. Native prepared TEXT/VARCHAR facts (MySQL nonbinary
+> varying-text metadata under its selected profile) authorize byte-exact text
+> collations; fixed-width/numeric/date/unknown values are not cast. SQLite keeps
+> storage classes and obtains declarations from a same-IR prepare-only twin that
+> omits only engine decorations, preserving authored SQL, CHAR padding and DATE.
+> SQL and twin projection/parameter vectors must match; adapter tests also reject
+> width mismatch before evaluation. Aggregate/SubPlan text facts use actual SQL
+> positions, not binding-name order. These facts are not constraint authority or
+> full RDF-key identity: the explicit CHARACTER-padding release test still fails
+> on duplicate decoded nodes, as recorded by ADR-0049.
 
 ### Identifier resolution — lenient against the live schema (decision 2026-06-28)
 

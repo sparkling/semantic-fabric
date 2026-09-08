@@ -789,6 +789,12 @@ impl Branch {
     /// All raw columns the branch must project: every binding's columns plus
     /// every column mentioned in a condition. De-duplicated, deterministic order.
     pub fn projection(&self) -> Vec<ColRef> {
+        self.projection_with_distinct(self.distinct)
+    }
+
+    /// Metadata uses the effective single-arm plan DISTINCT without cloning a
+    /// whole nested plan merely to inspect its prepared projection.
+    pub(crate) fn projection_with_distinct(&self, distinct: bool) -> Vec<ColRef> {
         let mut cols: Vec<ColRef> = Vec::new();
         let push = |c: ColRef, cols: &mut Vec<ColRef>| {
             if !cols.contains(&c) {
@@ -809,7 +815,7 @@ impl Branch {
         // key that varies per joined row would defeat `DISTINCT ?route`). Skipping them
         // under DISTINCT makes the dedup run over the projected key alone; for every
         // non-DISTINCT branch the loops still run, keeping its SELECT list byte-identical.
-        if !self.distinct {
+        if !distinct {
             for cond in &self.where_conds {
                 collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
             }

@@ -205,6 +205,48 @@ fn assert_paths(address: SocketAddr, fixture: &Fixture, database: &Database) {
     }
 }
 
+fn assert_collated_paths(fixture: &Fixture, database: &Database, postgres: bool) -> Server {
+    if postgres {
+        sql(database, "CREATE COLLATION path_ci (provider = icu, locale = 'und-u-ks-level1', deterministic = false); ALTER TABLE items ALTER COLUMN src TYPE VARCHAR(32) COLLATE path_ci; ALTER TABLE items ALTER COLUMN dst TYPE VARCHAR(32) COLLATE path_ci");
+    } else {
+        sql(database, "ALTER TABLE items MODIFY src VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, MODIFY dst VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    }
+    sql(database, "DELETE FROM items; INSERT INTO items(id,src,dst,value) VALUES (0,'a','B','same'),(1,'b','c','same'),(2,'A','B','same'),(3,'s','a ','same'),(4,'a','z','same')");
+    let (server, address) = start(fixture, database);
+    for operator in ["+", "*", "?", "|<http://example.test/edge>"] {
+        let query = format!("SELECT ?s ?o WHERE {{ ?s (<{EDGE}>{operator}) ?o }}");
+        let result = rows(address, fixture, &query);
+        let actual: BTreeSet<_> = result
+            .iter()
+            .map(|row| {
+                (
+                    row["s"]["value"].as_str().unwrap().to_owned(),
+                    row["o"]["value"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let node = |s: &str| format!("http://example.test/n/{}", s.replace(' ', "%20"));
+        let mut expected: BTreeSet<_> =
+            [("a", "B"), ("b", "c"), ("A", "B"), ("s", "a "), ("a", "z")]
+                .into_iter()
+                .map(|(s, o)| (node(s), node(o)))
+                .collect();
+        if matches!(operator, "*" | "?") {
+            expected.extend(["a", "B", "b", "c", "A", "s", "a ", "z"].map(|s| (node(s), node(s))));
+        }
+        assert_eq!(
+            actual, expected,
+            "native collation must not define RDF identity: {query}"
+        );
+        assert_eq!(
+            result.len(),
+            expected.len(),
+            "no RDF-distinct pairs lost or duplicated"
+        );
+    }
+    server
+}
+
 #[test]
 #[ignore = "requires Docker and pinned owned PostgreSQL/MySQL images; required in CI"]
 fn native_describe_and_recursive_paths_are_exact() {
@@ -227,8 +269,10 @@ fn native_describe_and_recursive_paths_are_exact() {
             "first.ttl",
             &MAPPING.replace("{src}", "{SRC}").replace("{dst}", "{DST}"),
         );
-        let (_server, address) = start(&fixture, &database);
+        let (server, address) = start(&fixture, &database);
         assert_joined_paths(address, &fixture);
+        drop(server);
+        let _server = assert_collated_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();
         eprintln!(
             "exact native DESCRIBE/path profile: {}",

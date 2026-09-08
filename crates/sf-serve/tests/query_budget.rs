@@ -11,6 +11,8 @@ use tower::ServiceExt;
 
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
+#[path = "query_budget/path_identity.rs"]
+mod path_identity;
 mod support;
 
 const TOKEN: &str = "test-only-compiler-budget-credential-123456";

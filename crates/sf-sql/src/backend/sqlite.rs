@@ -33,6 +33,8 @@ use crate::error::{Error, Result};
 use crate::stream::sqlite_column_decltypes;
 
 mod cancellation;
+#[cfg(test)]
+mod metadata_twin_tests;
 mod owned;
 
 pub use owned::{
@@ -127,14 +129,29 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
         sql: &str,
         lexical_params: &[String],
     ) -> Result<SqliteBranch<'s>> {
+        self.open_branch_with_metadata(sql, lexical_params, None)
+            .await
+    }
+
+    async fn open_branch_with_metadata<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+    ) -> Result<SqliteBranch<'s>> {
         // §10 declared codes + CHARACTER(n) pads from the prepared statement's
         // column metadata (no rows fetched), then the streaming cursor.
-        let (decl_codes, pads, nproj) = column_meta(self.conn, sql)?;
+        let (decl_codes, pads, nproj) = column_meta(self.conn, metadata_sql.unwrap_or(sql))?;
         // Store the prepared statement in the backend so the returned Rows can
         // borrow it for the branch's lifetime (the GAT stream). The Statement
         // borrows the EXTERNAL connection (`*self.conn`, lifetime 'c), not `self`,
         // so this is not a self-referential struct.
         let stmt: Statement<'c> = self.conn.prepare(sql)?;
+        if stmt.column_count() != nproj {
+            return Err(Error::Emit(
+                "SQLite metadata twin projection mismatch".into(),
+            ));
+        }
         self.stmt = Some(stmt);
         let rows = self
             .stmt
