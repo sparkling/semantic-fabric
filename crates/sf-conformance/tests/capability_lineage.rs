@@ -89,6 +89,15 @@ fn actual_multi_mapping_profiles_bind_required_native_and_bounded_executor_evide
                 evidence.command_id.as_deref(),
                 Some("cmd-verified-source-tls-live")
             );
+            for id in [
+                "e-query-lineage-multiple-native-stop",
+                "e-query-lineage-multiple-native-stop-oracle",
+            ] {
+                let proof = catalog.evidence.iter().find(|e| e.id == id).unwrap();
+                assert!(cell.evidence_ids.contains(&proof.id));
+                assert!(proof.required);
+                assert_eq!(proof.verification, Verification::CiRequired);
+            }
         }
     }
 }

@@ -27,11 +27,20 @@ fn wait_active(database: &Database, postgres: bool, expected: usize, bound: Dura
     }
 }
 pub(super) fn begin(address: SocketAddr, query: &str, token: &str) -> TcpStream {
+    begin_format(address, query, token, "application/sparql-results+json")
+}
+
+pub(super) fn begin_format(
+    address: SocketAddr,
+    query: &str,
+    token: &str,
+    accept: &str,
+) -> TcpStream {
     let mut stream = TcpStream::connect(address).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(4)))
         .unwrap();
-    write!(stream, "POST /sparql HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Type: application/sparql-query\r\nAccept: application/sparql-results+json\r\nContent-Length: {}\r\n\r\n{query}",query.len()).unwrap();
+    write!(stream, "POST /sparql HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Type: application/sparql-query\r\nAccept: {accept}\r\nContent-Length: {}\r\n\r\n{query}",query.len()).unwrap();
     stream
 }
 

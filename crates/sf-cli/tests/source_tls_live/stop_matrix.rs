@@ -3,13 +3,13 @@ use super::*;
 use std::net::Shutdown;
 
 #[derive(Clone, Copy, Debug)]
-enum Stop {
+pub(super) enum Stop {
     Deadline,
     Disconnect,
     Shutdown,
 }
 
-fn start(mut command: Command, address: SocketAddr) -> Server {
+pub(super) fn start(mut command: Command, address: SocketAddr) -> Server {
     let mut server = Server(
         command
             .stdout(Stdio::null())
@@ -32,7 +32,7 @@ fn start(mut command: Command, address: SocketAddr) -> Server {
     }
 }
 
-fn blocked_session(database: &Database, postgres: bool, table: &str) -> u64 {
+pub(super) fn blocked_session(database: &Database, postgres: bool, table: &str) -> u64 {
     assert!(matches!(table, "items" | "healthy"));
     let query = if postgres {
         format!("SELECT pid FROM pg_stat_activity WHERE usename='sf_tls' AND state='active' AND wait_event_type='Lock' AND query LIKE '%{table}%'")
@@ -56,7 +56,7 @@ fn blocked_session(database: &Database, postgres: bool, table: &str) -> u64 {
     }
 }
 
-fn active(database: &Database, postgres: bool, id: u64) -> bool {
+pub(super) fn active(database: &Database, postgres: bool, id: u64) -> bool {
     database.sql(&if postgres {
         format!("SELECT count(*) FROM pg_stat_activity WHERE pid={id} AND usename='sf_tls' AND state='active'")
     } else {
@@ -64,7 +64,7 @@ fn active(database: &Database, postgres: bool, id: u64) -> bool {
     }) == "1"
 }
 
-fn wire(stream: TcpStream) -> Vec<u8> {
+pub(super) fn wire(stream: TcpStream) -> Vec<u8> {
     let mut bytes = Vec::new();
     if let Err(error) = stream.take(65537).read_to_end(&mut bytes) {
         assert!(
@@ -79,7 +79,7 @@ fn wire(stream: TcpStream) -> Vec<u8> {
     bytes
 }
 
-fn assert_no_complete_union_success(response: &[u8]) {
+pub(super) fn assert_no_complete_union_success(response: &[u8]) {
     if response.starts_with(b"HTTP/1.1 200") {
         let boundary = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         let headers = std::str::from_utf8(&response[..boundary])
@@ -94,7 +94,7 @@ fn assert_no_complete_union_success(response: &[u8]) {
     }
 }
 
-fn bag(body: &[u8]) -> (serde_json::Value, Vec<String>) {
+pub(super) fn bag(body: &[u8]) -> (serde_json::Value, Vec<String>) {
     let result: serde_json::Value = serde_json::from_slice(body).unwrap();
     let mut rows: Vec<_> = result["results"]["bindings"]
         .as_array()

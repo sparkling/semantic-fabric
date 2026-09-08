@@ -42,14 +42,19 @@ SQLite HTTP, isolation, reload and failure tests plus owned pinned PostgreSQL
 results, not full lineage, all native-profile or exact-release qualification, or
 application completion. Native evidence parses the actual returned metadata and
 reification, observes encrypted sessions and rejects unsupported lineage while
-a source-table lock remains held; it is not lineage-specific reload/cancellation.
+a source-table lock remains held; those constant-origin cases do not establish
+lineage-specific reload/cancellation.
 An additional bounded multi-mapping profile now propagates actual origins through
 positive RDF-matched BGP/JOIN/UNION and root projection/dedup/slice, merging late
 duplicate witnesses before output. Its finite witness buffer fails on overflow;
 it is not an unbounded graph materialization or a candidate-map list. Broader
 operators, federation, authorized row keys and native/release qualification remain
 open. The capability catalog separately retains that incomplete release gate;
-ADR-0017 records the precise additional profile and required commands.
+ADR-0017 records the precise additional profile and required commands. Twelve
+required pinned native multi-map SELECT/CONSTRUCT cases now prove exact-target
+TLS/native stop under deadline/disconnect/forced SIGTERM, held-lock and unrelated
+sibling isolation, cap-one recovery and fail-terminal completion. This does not
+qualify lineage UNION/JOIN cancellation, source-RLS, reload or every operator.
 
 The catalog's wider global-operator and atomic/no-prefix-stream limitations are
 non-blocking scope exclusions under this decision: proposed ADR-0040 cannot add

@@ -197,6 +197,18 @@ contains multiple-map SELECT/UNION/join/CONSTRUCT and allowed/empty portable-pol
 checks with parsed returned provenance. That required aggregate passed on
 2026-09-08 against owned PostgreSQL 16.15/MySQL 8.4.11 fixtures (63.39 seconds).
 Its presence or ordinary test ignores alone are not qualification evidence.
+The same required aggregate passed in 84.48 seconds after adding twelve native
+multi-map SELECT/CONSTRUCT cases: deadline, disconnect and forced SIGTERM on
+each pinned provider. Each case observes the exact encrypted target session
+blocked on a held table lock, then proves native work stops while the lock stays
+granted. A distinct same-credential CLI sibling remains blocked on its own held
+lock and subsequently returns its exact bag. Deadline/disconnect cases recover
+exact results and actual origins through the target's cap-one pool; forced
+shutdown requires bounded clean exit and closed ingress. Failed responses cannot
+emit successful chunked completion or a parsed lineage completion record, even
+when the record crosses HTTP chunk boundaries. This is single-source multi-map
+SELECT/CONSTRUCT evidence, not lineage UNION/JOIN cancellation, portable/source-RLS
+cancellation, reload or every operator combination.
 Full lineage, all native lifecycle/source-RLS combinations and exact-artifact
 release admission remain open under ADR-0055.
 

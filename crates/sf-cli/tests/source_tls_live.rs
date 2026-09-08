@@ -6,6 +6,8 @@ mod cancellation;
 mod join;
 #[path = "source_tls_live/lineage.rs"]
 mod lineage;
+#[path = "source_tls_live/lineage_stop.rs"]
+mod lineage_stop;
 #[path = "source_tls_live/multiple_lineage.rs"]
 mod multiple_lineage;
 #[path = "source_tls_live/reload.rs"]
@@ -337,6 +339,7 @@ fn authenticated_public_queries_require_verified_source_tls() {
     assert_rejects(wrong_second_ca, address, &fixture);
     join::assert_joins(&fixture, &postgres, &mysql);
     stop_matrix::assert_federated_stop(&fixture, &postgres, &mysql);
+    lineage_stop::assert_native_stop(&fixture, &postgres, &mysql);
     eprintln!(
         "Live TLS providers: PostgreSQL {}; MySQL {}",
         postgres.sql("SHOW server_version"),
