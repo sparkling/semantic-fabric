@@ -18,12 +18,13 @@ fn exact_text(expression: String, dialect: Dialect) -> String {
     }
 }
 
-fn source_text(source: &LogicalSource, column: &str, catalog: &ColumnCatalog) -> bool {
+fn source_text(source: &LogicalSource, column: &str, catalog: &ColumnCatalog) -> Option<TextKey> {
     let name = resolve_col(column, catalog.columns(source));
     catalog
         .text_by_source
         .get(&source_key(source))
-        .is_some_and(|columns| columns.contains(name))
+        .and_then(|columns| columns.get(name))
+        .copied()
 }
 
 pub(super) fn path_key_expression(
@@ -33,9 +34,9 @@ pub(super) fn path_key_expression(
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> String {
-    if !catalog.suppress_path_collation
-        && (dialect == Dialect::Sqlite || source_text(source, column, catalog))
-    {
+    let key = source_text(source, column, catalog);
+    let expression = decoded_text(expression, key, dialect, catalog);
+    if !catalog.suppress_path_collation && (dialect == Dialect::Sqlite || key.is_some()) {
         exact_text(expression, dialect)
     } else {
         expression
@@ -45,8 +46,8 @@ pub(super) fn path_key_expression(
 fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
     match hop {
         HopExpr::Pred(rel) => (
-            source_text(&rel.source, &rel.subj_col, catalog),
-            source_text(&rel.source, &rel.obj_col, catalog),
+            source_text(&rel.source, &rel.subj_col, catalog).is_some(),
+            source_text(&rel.source, &rel.obj_col, catalog).is_some(),
         ),
         HopExpr::Inverse(inner) => {
             let (s, o) = hop_text(inner, catalog);
@@ -66,12 +67,12 @@ fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
 
 pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> AliasActuals {
     let (s, o) = hop_text(&path.hop, catalog);
-    let mut text_columns = HashSet::new();
+    let mut text_columns = HashMap::new();
     if s {
-        text_columns.insert("sf_s".into());
+        text_columns.insert("sf_s".into(), TextKey::Verbatim);
     }
     if o {
-        text_columns.insert("sf_o".into());
+        text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
         source_kind: AliasSourceKind::Derived,
@@ -112,11 +113,37 @@ pub(super) fn branch_has_path(branch: &Branch) -> bool {
         })
 }
 
-fn column_text(column: &ColRef, actuals: &ActualColumns) -> bool {
-    actuals.get(&column.alias).is_some_and(|a| {
+fn column_text(column: &ColRef, actuals: &ActualColumns) -> Option<TextKey> {
+    actuals.get(&column.alias).and_then(|a| {
         a.text_columns
-            .contains(resolve_col(&column.column, Some(&a.columns)))
+            .get(resolve_col(&column.column, Some(&a.columns)))
+            .copied()
     })
+}
+
+/// Normalize only live-proven decoder families, before SQL joins/deduplication.
+/// Keep this expression in the prepare-only twin: its result is already text,
+/// not an original CHAR column that should be padded again after a UNION.
+fn decoded_text(
+    expression: String,
+    key: Option<TextKey>,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> String {
+    match (dialect, key) {
+        (Dialect::Sqlite, Some(TextKey::SqliteCharacter(width))) => {
+            catalog
+                .character_keys
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            format!("__sf_character_key_v1({expression}, {width})")
+        }
+        (Dialect::Postgres, Some(TextKey::PostgresCharacter)) => {
+            // Keep the function nested separately from COLLATE: sqlparser 0.62
+            // otherwise backtracks a qualified function into a field reference.
+            format!("(pg_catalog.convert_from(pg_catalog.bpcharsend({expression}), 'UTF8'))")
+        }
+        _ => expression,
+    }
 }
 
 pub(super) fn subplan_actuals(
@@ -127,7 +154,7 @@ pub(super) fn subplan_actuals(
     #[cfg(test)]
     METADATA_VISITS.with(|visits| visits.set(visits.get() + 1));
     let mut width = 0;
-    let mut common: Option<HashSet<usize>> = None;
+    let mut common: Option<HashMap<usize, TextKey>> = None;
     for branch in &plan.branches {
         let projection: Vec<_> = match &branch.agg {
             Some(agg) if branch.path.is_none() => aggregate_projection(agg, dialect)
@@ -146,26 +173,26 @@ pub(super) fn subplan_actuals(
         };
         width = width.max(projection.len());
         let actuals = branch_actuals(branch, dialect, catalog);
-        let text: HashSet<_> = projection
+        let text: HashMap<_, _> = projection
             .iter()
             .enumerate()
             .filter_map(|(index, column)| {
                 column
                     .as_ref()
-                    .is_some_and(|column| column_text(column, &actuals))
-                    .then_some(index)
+                    .and_then(|column| column_text(column, &actuals))
+                    .map(|key| (index, key))
             })
             .collect();
         match common.as_mut() {
             None => common = Some(text),
-            Some(common) => common.retain(|index| text.contains(index)),
+            Some(common) => common.retain(|index, key| text.get(index) == Some(key)),
         }
     }
     let columns: Vec<_> = (0..width).map(|i| format!("c{i}")).collect();
     let text_columns = common
         .unwrap_or_default()
         .into_iter()
-        .map(|i| format!("c{i}"))
+        .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
         source_kind: AliasSourceKind::Derived,
@@ -186,12 +213,16 @@ pub(super) fn render_key_equality(
     let path = [a, b]
         .iter()
         .any(|c| actuals.get(&c.alias).is_some_and(|a| a.path));
-    if path
-        && !catalog.suppress_path_collation
-        && (dialect == Dialect::Sqlite || (column_text(a, actuals) && column_text(b, actuals)))
-    {
-        left = exact_text(left, dialect);
-        right = exact_text(right, dialect);
+    if path {
+        let (a_key, b_key) = (column_text(a, actuals), column_text(b, actuals));
+        left = decoded_text(left, a_key, dialect, catalog);
+        right = decoded_text(right, b_key, dialect, catalog);
+        if !catalog.suppress_path_collation
+            && (dialect == Dialect::Sqlite || (a_key.is_some() && b_key.is_some()))
+        {
+            left = exact_text(left, dialect);
+            right = exact_text(right, dialect);
+        }
     }
     format!("{left} = {right}")
 }

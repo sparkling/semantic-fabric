@@ -247,6 +247,97 @@ fn assert_collated_paths(fixture: &Fixture, database: &Database, postgres: bool)
     server
 }
 
+fn assert_character_paths(fixture: &Fixture, database: &Database, postgres: bool) -> Server {
+    for (src_width, dst_width) in [(4, 2), (2, 4), (4, 4)] {
+        sql(database, "DELETE FROM items");
+        if postgres {
+            sql(database, &format!("ALTER TABLE items ALTER COLUMN src TYPE CHAR({src_width}); ALTER TABLE items ALTER COLUMN dst TYPE CHAR({dst_width})"));
+        } else {
+            sql(database, &format!("ALTER TABLE items MODIFY src CHAR({src_width}) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, MODIFY dst CHAR({dst_width}) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"));
+        }
+        sql(database, "INSERT INTO items(id,src,dst,value) VALUES (0,'a','b','same'),(1,'a ','b ','same'),(2,'b','c','same'),(3,'A','b','same')");
+        let (server, address) = start(fixture, database);
+        let direct = rows(
+            address,
+            fixture,
+            &format!("SELECT ?s ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+        );
+        let pairs = |rows: &[serde_json::Value]| -> BTreeSet<(String, String)> {
+            rows.iter()
+                .map(|r| {
+                    (
+                        r["s"]["value"].as_str().unwrap().to_owned(),
+                        r["o"]["value"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect()
+        };
+        let direct = pairs(&direct);
+        let node = |s: &str, width: usize| {
+            format!(
+                "http://example.test/n/{s}{}",
+                if postgres {
+                    "%20".repeat(width - 1)
+                } else {
+                    String::new()
+                }
+            )
+        };
+        // Ordinary native DISTINCT under a source collation remains a separate
+        // open defect. Check its decoder here, but use an independent graph
+        // oracle so that defect cannot erase the required A/a path distinction.
+        assert!(direct.contains(&(node("a", src_width), node("b", dst_width))));
+        let direct: BTreeSet<_> = [("a", "b"), ("b", "c"), ("A", "b")]
+            .map(|(s, o)| (node(s, src_width), node(o, dst_width)))
+            .into_iter()
+            .collect();
+        let mut closure = direct.clone();
+        loop {
+            let more: Vec<_> = closure
+                .iter()
+                .flat_map(|(s, m)| {
+                    direct
+                        .iter()
+                        .filter_map(move |(n, o)| (m == n).then_some((s.clone(), o.clone())))
+                })
+                .collect();
+            let before = closure.len();
+            closure.extend(more);
+            if before == closure.len() {
+                break;
+            }
+        }
+        for op in ["+", "*", "?", "|<http://example.test/edge>"] {
+            let mut expected = if matches!(op, "+" | "*") {
+                closure.clone()
+            } else {
+                direct.clone()
+            };
+            if matches!(op, "*" | "?") {
+                expected.extend(
+                    direct
+                        .iter()
+                        .flat_map(|(s, o)| [(s.clone(), s.clone()), (o.clone(), o.clone())]),
+                );
+            }
+            let result = rows(
+                address,
+                fixture,
+                &format!("SELECT ?s ?o WHERE {{ ?s (<{EDGE}>{op}) ?o }}"),
+            );
+            assert_eq!(
+                pairs(&result),
+                expected,
+                "native CHAR {src_width}/{dst_width} {op}"
+            );
+            assert_eq!(result.len(), expected.len(), "duplicate decoded CHAR pairs");
+        }
+        database.assert_encrypted_sessions();
+        drop(server);
+    }
+    start(fixture, database).0
+}
+
 #[test]
 #[ignore = "requires Docker and pinned owned PostgreSQL/MySQL images; required in CI"]
 fn native_describe_and_recursive_paths_are_exact() {
@@ -272,7 +363,9 @@ fn native_describe_and_recursive_paths_are_exact() {
         let (server, address) = start(&fixture, &database);
         assert_joined_paths(address, &fixture);
         drop(server);
-        let _server = assert_collated_paths(&fixture, &database, postgres);
+        drop(assert_collated_paths(&fixture, &database, postgres));
+        fixture.write("first.ttl", MAPPING);
+        let _server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();
         eprintln!(
             "exact native DESCRIBE/path profile: {}",

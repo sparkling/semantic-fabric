@@ -23,7 +23,7 @@ use futures_util::TryStreamExt;
 
 use crate::error::Result;
 
-mod sqlite_metadata;
+pub(crate) mod sqlite_metadata;
 
 // --- SQLite (synchronous cursor) ------------------------------------------
 

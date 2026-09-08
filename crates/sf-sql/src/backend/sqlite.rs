@@ -36,6 +36,7 @@ mod cancellation;
 #[cfg(test)]
 mod metadata_twin_tests;
 mod owned;
+mod text_key;
 
 pub use owned::{
     SqliteOwnedBackend, SqliteOwnedConnection, SqliteOwnedLease, SqliteReceiverStream,
@@ -66,11 +67,13 @@ pub struct SqliteBranch<'s> {
     /// Each projected column's `CHARACTER(n)` blank-pad length, if any.
     pads: Vec<Option<usize>>,
     nproj: usize,
+    key: text_key::CharacterKeyGuard<'s>,
 }
 
 impl BranchStream for SqliteBranch<'_> {
     async fn next_row(&mut self) -> Result<Option<RawTuple>> {
-        let Some(row) = self.rows.next()? else {
+        let Some(row) = self.rows.next().map_err(|e| self.key.map_error(e.into()))? else {
+            self.key.finish()?;
             return Ok(None);
         };
         Ok(Some(marshal_row(
@@ -100,14 +103,10 @@ fn marshal_row(
         let v = row.get_ref(i)?;
         // §10 type: the declared decl type, else the value's storage class.
         let code = decl_code.or_else(|| storage_class_code(&v));
-        let mut text = lexical_typed(v, code)?;
-        // R2RML §10 / ADR-0015: blank-pad a fixed-length CHAR(n) value to `n`
-        // so SQLite matches the SQL-standard value.
-        if let (Some(n), Some(s)) = (pads[i], text.as_mut()) {
-            for _ in s.chars().count()..n {
-                s.push(' ');
-            }
-        }
+        let text = match pads[i] {
+            Some(width) => text_key::character(v, width, None)?,
+            None => lexical_typed(v, code)?,
+        };
         values.push(text);
         codes.push(code);
     }
@@ -122,6 +121,13 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
 
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
         crate::stream::sqlite_column_names(self.conn, probe_sql)
+    }
+
+    async fn result_columns(
+        &mut self,
+        probe_sql: &str,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        result_columns(self.conn, probe_sql)
     }
 
     async fn open_branch<'s>(
@@ -139,8 +145,20 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
         lexical_params: &[String],
         metadata_sql: Option<&str>,
     ) -> Result<SqliteBranch<'s>> {
+        self.open_branch_with_decoder(sql, lexical_params, metadata_sql, false)
+            .await
+    }
+
+    async fn open_branch_with_decoder<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+    ) -> Result<SqliteBranch<'s>> {
         // §10 declared codes + CHARACTER(n) pads from the prepared statement's
         // column metadata (no rows fetched), then the streaming cursor.
+        let key = text_key::CharacterKeyGuard::install(self.conn, sqlite_character_keys, None)?;
         let (decl_codes, pads, nproj) = column_meta(self.conn, metadata_sql.unwrap_or(sql))?;
         // Store the prepared statement in the backend so the returned Rows can
         // borrow it for the branch's lifetime (the GAT stream). The Statement
@@ -163,6 +181,7 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
             decl_codes,
             pads,
             nproj,
+            key,
         })
     }
 }
@@ -187,6 +206,37 @@ fn column_meta(conn: &Connection, sql: &str) -> Result<ColumnMeta> {
         .collect();
     let nproj = decltypes.len();
     Ok((decl_codes, pads, nproj))
+}
+
+/// Metadata facts from one prepare, preserving authored transparent COLLATE.
+fn result_columns(conn: &Connection, sql: &str) -> Result<Vec<crate::backend::ResultColumn>> {
+    use crate::backend::{ResultColumn, TextKey};
+    let stmt = conn.prepare(sql)?;
+    let columns = stmt.columns();
+    let declared = columns
+        .iter()
+        .map(|c| c.decl_type().map(str::to_owned))
+        .collect();
+    let declared = crate::stream::sqlite_metadata::recover_collated_decltypes(conn, sql, declared)?;
+    Ok(columns
+        .iter()
+        .zip(declared)
+        .map(|(column, decl)| {
+            let text_key = decl.as_deref().and_then(|decl| {
+                if let Some(width) = char_pad_len(decl) {
+                    Some(TextKey::SqliteCharacter(width))
+                } else if datatype::natural_xsd(decl) == Some(XsdTypeCode::String) {
+                    Some(TextKey::Verbatim)
+                } else {
+                    None
+                }
+            });
+            ResultColumn {
+                name: column.name().to_owned(),
+                text_key,
+            }
+        })
+        .collect())
 }
 
 // --- per-cell marshalling (moved VERBATIM from sf-sparql::exec, design §2) -----

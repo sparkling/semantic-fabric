@@ -127,17 +127,19 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > UDF/VFS/I/O, other backends, compiler/raw/conformance work, and production
 > admission remain outside this slice.
 
-> **Comparison metadata refinement (2026-09-08).** The existing charged source
-> probe now returns `ResultColumn` names plus a conservative varying-text fact
-> from native PostgreSQL/MySQL prepared metadata. Unknown/fixed-width types stay
-> unproved; no schema constraint or cache-generation authority is inferred.
-> `open_branch_with_metadata` accepts a compiler-generated prepare-only SQL twin
-> for SQLite; other adapters retain native result metadata. Both SQLite adapters
-> validate projection width, bind original parameters and execute only actual
-> SQL. The owned worker retains the same admission and cancellation lifetime.
-> Tests cover CHAR/DATE, non-evaluation, mismatch rejection and public path
-> correlations. This extends thin adapters, not per-provider executors; general
-> decoded-key equality and total source controls remain open under ADR-0049.
+> **Comparison metadata refinement (2026-09-08).** The charged source probe
+> returns result names plus live decoder recipes: verbatim text, SQLite CHAR(n)
+> or PostgreSQL BPCHAR. These are not constraints or generation authority.
+> The compiler passes an explicit SQLite decoder requirement separately from SQL
+> text; ordinary authored function names/literals cannot activate registration.
+> Both SQLite adapters preserve prepare-only twin positions and original binds.
+> A query-local scalar shares row decoding, charges source work before allocation,
+> preserves typed callback errors and removes registration after cursor cleanup.
+> The owned worker retains its original lease/mutex/cancellation owner. A failed
+> removal drops all request state, leaves an inert function and rejects subsequent
+> path registration; normal success/drop/error cleanup is tested. Native adapters
+> keep original decoding. This is thin-adapter work, not a graph materializer;
+> general decoded identity and total source controls remain open under ADR-0049.
 
 ## More Information
 

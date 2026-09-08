@@ -40,11 +40,15 @@ NULL/unbound behavior remains tested. SubPlan text facts follow the actual share
 aggregate projection layout (including SQLite AVG metadata), retain standalone
 path aliases and visit each nested plan once per metadata walk.
 
-Ordinary translate-time DISTINCT wrappers can still fail on native column folding.
-Many-to-one padding and mixed-type RDF identity remain open; the explicit required
-CHARACTER-padding check fails. Equal node shapes alone do not prove SQL-key/RDF
-term equality. Historical green fixtures below and the new text cases are not
-general exactness, total source-work bounds or release admission.
+CHARACTER decoder recipes now normalize each leaf before joins/UNION/closure,
+preserving each endpoint's own width. Normalized path aliases become text;
+raw SubPlans retain exact recipes only where all arms agree. An explicit compiler
+flag propagates through nested emission; authored SQL never activates callbacks.
+Required duplicate/connectivity, mixed-width and authenticated correlation tests
+pass, with pinned PostgreSQL/MySQL CHAR path evidence. Ordinary translate-time
+folding, ordinary source-collation/NULL behavior and general mixed-type identity
+remain open. Equal node shapes alone do not prove all SQL-key/RDF equality;
+historical green fixtures are not total source-work bounds or release admission.
 
 ## Implementation status (2026-07-19, same day)
 

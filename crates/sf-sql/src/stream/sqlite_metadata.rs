@@ -9,7 +9,7 @@ use sqlparser::parser::Parser;
 
 use crate::error::{Error, Result};
 
-pub(super) fn recover_collated_decltypes(
+pub(crate) fn recover_collated_decltypes(
     conn: &rusqlite::Connection,
     sql: &str,
     declared: Vec<Option<String>>,

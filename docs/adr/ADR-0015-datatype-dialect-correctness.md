@@ -40,17 +40,19 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 
 **`sqlparser` is SQL syntax only** — used for SQL emission and parsing `rr:sqlQuery`; it contributes nothing to type semantics, which is this separate subsystem. **NULL** in any referenced column ⇒ no RDF term (R2RML §11), enforced in Rust (not via SQL concat NULL-semantics).
 
-> **Path comparison refinement (2026-09-08).** Comparison decorations do not
-> replace Rust reconstruction. Native prepared TEXT/VARCHAR facts (MySQL nonbinary
-> varying-text metadata under its selected profile) authorize byte-exact text
-> collations; fixed-width/numeric/date/unknown values are not cast. SQLite keeps
-> storage classes and obtains declarations from a same-IR prepare-only twin that
-> omits only engine decorations, preserving authored SQL, CHAR padding and DATE.
-> SQL and twin projection/parameter vectors must match; adapter tests also reject
-> width mismatch before evaluation. Aggregate/SubPlan text facts use actual SQL
-> positions, not binding-name order. These facts are not constraint authority or
-> full RDF-key identity: the explicit CHARACTER-padding release test still fails
-> on duplicate decoded nodes, as recorded by ADR-0049.
+> **Path comparison refinement (2026-09-08).** Live text-decoder facts authorize
+> exact comparison without replacing Rust RDF reconstruction. SQLite CHARACTER(n)
+> uses its shared Rust lexical/padding function before joins and deduplication;
+> PostgreSQL BPCHAR preserves wire padding through convert_from(bpcharsend(...),
+> 'UTF8'), never a trimming ::text cast. MySQL nonbinary STRING follows its native
+> session-sensitive text decoder and existing UTF8/NO PAD comparison, not RPAD.
+> Numeric/date/binary/unknown families are not blanket-cast. The same-IR SQLite
+> prepare-only twin omits comparison collation but retains decoder calls, so a
+> compound relation cannot re-pad a CHAR(2) endpoint as CHAR(4). SQL/twin positions
+> and parameters match; normalized outputs are text, raw SubPlans retain only
+> agreed decoder facts. Required duplicate/connectivity, mixed-width, Unicode/NUL,
+> HTTP correlation and pinned native tests pass. General mixed-type identity,
+> ordinary-query collation/NULL handling and exact release remain open (ADR-0049).
 
 ### Identifier resolution — lenient against the live schema (decision 2026-06-28)
 

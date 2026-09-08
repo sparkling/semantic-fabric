@@ -18,11 +18,11 @@ fn fixture() -> (Vec<sf_core::ir::TriplesMap>, ColumnCatalog) {
             vec![
                 sf_sql::backend::ResultColumn {
                     name: "src".into(),
-                    varying_text: false,
+                    text_key: None,
                 },
                 sf_sql::backend::ResultColumn {
                     name: "dst".into(),
-                    varying_text: true,
+                    text_key: Some(sf_sql::backend::TextKey::Verbatim),
                 },
             ],
         )
@@ -58,11 +58,11 @@ fn aggregate_metadata_uses_sql_projection_order() {
                 vec![
                     sf_sql::backend::ResultColumn {
                         name: "src".into(),
-                        varying_text: false,
+                        text_key: None,
                     },
                     sf_sql::backend::ResultColumn {
                         name: "dst".into(),
-                        varying_text: true,
+                        text_key: Some(sf_sql::backend::TextKey::Verbatim),
                     },
                 ],
             )
@@ -74,7 +74,10 @@ fn aggregate_metadata_uses_sql_projection_order() {
         assert_eq!(emitted.projection[0].column.as_ref(), "dst");
         assert_eq!(emitted.projection[1].column.as_ref(), "src");
         let actuals = subplan_actuals(&sp.plan, Dialect::Postgres, &catalog);
-        assert_eq!(actuals.text_columns, HashSet::from(["c0".into()]));
+        assert_eq!(
+            actuals.text_columns,
+            HashMap::from([("c0".into(), sf_sql::backend::TextKey::Verbatim)])
+        );
         checked += 1;
     }
     assert_eq!(checked, 2);
@@ -116,8 +119,12 @@ fn sqlite_avg_layout_includes_only_its_metadata_operand() {
         }],
     });
     for (dialect, width, text) in [
-        (Dialect::Sqlite, 3, HashSet::from(["c2".into()])),
-        (Dialect::Postgres, 2, HashSet::new()),
+        (
+            Dialect::Sqlite,
+            3,
+            HashMap::from([("c2".into(), sf_sql::backend::TextKey::Verbatim)]),
+        ),
+        (Dialect::Postgres, 2, HashMap::new()),
     ] {
         let emitted = emit_branch_with(&plan.branches[0], dialect, &catalog).unwrap();
         let actuals = subplan_actuals(&plan, dialect, &catalog);
@@ -163,7 +170,10 @@ fn nested_metadata_visits_each_plan_once_independent_of_width() {
     METADATA_VISITS.with(|visits| visits.set(0));
     let actuals = subplan_actuals(&plan, Dialect::Postgres, &catalog);
     assert_eq!(actuals.columns.len(), 2);
-    assert_eq!(actuals.text_columns, HashSet::from(["c0".into()]));
+    assert_eq!(
+        actuals.text_columns,
+        HashMap::from([("c0".into(), sf_sql::backend::TextKey::Verbatim)])
+    );
     METADATA_VISITS.with(|visits| assert_eq!(visits.get(), 21));
 }
 
@@ -184,11 +194,63 @@ fn standalone_path_retains_projected_text_facts() {
         .iter()
         .enumerate()
         .filter(|(_, c)| c.column.as_ref() == "sf_o")
-        .map(|(i, _)| format!("c{i}"))
-        .collect::<HashSet<_>>();
+        .map(|(i, _)| (format!("c{i}"), sf_sql::backend::TextKey::Verbatim))
+        .collect::<HashMap<_, _>>();
     assert!(!expected.is_empty());
     assert_eq!(
         subplan_actuals(&plan, Dialect::Postgres, &catalog).text_columns,
         expected
     );
+}
+
+#[test]
+fn character_decoder_emission_is_explicit_and_preserved_in_metadata() {
+    for (dialect, key) in [
+        (Dialect::Sqlite, TextKey::SqliteCharacter(4)),
+        (Dialect::Postgres, TextKey::PostgresCharacter),
+    ] {
+        let (maps, mut catalog) = fixture();
+        let plan = crate::parse_and_translate(
+            "SELECT ?s ?o WHERE { ?s <http://ex/p>+ ?o }",
+            &maps,
+            dialect,
+        )
+        .unwrap();
+        let branches = plan.prepared_branches();
+        for source in live_metadata_sources(&branches) {
+            catalog
+                .insert_live_result(
+                    source,
+                    ["src", "dst"]
+                        .map(|name| sf_sql::backend::ResultColumn {
+                            name: name.into(),
+                            text_key: Some(key),
+                        })
+                        .to_vec(),
+                )
+                .unwrap();
+        }
+        let emitted = emit_branch_with(&branches[0], dialect, &catalog).unwrap();
+        assert_eq!(emitted.sqlite_character_keys, dialect == Dialect::Sqlite);
+        if dialect == Dialect::Sqlite {
+            assert!(emitted
+                .metadata_sql
+                .as_ref()
+                .unwrap()
+                .contains("__sf_character_key_v1"));
+        } else {
+            assert!(emitted.sql.contains("pg_catalog.bpcharsend"));
+        }
+        let ordinary = crate::parse_and_translate(
+            "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o }",
+            &maps,
+            dialect,
+        )
+        .unwrap();
+        assert!(
+            !emit_branch_with(&ordinary.prepared_branches()[0], dialect, &catalog)
+                .unwrap()
+                .sqlite_character_keys
+        );
+    }
 }

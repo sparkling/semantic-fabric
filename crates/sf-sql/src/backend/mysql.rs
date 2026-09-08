@@ -180,6 +180,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                 let varying_text = matches!(
                     column.column_type(),
                     ColumnType::MYSQL_TYPE_VARCHAR
+                        | ColumnType::MYSQL_TYPE_STRING
                         | ColumnType::MYSQL_TYPE_VAR_STRING
                         | ColumnType::MYSQL_TYPE_TINY_BLOB
                         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
@@ -189,7 +190,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                     == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
                     name: column.name_str().into_owned(),
-                    varying_text,
+                    text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),
                 })
             })
             .collect()

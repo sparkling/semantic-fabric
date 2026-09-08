@@ -1,0 +1,162 @@
+//! Query-local decoder-equivalent CHARACTER keys for relational path operations.
+use std::sync::{Arc, Mutex};
+
+use rusqlite::{functions::FunctionFlags, types::ValueRef, Connection};
+use sf_core::query_control::{QueryCharge, QueryControl};
+
+use crate::error::{Error, Result};
+
+const NAME: &str = "__sf_character_key_v1";
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Default)]
+struct Context {
+    active: bool,
+    control: Option<Arc<dyn QueryControl>>,
+    failure: Option<Error>,
+}
+
+/// Rows must be reset/dropped before this guard. The owned worker also finalizes
+/// its statement before teardown, while still owning the connection mutex/lease.
+pub(super) struct CharacterKeyGuard<'c> {
+    connection: &'c Connection,
+    context: Option<Arc<Mutex<Context>>>,
+}
+
+impl<'c> CharacterKeyGuard<'c> {
+    pub(super) fn install(
+        connection: &'c Connection,
+        required: bool,
+        control: Option<Arc<dyn QueryControl>>,
+    ) -> Result<Self> {
+        let mut guard = Self {
+            connection,
+            context: None,
+        };
+        if !required {
+            return Ok(guard);
+        }
+        // Never redefine an application callback, including a variadic overload.
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = ? COLLATE NOCASE)",
+            [NAME],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(Error::Emit(
+                "SQLite CHARACTER key function name is already registered".into(),
+            ));
+        }
+        let context = Arc::new(Mutex::new(Context {
+            active: true,
+            control,
+            failure: None,
+        }));
+        let callback = Arc::clone(&context);
+        connection.create_scalar_function(
+            NAME,
+            2,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
+            move |args| {
+                let mut state = callback.lock().unwrap_or_else(|p| p.into_inner());
+                let value = (|| {
+                    if !state.active {
+                        return Err(Error::Emit("inactive SQLite CHARACTER key function".into()));
+                    }
+                    let width = match args.get_raw(1) {
+                        ValueRef::Integer(n) if n >= 0 => usize::try_from(n).ok(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| Error::Marshal("invalid CHARACTER width".into()))?;
+                    character(args.get_raw(0), width, state.control.as_deref())
+                })();
+                match value {
+                    Ok(value) => Ok(value),
+                    Err(error) => {
+                        if state.failure.is_none() {
+                            state.failure = Some(error);
+                        }
+                        Err(rusqlite::Error::UserFunctionError(
+                            std::io::Error::other("CHARACTER key evaluation failed").into(),
+                        ))
+                    }
+                }
+            },
+        )?;
+        guard.context = Some(context);
+        Ok(guard)
+    }
+
+    pub(super) fn map_error(&self, error: Error) -> Error {
+        if !matches!(error, Error::Sqlite(_)) {
+            return error;
+        }
+        self.context
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .failure
+                    .take()
+            })
+            .unwrap_or(error)
+    }
+
+    pub(super) fn finish(&mut self) -> Result<()> {
+        if let Some(context) = self.context.take() {
+            // Even if SQLite refuses removal (an out-of-contract raw cursor),
+            // leave only an inert callback, with no request/control retention.
+            // Subsequent path admission then fails the collision check.
+            let mut state = context.lock().unwrap_or_else(|p| p.into_inner());
+            state.active = false;
+            state.control = None;
+            state.failure = None;
+            drop(state);
+            self.connection.remove_function(NAME, 2)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CharacterKeyGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
+/// The same Rust lexical conversion and Unicode-scalar padding as row decoding.
+/// No SQL length()/cast substitute: embedded NUL, UTF-8 and numeric storage must
+/// retain their existing lexical behavior. Charge before scanning/allocating.
+pub(super) fn character(
+    value: ValueRef<'_>,
+    width: usize,
+    control: Option<&dyn QueryControl>,
+) -> Result<Option<String>> {
+    if let Some(control) = control {
+        let input = match value {
+            ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
+            _ => 32,
+        };
+        let work = input
+            .checked_add(width)
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or(Error::QueryControl(
+                sf_core::query_control::QueryControlError::SourceWorkExceeded,
+            ))?;
+        control.consume(QueryCharge::SourceWork, work)?;
+    }
+    let mut text = super::lexical(value)?;
+    if let Some(text) = text.as_mut() {
+        let padding = width.saturating_sub(text.chars().count());
+        text.try_reserve(padding)
+            .map_err(|_| Error::Marshal("CHARACTER key allocation failed".into()))?;
+        text.extend(std::iter::repeat_n(' ', padding));
+    }
+    if let Some(control) = control {
+        control.checkpoint()?;
+    }
+    Ok(text)
+}

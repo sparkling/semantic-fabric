@@ -13,6 +13,8 @@ use sf_sparql::{exec, parse_and_translate};
 use sf_sql::Dialect;
 
 const REACHES: &str = "http://ex/reaches";
+#[path = "property_path_exact/character.rs"]
+mod character;
 
 #[test]
 fn path_keys_do_not_inherit_case_insensitive_source_collation() {
@@ -70,7 +72,6 @@ fn edge_mapping() -> Vec<TriplesMap> {
 }
 
 #[test]
-#[ignore = "ADR-0049 required release check: many-to-one decoded key identity remains open"]
 fn decoded_character_keys_deduplicate_as_rdf_nodes() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE edge(parent CHARACTER(4), child CHARACTER(4)); INSERT INTO edge VALUES ('a','b'),('a ','b');").unwrap();
@@ -99,6 +100,38 @@ fn decoded_character_keys_deduplicate_as_rdf_nodes() {
         distinct.len(),
         "recursive identity must not retain duplicate decoded RDF pairs"
     );
+}
+
+#[test]
+fn decoded_character_keys_determine_transitive_connectivity() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE edge(parent CHARACTER(4), child CHARACTER(4)); INSERT INTO edge VALUES ('a','b '),('b','c');").unwrap();
+    let plan = parse_and_translate(
+        &format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>+ ?o }}"),
+        &edge_mapping(),
+        Dialect::Sqlite,
+    )
+    .unwrap();
+    let rows = exec::select(&plan, &conn).unwrap().rows;
+    let actual: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r[0].as_ref().unwrap().to_string(),
+                r[1].as_ref().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let node = |s| format!("<http://ex/n/{s}%20%20%20>");
+    let expected = [("a", "b"), ("b", "c"), ("a", "c")]
+        .map(|(s, o)| (node(s), node(o)))
+        .into_iter()
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "connect through equal decoded nodes, not unequal raw strings"
+    );
+    assert_eq!(rows.len(), 3);
 }
 
 fn rowid_reflexive_mapping() -> Vec<TriplesMap> {

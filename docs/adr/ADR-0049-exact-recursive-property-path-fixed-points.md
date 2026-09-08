@@ -37,7 +37,7 @@ native prepare-time varying-text facts authorize PostgreSQL `COLLATE "C"` or
 MySQL text `CONVERT(... USING utf8mb4) COLLATE utf8mb4_0900_bin`. MySQL's
 [NO PAD text collation](https://dev.mysql.com/doc/refman/8.4/en/charset-mysql.html)
 preserves trailing spaces without changing the result decoder to binary/hex.
-Fixed-width, numeric, date and unknown native types are not blanket-cast.
+Numeric, date and unknown native types are not blanket-cast; CHAR is handled below.
 
 The rejected blanket SQLite prototype lost CHAR/DATE metadata. The integrated
 compiler instead emits a prepare-only, same-IR metadata twin omitting only its
@@ -55,14 +55,30 @@ layout, including SQLite AVG's metadata operand. Twenty nested two-column plans
 require 21 metadata visits, not width-exponential recursion. These are specific
 tested profiles, not every native outer correlation or a total compiler-work proof.
 
-**Remaining exactness gate:** storage equality is still not general decoded RDF
-identity. The required `decoded_character_keys_deduplicate_as_rdf_nodes` check
-currently fails: differently padded CHARACTER(4) keys decode to one RDF node but
-produce two path rows. `cmd-property-path-key-equality` runs it explicitly with
-`--ignored --exact`; default-suite green does not close it. Many-to-one decoding,
-mixed-type identity, ordinary early-wrapper native folding, total source-work
-and exact release remain open. No semantic-exact, bounded or admission flag is
-promoted by the text repair.
+**CHARACTER identity repair (2026-09-08):** required duplicate and transitive
+connectivity regressions now pass in the default suite. SQLite normalizes each
+leaf with the same Rust lexical/padding function used by row decoding. UTF-8
+scalar counts include embedded NUL, overlong values are never truncated, and
+the request's source-work allowance is charged before allocation. An explicit
+compiler flag, not SQL substring matching, requests a query-local function;
+case/arity collisions fail without replacing callbacks. Cursor cleanup removes
+it; failed removal leaves only inert state with no retained request control.
+The metadata twin retains normalization, preventing first-arm CHAR(4) metadata
+from re-padding CHAR(2) outputs. Native BPCHAR uses
+[its padding-preserving send value](https://raw.githubusercontent.com/postgres/postgres/REL_16_STABLE/src/backend/utils/adt/varchar.c)
+through `convert_from(bpcharsend(...), 'UTF8')`; extra parentheses preserve the
+qualified function through the SQL parser before COLLATE. MySQL nonbinary STRING
+uses the existing session-sensitive native value with UTF8/NO PAD comparison,
+without inferred width or added trimming/padding. Required owned TLS tests cover
+4/2, 2/4 and 4/4 CHAR widths for +/*/?/alternative on PostgreSQL16.15/MySQL8.4.11.
+SQLite also covers CHAR/VARCHAR, Unicode/NUL and authenticated outer correlations.
+
+**Remaining exactness gate:** general mixed/natural-type key identity, raw
+mixed-decoder SubPlan UNION, ordinary early-wrapper native folding and ordinary
+source-collation/NULL-subject behavior remain open. Native CHAR path expectations
+use an independent decoded graph, not a case-collapsing ordinary MySQL DISTINCT
+result. Total source work, synthetic row identity and exact-release qualification
+remain blockers. No broad semantic-exact, bounded or admission flag is promoted.
 
 ## Context
 

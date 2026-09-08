@@ -40,13 +40,21 @@ pub struct RawTuple {
     pub codes: Vec<Option<XsdTypeCode>>,
 }
 
+/// Decoder-preserving text comparison recipe, learned from a live prepare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKey {
+    Verbatim,
+    SqliteCharacter(usize),
+    PostgresCharacter,
+}
+
 /// Live prepare-time evidence for comparison decoration, not schema constraints.
 #[derive(Clone, Debug)]
 pub struct ResultColumn {
     pub name: String,
-    /// The native decoder preserves a varying-text value without padding or
-    /// numeric/date conversion. Unknown and fixed-width types are never guessed.
-    pub varying_text: bool,
+    /// How to expose the decoder's exact text value to relational comparisons.
+    /// Unknown and non-text families are never guessed or blanket-cast.
+    pub text_key: Option<TextKey>,
 }
 
 /// A bounded pull cursor over ONE emitted branch `SELECT`. One row in flight; the
@@ -90,7 +98,7 @@ pub trait SqlBackend {
             .into_iter()
             .map(|name| ResultColumn {
                 name,
-                varying_text: false,
+                text_key: None,
             })
             .collect())
     }
@@ -106,6 +114,18 @@ pub trait SqlBackend {
         _metadata_sql: Option<&str>,
     ) -> Result<Self::Stream<'s>> {
         self.open_branch(sql, lexical_params).await
+    }
+
+    /// Compiler-owned decoder requirements, distinct from authored SQL text.
+    async fn open_branch_with_decoder<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        _sqlite_character_keys: bool,
+    ) -> Result<Self::Stream<'s>> {
+        self.open_branch_with_metadata(sql, lexical_params, metadata_sql)
+            .await
     }
 
     /// Open a server-side cursor for one emitted branch and bind `lexical_params`

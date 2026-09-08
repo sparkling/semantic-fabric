@@ -233,6 +233,35 @@ impl SqlBackend for SqliteOwnedBackend {
         }
     }
 
+    async fn result_columns(
+        &mut self,
+        probe_sql: &str,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        let conn = Arc::clone(&self.conn);
+        let lease = self.lease.clone();
+        let control = self.control.clone();
+        let observer = self.observer.clone();
+        let probe_sql = probe_sql.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
+            observer.observe(SqliteCancellationEvent::MutexAcquired);
+            let cancellation = match control {
+                Some(control) => {
+                    control.checkpoint()?;
+                    Some(SqliteCancellationGuard::install(&guard, control, observer)?)
+                }
+                None => None,
+            };
+            super::result_columns(&guard, &probe_sql).map_err(|error| match cancellation {
+                Some(cancellation) => cancellation.map_error(error),
+                None => error,
+            })
+        })
+        .await
+        .map_err(|e| Error::Introspection(format!("result_columns worker join error: {e}")))?
+    }
+
     async fn open_branch(
         &mut self,
         sql: &str,
@@ -247,6 +276,17 @@ impl SqlBackend for SqliteOwnedBackend {
         sql: &str,
         lexical_params: &[String],
         metadata_sql: Option<&str>,
+    ) -> Result<SqliteReceiverStream> {
+        self.open_branch_with_decoder(sql, lexical_params, metadata_sql, false)
+            .await
+    }
+
+    async fn open_branch_with_decoder(
+        &mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
     ) -> Result<SqliteReceiverStream> {
         // cap-1, FIFO (=_bag-preserving) channel: at most one buffered row in flight
         // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
@@ -284,6 +324,17 @@ impl SqlBackend for SqliteOwnedBackend {
                     }
                 }
                 None => None,
+            };
+            let mut key = match super::text_key::CharacterKeyGuard::install(
+                &guard,
+                sqlite_character_keys,
+                control.clone(),
+            ) {
+                Ok(key) => key,
+                Err(error) => {
+                    send_error(&tx, control.as_deref(), error);
+                    return;
+                }
             };
             let (decl_codes, pads, nproj) =
                 match column_meta(&guard, metadata_sql.as_deref().unwrap_or(&sql)) {
@@ -369,10 +420,15 @@ impl SqlBackend for SqliteOwnedBackend {
                             Some(cancellation) => cancellation.map_rusqlite_error(e),
                             None => Error::Sqlite(e),
                         };
-                        send_error(&tx, control.as_deref(), error);
+                        send_error(&tx, control.as_deref(), key.map_error(error));
                         break;
                     }
                 }
+            }
+            drop(rows);
+            drop(stmt);
+            if let Err(error) = key.finish() {
+                send_error(&tx, control.as_deref(), error);
             }
         });
         Ok(SqliteReceiverStream { rx })

@@ -12,8 +12,12 @@ const PATH_MAPPING: &str = r#"
 "#;
 
 fn config(edges: &str) -> ServeConfig {
+    configured("TEXT COLLATE NOCASE", "TEXT COLLATE NOCASE", edges)
+}
+
+fn configured(edge_type: &str, outer_type: &str, edges: &str) -> ServeConfig {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE edge(parent TEXT COLLATE NOCASE, child TEXT COLLATE NOCASE); CREATE TABLE outer_nodes(name TEXT COLLATE NOCASE); INSERT INTO outer_nodes VALUES ('a');").unwrap();
+    conn.execute_batch(&format!("CREATE TABLE edge(parent {edge_type}, child {edge_type}); CREATE TABLE outer_nodes(name {outer_type}); INSERT INTO outer_nodes VALUES ('a');")).unwrap();
     conn.execute_batch(edges).unwrap();
     let mut config = support::serve_config(Backend::sqlite(conn), PATH_MAPPING);
     config.set_query_admission(QueryAdmission::Bearer(
@@ -91,6 +95,60 @@ async fn outer_nocase_column_cannot_create_a_path_correlation() {
         for row in rows {
             assert_eq!(row["s"]["value"], "http://ex/n/a");
             assert!(row.get("o").is_none(), "false correlation: {query}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn outer_character_column_correlates_by_its_own_decoded_width() {
+    for (outer, matches) in [("CHARACTER(4)", true), ("CHARACTER(2)", false)] {
+        for (pattern, positive, negative) in [
+            ("?s <http://ex/mark> ?m . ?s <http://ex/reaches>+ ?o", 1, 0),
+            (
+                "?s <http://ex/mark> ?m OPTIONAL { ?s <http://ex/reaches>+ ?o }",
+                1,
+                1,
+            ),
+            (
+                "?s <http://ex/mark> ?m FILTER EXISTS { ?s <http://ex/reaches>+ ?o }",
+                1,
+                0,
+            ),
+            (
+                "?s <http://ex/mark> ?m FILTER NOT EXISTS { ?s <http://ex/reaches>+ ?o }",
+                0,
+                1,
+            ),
+            (
+                "?s <http://ex/mark> ?m MINUS { ?s <http://ex/reaches>+ ?o }",
+                0,
+                1,
+            ),
+        ] {
+            let query = format!("SELECT ?s ?o WHERE {{ {pattern} }}");
+            let rows = result(
+                configured("CHARACTER(4)", outer, "INSERT INTO edge VALUES('a ','z');"),
+                &query,
+            )
+            .await;
+            assert_eq!(
+                rows.len(),
+                if matches { positive } else { negative },
+                "{outer}: {query}"
+            );
+            for row in rows {
+                assert_eq!(
+                    row["s"]["value"],
+                    if matches {
+                        "http://ex/n/a%20%20%20"
+                    } else {
+                        "http://ex/n/a%20"
+                    }
+                );
+                if !matches {
+                    assert!(row.get("o").is_none());
+                }
+            }
         }
     }
 }
