@@ -819,15 +819,61 @@ fn values_undef_acts_as_join_wildcard() {
 }
 
 #[test]
-fn values_filter_on_const_var_is_501() {
-    // FILTER over a variable bound only to a VALUES constant (no source column to
-    // push the predicate onto) is an honest 501 — never a silently-wrong answer.
+fn values_filter_on_const_var_compares_numeric_values() {
     let maps = mapping();
-    let q = "SELECT ?x WHERE { VALUES (?x) { (1) (2) } FILTER(?x = 1) }";
-    assert!(
-        parse_and_translate(q, &maps, Dialect::Sqlite).is_err(),
-        "FILTER on a VALUES-const var is deferred to 501, not silently wrong"
-    );
+    let conn = source();
+    for (values, filter, expected) in [
+        ("UNDEF 1 2", "!(?x = 1)", vec!["2"]),
+        ("1 2", "?x = 1", vec!["1"]),
+        ("1 10", "?x > 9", vec!["10"]),
+        (
+            "9007199254740992 9007199254740993",
+            "?x > 9007199254740992",
+            vec!["9007199254740993"],
+        ),
+        (
+            "0.000000000000000001 0.000000000000000002",
+            "?x > 0.000000000000000001",
+            vec!["0.000000000000000002"],
+        ),
+        (
+            "\"NaN\"^^<http://www.w3.org/2001/XMLSchema#double>",
+            "?x != ?x",
+            vec!["NaN"],
+        ),
+        (
+            "\"bad\"^^<http://www.w3.org/2001/XMLSchema#double>",
+            "!(?x = 1)",
+            vec![],
+        ),
+    ] {
+        let q = format!("SELECT ?x WHERE {{ VALUES ?x {{ {values} }} FILTER({filter}) }}");
+        let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+        let rows = exec::select(&plan, &conn).unwrap().rows;
+        assert_eq!(
+            rows.iter().map(|r| lit(&r[0])).collect::<Vec<_>>(),
+            expected,
+            "{q}"
+        );
+    }
+}
+
+#[test]
+fn values_string_pair_filter_retains_existing_equality_and_unbound_behavior() {
+    let maps = mapping();
+    let conn = source();
+    for (filter, expected) in [("?a = ?b", vec!["x"]), ("!(?a = ?b)", vec!["y"])] {
+        let q = format!(
+            r#"SELECT ?a WHERE {{ VALUES (?a ?b) {{ ("x" "x") ("y" "x") ("z" UNDEF) }} FILTER({filter}) }}"#
+        );
+        let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+        let rows = exec::select(&plan, &conn).unwrap().rows;
+        assert_eq!(
+            rows.iter().map(|r| lit(&r[0])).collect::<Vec<_>>(),
+            expected,
+            "{q}"
+        );
+    }
 }
 
 #[test]

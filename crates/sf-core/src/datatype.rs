@@ -123,6 +123,17 @@ pub fn canonical_lexical(value: &str, code: XsdTypeCode, out: &mut String) -> Re
     Ok(())
 }
 
+/// Canonical literal text after source decoding; binary is already hex encoded.
+pub fn natural_lexical(value: &str, code: XsdTypeCode, out: &mut String) -> Result<()> {
+    if matches!(code, XsdTypeCode::String | XsdTypeCode::HexBinary) {
+        out.clear();
+        out.push_str(value);
+        Ok(())
+    } else {
+        canonical_lexical(value, code, out)
+    }
+}
+
 /// Parse `value` via `oxsdatatypes` and append its canonical `Display`.
 fn cast_display<T>(value: &str, datatype: &str, out: &mut String) -> Result<()>
 where

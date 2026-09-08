@@ -41,6 +41,7 @@ mod scan;
 use scan::{scan_actuals, scan_ref};
 mod aggregate_projection;
 mod lexical_key;
+mod literal_cmp;
 mod path_comparison;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
@@ -363,6 +364,13 @@ pub(crate) fn validate_live_columns(
         catalog: &ColumnCatalog,
     ) -> Result<()> {
         match condition {
+            SqlCond::ExpressionError => Ok(()),
+            SqlCond::LiteralCmp(cmp) => {
+                for column in cmp.columns() {
+                    validate_ref(column, aliases, dialect, catalog)?;
+                }
+                Ok(())
+            }
             SqlCond::ColEq(left, right)
             | SqlCond::NativeColEq(left, right)
             | SqlCond::NullSafeEq(left, right) => {
@@ -663,6 +671,7 @@ pub struct EmittedBranch {
     pub metadata_sql: Option<String>,
     /// Engine-generated decoder call, never inferred from authored SQL text.
     pub sqlite_character_keys: bool,
+    /// Query-owned lexical decoder and literal numeric comparison callbacks.
     pub sqlite_lexical_keys: bool,
     /// The result-set schema: column `i` is `projection[i]` (positional — the
     /// reconstruction reads by position, not by the cosmetic `AS c{i}` label).
@@ -1593,6 +1602,10 @@ fn render_cond(
     pidx: &mut usize,
 ) -> Result<String> {
     Ok(match cond {
+        SqlCond::ExpressionError => "(NULL = 1)".to_owned(),
+        SqlCond::LiteralCmp(cmp) => {
+            literal_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?
+        }
         SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals),
         SqlCond::NativeColEq(a, b) => format!(
             "{} = {}",

@@ -35,6 +35,7 @@ pub mod affinity;
 pub mod datatype;
 pub mod graph_map;
 pub mod ir;
+pub mod numeric_compare;
 pub mod query_control;
 pub mod schema;
 pub mod schema_identity;

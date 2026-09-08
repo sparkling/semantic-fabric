@@ -13,7 +13,7 @@ const SQL: &str =
 fn absent(conn: &Connection) {
     let count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM pragma_function_list WHERE name=? COLLATE NOCASE",
+            "SELECT count(*) FROM pragma_function_list WHERE name=? COLLATE NOCASE OR name='__sf_numeric_cmp_v1' COLLATE NOCASE",
             [NAME],
             |r| r.get(0),
         )
@@ -118,22 +118,31 @@ async fn borrowing_lexical_callback_is_opt_in_and_cleans_up_on_all_terminal_path
 
 #[test]
 fn lexical_callback_does_not_replace_application_callbacks() {
-    for arity in [-1, 1, 3] {
+    for (name, arity) in [
+        (NAME, -1),
+        (NAME, 1),
+        (NAME, 3),
+        ("__SF_NUMERIC_CMP_V1", -1),
+        ("__SF_NUMERIC_CMP_V1", 1),
+        ("__SF_NUMERIC_CMP_V1", 5),
+    ] {
         let conn = Connection::open_in_memory().unwrap();
         conn.create_scalar_function(
-            "__SF_LEXICAL_KEY_V1",
+            name.to_ascii_uppercase().as_str(),
             arity,
             FunctionFlags::SQLITE_UTF8,
             |_| Ok(73),
         )
         .unwrap();
         assert!(CharacterKeyGuard::install_lexical(&conn, true, None).is_err());
-        let sql = if arity == 1 {
-            "SELECT __sf_lexical_key_v1(0)"
-        } else {
-            "SELECT __sf_lexical_key_v1(0,0,0)"
-        };
-        assert_eq!(conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap(), 73);
+        let args = std::iter::repeat_n("0", arity.max(1) as usize)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT {name}({args})");
+        assert_eq!(
+            conn.query_row(&sql, [], |r| r.get::<_, i64>(0)).unwrap(),
+            73
+        );
     }
 }
 
@@ -179,4 +188,74 @@ async fn owned_lexical_budget_and_drop_release_callback_and_request() {
             absent(&owned.raw_connection().lock().unwrap());
         }
     }
+}
+
+#[test]
+fn numeric_callback_is_query_owned_charged_and_null_preserving() {
+    let dtype = "http://www.w3.org/2001/XMLSchema#integer";
+    let sql = format!("SELECT __sf_numeric_cmp_v1('10','{dtype}','9','{dtype}',4)");
+    let charge = 128 + 3 + 2 * dtype.len() as u64;
+    for limit in [charge - 1, charge] {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(conn.prepare(&sql).is_err());
+        let budget = Arc::new(QueryBudget::new(QueryLimits::new(
+            u64::MAX,
+            limit,
+            u64::MAX,
+            u64::MAX,
+        )));
+        let weak = Arc::downgrade(&budget);
+        let mut guard =
+            CharacterKeyGuard::install_lexical(&conn, true, Some(budget.clone())).unwrap();
+        let result = conn.query_row(&sql, [], |r| r.get::<_, String>(0));
+        if limit < charge {
+            assert!(matches!(
+                guard.map_error(result.unwrap_err().into()),
+                Error::QueryControl(QueryControlError::SourceWorkExceeded)
+            ));
+            assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
+        } else {
+            assert_eq!(result.unwrap(), "1");
+            assert_eq!(budget.consumed(QueryCharge::SourceWork), charge);
+        }
+        guard.finish().unwrap();
+        drop(budget);
+        assert!(weak.upgrade().is_none());
+        absent(&conn);
+    }
+    let conn = Connection::open_in_memory().unwrap();
+    let mut guard = CharacterKeyGuard::install_lexical(&conn, true, None).unwrap();
+    for (sql, expected) in [
+        (
+            format!("SELECT __sf_numeric_cmp_v1(NULL,'{dtype}','9','{dtype}',4)"),
+            None,
+        ),
+        (
+            format!("SELECT __sf_numeric_cmp_v1('invalid','{dtype}','9','{dtype}',4)"),
+            None,
+        ),
+        ("SELECT __sf_lexical_key_v1('001',20,-1)".into(), Some("1")),
+        (
+            "SELECT __sf_lexical_key_v1(-0.0,16,-1)".into(),
+            Some("-0.0E0"),
+        ),
+    ] {
+        assert_eq!(
+            conn.query_row(&sql, [], |r| r.get::<_, Option<String>>(0))
+                .unwrap()
+                .as_deref(),
+            expected
+        );
+    }
+    for sql in [
+        format!("SELECT __sf_numeric_cmp_v1(1,'{dtype}','9','{dtype}',4)"),
+        format!("SELECT __sf_numeric_cmp_v1('1','{dtype}','9','{dtype}',6)"),
+    ] {
+        let error = conn
+            .query_row(&sql, [], |r| r.get::<_, String>(0))
+            .unwrap_err();
+        assert!(matches!(guard.map_error(error.into()), Error::Marshal(_)));
+    }
+    guard.finish().unwrap();
+    absent(&conn);
 }

@@ -80,6 +80,14 @@ pub(super) fn assert_references(fixture: &Fixture, database: &Database, postgres
     fixture.write("first.ttl", &mapping);
     let (server, address) = start(fixture, database);
     for (query, expected) in [
+        ("SELECT ?x WHERE { VALUES ?x { 1 10 } FILTER(?x > 9) }", 1),
+        ("SELECT ?x WHERE { VALUES ?x { 9007199254740992 9007199254740993 } FILTER(?x > 9007199254740992) }", 1),
+        ("SELECT ?x WHERE { VALUES ?x { UNDEF 1 } FILTER(!(?x = 1)) }", 0),
+        ("SELECT ?a WHERE { VALUES (?a ?b) { (\"x\" \"x\") (\"y\" \"x\") } FILTER(?a = ?b) }", 1),
+    ] {
+        assert_eq!(rows(address, fixture, query).len(), expected, "{query}");
+    }
+    for (query, expected) in [
         (format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}"), 4),
         (format!("SELECT DISTINCT ?o WHERE {{ ?s <{EDGE}> ?o }}"), 3),
         (format!("SELECT ?o WHERE {{ <http://example.test/n/one> <{EDGE}> ?o }}"), 1),
@@ -144,6 +152,54 @@ fn assert_mixed_columns(fixture: &Fixture, database: &Database, postgres: bool) 
     assert_eq!(count[0]["n"]["value"], "2");
     database.assert_encrypted_sessions();
     drop(server);
+    let ontology = std::fs::read_to_string(fixture.root.join("ontology.ttl")).unwrap();
+    fixture.write("ontology.ttl", &format!("{ontology}\n<http://example.test/natural> a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ."));
+    fixture.write(
+        "first.ttl",
+        r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#literal> rr:logicalTable [rr:tableName "mixed_keys"];
+ rr:subjectMap [rr:template "http://example.test/n/{DST}"];
+ rr:predicateObjectMap [rr:predicate <http://example.test/natural>; rr:objectMap [rr:column "src"]]."#,
+    );
+    let (server, address) = start(fixture, database);
+    for pattern in [
+        "?s <http://example.test/natural> 1".to_owned(),
+        "?s <http://example.test/natural> ?o FILTER(?o = 1)".to_owned(),
+    ] {
+        let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+        assert_eq!(
+            rows(address, fixture, &query).len(),
+            2,
+            "native natural literal: {query}"
+        );
+    }
+    database.assert_encrypted_sessions();
+    drop(server);
+    fixture.write("ontology.ttl", &ontology);
+    fixture.write("first.ttl", MAPPING);
+    assert_literal_datatype_identity(fixture, database);
+}
+
+fn assert_literal_datatype_identity(fixture: &Fixture, database: &Database) {
+    let ontology = std::fs::read_to_string(fixture.root.join("ontology.ttl")).unwrap();
+    fixture.write("ontology.ttl", &format!("{ontology}\n<http://example.test/literal> a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> ."));
+    fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#left> rr:logicalTable [rr:tableName "mixed_keys"]; rr:subject <http://example.test/left>;
+ rr:predicateObjectMap [rr:predicate <http://example.test/literal>; rr:objectMap [rr:column "dst"; rr:datatype <http://example.test/Type>]].
+<#right> rr:logicalTable [rr:tableName "mixed_keys"]; rr:subject <http://example.test/right>;
+ rr:predicateObjectMap [rr:predicate <http://example.test/literal>; rr:objectMap [rr:column "dst"; rr:datatype <http://example.test/type>]]."#);
+    let (server, address) = start(fixture, database);
+    for (pattern, expected) in [
+        ("<http://example.test/left> <http://example.test/literal> ?o . <http://example.test/right> <http://example.test/literal> ?o", 0),
+        ("<http://example.test/left> <http://example.test/literal> ?o . <http://example.test/right> <http://example.test/literal> ?other FILTER(sameTerm(?o, ?other))", 0),
+        ("<http://example.test/left> <http://example.test/literal> ?o . <http://example.test/right> <http://example.test/literal> ?other FILTER(!sameTerm(?o, ?other))", 4),
+    ] {
+        let query = format!("SELECT ?o WHERE {{ {pattern} }}");
+        assert_eq!(rows(address, fixture, &query).len(), expected, "{query}");
+    }
+    database.assert_encrypted_sessions();
+    drop(server);
+    fixture.write("ontology.ttl", &ontology);
     fixture.write("first.ttl", MAPPING);
 }
 

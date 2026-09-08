@@ -77,6 +77,8 @@ use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 /// with any scan alias produced by the RESOLVE pass across all subtrees.
 fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
     match cond {
+        SqlCond::ExpressionError => 0,
+        SqlCond::LiteralCmp(cmp) => cmp.columns().map(|c| c.alias).max().unwrap_or(0),
         SqlCond::ColEq(left, right)
         | SqlCond::NativeColEq(left, right)
         | SqlCond::NullSafeEq(left, right) => left.alias.max(right.alias),
@@ -3449,8 +3451,11 @@ mod tests {
         assert_eq!(p.branches.len(), 1);
         let b = &p.branches[0];
         assert!(
-            b.where_conds.iter().any(|c| matches!(c, SqlCond::Cmp(..))),
-            "?n > 5 ⇒ a Cmp WHERE cond: {:?}",
+            b.where_conds
+                .iter()
+                .any(|c| matches!(c, SqlCond::LiteralCmp(cmp)
+                if matches!(cmp.value_op, Some(crate::iq::CmpOp::Gt)))),
+            "?n > 5 ⇒ a typed literal value condition: {:?}",
             b.where_conds
         );
     }

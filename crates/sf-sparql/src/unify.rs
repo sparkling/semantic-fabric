@@ -12,6 +12,8 @@ use sf_core::ir::{Segment, TermMap, TermSpec, TermType};
 use sf_core::Term;
 
 use sf_sql::Dialect;
+mod literal_cmp;
+use crate::iq::literal_cmp::LiteralOperand;
 
 use crate::iq::{plain_term_def, CmpOp, ColRef, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef};
 
@@ -157,6 +159,12 @@ fn combine_unify(left: Unify, right: Unify) -> Unify {
 /// Unify a constant against a column/template term map: the raw column(s) must
 /// equal the constant's lexical form.
 fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
+    if let (Term::Literal(value), Some(column)) = (c, literal_cmp::operand(tm, alias)) {
+        return Unify::Sat(vec![literal_cmp::identity(
+            column,
+            LiteralOperand::Constant(value.clone()),
+        )]);
+    }
     let want = match const_lexical(c, term_map_type(tm)) {
         Ok(v) => v,
         Err(()) => return Unify::Empty, // term-kind mismatch ⇒ disjoint
@@ -211,6 +219,14 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
 /// Unify two column/template term maps → raw-column equalities, or a disjointness
 /// proof, or unsupported.
 fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
+    if let (Some(left), Some(right)) = (literal_cmp::operand(t1, a1), literal_cmp::operand(t2, a2))
+    {
+        // Natural derived/derived matching needs live per-backend datatype
+        // authority. Preserve its existing lowering until that proof is carried.
+        if left.explicit() && right.explicit() {
+            return Unify::Sat(vec![literal_cmp::identity(left, right)]);
+        }
+    }
     if let (Some(k1), Some(k2)) = (term_map_type(t1), term_map_type(t2)) {
         if k1 != k2 {
             return Unify::Empty; // an IRI can never equal a literal, etc.
@@ -613,19 +629,12 @@ pub fn filter_cond(
         Expression::Not(a) => Ok(SqlCond::Not(Box::new(filter_cond(a, bindings, dialect)?))),
         Expression::Bound(v) => var_col(v, bindings).map(SqlCond::IsNotNull),
         Expression::Equal(a, b) => cmp(a, b, CmpOp::Eq, bindings),
-        // ADR-0032 D3 item 4: this v1 slice treats `sameTerm` identically to
-        // `=` at the raw-column-comparison level it shares with `cmp` — sound
-        // for the IRI-valued components `star::rewrite_equality`'s
-        // component-wise recursion produces (subject/predicate are always
-        // IRIs; RDF term equality for IRIs has no `=`-vs-`sameTerm` value/
-        // syntactic distinction), and no worse than the SQL `=` every OTHER
-        // `cmp`-routed comparison in this v1 subset already relies on (which
-        // likewise does not distinguish e.g. `"1"^^xsd:integer` from
-        // `"1.0"^^xsd:decimal` by dialect-native numeric equality). A
-        // genuinely general `sameTerm` (full value/syntactic distinction for
-        // arbitrary literal operands) is unrelated pre-existing v1 scope, not
-        // added here.
-        Expression::SameTerm(a, b) => cmp(a, b, CmpOp::Eq, bindings),
+        // Literal operands retain identity separately from numeric FILTER value
+        // comparisons. IRI/constructed operands retain their existing lowering;
+        // natural derived pairs still need live decoder authority on all drivers.
+        Expression::SameTerm(a, b) => literal_cmp::filter(a, b, None, bindings)
+            .map(Ok)
+            .unwrap_or_else(|| cmp(a, b, CmpOp::Eq, bindings)),
         Expression::Greater(a, b) => cmp(a, b, CmpOp::Gt, bindings),
         Expression::GreaterOrEqual(a, b) => cmp(a, b, CmpOp::Ge, bindings),
         Expression::Less(a, b) => cmp(a, b, CmpOp::Lt, bindings),
@@ -838,6 +847,18 @@ fn cmp(
     op: CmpOp,
     bindings: &BTreeMap<String, TermDef>,
 ) -> Result<SqlCond, String> {
+    if [a, b]
+        .iter()
+        .any(|e| matches!(e, Expression::Variable(v) if !bindings.contains_key(v.as_str())))
+    {
+        return Ok(SqlCond::ExpressionError);
+    }
+    if let Some(comparison) = literal_cmp::kind_mismatch(a, b, op, bindings) {
+        return Ok(comparison);
+    }
+    if let Some(comparison) = literal_cmp::filter(a, b, Some(op), bindings) {
+        return Ok(comparison);
+    }
     match (a, b) {
         // ADR-0032 D3 item 4: `star::rewrite_equality`'s "both composed"
         // component-wise conjunction compares two component VARIABLES
@@ -1197,11 +1218,9 @@ mod tests {
         ));
     }
 
-    /// ADR-0032 D3 item 4: `sameTerm` lowers via the same `cmp` machinery as
-    /// `=` (this v1 slice's documented simplification — see `filter_cond`'s
-    /// `SameTerm` arm).
+    /// Literal sameTerm retains construction metadata independently of FILTER =.
     #[test]
-    fn same_term_lowers_like_equal() {
+    fn literal_same_term_retains_identity_instead_of_value_comparison() {
         let b = col_binding("x", "name");
         let eq = filter_cond(
             &Expression::Equal(Box::new(var("x")), Box::new(lit("Ada"))),
@@ -1216,17 +1235,15 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!((&eq, &st), (SqlCond::Cmp(c1, CmpOp::Eq, v1), SqlCond::Cmp(c2, CmpOp::Eq, v2))
-                if c1 == c2 && v1 == v2),
+            matches!((&eq, &st), (SqlCond::LiteralCmp(value), SqlCond::LiteralCmp(identity))
+                if matches!(value.value_op, Some(CmpOp::Eq)) && identity.value_op.is_none()),
             "eq={eq:?} st={st:?}"
         );
     }
 
-    /// ADR-0032 D3 item 4: two component variables compared directly (the
-    /// "both composed" component-wise conjunction's leaf shape) lowers to a
-    /// column-vs-column `SqlCond::ColEq` — NOT the constant-operand `Cmp`.
+    /// Literal variables retain value-comparison roles, not raw join authority.
     #[test]
-    fn variable_vs_variable_equality_lowers_to_col_eq() {
+    fn literal_variable_comparisons_preserve_value_roles() {
         let mut b = col_binding("t1_s", "col_a");
         b.extend(col_binding("t2_s", "col_b"));
         let cond = filter_cond(
@@ -1236,17 +1253,17 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(&cond, SqlCond::ColEq(a, b) if &*a.column == "col_a" && &*b.column == "col_b"),
+            matches!(&cond, SqlCond::LiteralCmp(cmp) if matches!(cmp.value_op, Some(CmpOp::Eq))
+                && cmp.columns().map(|c| c.column.as_ref()).collect::<Vec<_>>() == ["col_a", "col_b"]),
             "{cond:?}"
         );
-        // Any op OTHER than Eq between two bare variables stays unsupported
-        // (no column-vs-column SqlCond exists for it — sound over complete).
+        // Both literal operands are now represented for ordered comparisons too.
         assert!(filter_cond(
             &Expression::Greater(Box::new(var("t1_s")), Box::new(var("t2_s"))),
             &b,
             Dialect::Sqlite
         )
-        .is_err());
+        .is_ok());
     }
 
     // -- ADR-0032 D6 lift: align_templates literal-prefix disjointness -----

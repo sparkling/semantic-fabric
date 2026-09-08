@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [datatype, dialect, r2rml-section-10, canonicalization, oxsdatatypes, sqlite-affinity, correctness]
 supersedes: []
 depends-on:
@@ -64,6 +64,24 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 > that profile. General key equality, source bounds and release remain separate.
 
 ### Identifier resolution — lenient against the live schema (decision 2026-06-28)
+
+**Literal comparison refinement (2026-09-09).** RDF identity is the decoded
+lexical/datatype/language tuple, separate from numeric FILTER value promotion.
+SQLite compiler-owned predicates use shared Rust decoding and natural-literal
+canonicalization, not SQL casts; explicit datatype/language literals preserve
+their original lexical form. `sf-core::numeric_compare` validates the original
+four base numeric lexical spaces before integer/decimal/float/double promotion,
+avoids decimal-to-float double rounding and keeps NaN out of total-order rules.
+Invalid lexical operands produce expression error; the pinned numeric library's
+representation limits fail closed rather than misclassify valid XSD values.
+Callbacks charge work before parsing and release request state at teardown.
+Numeric VALUES compare in Rust on every dialect; existing nonnumeric VALUES
+variable-pair equality is retained. Different plain-column RDF kinds compare
+false when bound but preserve expression errors when unbound, including NOT.
+Datatype/language identifiers use byte-exact comparison, not native collation.
+The public signed-zero, datatype/language, large-integer/decimal and OPTIONAL
+checks cover this SQLite slice. Native/natural/mixed-descriptor generalization
+remains open under ADR-0034; missing metadata is never proof of xsd:string.
 
 R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) identifiers are case-insensitive; delimited identifiers are case-sensitive; an all-upper-case delimited identifier equals the undelimited form (`DEPTNO` = `"DEPTNO"`) but a mixed-case delimited one does not (`"Name"` ≠ regular `Name`). A strict processor therefore **rejects** a mapping that references a mixed-case delimited column with a regular identifier.
 

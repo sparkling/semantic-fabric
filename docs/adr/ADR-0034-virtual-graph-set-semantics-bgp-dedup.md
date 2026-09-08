@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-19
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [set-semantics, bgp-dedup, duplicate-rows, soundness, union-dedup, key-elision]
 supersedes: []
 depends-on:
@@ -82,21 +82,45 @@ of the all-key gate. Raw descriptors remain intact; general key identity is not 
 
 **SQLite lexical mixed-key correction (2026-09-08):** D1 now captures original
 term consumers before synthetic raw-column recipes erase that information. With
-live SQLite declaration/storage-fallback and padding facts, IRI-template-only keys use
+live SQLite declaration/storage-fallback and padding facts, decoded lexical keys use
 the same Rust decoder as result rows, not SQL CAST or numeric equality. Signed
 zero IRIs survive while integer/REAL lexical duplicates and CHAR duplicates
 collapse before projection; raw outputs and descriptors remain unchanged. A
 query-owned scalar charges source work, retains cancellation/lease ownership and
 cleans up on completion, drop and errors without replacing application callbacks.
-Lexical identity does not license literal value comparisons: only all-IRI-template
-consumers receive the new D1/comparison proof. Any literal, blank-node or column-IRI
-consumer revokes it; their old paths remain, including numeric FILTER comparison.
+Lexical identity does not license literal value comparisons: original IRI-template
+and explicit column-literal consumers supply D1 keys, including constant-only
+literal constraints. Natural literals, blank nodes or column IRIs revoke that
+raw lexical proof. Literal conditions retain construction specs and distinguish
+RDF identity from FILTER values; they confer no raw-key optimizer authority.
 Required public SELECT/COUNT, self-join/OPTIONAL/UNION, BLOB/date and
 numeric-filter checks pass. Owned PostgreSQL/MySQL mixed integer/case-insensitive
-text checks protect the existing native window path. This does not promote natural
-literal identity/value comparison or dual-use keys, base-resolved column IRIs, native scalar identity,
+text checks protect the existing native window path. This does not promote general natural
+literal identity/value comparison, base-resolved column IRIs, native scalar identity,
 mixed-decoder SubPlans/paths or unknown Ref keys. The existing unsupported
 template-vs-constant FILTER still rejects before source work; no admission flag changes.
+
+**Literal comparison correction (2026-09-09):** explicit SQLite column literals
+now compare decoded lexical/datatype/language tuples for BGP identity and sameTerm,
+preserving NULL expression errors under negation/OPTIONAL. Signed-zero terms remain
+distinct through SELECT/COUNT, constant matching and joins; numeric FILTER equality
+matches both. IRI/literal dual-use keeps identity distinct from value predicates.
+The query-owned Rust numeric callback compares the four base numeric datatypes with
+SPARQL promotion, exact integer/decimal arithmetic and NaN semantics. Invalid
+lexicals produce expression error; representational overflow fails closed. Other
+FILTER families keep their previous decoded-text/native-value path and cannot
+borrow D1 lexical authority. Missing Ref/SubPlan decoder facts do not fabricate
+TEXT callback inputs. Literal/IRI plain-column FILTER mismatches never fall back
+to identity-aware raw SQL equality; a condition-owned expression error preserves
+unbound behavior under NOT/OPTIONAL. Numeric VALUES use the same Rust promotion
+on all dialects and retain existing nonnumeric VALUES variable-pair equality.
+Datatype/language identity components use byte-exact, NO PAD comparison.
+Natural SQLite constant matching uses declared decoder
+datatype/canonicalization; undeclared natural serving maps remain rejected by
+existing admission. Native unknown natural descriptors keep legacy comparison,
+not invented xsd:string. General natural derived-pair identity, native numeric
+identity/value semantics and descriptor propagation remain required follow-up;
+the retained paths are compatibility boundaries, not completion evidence.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

@@ -444,6 +444,11 @@ pub(crate) fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
         return c;
     }
     match c {
+        SqlCond::LiteralCmp(cmp) if cmp.value_op.is_none() => {
+            let mut parts: Vec<_> = cmp.columns().cloned().map(SqlCond::IsNull).collect();
+            parts.insert(0, SqlCond::LiteralCmp(cmp));
+            SqlCond::Or(parts)
+        }
         // column = column: `(a = b OR a IS NULL OR b IS NULL)`.
         SqlCond::ColEq(a, b) => SqlCond::NullSafeEq(a, b),
         // constant vs (possibly nullable, e.g. nested-OPTIONAL) column: the constant

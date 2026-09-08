@@ -13,6 +13,213 @@ fn configured_mixed(setup: &str, mapping: &str) -> ServeConfig {
 const ZERO: &str = "CREATE TABLE edges(s CHARACTER(2), o GENERATED ALWAYS AS (CASE WHEN s='a' THEN 0.0 ELSE -0.0 END) VIRTUAL); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges(s) VALUES('a'),('a ');";
 
 #[tokio::test]
+async fn literal_iri_filter_mismatch_preserves_kind_and_unbound_error() {
+    let mapping = format!(
+        r#"{}
+<#iris> rr:logicalTable [rr:tableName "iris"]; rr:subject <http://ex/right>;
+ rr:predicateObjectMap [rr:predicate <http://ex/q>; rr:objectMap [rr:column "o"; rr:termType rr:IRI]]."#,
+        literal_mapping().replace("#double>", "#hexBinary>")
+    );
+    let setup = "CREATE TABLE edges(s TEXT,o BLOB); CREATE TABLE outer_nodes(s TEXT); CREATE TABLE iris(o TEXT); INSERT INTO edges VALUES('a',X'AB'); INSERT INTO iris VALUES('AB');";
+    for expression in ["?literal = ?iri", "sameTerm(?literal, ?iri)"] {
+        for (optional, negate, expected) in [
+            (false, false, 0),
+            (false, true, 1),
+            (true, false, 0),
+            (true, true, 0),
+        ] {
+            let right = if optional {
+                "OPTIONAL { <http://ex/right> <http://ex/q> ?iri FILTER(?iri = <http://ex/missing>) }"
+            } else {
+                "<http://ex/right> <http://ex/q> ?iri"
+            };
+            let filter = if negate {
+                format!("!({expression})")
+            } else {
+                expression.into()
+            };
+            let query = format!(
+                "SELECT ?literal WHERE {{ ?s <http://ex/p> ?literal . {right} FILTER({filter}) }}"
+            );
+            let json = answer(configured_mixed(setup, &mapping), &query).await;
+            assert_eq!(
+                json["results"]["bindings"].as_array().unwrap().len(),
+                expected,
+                "{query}: {json}"
+            );
+        }
+    }
+}
+
+fn literal_mapping() -> String {
+    MAP.replace(
+        "rr:template \"http://ex/n/{o}\"; rr:termType rr:IRI",
+        "rr:column \"o\"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>",
+    )
+}
+
+#[tokio::test]
+async fn literal_natural_constant_uses_declared_datatype() {
+    let mapping = MAP.replace(
+        "rr:template \"http://ex/n/{o}\"; rr:termType rr:IRI",
+        "rr:column \"o\"",
+    );
+    for kind in ["INTEGER", "BIGINT"] {
+        let setup = format!("CREATE TABLE edges(s TEXT,o {kind}); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a',1);");
+        for (literal, count) in [
+            ("1", 1),
+            ("\"1\"", 0),
+            ("\"1\"^^<http://www.w3.org/2001/XMLSchema#double>", 0),
+        ] {
+            let query = format!("SELECT ?s WHERE {{ ?s <http://ex/p> {literal} }}");
+            let json = answer(configured_mixed(&setup, &mapping), &query).await;
+            assert_eq!(
+                json["results"]["bindings"].as_array().unwrap().len(),
+                count,
+                "{kind}: {query}: {json}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_literal_identity_preserves_signed_zero_terms_before_count() {
+    for query in [
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o }",
+    ] {
+        let json = answer(configured_mixed(ZERO, &literal_mapping()), query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        if query.contains("COUNT") {
+            assert_eq!(rows[0]["n"]["value"], "2", "{json}");
+        } else {
+            let mut values: Vec<_> = rows
+                .iter()
+                .map(|r| r["o"]["value"].as_str().unwrap())
+                .collect();
+            values.sort();
+            assert_eq!(values, vec!["-0", "0"], "{json}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn literal_bgp_identity_is_not_numeric_filter_equality() {
+    let mapping = format!(
+        r#"{}
+<#right> rr:logicalTable [rr:tableName "right_values"];
+ rr:subject <http://ex/right>;
+ rr:predicateObjectMap [rr:predicate <http://ex/q>;
+ rr:objectMap [rr:column "o"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>]]."#,
+        literal_mapping()
+    );
+    let setup =
+        format!("{ZERO} CREATE TABLE right_values(o); INSERT INTO right_values VALUES (0.0);");
+    for (pattern, expected) in [
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?o", vec!["0"]),
+        ("?s <http://ex/p> ?o FILTER(?o = 0)", vec!["-0", "0"]),
+        ("?s <http://ex/p> ?o FILTER(0 = ?o)", vec!["-0", "0"]),
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?o = ?x)", vec!["-0", "0"]),
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?x = ?o)", vec!["-0", "0"]),
+        ("?s <http://ex/p> ?o FILTER(sameTerm(?o, \"-0\"^^<http://www.w3.org/2001/XMLSchema#double>))", vec!["-0"]),
+    ] {
+        let query = format!("SELECT ?o WHERE {{ {pattern} }}");
+        let json = answer(configured_mixed(&setup, &mapping), &query).await;
+        let mut values: Vec<_> = json["results"]["bindings"].as_array().unwrap().iter().map(|r| r["o"]["value"].as_str().unwrap()).collect();
+        values.sort();
+        assert_eq!(values, expected, "{query}: {json}");
+    }
+}
+
+#[tokio::test]
+async fn literal_constant_constraints_survive_dedup_without_a_projected_object() {
+    for value in ["0", "-0"] {
+        let query = format!("SELECT ?s WHERE {{ ?s <http://ex/p> \"{value}\"^^<http://www.w3.org/2001/XMLSchema#double> }}");
+        let json = answer(configured_mixed(ZERO, &literal_mapping()), &query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{query}: {json}");
+        assert_eq!(rows[0]["s"]["value"], "http://ex/n/a%20");
+    }
+}
+
+#[tokio::test]
+async fn literal_identity_checks_datatype_language_and_unbound_error() {
+    for (spec, matching, different) in [
+        (
+            "rr:datatype <http://www.w3.org/2001/XMLSchema#integer>",
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#double>",
+        ),
+        ("rr:language \"en\"", "\"1\"@en", "\"1\"@fr"),
+    ] {
+        let mapping = MAP.replace(
+            "rr:template \"http://ex/n/{o}\"; rr:termType rr:IRI",
+            &format!("rr:column \"o\"; {spec}"),
+        );
+        let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','1');";
+        for (pattern, count) in [
+            (format!("?s <http://ex/p> {matching}"), 1),
+            (format!("?s <http://ex/p> {different}"), 0),
+            (format!("?s <http://ex/p> ?o FILTER(sameTerm(?o, {matching}))"), 1),
+            (format!("?s <http://ex/p> ?o FILTER(sameTerm(?o, {different}))"), 0),
+            (format!("?s <http://ex/p> ?o OPTIONAL {{ ?s <http://ex/p> ?missing FILTER(sameTerm(?missing, {different})) }} FILTER(!sameTerm(?missing, {different}))"), 0),
+        ] {
+            let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+            let json = answer(configured_mixed(setup, &mapping), &query).await;
+            assert_eq!(json["results"]["bindings"].as_array().unwrap().len(), count, "{query}: {json}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn literal_numeric_lexicals_compare_values_without_losing_iri_dual_use() {
+    for (datatype, value, expression, count) in [
+        ("integer", "9007199254740993", "?o > 9007199254740992", 1),
+        (
+            "decimal",
+            "1.000000000000000002",
+            "?o > 1.000000000000000001",
+            1,
+        ),
+        ("double", "NaN", "?o = ?o", 0),
+        ("double", "NaN", "?o != 0", 1),
+        ("double", "invalid", "?o > 0", 0),
+        (
+            "integer",
+            "10",
+            "?o > \"9\"^^<http://www.w3.org/2001/XMLSchema#int>",
+            1,
+        ),
+    ] {
+        let mapping = literal_mapping().replace("#double>", &format!("#{datatype}>"));
+        let setup = format!("CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','{value}');");
+        let query = format!("SELECT ?o WHERE {{ ?s <http://ex/p> ?o FILTER({expression}) }}");
+        // The derived-integer fallback's prior SQL affinity is numeric, not TEXT.
+        let setup = if expression.contains("#int>") {
+            setup.replace("o TEXT", "o INTEGER")
+        } else {
+            setup
+        };
+        let json = answer(configured_mixed(&setup, &mapping), &query).await;
+        assert_eq!(
+            json["results"]["bindings"].as_array().unwrap().len(),
+            count,
+            "{query}: {json}"
+        );
+    }
+    let mapping = literal_mapping().replace("http://ex/n/{s}", "http://ex/n/{o}");
+    for query in [
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o . ?s <http://ex/p> ?other }",
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o FILTER(?o = 0) }",
+    ] {
+        let json = answer(configured_mixed(ZERO, &mapping), query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{query}: {json}");
+        assert_ne!(rows[0]["o"]["value"], rows[1]["o"]["value"]);
+    }
+}
+
+#[tokio::test]
 async fn decoded_mixed_template_keys_preserve_join_and_union_bags() {
     for (pattern, expected) in [
         ("?s <http://ex/p> ?o . ?other <http://ex/p> ?o", 2),

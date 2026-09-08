@@ -810,6 +810,8 @@ pub(super) fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
 
 fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
     match cond {
+        SqlCond::ExpressionError => {}
+        SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(fix),
         SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             fix(a);
             fix(b);

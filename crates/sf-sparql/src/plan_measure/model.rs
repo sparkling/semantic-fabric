@@ -257,6 +257,20 @@ pub(super) fn visit_sql_cond<'a>(
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
     match cond {
+        SqlCond::ExpressionError => {}
+        SqlCond::LiteralCmp(cmp) => {
+            for operand in [&cmp.left, &cmp.right] {
+                match operand {
+                    crate::iq::literal_cmp::LiteralOperand::Column { column, spec } => {
+                        walker.push(depth, Work::ColRef(column))?;
+                        walker.push(depth, Work::TermSpec(spec))?;
+                    }
+                    crate::iq::literal_cmp::LiteralOperand::Constant(value) => {
+                        walker.push(depth, Work::Literal(value))?
+                    }
+                }
+            }
+        }
         SqlCond::ColEq(left, right)
         | SqlCond::NativeColEq(left, right)
         | SqlCond::NullSafeEq(left, right) => {

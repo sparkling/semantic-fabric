@@ -1,4 +1,4 @@
-//! Decoder-equivalent lexical keys. No natural-literal canonicalization here.
+//! Decoder-equivalent keys with separately requested natural canonicalization.
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -36,7 +36,12 @@ pub(super) fn evaluate(
     args: &Context<'_>,
     control: Option<&dyn QueryControl>,
 ) -> Result<Option<String>> {
-    let code = match args.get_raw(1) {
+    let natural = matches!(args.get_raw(1), ValueRef::Integer(16..=25));
+    let raw_code = match args.get_raw(1) {
+        ValueRef::Integer(n) if natural => ValueRef::Integer(n - 16),
+        other => other,
+    };
+    let code = match raw_code {
         ValueRef::Integer(0) => None,
         ValueRef::Integer(n) if (1..=9).contains(&n) => Some(CODES[n as usize - 1]),
         _ => return Err(Error::Marshal("invalid lexical decoder code".into())),
@@ -49,14 +54,34 @@ pub(super) fn evaluate(
         ),
         _ => return Err(Error::Marshal("invalid lexical decoder width".into())),
     };
-    lexical(
-        args.get_raw(0),
-        SqliteDecode {
-            declared: code,
-            padding,
-        },
-        control,
-    )
+    let decode = SqliteDecode {
+        declared: code,
+        padding,
+    };
+    let result = lexical(args.get_raw(0), decode, control)?;
+    if natural {
+        let Some(value) = result else {
+            return Ok(None);
+        };
+        if let Some(control) = control {
+            control.consume(
+                QueryCharge::SourceWork,
+                (value.len() as u64).checked_add(128).ok_or_else(exceeded)?,
+            )?;
+        }
+        let effective = code
+            .or_else(|| super::storage_class_code(&args.get_raw(0)))
+            .unwrap_or(XsdTypeCode::String);
+        let mut canonical = String::new();
+        sf_core::datatype::natural_lexical(&value, effective, &mut canonical)
+            .map_err(|e| Error::Marshal(e.to_string()))?;
+        if let Some(control) = control {
+            control.checkpoint()?;
+        }
+        Ok(Some(canonical))
+    } else {
+        Ok(result)
+    }
 }
 
 pub(super) fn lexical(

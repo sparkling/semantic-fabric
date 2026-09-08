@@ -7,7 +7,8 @@ use super::{Branch, ColRef, PathClosure, SqlCond};
 pub(crate) mod ref_atom;
 
 #[derive(Debug, Clone)]
-/// Every original consumer of this column is an IRI template.
+/// Every original consumer preserves raw decoded lexical identity (IRI template
+/// or explicit column literal); numeric predicates own separate typed operands.
 pub struct LexicalKey {
     pub column: Box<str>,
 }
@@ -34,8 +35,8 @@ pub enum ScanSource {
         distinct: bool,
         /// Native comparison keys; bool also requires RDF-key equivalence.
         native_keys: Vec<(Box<str>, bool)>,
-        /// Original RDF consumers are all IRI templates, not literals, blank
-        /// nodes or base-resolved column IRIs. Captured
+        /// Original RDF consumers are IRI templates or explicit column literals,
+        /// not natural literals, blank nodes or base-resolved IRIs. Captured
         /// before projection narrowing; synthetic `columns` specs are no proof.
         lexical_keys: Vec<LexicalKey>,
     },

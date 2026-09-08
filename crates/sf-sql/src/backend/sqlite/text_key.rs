@@ -1,4 +1,4 @@
-//! Query-local decoder-equivalent CHARACTER keys for relational path operations.
+//! Query-local decoder keys and typed literal predicates; no persistent functions.
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{functions::FunctionFlags, types::ValueRef, Connection};
@@ -69,46 +69,62 @@ impl<'c> CharacterKeyGuard<'c> {
                 "SQLite decoder key function name is already registered".into(),
             ));
         }
+        if lexical && connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = '__sf_numeric_cmp_v1' COLLATE NOCASE)", [], |row| row.get::<_,bool>(0))? {
+            return Err(Error::Emit("SQLite numeric comparison function name is already registered".into()));
+        }
         let context = Arc::new(Mutex::new(Context {
             active: true,
             control,
             failure: None,
         }));
-        let callback = Arc::clone(&context);
-        connection.create_scalar_function(
-            name,
-            if lexical { 3 } else { 2 },
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
-            move |args| {
-                let mut state = callback.lock().unwrap_or_else(|p| p.into_inner());
-                let value = (|| {
-                    if !state.active {
-                        return Err(Error::Emit("inactive SQLite decoder key function".into()));
-                    }
-                    if lexical {
-                        return super::lexical_key::evaluate(args, state.control.as_deref());
-                    }
-                    let width = match args.get_raw(1) {
-                        ValueRef::Integer(n) if n >= 0 => usize::try_from(n).ok(),
-                        _ => None,
-                    }
-                    .ok_or_else(|| Error::Marshal("invalid CHARACTER width".into()))?;
-                    character(args.get_raw(0), width, state.control.as_deref())
-                })();
-                match value {
-                    Ok(value) => Ok(value),
-                    Err(error) => {
-                        if state.failure.is_none() {
-                            state.failure = Some(error);
+        let registrations: &[(&str, i32, bool)] = if lexical {
+            &[
+                ("__sf_lexical_key_v1", 3, false),
+                ("__sf_numeric_cmp_v1", 5, true),
+            ]
+        } else {
+            &[(NAME, 2, false)]
+        };
+        guard.context = Some(context.clone());
+        for &(name, arity, numeric) in registrations {
+            let callback = Arc::clone(&context);
+            connection.create_scalar_function(
+                name,
+                arity,
+                FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
+                move |args| {
+                    let mut state = callback.lock().unwrap_or_else(|p| p.into_inner());
+                    let value = (|| {
+                        if !state.active {
+                            return Err(Error::Emit("inactive SQLite decoder key function".into()));
                         }
-                        Err(rusqlite::Error::UserFunctionError(
-                            std::io::Error::other("CHARACTER key evaluation failed").into(),
-                        ))
+                        if numeric {
+                            return super::numeric_cmp::evaluate(args, state.control.as_deref());
+                        }
+                        if lexical {
+                            return super::lexical_key::evaluate(args, state.control.as_deref());
+                        }
+                        let width = match args.get_raw(1) {
+                            ValueRef::Integer(n) if n >= 0 => usize::try_from(n).ok(),
+                            _ => None,
+                        }
+                        .ok_or_else(|| Error::Marshal("invalid CHARACTER width".into()))?;
+                        character(args.get_raw(0), width, state.control.as_deref())
+                    })();
+                    match value {
+                        Ok(value) => Ok(value),
+                        Err(error) => {
+                            if state.failure.is_none() {
+                                state.failure = Some(error);
+                            }
+                            Err(rusqlite::Error::UserFunctionError(
+                                std::io::Error::other("decoder predicate evaluation failed").into(),
+                            ))
+                        }
                     }
-                }
-            },
-        )?;
-        guard.context = Some(context);
+                },
+            )?;
+        }
         Ok(guard)
     }
 
@@ -138,14 +154,21 @@ impl<'c> CharacterKeyGuard<'c> {
             state.control = None;
             state.failure = None;
             drop(state);
-            self.connection.remove_function(
+            let lexical_result = self.connection.remove_function(
                 if self.lexical {
                     "__sf_lexical_key_v1"
                 } else {
                     NAME
                 },
                 if self.lexical { 3 } else { 2 },
-            )?;
+            );
+            let numeric_result = if self.lexical {
+                self.connection.remove_function("__sf_numeric_cmp_v1", 5)
+            } else {
+                Ok(())
+            };
+            lexical_result?;
+            numeric_result?;
         }
         Ok(())
     }

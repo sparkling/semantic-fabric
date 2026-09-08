@@ -148,7 +148,9 @@ fn condition_reads_source(condition: &crate::iq::SqlCond) -> bool {
         SqlCond::And(conditions) | SqlCond::Or(conditions) => {
             conditions.iter().any(condition_reads_source)
         }
-        SqlCond::ColEq(..)
+        SqlCond::ExpressionError
+        | SqlCond::LiteralCmp(..)
+        | SqlCond::ColEq(..)
         | SqlCond::NativeColEq(..)
         | SqlCond::NullSafeEq(..)
         | SqlCond::Cmp(..)

@@ -255,7 +255,7 @@ pub(super) fn natural_literal(value: &str, code: XsdTypeCode) -> Result<Term> {
         XsdTypeCode::HexBinary => Literal::new_typed_literal(value, code.iri()),
         _ => {
             let mut buf = String::new();
-            datatype::canonical_lexical(value, code, &mut buf)
+            datatype::natural_lexical(value, code, &mut buf)
                 .map_err(|e| Error::Core(e.to_string()))?;
             Literal::new_typed_literal(buf, code.iri())
         }

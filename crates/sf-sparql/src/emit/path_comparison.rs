@@ -160,6 +160,17 @@ pub(super) fn rdf_column(
             return lexical_key::expression(colref(column, dialect, actuals), decode, catalog);
         }
     }
+    rdf_text_column(column, dialect, catalog, actuals)
+}
+
+/// Legacy value predicates may use decoded text, but cannot borrow a D1/RDF
+/// lexical identity proof for a numeric or mixed-storage column.
+pub(super) fn rdf_text_column(
+    column: &ColRef,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+) -> String {
     let key = column_text(column, actuals);
     let expression = decoded_text(colref(column, dialect, actuals), key, dialect, catalog);
     if !catalog.suppress_path_collation && key.is_some() {

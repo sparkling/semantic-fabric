@@ -3,8 +3,9 @@ use super::*;
 use std::collections::BTreeSet;
 
 /// Capture original consumer semantics before D1 replaces them with synthetic
-/// raw Column recipes. Every consumer must be an IRI template: literal identity
-/// versus value comparison needs separate authority, even for explicit datatypes.
+/// raw Column recipes. IRI templates and explicit column literals preserve the
+/// decoded lexical value. Literal conditions own identity/value roles separately;
+/// natural literals and base-resolved IRIs cannot borrow this raw lexical proof.
 pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
     fn term(
         map: &TermMap,
@@ -17,7 +18,10 @@ pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
         }
         let lexical = match map {
             TermMap::Template(_, spec) => spec.term_type == sf_core::ir::TermType::Iri,
-            TermMap::Column(_, _) => false,
+            TermMap::Column(_, spec) => {
+                spec.term_type == sf_core::ir::TermType::Literal
+                    && (spec.datatype.is_some() || spec.language.is_some())
+            }
             TermMap::Constant(_) => return,
         };
         let mut record = |column: &str| {
@@ -70,6 +74,45 @@ pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
                 }
             }
         }
+    }
+    fn condition(
+        cond: &SqlCond,
+        alias: usize,
+        modes: &mut std::collections::BTreeMap<Box<str>, bool>,
+    ) {
+        match cond {
+            SqlCond::LiteralCmp(cmp) => {
+                for operand in [&cmp.left, &cmp.right] {
+                    if let crate::iq::literal_cmp::LiteralOperand::Column { column, spec } = operand
+                    {
+                        term(
+                            &TermMap::Column(column.column.clone(), spec.clone()),
+                            column.alias,
+                            alias,
+                            modes,
+                        );
+                    }
+                }
+            }
+            SqlCond::And(cs)
+            | SqlCond::Or(cs)
+            | SqlCond::Exists { conds: cs, .. }
+            | SqlCond::NotExists { conds: cs, .. }
+            | SqlCond::PathExists { conds: cs, .. } => {
+                for c in cs {
+                    condition(c, alias, modes);
+                }
+            }
+            SqlCond::Not(c) => condition(c, alias, modes),
+            _ => {}
+        }
+    }
+    for cond in branch
+        .where_conds
+        .iter()
+        .chain(branch.opts.iter().flat_map(|o| o.on.iter().chain(&o.extra)))
+    {
+        condition(cond, alias, &mut modes);
     }
     modes
         .into_iter()
@@ -170,15 +213,13 @@ mod tests {
         assert_eq!(keys[0].column.as_ref(), "key");
         assert!(lexical_keys(&branch, 4).is_empty());
         branch.bindings.insert("typed".into(), typed);
-        assert!(
-            lexical_keys(&branch, 3).is_empty(),
-            "mixed IRI/literal consumers need per-comparison roles"
+        assert_eq!(
+            lexical_keys(&branch, 3).len(),
+            1,
+            "explicit literal identity is now condition-owned"
         );
         branch.bindings.remove("iri");
-        assert!(
-            lexical_keys(&branch, 3).is_empty(),
-            "literal identity remains separate"
-        );
+        assert_eq!(lexical_keys(&branch, 3).len(), 1);
         branch.bindings.insert("natural".into(), natural);
         assert!(
             lexical_keys(&branch, 3).is_empty(),

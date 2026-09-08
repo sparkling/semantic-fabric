@@ -36,6 +36,7 @@ mod cancellation;
 mod lexical_key;
 #[cfg(test)]
 mod metadata_twin_tests;
+mod numeric_cmp;
 mod owned;
 mod text_key;
 
