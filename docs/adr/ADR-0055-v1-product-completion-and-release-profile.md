@@ -458,8 +458,9 @@ downgrade/socket fallback and retain PostgreSQL trust for cancellation. Required
 loopback protocol peers and public startup rejection tests verify these boundaries.
 Required native CLI tests now verify authenticated exact queries on digest-pinned
 PostgreSQL 16.15/MySQL 8.4.11, including their mixed UNION, actual encrypted
-sessions and independent-CA/hostname failures. Exact-release-artifact evidence
-and backend admission remain required; this narrow result does not complete M3/M6.
+sessions and independent-CA/hostname failures. These required real-CLI paths also
+qualify both source selectors; old optional/missing-unit-test metadata adds no gate.
+Exact-release-artifact evidence and backend admission remain required; M3/M6 remain incomplete.
 
 The public bounded two-pattern join now implements ADR-0006's fixed-cap merge:
 128 distinct complete driving triples, 4,096 probe triples, conservative bound
