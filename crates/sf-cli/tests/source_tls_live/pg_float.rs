@@ -40,6 +40,7 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
         1.1,
         -1.1,
         1.0 + 1.0 / 131_072.0, // Exactly 1.00000762939453125: shortest-decimal midpoint.
+        1.0 + 1.0 / 16_777_216.0, // Shortest f64 lexical crosses an f32 midpoint.
         1e23,
         f64::MIN_POSITIVE,
         f64::from_bits(1),
@@ -58,10 +59,11 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
         <#m> rr:logicalTable [rr:tableName "items"]; rr:subject <http://example.test/item>;
           rr:predicateObjectMap [rr:predicate <http://example.test/natural>; rr:objectMap [rr:column "FLOAT_COLUMN"]];
           rr:predicateObjectMap [rr:predicate <http://example.test/explicit>; rr:objectMap [rr:column "FLOAT_COLUMN"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>]];
+          rr:predicateObjectMap [rr:predicate <http://example.test/float>; rr:objectMap [rr:column "FLOAT_COLUMN"; rr:datatype <http://www.w3.org/2001/XMLSchema#float>]];
           rr:predicateObjectMap [rr:predicate <http://example.test/raw>; rr:objectMap [rr:column "FLOAT_COLUMN"; rr:datatype <http://www.w3.org/2001/XMLSchema#string>]];
           rr:predicateObjectMap [rr:predicate <http://example.test/edge>; rr:objectMap [rr:template "http://example.test/n/{FLOAT_COLUMN}"]];
           rr:predicateObjectMap [rr:predicate <http://example.test/lexical>; rr:objectMap [rr:column "value"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>]]."#.replace("FLOAT_COLUMN", column));
-        fixture.write("ontology.ttl", &(["natural", "explicit", "raw", "lexical"].map(|name| format!("<http://example.test/{name}> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .")).join("\n") + "\n<http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> ."));
+        fixture.write("ontology.ttl", &(["natural", "explicit", "raw", "lexical", "float"].map(|name| format!("<http://example.test/{name}> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .")).join("\n") + "\n<http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> ."));
         let expected: BTreeSet<_> = values.iter().map(|v| canonical(v)).collect();
         let inserts = values
             .iter()
@@ -159,6 +161,12 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
             );
         }
         values::assert_constants(address, fixture, NATURAL, &expected);
+        values::assert_constants(
+            address,
+            fixture,
+            "http://example.test/float",
+            &values.iter().cloned().collect(),
+        );
         database.assert_encrypted_sessions();
         drop(server);
     }

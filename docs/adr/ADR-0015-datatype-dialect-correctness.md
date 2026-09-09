@@ -85,11 +85,11 @@ duplicates and NULL, with deliberately degraded PostgreSQL text precision.
 Same-width SQL pools and independently executed unlike-width UNIONs retain their
 descriptors; consumed mixed-width SQL pools reject before coercion can alter RDF
 output. Hidden in-arm float guards do not reject safe integer-subject pools.
-The separate double value-comparison refinement below does not grant identity
+The separate floating value-comparison refinement below does not grant identity
 or pooled-output authority. Coercing-pool preservation, other native families
 and exact-release qualification remain open; no backend is removed.
 
-### PostgreSQL double value-comparison refinement (2026-09-09)
+### PostgreSQL floating value-comparison refinement (2026-09-09)
 
 All six operators now compare qualified native operands after RDF double
 promotion. Natural FLOAT4 first uses the decoder's shortest decimal, whereas an
@@ -105,8 +105,24 @@ and unqualified authored numeric-column overrides reject, not raw-compare.
 Required owned TLS CLI tests cover both-width cross comparisons, signed-zero bags,
 extrema/subnormals, full-range NUMERIC rounding boundaries, subtype constants,
 invalid source/override failure and cap-one recovery, and denied-row isolation.
-Rust output and identity keys are unchanged. Float-only promotion, broader typed
-column parsing/arithmetic, other backends and exact-release qualification remain
+The Float-only continuation selects REAL whenever no RDF Double participates.
+Integer/decimal constants parse directly as f32; native INTEGER/NUMERIC cast
+directly to REAL after exact `2^128 - 2^103` overflow and `2^-150` underflow
+guards. Neither path rounds through Double. Natural PostgreSQL REAL remains
+RDF Double and therefore selects the previous higher-precision promotion.
+Authored xsd:float columns have separate raw-lexical parsing authority for exact
+native INTEGER, NUMERIC, FLOAT4 and FLOAT8 descriptors. FLOAT4's finite raw lexical
+round-trips to its native value; FLOAT8 first uses its exact Rust shortest lexical
+as NUMERIC, then REAL. Only the resulting Float widens when a Double participates.
+Raw native `inf`/`-inf` are invalid authored XSD float lexicals and yield expression
+errors; NaN remains valid. NUMERIC nonfinite wire errors are never reinterpreted.
+Required owned TLS checks now cover Float/Double constants, exact 32-bit rounding
+boundaries and decimal/BIGINT double-rounding counterexamples, authored Float
+columns, raw FLOAT8 midpoint spelling, all six operators/NOT, invalid source
+recovery and policy-first EXISTS/OPTIONAL. Focused core/compiler tests retain
+subtype facets and reject missing, inconsistent and foreign decoder facts.
+Rust output and identity keys are unchanged. General text/other typed-column
+parsing, wider arithmetic, other backends and exact-release qualification remain
 required follow-up, not removed capabilities or a complete numeric gate.
 
 ### PostgreSQL NUMERIC decoder correction (2026-09-09)

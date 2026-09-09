@@ -64,10 +64,20 @@ pub(super) fn assert_constants(
     let typed = |lexical: &str, kind: &str| {
         format!("\"{lexical}\"^^<http://www.w3.org/2001/XMLSchema#{kind}>")
     };
+    let source_float = predicate == "http://example.test/float";
     for (literal, number) in [
         (typed("0", "double"), Some(0.0)),
         (typed("1.1", "double"), Some(1.1)),
         (typed("1.1", "float"), Some(f64::from(1.1_f32))),
+        (typed("1", "float"), Some(1.0)),
+        (typed("NaN", "float"), Some(f64::NAN)),
+        (typed("INF", "float"), Some(f64::INFINITY)),
+        (typed("1e-45", "float"), Some(f64::from(f32::from_bits(1)))),
+        (
+            typed("4611686018427387904", "float"),
+            Some(4611686018427387904.0),
+        ),
+        (typed("inf", "float"), None),
         (typed("NaN", "double"), Some(f64::NAN)),
         (typed("INF", "double"), Some(f64::INFINITY)),
         (typed("5e-324", "double"), Some(f64::from_bits(1))),
@@ -79,9 +89,14 @@ pub(super) fn assert_constants(
         (typed("-0", "negativeInteger"), None),
         ("\"1\"@en".into(), None),
     ] {
-        // This slice qualifies double promotion. Decimal/integer-only and
-        // float-only comparisons have separate exact promotion contracts.
-        if predicate != NATURAL && !literal.contains("XMLSchema#double>") {
+        // Decimal/integer-only comparisons retain their exact, non-IEEE lane.
+        let float_only = (predicate != NATURAL && literal.contains("XMLSchema#float>"))
+            || (source_float && !literal.contains("XMLSchema#double>"));
+        if predicate != NATURAL
+            && !source_float
+            && !float_only
+            && !literal.contains("XMLSchema#double>")
+        {
             continue;
         }
         for op in ["=", "!=", "<", "<=", ">", ">="] {
@@ -99,8 +114,17 @@ pub(super) fn assert_constants(
                 let expected: BTreeSet<_> = source
                     .iter()
                     .filter(|lexical| {
+                        // Native raw infinity spellings are invalid authored
+                        // XSD float lexicals, even though Rust accepts `inf`.
+                        if source_float && matches!(lexical.as_str(), "inf" | "-inf") {
+                            return false;
+                        }
                         number.is_some_and(|right| {
-                            let left = lexical.parse::<f64>().unwrap();
+                            let left = if float_only || source_float {
+                                f64::from(lexical.parse::<f32>().unwrap())
+                            } else {
+                                lexical.parse::<f64>().unwrap()
+                            };
                             compare(left, right, op) != negate
                         })
                     })
@@ -124,15 +148,20 @@ pub(super) fn assert_numeric(fixture: &Fixture, database: &Database) {
     fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
       <#n> rr:logicalTable [rr:tableName "items"]; rr:subject <http://example.test/item>;
       rr:predicateObjectMap [rr:predicate <http://example.test/number>; rr:objectMap [rr:column "float_decimal"]];
+      rr:predicateObjectMap [rr:predicate <http://example.test/float>; rr:objectMap [rr:column "float_decimal"; rr:datatype <http://www.w3.org/2001/XMLSchema#float>]];
       rr:predicateObjectMap [rr:predicate <http://example.test/raw>; rr:objectMap [rr:column "float_decimal"; rr:datatype <http://www.w3.org/2001/XMLSchema#string>]];
       rr:predicateObjectMap [rr:predicate <http://example.test/integer>; rr:objectMap [rr:column "float_integer"]]."#);
-    fixture.write("ontology.ttl", "<http://example.test/number> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/integer> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/raw> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
+    fixture.write("ontology.ttl", "<http://example.test/number> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/integer> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/raw> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/float> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
     sql(database, "DELETE FROM items; ALTER TABLE items ADD COLUMN float_decimal NUMERIC; ALTER TABLE items ADD COLUMN float_integer BIGINT");
     // Exercise exact rounding boundaries and the complete native NUMERIC
     // exponent range without a bounded-i64/decimal intermediate representation.
     let overflow = "(power(2::numeric,1024)-power(2::numeric,970))";
     let underflow = "(trim_scale(power(5::numeric,1075))::text||'e-1075')::numeric";
+    let float_overflow = "(power(2::numeric,128)-power(2::numeric,103))";
+    let float_underflow = "(trim_scale(power(5::numeric,150))::text||'e-150')::numeric";
     let expressions = [
+        "1.000000059604644776".into(), // Direct f32 rounds above1; via f64 ties to1.
+        "16777217".into(),
         "1.1".into(),
         "0".into(),
         "-1.1".into(),
@@ -151,15 +180,29 @@ pub(super) fn assert_numeric(fixture: &Fixture, database: &Database) {
         format!("{underflow}+1e-1100"),
         format!("-({underflow})"),
         format!("-({underflow})-1e-1100"),
+        float_overflow.into(),
+        format!("{float_overflow}-1"),
+        format!("{float_overflow}+1"),
+        format!("-{float_overflow}"),
+        format!("-{float_overflow}+1"),
+        float_underflow.into(),
+        format!("{float_underflow}-1e-200"),
+        format!("{float_underflow}+1e-200"),
+        format!("-({float_underflow})"),
+        format!("-({float_underflow})-1e-200"),
     ];
     let inserts = expressions
         .iter()
         .map(|v| format!("({v},9007199254740993,'same')"))
         .collect::<Vec<_>>()
         .join(",");
-    sql(database, &format!("INSERT INTO items(float_decimal,float_integer,value) VALUES {inserts},(NULL,NULL,'same')"));
+    sql(database, &format!("INSERT INTO items(float_decimal,float_integer,value) VALUES {inserts},(NULL,NULL,'same'),(NULL,16777217,'same'),(NULL,4611686293305294849,'same')"));
     let (server, address) = start(fixture, database);
-    for predicate in ["http://example.test/number", "http://example.test/integer"] {
+    for predicate in [
+        "http://example.test/number",
+        "http://example.test/integer",
+        "http://example.test/float",
+    ] {
         let source = complete_rows(
             address,
             fixture,
@@ -183,12 +226,17 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
             "?o > 0e0",
             "\"NaN\"^^<http://www.w3.org/2001/XMLSchema#double> = ?o",
             "\"inf\"^^<http://www.w3.org/2001/XMLSchema#double> = ?o",
+            "?o > \"0\"^^<http://www.w3.org/2001/XMLSchema#float>",
+            "\"NaN\"^^<http://www.w3.org/2001/XMLSchema#float> = ?o",
+            "\"inf\"^^<http://www.w3.org/2001/XMLSchema#float> = ?o",
         ] {
             for pattern in [
                 format!("?s <http://example.test/number> ?o FILTER({expression})"),
                 format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/number> ?o FILTER({expression}) }}"),
                 format!("?s <http://example.test/raw> ?o FILTER({expression})"),
                 format!("?s <http://example.test/raw> ?o FILTER(!({expression}))"),
+                format!("?s <http://example.test/float> ?o FILTER({expression})"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/float> ?o FILTER({expression}) }}"),
             ] {
                 let query = format!("SELECT ?s WHERE {{ {pattern} }}");
                 let response = stop_matrix::wire(cancellation::begin(address, &query, &fixture.token));
@@ -224,10 +272,20 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
             } else {
                 "1.1e0"
             };
+            let float_constant = format!(
+                "\"{}\"^^<http://www.w3.org/2001/XMLSchema#float>",
+                constant.trim_end_matches("e0")
+            );
             for pattern in [
                 format!("?s <http://example.test/number> ?o FILTER(?o {op} {constant})"),
                 format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/number> ?o FILTER(?o {op} {constant}) }}"),
                 format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/number> ?o FILTER(?o {op} {constant}) }}"),
+                format!("?s <http://example.test/number> ?o FILTER(?o {op} {float_constant})"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/number> ?o FILTER(?o {op} {float_constant}) }}"),
+                format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/number> ?o FILTER(?o {op} {float_constant}) }}"),
+                format!("?s <http://example.test/float> ?o FILTER(?o {op} {float_constant})"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/float> ?o FILTER(?o {op} {float_constant}) }}"),
+                format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/float> ?o FILTER(?o {op} {float_constant}) }}"),
             ] {
                 let query = format!("SELECT ?s WHERE {{ {pattern} }}");
                 assert_eq!(complete_rows(address, fixture, &query).len(), 1, "{invalid}: {query}");

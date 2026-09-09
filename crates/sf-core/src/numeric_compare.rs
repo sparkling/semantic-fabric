@@ -104,6 +104,33 @@ fn parse(value: &str, datatype: &str) -> Result<Option<Number>> {
 /// This is only authority for a comparison whose promoted type is double.
 /// Authored xsd:float values round to float *before* widening to double.
 pub fn promote_to_double(value: &str, datatype: &str) -> Option<f64> {
+    let (value, kind) = validated_numeric(value, datatype)?;
+    match value {
+        "INF" => Some(f64::INFINITY),
+        "-INF" => Some(f64::NEG_INFINITY),
+        "NaN" => Some(f64::NAN),
+        _ if kind == "float" => value.parse::<f32>().ok().map(f64::from),
+        _ => value.parse().ok(),
+    }
+}
+
+/// Promote directly to float when no double operand participates. Parsing via
+/// double would round twice and can return a different value at f32 midpoints.
+/// A double input is not a Float-only promotion and is deliberately rejected.
+pub fn promote_to_float(value: &str, datatype: &str) -> Option<f32> {
+    let (value, kind) = validated_numeric(value, datatype)?;
+    if kind == "double" {
+        return None;
+    }
+    match value {
+        "INF" => Some(f32::INFINITY),
+        "-INF" => Some(f32::NEG_INFINITY),
+        "NaN" => Some(f32::NAN),
+        _ => value.parse().ok(),
+    }
+}
+
+fn validated_numeric<'a>(value: &'a str, datatype: &'a str) -> Option<(&'a str, &'a str)> {
     let kind = datatype.strip_prefix("http://www.w3.org/2001/XMLSchema#")?;
     let value = value.trim_matches([' ', '\t', '\r', '\n']);
     let integer = is_integer_datatype(datatype);
@@ -113,13 +140,7 @@ pub fn promote_to_double(value: &str, datatype: &str) -> Option<f64> {
     {
         return None;
     }
-    match value {
-        "INF" => Some(f64::INFINITY),
-        "-INF" => Some(f64::NEG_INFINITY),
-        "NaN" => Some(f64::NAN),
-        _ if kind == "float" => value.parse::<f32>().ok().map(f64::from),
-        _ => value.parse().ok(),
-    }
+    Some((value, kind))
 }
 
 /// Standard XSD integer derivations participate in numeric promotion. Authored
@@ -216,6 +237,47 @@ fn valid_lexical(value: &str, kind: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_promotion_rounds_once_after_lexical_and_facet_validation() {
+        let promote = |v: &str, kind: &str| {
+            promote_to_float(v, &format!("http://www.w3.org/2001/XMLSchema#{kind}"))
+        };
+        let midpoint = "1.000000059604644776";
+        assert_eq!(
+            promote(midpoint, "decimal"),
+            Some(f32::from_bits(1.0_f32.to_bits() + 1))
+        );
+        assert_ne!(
+            promote(midpoint, "decimal"),
+            Some(midpoint.parse::<f64>().unwrap() as f32)
+        );
+        let integer = "4611686293305294849";
+        assert_eq!(promote(integer, "integer"), integer.parse::<f32>().ok());
+        assert_ne!(
+            promote(integer, "integer"),
+            Some(integer.parse::<f64>().unwrap() as f32)
+        );
+        assert_eq!(
+            promote(&"9".repeat(400), "positiveInteger"),
+            Some(f32::INFINITY)
+        );
+        assert_eq!(
+            promote("-1e-9999", "float").unwrap().to_bits(),
+            (-0.0_f32).to_bits()
+        );
+        assert_eq!(promote("1e-45", "float"), Some(f32::from_bits(1)));
+        assert!(promote("NaN", "float").unwrap().is_nan());
+        for (value, kind) in [
+            ("inf", "float"),
+            ("256", "unsignedByte"),
+            ("-0", "negativeInteger"),
+            ("1e2", "integer"),
+            ("1", "double"),
+        ] {
+            assert_eq!(promote(value, kind), None);
+        }
+    }
 
     #[test]
     fn double_promotion_validates_before_rounding_full_range_lexicals() {
