@@ -164,6 +164,103 @@ fn assert_double_override(fixture: &Fixture, database: &Database) {
 pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_float(fixture, database);
     assert_double_override(fixture, database);
+    assert_identity(fixture, database);
+}
+
+#[test]
+#[ignore = "requires owned pinned MySQL TLS fixture"]
+fn mysql_native_float_identity_preserves_terms() {
+    let fixture = Fixture::new();
+    let database = Database::start(&fixture, false);
+    assert_identity(&fixture, &database);
+}
+
+fn assert_identity(fixture: &Fixture, database: &Database) {
+    for storage in ["FLOAT", "DOUBLE"] {
+        mappings(fixture);
+        seed_native(
+            database,
+            storage,
+            &[
+                "1.1".into(),
+                "1.1".into(),
+                "2".into(),
+                "0".into(),
+                "-0e0".into(),
+            ],
+        );
+        let (server, address) = start(fixture, database);
+        for predicate in ["natural", "double"] {
+            for (lexical, ids) in [
+                ("0.0E0", vec![3]),
+                ("-0.0E0", vec![4]),
+                ("1.1E0", vec![0, 1]),
+                ("1.10E0", vec![]),
+                ("0", vec![]),
+                ("NaN", vec![]),
+                ("INF", vec![]),
+            ] {
+                let literal = format!("\"{lexical}\"^^<{XSD}double>");
+                let expected = ids
+                    .iter()
+                    .map(|i| format!("http://example.test/numeric/{i}"))
+                    .collect();
+                for body in [
+                    format!("?s <http://example.test/{predicate}> {literal}"),
+                    format!(
+                        "?s <http://example.test/{predicate}> ?o FILTER(sameTerm(?o, {literal}))"
+                    ),
+                    format!(
+                        "?s <http://example.test/{predicate}> ?o FILTER(sameTerm({literal}, ?o))"
+                    ),
+                ] {
+                    assert_rows(
+                        address,
+                        fixture,
+                        &format!("SELECT ?s WHERE {{ {body} }}"),
+                        &expected,
+                    );
+                }
+                let complement = (0..5)
+                    .filter(|i| !ids.contains(i))
+                    .map(|i| format!("http://example.test/numeric/{i}"))
+                    .collect();
+                assert_rows(address, fixture, &format!("SELECT ?s WHERE {{ ?s <http://example.test/{predicate}> ?o FILTER(!sameTerm(?o, {literal})) }}"), &complement);
+            }
+        }
+        assert_rows(address, fixture, "SELECT ?s WHERE { ?s <http://example.test/natural> ?o; <http://example.test/double> ?o }", &(0..5).map(|i| format!("http://example.test/numeric/{i}")).collect());
+        database.assert_encrypted_sessions();
+        drop(server);
+        let mapping = std::fs::read_to_string(fixture.root.join("first.ttl")).unwrap();
+        fixture.write(
+            "first.ttl",
+            &mapping.replace(
+                "rr:subjectMap [rr:template \"http://example.test/numeric/{id}\"]",
+                "rr:subject <http://example.test/numeric/item>",
+            ),
+        );
+        let (server, address) = start(fixture, database);
+        for predicate in ["natural", "double", "float"] {
+            for select in ["SELECT ?o", "SELECT DISTINCT ?o"] {
+                let query = format!("{select} WHERE {{ <http://example.test/numeric/item> <http://example.test/{predicate}> ?o }}");
+                let result = rows(address, fixture, &query);
+                assert_eq!(result.len(), 4, "{storage}: {query}");
+                let values: BTreeSet<_> = result
+                    .iter()
+                    .map(|r| r["o"]["value"].as_str().unwrap())
+                    .collect();
+                let expected = if predicate == "float" {
+                    BTreeSet::from(["0", "-0", "1.1", "2"])
+                } else {
+                    BTreeSet::from(["0.0E0", "-0.0E0", "1.1E0", "2.0E0"])
+                };
+                assert_eq!(values, expected, "{storage}: {query}");
+            }
+        }
+        database.assert_encrypted_sessions();
+        drop(server);
+        sql(database, "DROP TABLE sf_numeric_items");
+    }
 }
 
 fn mappings(fixture: &Fixture) {

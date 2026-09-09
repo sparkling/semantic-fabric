@@ -2,6 +2,8 @@
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use pg_decimal_value::datatype;
+#[path = "mysql_float_identity.rs"]
+pub(super) mod identity;
 #[path = "mysql_float_round.rs"]
 mod round;
 #[path = "mysql_float_shortest.rs"]

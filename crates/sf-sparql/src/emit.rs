@@ -891,11 +891,12 @@ fn emit_branch_keys(
     // `term_dedup` skips SQL DISTINCT even though `b.distinct` is set (see the C.3 gate
     // above) — its raw, non-injective duplicates are collapsed downstream, by TERM, not
     // by raw-column SQL DISTINCT (which would be the unsound operation C.3 refuses).
-    let numeric_keys = if b.distinct && !term_dedup && dialect == Dialect::Postgres {
-        pg_numeric::distinct_keys(b, dialect, &actuals)
-    } else {
-        Vec::new()
-    };
+    let numeric_keys =
+        if b.distinct && !term_dedup && matches!(dialect, Dialect::Postgres | Dialect::MySql) {
+            pg_numeric::distinct_keys(b, dialect, &actuals)
+        } else {
+            Vec::new()
+        };
     let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(Option::is_some);
     let literal_window = (b.distinct && !term_dedup && dialect == Dialect::Sqlite)
         .then(|| literal_roles::sqlite_distinct(b, catalog, &actuals))
@@ -934,7 +935,7 @@ fn emit_branch_keys(
     }
     // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
     if let Some(order) = if numeric_distinct || literal_window.is_some() {
-        pg_numeric::order(b, &projection)?
+        pg_numeric::order(b, &projection, dialect)?
     } else {
         render_order(
             &b.order,
@@ -1602,6 +1603,7 @@ fn emit_subplan_sql(
         }
     }
     pg_float::validate_union(&branches, dialect, &catalog, plan.distinct)?;
+    mysql_float_value::identity::validate_union(&branches, dialect, &catalog)?;
     let emitted = branches
         .iter()
         .map(|branch| emit_branch_keys(branch, dialect, &catalog, plan.distinct || branch.distinct))

@@ -115,11 +115,11 @@ cargo build --workspace --locked
 
 ## Codex platform notes
 
-### Delivery execution (ADR-0055, updated 2026-09-07)
+### Delivery execution (ADR-0055, updated 2026-09-10)
 
 - Native Codex/Claude subscription agents build with their normal edit/test tools. Ruflo is the MCP coordination/memory ledger. The closed experimental candidate harness is optional, never the default builder or a per-commit gate.
 - Finish integration and public request behavior before starting another foundation. Count verified requirement closure, not commits, tests, scores, reviews or receipts alone.
-- Preserve the selected main model. Supporting tasks start with Luna/Haiku for bounded mechanical work, Terra for established patterns, Sol/Sonnet for ordinary implementation, Astra/Opus for difficult reasoning, and Fable for exceptional hard work.
+- Preserve the selected main model. Use tools for deterministic work, Luna low/Haiku for bounded mechanical tasks, Terra medium for established patterns, and Sol medium/Sonnet for normal implementation/review (Sol high for a specific correctness proof). Escalate to Astra high/Opus only for a named unresolved problem; max/Fable needs a bounded exceptional task. Ultra requires a specific user request, not routine follow-up. Route each new task afresh and stop stronger reviewers once their question is answered.
 - Astra `max` and `ultra` are supported choices. Forward explicit effort unchanged; never clamp it based on an obsolete adapter or silently substitute a model. Use stronger effort for demonstrated task difficulty, not as a blanket default.
 - Native subscription authentication only: no API keys, OpenRouter, or spend/token/request/invocation/quota budgets. If the native subscription/requested model is unavailable, pause model execution and report the exact client, model and error.
 - Do not expand Darwin/GEPA/AVO, retrieval tuning, benchmark trains or release research during v1 completion. Required security, exactness, boundedness, lifecycle, federation and minimum release checks remain blockers.

@@ -67,14 +67,14 @@ This target never truncates necessary implementation or correctness checks.
    architecture unless a concrete required product defect makes it necessary
    and the current scope authorizes it.
 
-7. Allocate models by the task, not by blanket maximum effort. Use ordinary
-   tools for deterministic work; Luna/Haiku for bounded mechanical work, Terra
-   for established-pattern changes, Sol/Sonnet for normal implementation, and
-   Astra/Opus for difficult cross-component reasoning or independent review.
-   Astra max AND ultra are available: use them for a specific hard correctness,
-   concurrency or integration problem when warranted; never silently clamp a
-   requested effort. Reserve Fable for exceptionally difficult work where it
-   helps. Retain the selected main model; do not ask for a downgrade. Measure
+7. Prefer faster supporting models: ordinary tools for deterministic work,
+   Luna low/Haiku for mechanical work, Terra medium for established patterns,
+   Sol medium/Sonnet for normal implementation and bounded review; Sol high
+   for a specific correctness proof. Escalate to Astra high/Opus only for a
+   named unresolved cross-component problem. Max/Fable needs a bounded hard
+   task; Ultra is not a routine worker and requires a specific user request.
+   Route each next task afresh; stop escalations when their question is answered.
+   Retain the selected main model and explicit requested effort; never clamp. Measure
    verified integrated outcomes, elapsed time and rework, not invented savings.
    Use no subscription spend/token/request/quota ceilings and no API keys or
    OpenRouter. If a native subscription or requested model is unavailable,
