@@ -14,6 +14,22 @@ implements: []
 
 # Virtual-graph set semantics: BGP-level dedup for duplicate rows and cross-map same-triple emission
 
+## NUMERIC wrapper refinement (2026-09-09)
+
+PostgreSQL finite NUMERIC now uses decoded lexical keys for authored static IRI
+consumers while retaining raw numeric output. D1 keeps original consumer roles;
+final DISTINCT uses only output consumers, so hidden lexical roles do not split
+natural-only results. Mixed known-natural roles are explicit, not unknown vetoes.
+Native-only Ref keys retain native equality alongside required RDF keys. Every
+new numeric-window companion needs its own role/type proof; unknowns fail closed.
+Admitted nested bag UNIONs rebase each arm's PostgreSQL parameters. Compatible
+compiler DISTINCT pools use UNION ALL plus a raw-preserving numeric-key window;
+disagreeing numeric roles reject. This does not relax serving's existing
+source-sized multi-arm DISTINCT gate. Required owned TLS CLI checks verify that
+rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy
+isolation; compiler tests cover the DISTINCT SQL wrapper. General mixed/native
+identity, natural-decimal range and release qualification remain open.
+
 ## Current wrapper boundary (2026-09-08)
 
 D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned

@@ -113,6 +113,11 @@ fn zero_slot_template_registers_its_finalizer_without_a_column_decoder() {
 fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
     for (dialect, key, expression) in [
         (Dialect::Postgres, NativeScalarKey::Integer, "CAST("),
+        (
+            Dialect::Postgres,
+            NativeScalarKey::PostgresNumeric,
+            "AS JSON) AS TEXT",
+        ),
         (Dialect::MySql, NativeScalarKey::Integer, "DECIMAL(20, 0)"),
         (
             Dialect::Postgres,

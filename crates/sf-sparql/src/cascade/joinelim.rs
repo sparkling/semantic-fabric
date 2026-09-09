@@ -227,6 +227,9 @@ fn find_multi_fk_pk_join(b: &Branch, schema: &[TableSchema]) -> Option<MultiFkEl
 
 /// Does every reference to `alias` use only the columns in `cols`?
 fn parent_referenced_only_via_set(b: &Branch, alias: usize, cols: &[&str]) -> bool {
+    if crate::iq::decode_valid::branch_references(b, alias) {
+        return false;
+    }
     let mut ok = true;
     let mut check = |c: &ColRef| {
         if c.alias == alias && !cols.contains(&&*c.column) {
@@ -321,6 +324,7 @@ fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
         SqlCond::Cmp(a, _, _)
         | SqlCond::NativeCmp(a, _, _)
         | SqlCond::IsNotNull(a)
+        | SqlCond::DecodedIsNotNull(a)
         | SqlCond::IsNull(a) => rewrite_parent_colref_multi(a, e),
         SqlCond::StrMatch { col, .. } => rewrite_parent_colref_multi(col, e),
         SqlCond::Not(c) => rewrite_parent_cond_multi(c, e),
@@ -467,6 +471,9 @@ fn column_not_null(t: &TableSchema, col: &str) -> bool {
 /// Does every reference to `alias` (bindings + WHERE + OPTIONAL conditions) use
 /// only column `col`? If so the parent scan contributes nothing but its PK.
 fn parent_referenced_only_via(b: &Branch, alias: usize, col: &str) -> bool {
+    if crate::iq::decode_valid::branch_references(b, alias) {
+        return false;
+    }
     let mut ok = true;
     let mut check = |c: &ColRef| {
         if c.alias == alias && &*c.column != col {
@@ -548,6 +555,7 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
         SqlCond::Cmp(a, _, _)
         | SqlCond::NativeCmp(a, _, _)
         | SqlCond::IsNotNull(a)
+        | SqlCond::DecodedIsNotNull(a)
         | SqlCond::IsNull(a) => rewrite_parent_colref(a, e),
         SqlCond::StrMatch { col, .. } => rewrite_parent_colref(col, e),
         SqlCond::Not(c) => rewrite_parent_cond(c, e),

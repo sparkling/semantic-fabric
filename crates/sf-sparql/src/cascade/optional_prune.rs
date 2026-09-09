@@ -27,6 +27,14 @@ pub(super) fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
         });
     }
     for opt in &b.opts {
+        if opt
+            .on
+            .iter()
+            .chain(&opt.extra)
+            .any(|c| crate::iq::decode_valid::references(c, None))
+        {
+            required.insert(opt.scan.alias);
+        }
         // Its own ON cannot filter the preserved left row, but another opt's
         // correlation may need this scan even when its binding is unprojected.
         for cond in opt.on.iter().chain(&opt.extra) {
@@ -139,6 +147,19 @@ mod tests {
         let mut b = branch();
         prune(&mut b);
         assert!(b.opts.is_empty());
+    }
+
+    #[test]
+    fn hidden_decoder_validation_retains_optional_and_has_no_key_authority() {
+        let mut b = branch();
+        let condition = SqlCond::DecodedIsNotNull(ColRef::new(1, "value"));
+        b.opts[0].extra.push(SqlCond::And(vec![condition.clone()]));
+        prune(&mut b);
+        assert_eq!(b.opts.len(), 1);
+        let mut only_validation = Branch::single(scan(1));
+        only_validation.where_conds.push(condition);
+        assert!(super::super::distinct_scan::lexical_keys(&only_validation, 1).is_empty());
+        assert!(super::super::distinct_scan::native_keys(&only_validation, 1).is_empty());
     }
 
     #[test]

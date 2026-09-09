@@ -483,7 +483,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         database.assert_encrypted_sessions();
         drop(server);
         if postgres {
-            pg_numeric::assert_large_decoder(&fixture, &database);
+            pg_numeric::assert_all(&fixture, &database);
         } else {
             natural_temporal::assert_responses(&fixture, &database);
         }

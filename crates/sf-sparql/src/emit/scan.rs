@@ -86,6 +86,17 @@ fn projection_sql(
         .then(|| lexical_key::column_decode(&ColRef::new(input.alias, raw), &actuals))
         .flatten()
     };
+    let numeric = |raw: &str| {
+        pg_numeric::key(
+            &ColRef::new(input.alias, raw),
+            dialect,
+            &actuals,
+            lexical_keys,
+        )
+    };
+    let has_numeric = columns
+        .iter()
+        .any(|(_, term)| matches!(term, TermMap::Column(raw, _) if numeric(raw).is_some()));
     let has_iris = lexical_keys
         .iter()
         .any(|key| matches!(key.mode, LexicalMode::Iri { .. }));
@@ -100,16 +111,26 @@ fn projection_sql(
             .any(|key| key.column.as_ref() == raw && matches!(key.mode, LexicalMode::Iri { .. }))
     };
     let window = distinct
-        && native_keys.is_empty()
+        && (native_keys.is_empty() || has_numeric)
         && !columns.is_empty()
         && ((dialect == Dialect::Sqlite && columns.iter().all(|(_, term)| template::supports_distinct(term))) || columns.iter().all(|(_, term)| {
-            matches!(term, TermMap::Column(raw, _) if iri_column(raw) || lexical(raw).is_some() || path_comparison::column_text(
+            matches!(term, TermMap::Column(raw, _) if iri_column(raw) || lexical(raw).is_some() || numeric(raw).is_some() || (has_numeric && pg_numeric::native_companion(&ColRef::new(input.alias, raw.clone()), dialect, &actuals, lexical_keys)) || path_comparison::column_text(
                 &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
-        }) || (!guards.iter().any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+        }) || (has_numeric && columns.iter().all(|(name, term)| {
+            native_keys.iter().any(|(key, both)| key == name && !both)
+                || matches!(term, TermMap::Column(raw, _) if numeric(raw).is_some()
+                    || pg_numeric::native_companion(&ColRef::new(input.alias, raw.clone()), dialect, &actuals, lexical_keys)
+                    || path_comparison::column_text(&ColRef::new(input.alias, raw.clone()), &actuals).is_some())
+        })) || (!has_numeric && !guards.iter().any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
             && !actuals[&input.alias].text_columns.is_empty()));
     if distinct && has_iris && !window {
         return Err(Error::Unsupported(
             "resolved column-IRI dedup requires exact keys for every scan consumer".into(),
+        ));
+    }
+    if distinct && has_numeric && !window {
+        return Err(Error::Unsupported(
+            "numeric RDF dedup requires known decoder roles for every key".into(),
         ));
     }
     let mut rank = "__sf_rank".to_owned();
@@ -164,24 +185,21 @@ fn projection_sql(
                 }
             }
             if native.is_none_or(|(_, both)| *both) {
-                keys.push(
-                    if let Some(decode) = lexical(raw).filter(|_| {
-                        path_comparison::column_text(
-                            &ColRef::new(input.alias, raw.clone()),
-                            &actuals,
-                        )
+                keys.push(if let Some(key) = numeric(raw) {
+                    key
+                } else if let Some(decode) = lexical(raw).filter(|_| {
+                    path_comparison::column_text(&ColRef::new(input.alias, raw.clone()), &actuals)
                         .is_none()
-                    }) {
-                        lexical_key::expression(column(raw), decode, catalog)
-                    } else {
-                        path_comparison::rdf_column(
-                            &ColRef::new(input.alias, raw.clone()),
-                            dialect,
-                            catalog,
-                            &actuals,
-                        )
-                    },
-                );
+                }) {
+                    lexical_key::expression(column(raw), decode, catalog)
+                } else {
+                    path_comparison::rdf_column(
+                        &ColRef::new(input.alias, raw.clone()),
+                        dialect,
+                        catalog,
+                        &actuals,
+                    )
+                });
             }
             if native.is_some() {
                 let key = column(raw);
@@ -212,24 +230,35 @@ fn projection_sql(
         items.join(", "),
         scan_ref(input, dialect, catalog, params, pidx)?
     );
-    let predicates = guards
-        .iter()
-        .map(|guard| match guard {
-            SqlCond::IsNull(c) if c.alias == input.alias => {
-                Ok(format!("{} IS NULL", column(&c.column)))
-            }
-            SqlCond::IsNotNull(c) if c.alias == input.alias => {
-                Ok(format!("{} IS NOT NULL", column(&c.column)))
-            }
-            SqlCond::NativeCmp(c, CmpOp::Eq, _) if c.alias == input.alias => {
-                render_cond(guard, dialect, catalog, &actuals, params, pidx)
-            }
-            _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
-                render_cond(guard, dialect, catalog, &actuals, params, pidx)
-            }
-            _ => Err(Error::Unsupported("projection guard shape".into())),
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let protected = natural_temporal::authorized_conjunction(
+        &guards.iter().collect::<Vec<_>>(),
+        dialect,
+        catalog,
+        &actuals,
+        params,
+        pidx,
+    )?;
+    let predicates = match protected {
+        Some(sql) => vec![sql],
+        None => guards
+            .iter()
+            .map(|guard| match guard {
+                SqlCond::IsNull(c) if c.alias == input.alias => {
+                    Ok(format!("{} IS NULL", column(&c.column)))
+                }
+                SqlCond::IsNotNull(c) if c.alias == input.alias => {
+                    Ok(format!("{} IS NOT NULL", column(&c.column)))
+                }
+                SqlCond::NativeCmp(c, CmpOp::Eq, _) if c.alias == input.alias => {
+                    render_cond(guard, dialect, catalog, &actuals, params, pidx)
+                }
+                _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
+                    render_cond(guard, dialect, catalog, &actuals, params, pidx)
+                }
+                _ => Err(Error::Unsupported("projection guard shape".into())),
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
     if !predicates.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&predicates.join(" AND "));
@@ -256,6 +285,19 @@ fn projection_sql(
         // validation outside this relation can only inspect authorized rows.
         sql.push_str(" LIMIT ");
         sql.push_str(dialect.bare_offset_limit_sentinel().unwrap());
+    }
+    if dialect == Dialect::Postgres
+        && actuals[&input.alias]
+            .scalar_columns
+            .values()
+            .any(|key| *key == NativeScalarKey::PostgresNumeric)
+        && guards
+            .iter()
+            .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+    {
+        // Block pull-up/predicate pushdown across admitted rows. Outer fallible
+        // NUMERIC validation cannot run against rows hidden by portable policy.
+        sql.push_str(" OFFSET 0");
     }
     Ok(sql)
 }

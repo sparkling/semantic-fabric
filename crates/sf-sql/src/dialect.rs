@@ -255,6 +255,60 @@ impl Dialect {
     }
 }
 
+/// Rebase PostgreSQL parameters without changing authored SQL lexicals.
+pub fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<String> {
+    if dialect != Dialect::Postgres || base == 0 {
+        return Ok(sql.to_owned());
+    }
+    use sqlparser::tokenizer::{Location, Token, Tokenizer};
+    // Rewrite actual parameters only; keep all other authored UTF-8 bytes.
+    let tokens = Tokenizer::new(&sqlparser::dialect::PostgreSqlDialect {}, sql)
+        .tokenize_with_location()
+        .map_err(|_| Error::Emit("cannot tokenize nested PostgreSQL parameters".into()))?;
+    let mut placeholders = tokens
+        .iter()
+        .filter_map(|token| match &token.token {
+            Token::Placeholder(value) => Some((token.span.start, value)),
+            _ => None,
+        })
+        .peekable();
+    let mut out = String::with_capacity(sql.len());
+    let mut copied = 0;
+    let mut location = Location::new(1, 1);
+    for (index, character) in sql.char_indices() {
+        if placeholders.peek().is_some_and(|(at, _)| *at == location) {
+            let (_, value) = placeholders.next().unwrap();
+            let n = value
+                .strip_prefix('$')
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_add(base))
+                .ok_or_else(|| Error::Emit("invalid nested PostgreSQL parameter index".into()))?;
+            if index < copied || sql.get(index..index + value.len()) != Some(value.as_str()) {
+                return Err(Error::Emit(
+                    "nested PostgreSQL parameter span mismatch".into(),
+                ));
+            }
+            out.push_str(&sql[copied..index]);
+            out.push('$');
+            out.push_str(&n.to_string());
+            copied = index + value.len();
+        }
+        if character == '\n' {
+            location.line += 1;
+            location.column = 1;
+        } else {
+            location.column += 1;
+        }
+    }
+    if placeholders.next().is_some() {
+        return Err(Error::Emit(
+            "missing nested PostgreSQL parameter span".into(),
+        ));
+    }
+    out.push_str(&sql[copied..]);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

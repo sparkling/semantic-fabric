@@ -248,6 +248,8 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
             ("BYTEA", "decode('00ff61622f', 'hex')", "00FF61622F"),
             ("BYTEA", "decode('', 'hex')", ""),
             ("BYTEA", "decode('0000', 'hex')", "0000"),
+            ("NUMERIC(30,6)", "-12.34", "-12.340000"),
+            ("NUMERIC", "1.00", "1.00"),
             ("BOOLEAN", "TRUE", "true"),
             ("BOOLEAN", "FALSE", "false"),
         ]

@@ -158,6 +158,7 @@ fn condition_reads_source(condition: &crate::iq::SqlCond) -> bool {
         | SqlCond::NativeCmp(..)
         | SqlCond::StrMatch { .. }
         | SqlCond::IsNotNull(..)
+        | SqlCond::DecodedIsNotNull(..)
         | SqlCond::IsNull(..)
         | SqlCond::TemplateEq(..) => false,
     }

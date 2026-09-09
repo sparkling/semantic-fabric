@@ -51,7 +51,8 @@ subject/predicate/object (including referenced parent subjects); class shortcuts
 guard their subject before projection or correlation. DISTINCT may remove an
 OPTIONAL only when projected bindings, WHERE and other OPTIONAL conditions no
 longer consume its alias, including nested existential correlations. Its own ON
-conditions alone do not prevent pruning. Ordered/aggregate/path/SubPlan consumers
+conditions alone do not prevent pruning, except retained fallible decoder
+validation (the 2026-09-09 NUMERIC refinement). Ordered/aggregate/path/SubPlan consumers
 remain outside this pruning proof. Verified NOT-NULL/PK guards are tautologies for
 the existing same-row self-left-join proof, but multiple nullable guards remain
 conditional and cannot be discarded. Required NULL-term, pruning and independent
@@ -75,6 +76,15 @@ Every newly enabled policy key needs live text/CHAR or the SQLite lexical-only
 IRI-template consumer/decoder proof in ADR-0034; raw outputs stay native. Lexical D1 identity
 is separate from numeric literal value comparisons. Only all-IRI-template
 consumers gain the new lexical comparison recipe; native guards are unchanged.
+
+**Decoder-validity refinement (2026-09-09):** PostgreSQL original term columns
+retain a distinct validation condition through narrowing, COUNT/ASK, OPTIONAL
+and rendered pooling. It is not nullness, equality, native-key or lexical-role
+authority. FK/PK substitution cannot transfer a parent's decoder obligation to
+the child. Live NUMERIC validation and policy-dominating CASE/fenced projections
+implement this slice; other scalar families gain no new recipe (ADR-0015/0024).
+Numeric output-only DISTINCT roles remain separate from original D1 consumers;
+decoded-plus-natural roles never authorize MySQL lexical-only output casts.
 
 ### Pipeline (`sf-sparql`)
 

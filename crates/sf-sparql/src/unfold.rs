@@ -774,7 +774,7 @@ impl<'a> Unfolder<'a> {
         // e.g. `GRAPH ?s { ?s :p ?o }` reusing the subject var as the graph var).
         match graph {
             AtomGraph::Bind(var, gm) => {
-                if !bind_variable(&mut branch, var, gm, alias)? {
+                if !bind_variable(&mut branch, var, gm, alias, self.dialect)? {
                     return Ok(None);
                 }
             }
@@ -822,6 +822,7 @@ impl<'a> Unfolder<'a> {
         // definitions before inverse swapping or later OPTIONAL/Coalesce binding.
         // These atom-local conditions remain inside OPTIONAL ON / anti-joins.
         for def in [&subj_def, &pred_def, &obj_def] {
+            crate::iq::decode_valid::validate_term(def, self.dialect, &mut branch.where_conds);
             crate::iq::iri_cmp::validate_term(def, &mut branch.where_conds);
             if self.dialect == sf_sql::Dialect::MySql {
                 crate::iq::literal_cmp::validate_term(def, &mut branch.where_conds);
@@ -910,7 +911,7 @@ impl<'a> Unfolder<'a> {
                 source: (self.copy_source(&tm.source)?).into(),
             });
             if let Some((var, gm)) = graph_binding {
-                if !bind_variable(&mut branch, var, gm, alias)? {
+                if !bind_variable(&mut branch, var, gm, alias, self.dialect)? {
                     continue;
                 }
             } else if !self.filter_graphs(&mut branch, graphs, alias)? {
@@ -924,6 +925,11 @@ impl<'a> Unfolder<'a> {
                 .unwrap_or_else(|| fixed_graph_scope(self.current_graph.as_ref()));
             let subj_def = mapping_term_def(&tm.subject.term, alias, term_graph);
             crate::iq::iri_cmp::validate_term(&subj_def, &mut branch.where_conds);
+            crate::iq::decode_valid::validate_term(
+                &subj_def,
+                self.dialect,
+                &mut branch.where_conds,
+            );
             // A class shortcut still requires a generated subject. Guard only
             // this selected term/graph, never every member of the graph union.
             branch

@@ -39,42 +39,24 @@ graph, preserving response-wide blank-node identity. Its required
 SQLite HTTP, isolation, reload and failure tests plus owned pinned PostgreSQL
 16.15/MySQL 8.4.11 serving-only CLI lineage/portable-policy checks are incremental
 results, not full lineage, all native-profile or exact-release qualification, or
-application completion. Native evidence parses the actual returned metadata and
-reification, observes encrypted sessions and rejects unsupported lineage while
-a source-table lock remains held; those constant-origin cases do not establish
-lineage-specific reload/cancellation.
-An additional bounded multi-mapping profile now propagates actual origins through
-positive RDF-matched BGP/JOIN/UNION and root projection/dedup/slice, merging late
-duplicate witnesses before output. Its finite witness buffer fails on overflow;
-it is not an unbounded graph materialization or a candidate-map list. Broader
-operators, federation, authorized row keys and native/release qualification remain
-open. The capability catalog separately retains that incomplete release gate;
-ADR-0017 records the precise additional profile and required commands. Twelve
-required pinned native multi-map SELECT/CONSTRUCT cases now prove exact-target
-TLS/native stop under deadline/disconnect/forced SIGTERM, held-lock and unrelated
-sibling isolation, cap-one recovery and fail-terminal completion. This does not
-qualify lineage UNION/JOIN cancellation, source-RLS, reload or every operator.
-The separate bounded two-source UNION lineage profile now binds actual origins to
-their source under shared snapshot/security/budget and native cleanup owners.
-Required HTTP and owned TLS CLI checks cover its bags, entailed source affinity,
-source-scoped blank nodes, portable callers, pinned activation, limits and native
-deadline/disconnect/forced-shutdown failures. ADR-0017 records the exact profile;
-the following join slice adds coverage; row-key authority and broader qualification
-remain separate.
-The existing bounded two-source join now emits actual origins for both mandatory
-contributors, using compiler-sealed source/map pairs and its existing capped
-pre-200 executor. Explicit map-to-source links disambiguate identical authored IDs;
-hidden keys, filtered rows and empty joins acquire no inferred row provenance.
-Required HTTP tests cover bags, limits, policy, activation and recovery; the pinned
-TLS CLI aggregate adds both-order exact bags and twelve join-lineage native
-deadline/disconnect/forced-shutdown cases. The required owned TLS aggregate now
-also qualifies authored lineage reload: constant/multi-map SELECT/CONSTRUCT,
-mixed UNION and nonempty both-order join results carry changed actual mapping
-documents; invalid input fences new queries while native-held requests complete
-with pre-invalid results/provenance, and repaired input restores readiness.
-Held-query cases are multi-map SELECT on both providers and mixed UNION/forward
-join on PostgreSQL, not every graph/operator/order. This closes that reload evidence
-slice. Required owned PostgreSQL public-router tests now also qualify source-RLS
+application completion. Native evidence parses the actual returned metadata and reification, observes encrypted sessions and rejects unsupported lineage while
+a source-table lock remains held; those constant-origin cases do not establish lineage-specific reload/cancellation.
+An additional bounded multi-mapping profile now propagates actual origins through positive RDF-matched BGP/JOIN/UNION and root projection/dedup/slice, merging late
+duplicate witnesses before output. Its finite witness buffer fails on overflow; it is not an unbounded graph materialization or a candidate-map list. Broader
+operators, federation, authorized row keys and native/release qualification remain open. The capability catalog separately retains that incomplete release gate;
+ADR-0017 records the precise additional profile and required commands. Twelve required pinned native multi-map SELECT/CONSTRUCT cases now prove exact-target
+TLS/native stop under deadline/disconnect/forced SIGTERM, held-lock and unrelated sibling isolation, cap-one recovery and fail-terminal completion. This does not
+qualify lineage UNION/JOIN cancellation, source-RLS, reload or every operator. The separate bounded two-source UNION lineage profile now binds actual origins to
+their source under shared snapshot/security/budget and native cleanup owners. Required HTTP and owned TLS CLI checks cover its bags, entailed source affinity,
+source-scoped blank nodes, portable callers, pinned activation, limits and native deadline/disconnect/forced-shutdown failures. ADR-0017 records the exact profile;
+the following join slice adds coverage; row-key authority and broader qualification remain separate.
+The existing bounded two-source join now emits actual origins for both mandatory contributors, using compiler-sealed source/map pairs and its existing capped
+pre-200 executor. Explicit map-to-source links disambiguate identical authored IDs; hidden keys, filtered rows and empty joins acquire no inferred row provenance.
+Required HTTP tests cover bags, limits, policy, activation and recovery; the pinned TLS CLI aggregate adds both-order exact bags and twelve join-lineage native
+deadline/disconnect/forced-shutdown cases. The required owned TLS aggregate now also qualifies authored lineage reload: constant/multi-map SELECT/CONSTRUCT,
+mixed UNION and nonempty both-order join results carry changed actual mapping documents; invalid input fences new queries while native-held requests complete
+with pre-invalid results/provenance, and repaired input restores readiness. Held-query cases are multi-map SELECT on both providers and mixed UNION/forward
+join on PostgreSQL, not every graph/operator/order. This closes that reload evidence slice. Required owned PostgreSQL public-router tests now also qualify source-RLS
 lineage: exact A/B/A constant/multi-map SELECT/CONSTRUCT and federated UNION/join,
 actual source/map proof, empty results, concurrent caller isolation and clean cap-one
 pool reuse. Constant-lineage body-drop, policy-error and deadline cases fail terminally
@@ -176,8 +158,16 @@ operability contracts remain in force. ADR-0037 remains the accepted engineering
 interprets the unsigned digit count, preserving 131,072-digit IRI substitutions
 and their display scale. Focused wire and authenticated owned PostgreSQL TLS CLI
 evidence cover this boundary; the query-profile aggregate includes that check.
-This removes a prerequisite decoder defect. Numeric IRI identity/deduplication,
-natural-decimal range and other native exactness/release gates remain open.
+This removes a prerequisite decoder defect. The subsequent qualified static
+NUMERIC IRI slice now passes listed/fixed/`=`/`sameTerm`, scale-sensitive D1 and
+DISTINCT/COUNT, mixed natural consumers, ordering/slicing, native Ref keys and
+authored SQL-expression result checks. Original decoder validation survives
+hidden COUNT/ASK/OPTIONAL; portable policy excludes invalid denied values and
+cap-one requests recover. Raw NUMERIC output and Rust construction remain intact.
+Required owned PostgreSQL TLS aggregate evidence covers this public slice;
+ADR-0015/0024/0034 record the precise authority. The existing source-sized
+multi-arm DISTINCT serving gate is unchanged, not newly qualified by compiler
+UNION tests. Natural-decimal range and other native exactness/release gates remain open.
 
 **Static IRI-constant delta (2026-09-09):** ADR-0007/0034 replace inverse raw-slot comparison with decoded forward identity for static single-slot IRI constants. Authenticated SQLite and owned TLS PostgreSQL16.15/MySQL8.4.11 checks cover text/CHAR, native integer spelling, percent collisions and surrounding native query profiles; SQLite adds mixed-storage/signed-zero, NULL/negation and COUNT/OPTIONAL. Native scalar lexical proof is independent of text or constraint authority. The required native aggregate additionally passes PostgreSQL boolean/BYTEA and MySQL binary string/blob/NEWDECIMAL fixed/equality/sameTerm, COUNT/OPTIONAL, NULL/negation, hex-case and decimal scale/ZEROFILL checks; AST/metadata tests reject cross-provider recipes and decimal proof through coercing UNIONs. BIT byte widths and TIME/TIMESTAMP spelling are now additionally qualified through fixed/equality/COUNT/OPTIONAL checks, including signed durations, zero values and non-UTC timestamp sessions; exact scalar alphabets avoid the generic SQL encoder. MySQL DATE/DATETIME lexical-only projection now preserves partial/invalid/zero dates and fractional times before window copies; required CLI evidence covers constant lookup and duplicate/explicit-date-literal bags. Native/natural consumer vetoes remain; unprotected raw temporal facts confer no copied identity. PostgreSQL numeric/temporal, native floating and existing multi-slot/template-pair identities remain required, unclosed work; no release-blocking flag changes. Saved `fb7b684` delivery history is now fast-forward integrated into local `main`; GitHub `main` remains unchanged, and the saved delivery branch is retained.
 

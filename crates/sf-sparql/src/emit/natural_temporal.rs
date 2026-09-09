@@ -59,9 +59,12 @@ pub(super) fn authorized_conjunction(
         .iter()
         .copied()
         .partition(|c| matches!(c, SqlCond::NativeCmp(..)));
-    if dialect != Dialect::MySql
-        || policies.is_empty()
-        || !rest.iter().any(|c| validates(c, actuals))
+    if policies.is_empty()
+        || !rest.iter().any(|c| match dialect {
+            Dialect::MySql => validates(c, actuals),
+            Dialect::Postgres => pg_numeric::validates(c, actuals),
+            _ => false,
+        })
     {
         return Ok(None);
     }

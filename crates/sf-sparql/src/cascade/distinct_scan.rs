@@ -2,13 +2,26 @@
 use super::*;
 use crate::iq::scan::LexicalMode;
 use std::collections::BTreeSet;
-type Modes = std::collections::BTreeMap<Box<str>, Option<BTreeSet<LexicalMode>>>;
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Consumer {
+    Lexical(LexicalMode),
+    Natural,
+}
+type Modes = std::collections::BTreeMap<Box<str>, Option<BTreeSet<Consumer>>>;
 
 /// Capture original consumer semantics before D1 replaces them with synthetic
 /// raw Column recipes. IRI templates and explicit column literals preserve the
 /// decoded lexical value. Literal conditions own identity/value roles separately;
 /// natural literals and base-resolved IRIs cannot borrow this raw lexical proof.
 pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
+    keys(branch, alias, true)
+}
+
+pub(crate) fn binding_lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
+    keys(branch, alias, false)
+}
+
+fn keys(branch: &Branch, alias: usize, with_conditions: bool) -> Vec<crate::iq::LexicalKey> {
     fn term(map: &TermMap, owner: usize, alias: usize, modes: &mut Modes) {
         if owner != alias {
             return;
@@ -29,7 +42,10 @@ pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
                 && (spec.datatype.is_some() || spec.language.is_some()))
             .then_some(LexicalMode::Decoded),
             TermMap::Constant(_) => return,
-        };
+        }.map(Consumer::Lexical).or_else(|| {
+            matches!(map, TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::Literal
+                && spec.datatype.is_none() && spec.language.is_none()).then_some(Consumer::Natural)
+        });
         let mut record = |column: &str| {
             modes
                 .entry(column.into())
@@ -106,10 +122,12 @@ pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
                                 .entry(column.column.clone())
                                 .and_modify(|value| {
                                     if let Some(modes) = value {
-                                        modes.insert(LexicalMode::Decoded);
+                                        modes.insert(Consumer::Lexical(LexicalMode::Decoded));
                                     }
                                 })
-                                .or_insert_with(|| Some(BTreeSet::from([LexicalMode::Decoded])));
+                                .or_insert_with(|| {
+                                    Some(BTreeSet::from([Consumer::Lexical(LexicalMode::Decoded)]))
+                                });
                         }
                     }
                 }
@@ -145,14 +163,33 @@ pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
         .iter()
         .chain(branch.opts.iter().flat_map(|o| o.on.iter().chain(&o.extra)))
     {
-        condition(cond, alias, &mut modes);
+        if with_conditions {
+            condition(cond, alias, &mut modes);
+        }
     }
     modes
         .into_iter()
         .flat_map(|(column, modes)| {
+            let modes = modes.unwrap_or_default();
+            let natural = modes.contains(&Consumer::Natural);
+            // A natural consumer must not erase a separate resolved-IRI key.
+            // Keep the previous veto for that unqualified mixed combination.
+            let veto = natural
+                && modes
+                    .iter()
+                    .any(|m| matches!(m, Consumer::Lexical(LexicalMode::Iri { .. })));
+            let natural_only = modes.len() == 1 && natural;
             modes
                 .into_iter()
-                .flatten()
+                .filter_map(move |consumer| match consumer {
+                    Consumer::Natural if natural_only => Some(LexicalMode::Natural),
+                    Consumer::Natural => None,
+                    Consumer::Lexical(_) if veto => None,
+                    Consumer::Lexical(LexicalMode::Decoded) if natural => {
+                        Some(LexicalMode::DecodedWithNatural)
+                    }
+                    Consumer::Lexical(mode) => Some(mode),
+                })
                 .map(move |mode| crate::iq::LexicalKey {
                     column: column.clone(),
                     mode,
@@ -187,7 +224,7 @@ pub(super) fn native_keys(branch: &Branch, alias: usize) -> Vec<(Box<str>, bool)
             }
             SqlCond::Not(c) => visit(c, alias, native, rdf),
             // Existence guards do not make the value an RDF identity key.
-            SqlCond::IsNull(_) | SqlCond::IsNotNull(_) => {}
+            SqlCond::IsNull(_) | SqlCond::IsNotNull(_) | SqlCond::DecodedIsNotNull(_) => {}
             _ => collect_cond_cols(cond, &mut |c| {
                 if c.alias == alias {
                     rdf.insert(c.column.clone());
@@ -262,10 +299,9 @@ mod tests {
         branch.bindings.remove("iri");
         assert_eq!(lexical_keys(&branch, 3).len(), 1);
         branch.bindings.insert("natural".into(), natural);
-        assert!(
-            lexical_keys(&branch, 3).is_empty(),
-            "one natural consumer revokes raw lexical identity"
-        );
+        let mixed = lexical_keys(&branch, 3);
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0].mode, LexicalMode::DecodedWithNatural);
         branch.bindings.clear();
         branch.bindings.insert("iri".into(), iri);
         branch.bindings.insert(

@@ -384,6 +384,17 @@ fn fk_pk_join_eliminated_on_notnull_fk_to_pk() {
 }
 
 #[test]
+fn fk_pk_does_not_transfer_parent_decoder_validation() {
+    let mut branch = fk_branch();
+    branch
+        .where_conds
+        .push(SqlCond::DecodedIsNotNull(ColRef::new(1, "route_id")));
+    let out = run(vec![branch], &gtfs_schema(), &CascadeCtx::default());
+    assert_eq!(out[0].core.len(), 2);
+    assert!(crate::iq::decode_valid::branch_references(&out[0], 1));
+}
+
+#[test]
 fn fk_pk_not_eliminated_when_fk_nullable() {
     // Nullable FK: the inner join drops NULL-rid child rows; removing it would
     // re-admit them → extra rows → =_bag break. Must NOT fire.

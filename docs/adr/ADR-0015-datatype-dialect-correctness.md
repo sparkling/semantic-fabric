@@ -72,7 +72,28 @@ retains truncated-array checks, and still rejects NaN/infinities as unsupported.
 The required owned PostgreSQL TLS query-profile aggregate includes authenticated
 IRI reconstruction of a 131,072-digit NUMERIC with `.00` display scale. A synthetic
 wire regression also covers the unsigned boundary and truncation. This repairs
-the raw decoder, not natural-decimal range or numeric IRI comparison/deduplication.
+the raw decoder, not natural-decimal range. The identity refinement below closes
+the separate qualified static-template comparison and deduplication slice.
+
+### PostgreSQL NUMERIC identity refinement (2026-09-09)
+
+Live NUMERIC metadata now authorizes a separate finite decoded lexical key, not
+text output replacement or general numeric comparison. SQL set-work validates
+`NUMERIC -> TEXT -> JSON -> TEXT` and compares under `C` collation; PostgreSQL's
+[pinned JSON input/output](https://raw.githubusercontent.com/postgres/postgres/REL_16_15/src/backend/utils/adt/json.c)
+preserves validated text. `JSONB` and `to_json` are not equivalent substitutes.
+The returned payload remains NUMERIC, and Rust remains the RDF constructor.
+Scale-distinct IRI substitutions (`1.0` / `1.00`) survive D1 and output DISTINCT;
+known natural-only consumers keep their separate canonical numeric identity.
+
+Required owned TLS CLI checks cover exact listed/fixed/`=`/`sameTerm` values,
+signed/zero/fractional scale, duplicate and mixed-consumer bags, ordering/slicing,
+native reference joins and authored SQL result expressions. Authored SQL literals
+still require explicit datatype for semantic admission. Hidden NaN/infinity
+terms fail terminally, including COUNT/ASK and unprojected OPTIONAL; portable
+policy excludes denied invalid rows and cap-one requests recover. SQL validation
+errors need not have the raw decoder's Unsupported classification. Natural-decimal
+range, other native families and general pooled identity remain unclosed.
 
 ### Natural temporal identity refinement (2026-09-09)
 

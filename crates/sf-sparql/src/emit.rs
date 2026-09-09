@@ -51,6 +51,7 @@ mod lexical_key;
 mod literal_cmp;
 mod natural_temporal;
 mod path_comparison;
+mod pg_numeric;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
 use path_comparison::{path_actuals, path_key_expression, render_key_equality, subplan_actuals};
@@ -401,6 +402,7 @@ pub(crate) fn validate_live_columns(
             SqlCond::Cmp(column, _, _)
             | SqlCond::NativeCmp(column, _, _)
             | SqlCond::IsNotNull(column)
+            | SqlCond::DecodedIsNotNull(column)
             | SqlCond::IsNull(column)
             | SqlCond::StrMatch { col: column, .. } => {
                 validate_ref(column, aliases, dialect, catalog)
@@ -849,7 +851,13 @@ fn emit_branch_keys(
     // `term_dedup` skips SQL DISTINCT even though `b.distinct` is set (see the C.3 gate
     // above) — its raw, non-injective duplicates are collapsed downstream, by TERM, not
     // by raw-column SQL DISTINCT (which would be the unsound operation C.3 refuses).
-    let distinct = if b.distinct && !term_dedup {
+    let numeric_keys = if b.distinct && !term_dedup && dialect == Dialect::Postgres {
+        pg_numeric::distinct_keys(b, dialect, &actuals)
+    } else {
+        Vec::new()
+    };
+    let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(|key| *key);
+    let distinct = if b.distinct && !term_dedup && !numeric_distinct {
         "DISTINCT "
     } else {
         ""
@@ -862,15 +870,22 @@ fn emit_branch_keys(
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
+    if numeric_distinct {
+        skeleton = pg_numeric::distinct_sql(skeleton, &numeric_keys);
+    }
     // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
-    if let Some(order) = render_order(
-        &b.order,
-        b,
-        dialect,
-        catalog,
-        &actuals,
-        normalize_projection && !term_dedup,
-    )? {
+    if let Some(order) = if numeric_distinct {
+        pg_numeric::order(b, &projection)?
+    } else {
+        render_order(
+            &b.order,
+            b,
+            dialect,
+            catalog,
+            &actuals,
+            normalize_projection && !term_dedup,
+        )?
+    } {
         skeleton.push_str(&order);
     }
     push_limit_offset(&mut skeleton, b, dialect);
@@ -1538,20 +1553,30 @@ fn emit_subplan_sql(
     // accept it. So SQLite joins the arms bare.
     let mut all_sql = Vec::new();
     let mut all_params = Vec::new();
+    let numeric_keys = if plan.distinct {
+        pg_numeric::union_keys(&branches, dialect, &catalog)?
+    } else {
+        None
+    };
     for e in &emitted {
+        let sql = rebase_placeholders(&e.sql, dialect, all_params.len())?;
         if dialect == Dialect::Sqlite {
-            all_sql.push(e.sql.clone());
+            all_sql.push(sql);
         } else {
-            all_sql.push(format!("({})", e.sql));
+            all_sql.push(format!("({sql})"));
         }
         all_params.extend(e.params.clone());
     }
-    let op = if plan.distinct {
+    let op = if plan.distinct && numeric_keys.is_none() {
         " UNION "
     } else {
         " UNION ALL "
     };
-    let sql = all_sql.join(op);
+    let raw = all_sql.join(op);
+    let sql = match numeric_keys {
+        Some(keys) => pg_numeric::distinct_sql(raw, &keys),
+        None => raw,
+    };
     Ok((sql, all_params))
 }
 
@@ -1559,34 +1584,8 @@ fn emit_subplan_sql(
 /// for PostgreSQL numbered placeholders. SQLite uses `?` (positional by text order,
 /// no numbering), so for SQLite (or when `base == 0`) returns `sql` unchanged.
 fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<String> {
-    if dialect != Dialect::Postgres || base == 0 {
-        return Ok(sql.to_owned());
-    }
-    // Replace each `$N` → `$(N + base)` by scanning the string bytes.
-    let mut out = String::with_capacity(sql.len() + 16);
-    let bytes = sql.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-            i += 1; // skip '$'
-            let start = i;
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            let n: usize = sql[start..i].parse().map_err(|_| {
-                Error::Sql(format!(
-                    "rebase_placeholders: non-numeric after $: {}",
-                    &sql[start..i]
-                ))
-            })?;
-            out.push('$');
-            out.push_str(&(n + base).to_string());
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    Ok(out)
+    sf_sql::dialect::rebase_placeholders(sql, dialect, base)
+        .map_err(|error| Error::Sql(error.to_string()))
 }
 
 fn render_where(
@@ -1702,6 +1701,15 @@ fn render_cond(
             }
         }
         SqlCond::IsNotNull(a) => format!("{} IS NOT NULL", colref(a, dialect, actuals)),
+        SqlCond::DecodedIsNotNull(a) => {
+            let raw = colref(a, dialect, actuals);
+            let decoded = if pg_numeric::is_numeric(a, dialect, actuals) {
+                pg_numeric::lexical(&raw)
+            } else {
+                raw
+            };
+            format!("{decoded} IS NOT NULL")
+        }
         SqlCond::IsNull(a) => format!("{} IS NULL", colref(a, dialect, actuals)),
         SqlCond::Not(c) => format!(
             "(NOT {})",
@@ -2223,6 +2231,18 @@ mod tests {
         });
         b.where_conds.push(cond);
         b
+    }
+
+    #[test]
+    fn postgres_placeholder_rebase_preserves_authored_bytes() {
+        let prefix = "SELECT 'é$1', \"$2\", $$δ$3$$, $tag$🍀$4$tag$, E'it\\'s $5', table$6 /* $7 /* $8 */ */ -- $9\n";
+        let sql = format!("{prefix}$1, $20");
+        assert_eq!(
+            rebase_placeholders(&sql, Dialect::Postgres, 2).unwrap(),
+            format!("{prefix}$3, $22")
+        );
+        assert_eq!(rebase_placeholders(&sql, Dialect::MySql, 2).unwrap(), sql);
+        assert!(rebase_placeholders("SELECT $1", Dialect::Postgres, usize::MAX).is_err());
     }
 
     /// A `LIKE` pushdown renders `ESCAPE '\'`, binds its pattern as a parameter,

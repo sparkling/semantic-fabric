@@ -16,7 +16,14 @@ pub struct LexicalKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LexicalMode {
     Decoded,
-    Iri { base: Option<Box<str>> },
+    /// Decoded lexical keys coexist with a known natural-value consumer.
+    /// This never permits replacing the native output with lexical text.
+    DecodedWithNatural,
+    /// Known plain natural literal only; no raw-lexical output authority.
+    Natural,
+    Iri {
+        base: Option<Box<str>>,
+    },
 }
 
 #[derive(Debug, Clone)]

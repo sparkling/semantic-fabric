@@ -319,7 +319,7 @@ pub(super) fn visit_sql_cond<'a>(
             walker.push(depth, Work::ColRef(col))?;
             walker.payload(param.len())?;
         }
-        SqlCond::IsNotNull(col) | SqlCond::IsNull(col) => {
+        SqlCond::IsNotNull(col) | SqlCond::IsNull(col) | SqlCond::DecodedIsNotNull(col) => {
             walker.push(depth, Work::ColRef(col))?;
         }
         SqlCond::Not(inner) => walker.push(depth, Work::SqlCond(inner))?,

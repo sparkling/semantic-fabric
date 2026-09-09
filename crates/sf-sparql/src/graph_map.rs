@@ -94,8 +94,10 @@ pub(crate) fn bind_variable(
     variable: &str,
     graph: &TermMap,
     alias: usize,
+    dialect: sf_sql::Dialect,
 ) -> Result<bool> {
     let definition = term_def(graph, alias);
+    crate::iq::decode_valid::validate_term(&definition, dialect, &mut branch.where_conds);
     crate::iq::iri_cmp::validate_term(&definition, &mut branch.where_conds);
     let default = TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RR_DEFAULT_GRAPH)));
     match unify(&default, &definition) {

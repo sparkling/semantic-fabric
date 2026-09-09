@@ -86,6 +86,7 @@ fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
         SqlCond::Cmp(column, _, _)
         | SqlCond::NativeCmp(column, _, _)
         | SqlCond::IsNotNull(column)
+        | SqlCond::DecodedIsNotNull(column)
         | SqlCond::IsNull(column)
         | SqlCond::StrMatch { col: column, .. } => column.alias,
         SqlCond::Not(inner) => max_alias_in_sql_cond(inner),
@@ -2079,7 +2080,7 @@ pub(crate) fn pool_rendered(
             || matches!(scan.source, crate::iq::ScanSource::RefAtom { .. }))
             || !b.where_conds.iter().all(|cond| {
                 matches!(cond,
-                SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == scan.alias)
+                SqlCond::IsNull(c) | SqlCond::IsNotNull(c) | SqlCond::DecodedIsNotNull(c) if c.alias == scan.alias)
             })
         {
             return Ok(None);

@@ -55,6 +55,7 @@ pub enum NativeScalarKey {
     Integer,
     PostgresBoolean,
     PostgresBytea,
+    PostgresNumeric,
     MysqlBinaryBytes,
     MysqlBit,
     MysqlDecimal,

@@ -389,6 +389,10 @@ pub enum SqlCond {
     },
     /// `col IS NOT NULL` — `BOUND(?v)`.
     IsNotNull(ColRef),
+    /// Original RDF field must decode successfully even when not projected.
+    /// Live decoder metadata qualifies validation; this is not a redundant
+    /// schema-NOT-NULL predicate or a lexical/native equality key.
+    DecodedIsNotNull(ColRef),
     /// `col IS NULL` — the NULL half of an OPTIONAL shared-variable compatibility
     /// guard when one side is a constant (ADR-0007 R1: an unbound variable is
     /// compatible with any value, so a nullable column must be admitted).
@@ -525,6 +529,7 @@ impl CmpOp {
 
 pub(crate) mod scan;
 pub use scan::{LexicalKey, Scan, ScanSource};
+pub(crate) mod decode_valid;
 pub mod iri_cmp;
 pub mod literal_cmp;
 
@@ -859,6 +864,7 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
         SqlCond::Cmp(a, _, _)
         | SqlCond::NativeCmp(a, _, _)
         | SqlCond::IsNotNull(a)
+        | SqlCond::DecodedIsNotNull(a)
         | SqlCond::IsNull(a) => f(a),
         SqlCond::StrMatch { col, .. } => f(col),
         SqlCond::Not(c) => collect_cond_cols(c, f),

@@ -181,6 +181,17 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > invalid admitted terms fail terminally and cap-one admission recovers.
 > Existing native stop/work limits remain; wider source governance is not closed.
 
+> **PostgreSQL numeric refinement (2026-09-09).** Prepared NUMERIC result metadata
+> carries finite decoded lexical-key authority through exact raw positions;
+> it does not change the result datatype or Rust natural canonicalization.
+> D1/window output stays native. Portable-policy NUMERIC projections use `OFFSET 0`
+> as a structural pull-up/pushdown boundary; direct and projection guards use CASE
+> so denied rows cannot trigger fallible validation. Original decoder guards
+> survive hidden projection and unconsumed OPTIONALs. Required owned PostgreSQL
+> TLS checks cover exact scale, native Ref keys, typed SQL result expressions,
+> invalid hidden values and policy isolation/recovery. Coercing or unknown
+> scalar roles cannot borrow this proof. Existing source/work limits remain.
+
 ## More Information
 
 * **Evidence (2026-07-01):** the live Ontop 5.5.0 vs semantic-fabric head-to-head (`BENCHMARKS.md`, `scripts/compare/race.sh`) — five Postgres-path-only correctness defects (q9 agg-over-union, q10 sequence path, q11 MINUS, q12 FILTER-EXISTS/typed-column, q15 DISTINCT-over-join) + one perf blowup (q14), all invisible to the green SQLite differential; fixed in `exec_pg.rs`/`unfold.rs`/`iq.rs`/`leftjoin.rs` and re-verified at row-parity on the live PG endpoint.

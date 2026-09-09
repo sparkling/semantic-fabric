@@ -123,7 +123,9 @@ impl IriComparison {
 /// grants no raw-table restoration or policy bypass authority.
 pub(crate) fn atom_guard(condition: &super::SqlCond, alias: usize) -> bool {
     match condition {
-        super::SqlCond::IsNull(c) | super::SqlCond::IsNotNull(c) => c.alias == alias,
+        super::SqlCond::IsNull(c)
+        | super::SqlCond::IsNotNull(c)
+        | super::SqlCond::DecodedIsNotNull(c) => c.alias == alias,
         super::SqlCond::IriCmp(cmp) => cmp.columns().all(|c| c.alias == alias),
         super::SqlCond::Not(inner) => atom_guard(inner, alias),
         super::SqlCond::And(parts) | super::SqlCond::Or(parts) => {

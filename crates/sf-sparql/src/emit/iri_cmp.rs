@@ -106,6 +106,11 @@ pub(super) fn template(
 pub(super) fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
     Ok(match (dialect, key) {
         (Dialect::Postgres, NativeScalarKey::Integer) => format!("CAST({raw} AS TEXT)"),
+        (Dialect::Postgres, NativeScalarKey::PostgresNumeric) => {
+            // JSON validates finite number syntax while retaining the input
+            // text exactly. JSONB/to_json would normalize or quote it instead.
+            pg_numeric::lexical(raw)
+        }
         // YEAR zero and ZEROFILL displays differ from integer wire decoding.
         // Decimal(20,0) normalizes both without narrowing unsigned u64.
         (Dialect::MySql, NativeScalarKey::Integer) => {
@@ -175,6 +180,7 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
         NativeScalarKey::Integer
         | NativeScalarKey::PostgresBoolean
         | NativeScalarKey::PostgresBytea
+        | NativeScalarKey::PostgresNumeric
         | NativeScalarKey::MysqlBinaryBytes
         | NativeScalarKey::MysqlBit
         | NativeScalarKey::MysqlDate

@@ -821,6 +821,7 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
         SqlCond::Cmp(a, _, _)
         | SqlCond::NativeCmp(a, _, _)
         | SqlCond::IsNotNull(a)
+        | SqlCond::DecodedIsNotNull(a)
         | SqlCond::IsNull(a) => fix(a),
         SqlCond::StrMatch { col, .. } => fix(col),
         SqlCond::Not(c) => rewrite_cond_alias(c, fix),
