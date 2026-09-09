@@ -86,6 +86,8 @@ implement this slice; other scalar families gain no new recipe (ADR-0015/0024).
 Numeric output-only DISTINCT roles remain separate from original D1 consumers;
 decoded-plus-natural roles never authorize MySQL lexical-only output casts.
 
+**Same-row OPTIONAL follow-up (2026-09-09):** verified-key self-left-join elimination now relocates each original decoder obligation onto the retained physical row as `IS NULL OR DecodedIsNotNull`. This preserves nullable left rows and hidden invalid-value failures; it does not discard validation as a PK/NOT-NULL tautology. Ordinary null guards independently justify the existing lone-nullable-component exception; unpaired nullable markers, multiple nullable components and other filters still veto. The full-pipeline GTFS Q5 regression and focused cascade checks pass. Serving's unverified-constraint quarantine is unchanged.
+
 ### Pipeline (`sf-sparql`)
 
 1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`. Since 2026-09-08 public serving uses an explicit prepared Rust process and bounded QueryV1 transfer before parent AST ownership (ADR-0055 parser-lifetime repair); raw diagnostic APIs retain their caller-owned contract. Existing semantic/compiler/cache profiles are not promoted to `GovernedV1`.

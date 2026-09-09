@@ -2,6 +2,39 @@
 use super::{collect_cond_cols, Branch, CascadeCtx, SqlCond};
 use std::collections::BTreeSet;
 
+/// Decoder obligations are relocated, never discarded or used as key proof.
+/// Their NULL behavior must already be covered by ordinary guards/schema.
+pub(super) fn self_left_extra_compatible(
+    opt: &crate::iq::OptJoin,
+    table: &sf_sql::TableSchema,
+) -> bool {
+    let mut nullable = None;
+    for cond in &opt.extra {
+        let col = match cond {
+            SqlCond::DecodedIsNotNull(col) if col.alias == opt.scan.alias => {
+                if !super::key_is_non_null(table, &col.column)
+                    && !opt
+                        .extra
+                        .iter()
+                        .any(|c| matches!(c, SqlCond::IsNotNull(other) if other == col))
+                {
+                    return false;
+                }
+                continue;
+            }
+            SqlCond::IsNotNull(col) if col.alias == opt.scan.alias => col,
+            _ => return false,
+        };
+        if !super::key_is_non_null(table, &col.column) {
+            if nullable.is_some_and(|other| other != col) {
+                return false;
+            }
+            nullable = Some(col);
+        }
+    }
+    true
+}
+
 /// An unused LEFT JOIN only repeats the same projected tuple (or preserves one
 /// NULL-extended row), so DISTINCT absorbs its multiplicity. This proof fails
 /// if a surviving condition or operator consumes the optional values.
@@ -180,5 +213,51 @@ mod tests {
             .push(SqlCond::IsNotNull(ColRef::new(1, "other")));
         assert!(super::super::find_self_left_join(&b, &schema).is_none());
         assert!(super::super::find_self_left_join(&b, &vec![]).is_none());
+    }
+
+    #[test]
+    fn self_left_join_retains_nullable_decoder_obligations_on_the_same_row() {
+        let mut b = branch();
+        b.opts[0].extra.extend([
+            SqlCond::IsNotNull(ColRef::new(1, "id")),
+            SqlCond::DecodedIsNotNull(ColRef::new(1, "id")),
+            SqlCond::DecodedIsNotNull(ColRef::new(1, "value")),
+        ]);
+        for value_type in ["text", "NUMERIC", "unknown"] {
+            let mut table = sf_sql::TableSchema::new("items");
+            table.primary_key = vec!["id".into()];
+            table.columns = vec![
+                sf_sql::Column::new("id", "text", true),
+                sf_sql::Column::new("value", value_type, false),
+            ];
+            let tables = [table];
+            let schema = super::super::build_schema_map(&tables);
+            let mut candidate = b.clone();
+            super::super::self_left_join_elimination(&mut candidate, &schema);
+            assert!(candidate.opts.is_empty(), "{value_type}");
+            for name in ["id", "value"] {
+                let col = ColRef::new(0, name);
+                assert!(candidate.where_conds.iter().any(|cond| matches!(cond,
+                    SqlCond::Or(parts) if matches!(parts.as_slice(),
+                        [SqlCond::IsNull(a), SqlCond::DecodedIsNotNull(b)] if a == &col && b == &col)
+                )), "decoder survives NULL-tolerantly: {name}, {value_type}");
+            }
+            assert!(
+                !candidate
+                    .where_conds
+                    .iter()
+                    .any(|c| matches!(c, SqlCond::IsNotNull(_) | SqlCond::DecodedIsNotNull(_))),
+                "nullable OPTIONAL must not filter the left row"
+            );
+        }
+        b.opts[0]
+            .extra
+            .retain(|c| !matches!(c, SqlCond::IsNotNull(col) if col.column.as_ref() == "value"));
+        let mut table = sf_sql::TableSchema::new("items");
+        table.primary_key = vec!["id".into()];
+        assert!(
+            !self_left_extra_compatible(&b.opts[0], &table),
+            "unpaired nullable marker cannot license elimination"
+        );
     }
 }

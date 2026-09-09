@@ -547,7 +547,17 @@ fn self_left_join_elimination(b: &mut Branch, schema: &SchemaMap) {
         // The ON lived on the OptJoin, never in `where_conds`; remove the whole
         // OptJoin, then rebind every reference to the optional scan onto the kept
         // scan (rewrite_alias recurses through Coalesce bindings).
-        b.opts.remove(opt_idx);
+        let opt = b.opts.remove(opt_idx);
+        // Validation still belongs to the same physical cell. Make it
+        // NULL-tolerant so an absent optional value cannot filter its left row.
+        for cond in opt.extra {
+            if let SqlCond::DecodedIsNotNull(col) = cond {
+                b.where_conds.push(SqlCond::Or(vec![
+                    SqlCond::IsNull(col.clone()),
+                    SqlCond::DecodedIsNotNull(col),
+                ]));
+            }
+        }
         rewrite_alias(b, opt_alias, keep);
     }
     // Detect self-LJ where the right-side extra conditions contradict the core
@@ -678,16 +688,7 @@ fn find_self_left_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, 
                 // excluding only those tautologies, retain the existing lone
                 // nullable-column exception (its NULL propagates after merging).
                 // Multiple nullable guards or any other FILTER remain conditional.
-                let mut conditional = opt.extra.iter().filter(|cond| {
-                    !matches!(cond, SqlCond::IsNotNull(col)
-                        if col.alias == opt_alias && key_is_non_null(t, &col.column))
-                });
-                let extra_ok = match (conditional.next(), conditional.next()) {
-                    (None, None) => true,
-                    (Some(SqlCond::IsNotNull(col)), None) => col.alias == opt_alias,
-                    _ => false,
-                };
-                if extra_ok {
+                if optional_prune::self_left_extra_compatible(opt, t) {
                     return Some((keep.alias, opt_alias, idx));
                 }
             }
