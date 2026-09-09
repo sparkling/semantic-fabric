@@ -28,7 +28,7 @@ disagreeing numeric roles reject. This does not relax serving's existing
 source-sized multi-arm DISTINCT gate. Required owned TLS CLI checks verify that
 rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy
 isolation; compiler tests cover the DISTINCT SQL wrapper. ADR-0015 now separately qualifies full-range natural decimal construction and fixed/sameTerm/Eq/Ne keys with raw payload preservation. Positional natural provenance survives raw Projection/Ref/SubPlan only with compatible decoder proof; coercing MySQL decimal UNIONs retain rejection markers, not raw-equality authority.
-General natural BGP unification, mixed/native identity and release qualification remain open.
+The 2026-09-09 natural/explicit column BGP correction retains identity until live datatype/decoder resolution. Required SQLite HTTP and owned PostgreSQL/MySQL decimal/integer CLI tests cover BGP/EXISTS/OPTIONAL exact bags, lexical overrides, disjoint datatypes and NULLs. MySQL integer validation remains policy-dominated without narrowing raw unsigned IRI keys. Datatype facts alone confer no canonical authority; Integer/Boolean UNION promotions retain incompatible markers, as do existing decimal range hazards. General mixed/native, floating/temporal and coercing-UNION identity and release qualification remain open (ADR-0015).
 
 **Explicit natural datatype correction (2026-09-09):** D1 retains `TypedLiteral`
 until live type resolution; matching datatypes use natural identity, not raw text.

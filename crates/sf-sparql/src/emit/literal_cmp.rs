@@ -10,6 +10,9 @@ pub(super) fn render(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
+    if let Some(sql) = literal_datatype::mismatch(cmp, dialect, actuals)? {
+        return Ok(sql);
+    }
     if let (LiteralOperand::Constant(left), LiteralOperand::Constant(right)) =
         (&cmp.left, &cmp.right)
     {
@@ -76,6 +79,25 @@ pub(super) fn render(
         && cmp
             .columns()
             .all(|c| lexical_key::column_decode(c, actuals).is_some());
+    if cmp.value_op.is_none()
+        && unknown_natural
+        && cmp.columns().count() == 2
+        && !literal_datatype::implicit_column_pair(cmp)
+        && ((matches!(dialect, Dialect::MySql | Dialect::Postgres)
+            && cmp.columns().any(|column| literal_datatype::fact(column, actuals).is_some()))
+            // A live prepare may know names but no datatypes (legacy drivers).
+            // Do not turn formerly disjoint mixed mappings into raw equality.
+            // Offline rendering and the old explicit-string lane are unchanged;
+            // neither is newly qualified by the column-join implementation.
+            || (!catalog.datatypes_by_source.is_empty()
+                && [&cmp.left, &cmp.right].iter().any(|value| matches!(value,
+                    LiteralOperand::Column { spec, .. } if spec.language.is_some()
+                        || spec.datatype.as_ref().is_some_and(|dt| dt.as_str() != "http://www.w3.org/2001/XMLSchema#string")))))
+    {
+        return Err(Error::Unsupported(
+            "mixed natural literal identity requires exact native decoder keys".into(),
+        ));
+    }
     if unknown_natural || (cmp.value_op.is_some() && !decoded_numeric) {
         let mut raw = |value: &LiteralOperand| match value {
             LiteralOperand::Column { column, .. } if cmp.value_op.is_some() => {

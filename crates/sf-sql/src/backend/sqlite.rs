@@ -262,6 +262,7 @@ fn result_columns(conn: &Connection, sql: &str) -> Result<Vec<crate::backend::Re
                 }
             });
             ResultColumn {
+                natural_datatype: decl.as_deref().and_then(datatype::natural_xsd),
                 native_scalar: None,
                 name: column.name().to_owned(),
                 text_key,

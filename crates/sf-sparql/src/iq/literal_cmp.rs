@@ -30,15 +30,6 @@ pub enum LiteralOperand {
     Constant(Literal),
 }
 
-impl LiteralOperand {
-    pub(crate) fn explicit(&self) -> bool {
-        match self {
-            Self::Constant(_) => true,
-            Self::Column { spec, .. } => spec.datatype.is_some() || spec.language.is_some(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct LiteralComparison {
     pub left: LiteralOperand,

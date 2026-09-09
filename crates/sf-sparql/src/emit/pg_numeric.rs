@@ -203,12 +203,14 @@ mod tests {
                 source,
                 vec![
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "src".into(),
                         native_scalar: Some(NativeScalarKey::PostgresNumeric),
                         text_key: None,
                         sqlite_decode: None,
                     },
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "tenant".into(),
                         native_scalar: None,
                         text_key: Some(TextKey::Verbatim),
@@ -253,18 +255,21 @@ rr:predicateObjectMap [rr:predicate <http://ex/edge>; rr:objectMap [rr:template 
                 &source,
                 vec![
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "src".into(),
                         native_scalar: Some(NativeScalarKey::PostgresNumeric),
                         text_key: None,
                         sqlite_decode: None,
                     },
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "tenant".into(),
                         native_scalar: None,
                         text_key: Some(TextKey::Verbatim),
                         sqlite_decode: None,
                     },
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "mystery".into(),
                         native_scalar: None,
                         text_key: None,

@@ -164,8 +164,33 @@ fixed/sameTerm, signed zero, mixed IRI roles, DISTINCT/slice, GROUP BY and diffe
 datatype/language behavior; raw compiler tests preserve dynamic datatype identity.
 Owned TLS CLI checks cover explicit PostgreSQL/MySQL decimal identity and MySQL
 DATE/DATETIME, including hidden invalid-calendar errors, policy and recovery.
-Wider native families, general natural BGP, arithmetic and release qualification
-remain open; this does not establish validation of every different-datatype override.
+Wider native families, arithmetic and release qualification remain open; the
+next refinement closes qualified natural/explicit BGP identity, not validation
+of every different-datatype override.
+
+### Natural/explicit column join refinement (2026-09-09)
+
+Column-literal unification retains RDF identity until live emission instead of
+treating an absent datatype as xsd:string. Prepare-derived datatype facts are
+separate from canonical-key authority and follow raw Projection/Ref/SubPlan
+positions. Known disjoint datatypes compare false with NULL preserved; this rule
+does not authorize numeric FILTER comparisons. Matching explicit types require
+the exact natural decoder, not an available raw lexical recipe.
+
+Authenticated SQLite BOOLEAN/integer/decimal/text tests and owned PostgreSQL/MySQL
+decimal/integer CLI tests cover BGP, EXISTS and OPTIONAL bags, matching natural
+types, lexical overrides, mismatches and NULLs. MySQL natural integer keys retain
+the locked Rust i64 validation boundary; raw unsigned IRI spellings are not
+narrowed. Hidden invalid SELECT/COUNT/ASK terms fail terminally and recover;
+portable policies exclude denied invalid rows before fallible identity keys.
+Equal XSD Integer/Boolean facts do not retain MySQL UNION width/signedness: those
+multi-arm facts remain incompatible until a result-decoder proof exists. Existing
+decimal-UNION range guards remain. Tests also reject borrowing TIMESTAMP's raw
+recipe for canonical dateTime identity. A live prepare without datatype facts
+cannot turn formerly disjoint non-string/language mappings into raw-equality
+joins. Offline rendering and the previously admitted legacy explicit-string lane
+are preserved, not newly qualified. Broader floating/temporal, mixed native and
+coercing-UNION identities remain required follow-up, not qualified by this slice.
 
 ### Natural temporal identity refinement (2026-09-09)
 

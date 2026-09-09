@@ -241,11 +241,9 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
     }
     if let (Some(left), Some(right)) = (literal_cmp::operand(t1, a1), literal_cmp::operand(t2, a2))
     {
-        // Natural derived/derived matching needs live per-backend datatype
-        // authority. Preserve its existing lowering until that proof is carried.
-        if left.explicit() && right.explicit() {
-            return Unify::Sat(vec![literal_cmp::identity(left, right)]);
-        }
+        // A natural column's datatype is learned from its live decoder, not
+        // from an absent rr:datatype. Keep the complete identity until emission.
+        return Unify::Sat(vec![literal_cmp::identity(left, right)]);
     }
     if let (Some(k1), Some(k2)) = (term_map_type(t1), term_map_type(t2)) {
         if k1 != k2 {

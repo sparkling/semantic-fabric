@@ -75,6 +75,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
+        datatype_columns: HashMap::new(),
         natural_columns: HashMap::new(),
         scalar_columns: HashMap::new(),
         sqlite_columns: HashMap::new(),
@@ -193,6 +194,7 @@ pub(super) fn subplan_actuals(
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
     let mut common_scalars: Option<HashMap<usize, NativeScalarKey>> = None;
+    let mut common_datatypes = None;
     let mut common_temporals: Option<HashMap<usize, Option<sf_core::datatype::XsdTypeCode>>> = None;
     for branch in &plan.branches {
         let effective_distinct = if plan.branches.len() == 1 {
@@ -203,6 +205,24 @@ pub(super) fn subplan_actuals(
         let projection = source_projection(branch, effective_distinct, dialect);
         width = width.max(projection.len());
         let actuals = branch_actuals(branch, dialect, catalog);
+        literal_datatype::merge(
+            &mut common_datatypes,
+            projection
+                .iter()
+                .enumerate()
+                .filter_map(|(index, column)| {
+                    column
+                        .as_ref()
+                        .and_then(|column| literal_datatype::fact(column, &actuals))
+                        .map(|code| {
+                            (
+                                index,
+                                literal_datatype::after_union(code, dialect, plan.branches.len()),
+                            )
+                        })
+                })
+                .collect(),
+        );
         let temporals = projection
             .iter()
             .enumerate()
@@ -219,7 +239,7 @@ pub(super) fn subplan_actuals(
                         {
                             None
                         } else {
-                            code
+                            literal_datatype::after_union(code, dialect, plan.branches.len())
                         }
                     })
                     .map(|code| (index, code))
@@ -308,6 +328,11 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
+        datatype_columns: common_datatypes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(i, code)| (format!("c{i}"), code))
+            .collect(),
         natural_columns: common_temporals
             .unwrap_or_default()
             .into_iter()

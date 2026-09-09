@@ -11,6 +11,7 @@ fn iri_dedup_never_falls_through_to_raw_distinct_for_an_unproven_sibling_key() {
             &source,
             ["u", "v"]
                 .map(|name| sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     native_scalar: None,
                     name: name.into(),
                     text_key: None,
@@ -145,6 +146,7 @@ fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
             .insert_live_result(
                 &source,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "id".into(),
                     native_scalar: Some(key),
                     text_key: None,
@@ -244,6 +246,7 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
                 .insert_live_result(
                     &source,
                     vec![sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "id".into(),
                         native_scalar: None,
                         text_key: key,
@@ -324,6 +327,7 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
             .insert_live_result(
                 &maps[0].source,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "id".into(),
                     native_scalar: Some(key),
                     text_key: None,
@@ -385,6 +389,7 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
             .insert_live_result(
                 &other,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "id".into(),
                     native_scalar: Some(NativeScalarKey::PostgresBytea),
                     text_key: None,
@@ -417,6 +422,7 @@ fn nested_emission_preserves_live_scalar_projection_recipes() {
         .insert_live_result(
             &maps[0].source,
             vec![sf_sql::backend::ResultColumn {
+                natural_datatype: None,
                 name: "id".into(),
                 native_scalar: Some(NativeScalarKey::MysqlDate),
                 text_key: None,

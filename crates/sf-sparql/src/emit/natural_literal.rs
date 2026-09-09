@@ -1,4 +1,5 @@
 //! Decoder-qualified natural literal identity, separate from SQL value authority.
+pub(super) use super::native_literal_key::qualified_source;
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use sf_core::datatype::XsdTypeCode;
@@ -52,7 +53,12 @@ pub(super) fn authorized_conjunction(
                     && [&cmp.left, &cmp.right].iter().any(|v| {
                         matches!(
                             natural(v, actuals),
-                            Some(XsdTypeCode::Date | XsdTypeCode::DateTime)
+                            Some(
+                                XsdTypeCode::Date
+                                    | XsdTypeCode::DateTime
+                                    | XsdTypeCode::Integer
+                                    | XsdTypeCode::Boolean
+                            )
                         )
                     })
             }
@@ -91,7 +97,7 @@ pub(super) fn authorized_conjunction(
     )))
 }
 
-fn key(raw: &str, code: XsdTypeCode) -> String {
+pub(super) fn key(raw: &str, code: XsdTypeCode) -> String {
     let text = format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)");
     let year = format!("CAST(SUBSTRING({text}, 1, 4) AS DECIMAL(4, 0))");
     let month = format!("CAST(SUBSTRING({text}, 6, 2) AS DECIMAL(2, 0))");
@@ -131,10 +137,20 @@ pub(super) fn comparison(
     {
         return Ok(None);
     }
-    if [&cmp.left, &cmp.right].iter().any(|value| matches!(value,
-        LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none()
-            && column_code(column, actuals).is_none())) {
-        return Err(Error::Unsupported("natural literal identity requires each operand's natural decoder".into()));
+    if ![&cmp.left, &cmp.right]
+        .iter()
+        .all(|value| native_literal_key::renderable(value, actuals))
+    {
+        if literal_datatype::implicit_column_pair(cmp)
+            && cmp
+                .columns()
+                .all(|column| matches!(literal_datatype::fact(column, actuals), Some(Some(_))))
+        {
+            return Ok(None);
+        }
+        return Err(Error::Unsupported(
+            "natural literal identity requires each operand's exact natural decoder".into(),
+        ));
     }
     let mut bind = |value: &str| {
         params.push(value.to_owned());
@@ -155,11 +171,7 @@ pub(super) fn comparison(
                 }
                 if let Some(code) = natural(value, actuals) {
                     return Ok(if part == 0 {
-                        if code == XsdTypeCode::Decimal {
-                            natural_decimal::key(&raw, dialect)
-                        } else {
-                            key(&raw, code)
-                        }
+                        native_literal_key::key(column, code, dialect, catalog, actuals)?
                     } else {
                         bind(code.iri().as_str())
                     });
@@ -241,12 +253,14 @@ mod tests {
                 source,
                 vec![
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "src".into(),
                         native_scalar: Some(key),
                         text_key: None,
                         sqlite_decode: None,
                     },
                     sf_sql::backend::ResultColumn {
+                        natural_datatype: None,
                         name: "tenant".into(),
                         native_scalar: None,
                         text_key: Some(TextKey::Verbatim),
@@ -267,6 +281,7 @@ mod tests {
             .insert_live_result(
                 &other,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "src".into(),
                     native_scalar: Some(NativeScalarKey::MysqlDateTime),
                     text_key: None,
@@ -373,6 +388,7 @@ mod tests {
             .insert_live_result(
                 &source,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "src".into(),
                     native_scalar: Some(NativeScalarKey::MysqlDateTime),
                     text_key: None,

@@ -8,6 +8,49 @@ fn configured(setup: &str, datatype: &str) -> ServeConfig {
     )
 }
 
+#[tokio::test]
+async fn natural_and_explicit_column_literals_join_by_constructed_identity() {
+    for (declared, values, datatype, expected) in [
+        ("BOOLEAN", "(1),('true'),(NULL)", "boolean", 1),
+        ("INTEGER", "(1),(NULL)", "integer", 1),
+        ("NUMERIC", "(1.0),(1.00),(NULL)", "decimal", 1),
+        ("INTEGER", "(1),(NULL)", "decimal", 0),
+        ("TEXT", "('1'),(NULL)", "integer", 0),
+    ] {
+        for pattern in [
+            "?s <http://ex/p> ?o . ?t <http://ex/q> ?o",
+            "?s <http://ex/p> ?o FILTER EXISTS { ?t <http://ex/q> ?o }",
+            "?s <http://ex/p> ?o OPTIONAL { ?t <http://ex/q> ?o }",
+        ] {
+            let connection = rusqlite::Connection::open_in_memory().unwrap();
+            connection
+                .execute_batch(&format!(
+                    "CREATE TABLE items(v {declared}); INSERT INTO items VALUES {values};"
+                ))
+                .unwrap();
+            let mapping = format!(
+                r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+                <#m> rr:logicalTable [rr:tableName "items"]; rr:subject <http://ex/s>;
+                rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "v"]];
+                rr:predicateObjectMap [rr:predicate <http://ex/q>; rr:objectMap [rr:column "v"; rr:datatype <http://www.w3.org/2001/XMLSchema#{datatype}>]]."#
+            );
+            let mut cfg = support::serve_config(Backend::sqlite(connection), &mapping);
+            cfg.set_query_admission(QueryAdmission::Bearer(
+                BearerQueryAdmission::for_service_principal(TOKEN).unwrap(),
+            ));
+            let json = answer(cfg, &format!("SELECT ?o ?t WHERE {{ {pattern} }}")).await;
+            let rows = json["results"]["bindings"].as_array().unwrap();
+            let actual = if pattern.contains("OPTIONAL") {
+                assert_eq!(rows.len(), 1, "optional preserves its left row: {json}");
+                rows.iter().filter(|row| row.get("t").is_some()).count()
+            } else {
+                rows.len()
+            };
+            assert_eq!(actual, expected, "{declared}/{datatype}, {pattern}: {json}");
+        }
+    }
+}
+
 fn with_spec(setup: &str, spec: &str, unique_subject: bool) -> ServeConfig {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     connection.execute_batch(setup).unwrap();

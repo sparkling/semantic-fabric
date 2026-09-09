@@ -78,6 +78,9 @@ pub struct SqliteDecode {
 #[derive(Clone, Debug)]
 pub struct ResultColumn {
     pub name: String,
+    /// Natural RDF datatype from this native prepare/type profile. This is
+    /// datatype evidence only, never authority for a lexical comparison recipe.
+    pub natural_datatype: Option<XsdTypeCode>,
     /// Exact lexical recipe, authorized only by native result metadata.
     pub native_scalar: Option<NativeScalarKey>,
     /// How to expose the decoder's exact text value to relational comparisons.
@@ -126,6 +129,7 @@ pub trait SqlBackend {
             .await?
             .into_iter()
             .map(|name| ResultColumn {
+                natural_datatype: None,
                 name,
                 native_scalar: None,
                 text_key: None,

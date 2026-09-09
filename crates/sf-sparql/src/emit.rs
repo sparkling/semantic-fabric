@@ -49,7 +49,9 @@ mod projection_layout;
 pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
+mod literal_datatype;
 mod literal_roles;
+mod native_literal_key;
 mod natural_decimal;
 mod natural_literal;
 mod path_comparison;
@@ -70,6 +72,8 @@ pub struct ColumnCatalog {
     text_by_source: std::sync::Arc<HashMap<String, HashMap<String, TextKey>>>,
     sqlite_by_source: std::sync::Arc<HashMap<String, HashMap<String, SqliteDecode>>>,
     scalars_by_source: std::sync::Arc<HashMap<String, HashMap<String, NativeScalarKey>>>,
+    datatypes_by_source:
+        std::sync::Arc<HashMap<String, HashMap<String, sf_core::datatype::XsdTypeCode>>>,
     suppress_path_collation: bool,
     character_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lexical_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -81,6 +85,7 @@ impl ColumnCatalog {
         std::sync::Arc::make_mut(&mut self.text_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.scalars_by_source).remove(&source_key(source));
+        std::sync::Arc::make_mut(&mut self.datatypes_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.by_source).insert(source_key(source), columns);
     }
 
@@ -89,6 +94,15 @@ impl ColumnCatalog {
         source: &LogicalSource,
         columns: Vec<sf_sql::backend::ResultColumn>,
     ) -> Result<()> {
+        let datatypes = columns
+            .iter()
+            .filter_map(|column| {
+                column
+                    .natural_datatype
+                    .or_else(|| column.native_scalar.and_then(natural_literal::source_code))
+                    .map(|code| (column.name.clone(), code))
+            })
+            .collect();
         let scalars = columns
             .iter()
             .filter_map(|column| column.native_scalar.map(|key| (column.name.clone(), key)))
@@ -108,6 +122,8 @@ impl ColumnCatalog {
         std::sync::Arc::make_mut(&mut self.text_by_source).insert(source_key(source), text);
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).insert(source_key(source), sqlite);
         std::sync::Arc::make_mut(&mut self.scalars_by_source).insert(source_key(source), scalars);
+        std::sync::Arc::make_mut(&mut self.datatypes_by_source)
+            .insert(source_key(source), datatypes);
         Ok(())
     }
 
@@ -630,6 +646,8 @@ enum AliasSourceKind {
 
 #[derive(Clone, Debug)]
 struct AliasActuals {
+    // Effective source datatype is not canonical-key or output-cast authority.
+    datatype_columns: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
     // None retains incompatible natural provenance; it must not fall back to
     // native equality after a coercing SubPlan loses a common decoder.
     natural_columns: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
@@ -648,16 +666,15 @@ struct AliasActuals {
 type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
-    AliasActuals {
-        natural_columns: catalog
-            .scalars_by_source
+    let mut actuals = AliasActuals {
+        datatype_columns: catalog
+            .datatypes_by_source
             .get(&source_key(source))
             .into_iter()
             .flatten()
-            .filter_map(|(name, key)| {
-                natural_literal::source_code(*key).map(|code| (name.clone(), Some(code)))
-            })
+            .map(|(name, code)| (name.clone(), Some(*code)))
             .collect(),
+        natural_columns: HashMap::new(),
         scalar_columns: catalog
             .scalars_by_source
             .get(&source_key(source))
@@ -681,7 +698,19 @@ fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActua
             .get(&source_key(source))
             .cloned()
             .unwrap_or_default(),
+    };
+    for (name, code) in &actuals.datatype_columns {
+        if let Some(code) = code.filter(|code| {
+            natural_literal::qualified_source(
+                *code,
+                actuals.scalar_columns.get(name).copied(),
+                actuals.text_columns.get(name).copied(),
+            )
+        }) {
+            actuals.natural_columns.insert(name.clone(), Some(code));
+        }
     }
+    actuals
 }
 
 /// The source kind and actual columns of every scan alias in `b`, keyed by alias,

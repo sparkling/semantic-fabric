@@ -190,6 +190,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                 let code = mysql_xsd_code(column, self.type_profile)?;
                 let varying_text = bytes && code == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
+                    natural_datatype: code,
                     // DATE/DATETIME facts describe direct fields only. The
                     // emitter must revoke them at temporal materialization.
                     // *_2 temporal wire codes are not decoded by the locked driver.

@@ -195,4 +195,36 @@ pub(super) fn assert_explicit(fixture: &Fixture, database: &Database) {
         1
     );
     drop(server);
+    assert_join_identity(fixture, database);
+}
+
+fn assert_join_identity(fixture: &Fixture, database: &Database) {
+    fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+      <#m> rr:logicalTable [rr:tableName "items"]; rr:subject <http://example.test/item>;
+        rr:predicateObjectMap [rr:predicate <http://example.test/natural>; rr:objectMap [rr:column "src"]];
+        rr:predicateObjectMap [rr:predicate <http://example.test/explicit>; rr:objectMap [rr:column "src"; rr:datatype <http://www.w3.org/2001/XMLSchema#decimal>]];
+        rr:predicateObjectMap [rr:predicate <http://example.test/lexical>; rr:objectMap [rr:column "value"; rr:datatype <http://www.w3.org/2001/XMLSchema#decimal>]];
+        rr:predicateObjectMap [rr:predicate <http://example.test/integer>; rr:objectMap [rr:column "id"]]."#);
+    fixture.write("ontology.ttl", &[
+        "natural", "explicit", "lexical", "integer",
+    ].map(|p| format!("<http://example.test/{p}> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .")).join("\n"));
+    sql(database, "DELETE FROM items; INSERT INTO items(id,src,value) VALUES (1,1.0,'1'),(2,1.00,'1.0'),(3,0.000,'0'),(4,NULL,'0')");
+    let (server, address) = start(fixture, database);
+    for (other, expected) in [("explicit", 2), ("lexical", 2), ("integer", 0)] {
+        for pattern in [
+            format!("?s <http://example.test/natural> ?n . ?t <http://example.test/{other}> ?n"),
+            format!("?s <http://example.test/natural> ?n FILTER EXISTS {{ ?t <http://example.test/{other}> ?n }}"),
+            format!("?s <http://example.test/natural> ?n OPTIONAL {{ ?t <http://example.test/{other}> ?n }}"),
+        ] {
+            let query = format!("SELECT ?n ?t WHERE {{ {pattern} }}");
+            let result = rows(address, fixture, &query);
+            let actual = if pattern.contains("OPTIONAL") {
+                assert_eq!(result.len(), 2, "optional preserves its left rows: {query}");
+                result.iter().filter(|row| row.get("t").is_some()).count()
+            } else { result.len() };
+            assert_eq!(actual, expected, "{query}");
+        }
+    }
+    database.assert_encrypted_sessions();
+    drop(server);
 }

@@ -48,6 +48,23 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                 .map(|(name, decode)| (name.clone(), *decode))
                 .collect();
             AliasActuals {
+                datatype_columns: columns
+                    .iter()
+                    .filter_map(|(name, term)| {
+                        let TermMap::Column(raw, _) = term else {
+                            return None;
+                        };
+                        let code = if temporals.contains_key(name.as_ref()) {
+                            Some(Some(sf_core::datatype::XsdTypeCode::String))
+                        } else {
+                            inner
+                                .datatype_columns
+                                .get(resolve_col(raw, Some(&inner.columns)))
+                                .copied()
+                        };
+                        code.map(|code| (name.to_string(), code))
+                    })
+                    .collect(),
                 natural_columns: columns
                     .iter()
                     .filter_map(|(name, term)| {
@@ -269,6 +286,7 @@ mod tests {
                             &source,
                             vec![
                                 ResultColumn {
+                                    natural_datatype: None,
                                     name: "src".into(),
                                     native_scalar: Some(key),
                                     text_key: None,
@@ -276,6 +294,7 @@ mod tests {
                                 },
                                 // Unused text forces the original window implementation.
                                 ResultColumn {
+                                    natural_datatype: None,
                                     name: "unused".into(),
                                     native_scalar: None,
                                     text_key: Some(TextKey::Verbatim),

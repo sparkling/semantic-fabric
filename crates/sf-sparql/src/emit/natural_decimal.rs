@@ -109,6 +109,7 @@ mod tests {
             .insert_live_result(
                 source,
                 vec![sf_sql::backend::ResultColumn {
+                    natural_datatype: None,
                     name: "src".into(),
                     native_scalar: Some(key),
                     text_key: None,

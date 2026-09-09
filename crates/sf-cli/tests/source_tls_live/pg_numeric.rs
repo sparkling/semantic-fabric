@@ -2,6 +2,8 @@
 use super::*;
 #[path = "natural_decimal.rs"]
 mod natural_decimal;
+#[path = "natural_integer.rs"]
+mod natural_integer;
 #[path = "pg_numeric_range.rs"]
 mod range;
 
@@ -19,6 +21,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_identity(fixture, database);
     natural_decimal::assert_identity(fixture, database);
     natural_decimal::assert_explicit(fixture, database);
+    natural_integer::assert_identity(fixture, database);
     assert_references(fixture, database);
     assert_invalid(fixture, database);
 }
@@ -27,6 +30,7 @@ pub(super) fn assert_mysql_range(fixture: &Fixture, database: &Database) {
     range::assert_mysql(fixture, database);
     natural_decimal::assert_identity(fixture, database);
     natural_decimal::assert_explicit(fixture, database);
+    natural_integer::assert_identity(fixture, database);
 }
 
 #[test]

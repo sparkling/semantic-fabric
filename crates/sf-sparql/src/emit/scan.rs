@@ -285,7 +285,10 @@ fn projection_sql(
             matches!(
                 code,
                 Some(
-                    sf_core::datatype::XsdTypeCode::Date | sf_core::datatype::XsdTypeCode::DateTime
+                    sf_core::datatype::XsdTypeCode::Date
+                        | sf_core::datatype::XsdTypeCode::DateTime
+                        | sf_core::datatype::XsdTypeCode::Integer
+                        | sf_core::datatype::XsdTypeCode::Boolean
                 )
             )
         })
@@ -455,6 +458,7 @@ mod tests {
                     .insert_live_result(
                         &source,
                         vec![sf_sql::backend::ResultColumn {
+                            natural_datatype: None,
                             native_scalar: None,
                             sqlite_decode: None,
                             name: "key".into(),

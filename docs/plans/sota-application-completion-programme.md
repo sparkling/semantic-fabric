@@ -21,10 +21,10 @@ Qualified PostgreSQL/MySQL decimal and MySQL temporal CLI cases, SQLite public
 DISTINCT/GROUP BY/mixed-IRI cases and bounded literal federation reduction are
 covered by existing required checks (ADR-0015/0034). Review caught and corrected
 dynamic datatype loss, raw grouping and comparison/projection authority confusion.
-This is an exactness slice; broader native families, general natural BGP/arithmetic,
-total execution/lifecycle controls and exact-release qualification are still open.
+The natural/explicit column BGP slice now passes authenticated SQLite and required owned PostgreSQL/MySQL decimal/integer joins, EXISTS/OPTIONAL, type mismatches, lexical overrides, NULLs and denied-invalid-row isolation (ADR-0015/0034). Review closed MySQL Integer/Boolean UNION metadata promotion and legacy no-datatype fallback hazards; matching explicit types cannot borrow unqualified raw recipes. The native aggregate passed in 95.79 seconds; the 5,000-case generated SQLite component passed in 703.28 seconds. After catalog-hash refresh and the separately tested legacy guard (which does not affect that generated component), all remaining locked workspace targets passed. This is combined integration evidence, not one clean first-pass release qualification. Broader native/floating/temporal and coercing-UNION identity, arithmetic,
+total execution/lifecycle controls and exact-release qualification remain open; no release flags, acceptance commands or backend scope changed.
 
-**Integration follow-up:** the locked workspace boundary passed its existing
+**Earlier explicit-datatype integration:** the locked workspace boundary passed its existing
 5,000-case generated component in 630.36 seconds, then exposed stale optimizer
 assertions about raw PK/literal uniqueness. Those fixtures now distinguish
 injective IRI keys from canonical literal collisions, including an executable
