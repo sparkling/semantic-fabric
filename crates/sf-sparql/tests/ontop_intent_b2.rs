@@ -9,20 +9,22 @@
 //!
 //! ## Covered scenarios
 //!
-//! ### DistinctTest — multi-scan DISTINCT-over-join removal (NEEDS_IMPL)
+//! ### DistinctTest — decoder-aware multi-scan DISTINCT-over-join removal
 //!
-//! `testDistinctJoin2` and `testDistinctJoin5` extend the `testDistinctJoin1` RED-SPEC
-//! already in the port file.  sf's pass 6 bails on any multi-scan core
-//! (`core.len() != 1`), so it cannot prove a join's output is key-unique even when
-//! every joined table contributes a projected primary key.
+//! `testDistinctJoin2` and `testDistinctJoin5` cover projected key uniqueness.
+//! Multi-scan removal requires injective RDF construction for every projected
+//! source key. A raw primary key alone does not prove literal uniqueness:
+//! natural canonicalization can collapse distinct source values (ADR-0034).
 //!
-//! * `ontop_distinct_over_join_all_keys_two_tables` — RED-SPEC.  Two PK tables; both
-//!   PKs projected.  Ontop removes DISTINCT; sf keeps it.  Desired: `distinct == false`.
+//! * `ontop_distinct_over_join_all_keys_two_tables` — GREEN. Two PK tables with
+//!   injective IRI templates over both keys: DISTINCT is redundant.
+//! * `ontop_distinct_over_join_literal_keys_kept` — GREEN. The same source keys
+//!   projected as natural literals do not license removal without decoder proof.
 //!
 //! * `ontop_distinct_over_join_partial_key_kept` — GREEN guard (negative direction).
 //!   Two PK tables joined, but only one table's PK is projected alongside a non-key
 //!   column.  Duplicates are semantically possible; DISTINCT is required.  sf preserves
-//!   it (multi-scan bail coincides with the correct outcome).
+//!   it because the projected keys do not cover every joined table.
 //!
 //! ### ConjunctionOfDisjunctionsMergingTest — boolean filter simplification (NEEDS_IMPL)
 //!
@@ -63,7 +65,7 @@
 //!   node, or splits a join condition around a flatten.  sf has no `FlattenNode` in
 //!   its IR; out of charter (ADR-0004).
 
-use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
 use sf_sparql::cascade::{run, CascadeCtx};
 use sf_sparql::iq::{Branch, CmpOp, ColRef, Scan, SqlCond, TermDef};
 use sf_sql::{Column, TableSchema};
@@ -79,6 +81,21 @@ fn scan(alias: usize, table: &str) -> Scan {
 fn col_binding(alias: usize, col: &str) -> TermDef {
     TermDef::Derived {
         term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
+        alias,
+    }
+}
+
+/// A static one-slot IRI template has the construction proof a raw key lacks.
+fn iri_binding(alias: usize, col: &str) -> TermDef {
+    TermDef::Derived {
+        term_map: TermMap::Template(
+            Template::from_segments(vec![
+                Segment::Literal("http://example.test/key/".into()),
+                Segment::Column(col.into()),
+            ])
+            .unwrap(),
+            TermSpec::iri(),
+        ),
         alias,
     }
 }
@@ -112,24 +129,14 @@ fn one_table_ab() -> Vec<TableSchema> {
 
 // ── DistinctTest.testDistinctJoin2 ──────────────────────────────────────────
 
-/// **NEEDS_IMPL spec (RED, `#[ignore]`d).** Ontop `DistinctTest.testDistinctJoin2`.
-///
-/// `DISTINCT` over the cross product of *two* PK tables, projecting both PKs:
-/// `A := t0.c0` (PK of t0) and `B := t1.c0` (PK of t1).  Every output tuple is
-/// uniquely identified by the pair `(t0.c0, t1.c0)` — no duplicates are possible.
-/// Ontop's DISTINCT-removal pass detects this via FD-closure over the join and
-/// removes the `DISTINCT`.  sf's pass 6 bails on any multi-scan core
-/// (`core.len() != 1`), so it keeps the `DISTINCT`.
-///
-/// Asserts the DESIRED post-impl state (`distinct == false`) and is `#[ignore]`d
-/// (RED) until multi-scan FD-closure DISTINCT removal lands.
-/// Run with `cargo test -- --ignored`.
+/// Both projected PKs retain injective IRI construction, so their tuple is unique.
+/// Ontop `DistinctTest.testDistinctJoin2`, with the RDF construction proof explicit.
 #[test]
 fn ontop_distinct_over_join_all_keys_two_tables() {
     let mut b = Branch::single(scan(0, "pk_t0"));
     b.core.push(scan(1, "pk_t1"));
-    b.bindings.insert("A".into(), col_binding(0, "c0")); // PK of t0
-    b.bindings.insert("B".into(), col_binding(1, "c0")); // PK of t1
+    b.bindings.insert("A".into(), iri_binding(0, "c0")); // PK of t0
+    b.bindings.insert("B".into(), iri_binding(1, "c0")); // PK of t1
 
     let ctx = CascadeCtx {
         distinct: true,
@@ -139,9 +146,71 @@ fn ontop_distinct_over_join_all_keys_two_tables() {
     assert_eq!(out.len(), 1);
     assert!(
         !out[0].distinct,
-        "DISTINCT is redundant: both projected terms are PKs of their respective tables \
-         ⇒ every output row is unique (DESIRED multi-scan removal — DistinctTest.testDistinctJoin2)"
+        "injective RDF construction preserves both projected primary keys"
     );
+}
+
+#[test]
+fn ontop_distinct_over_join_literal_keys_kept() {
+    let mut b = Branch::single(scan(0, "pk_t0"));
+    b.core.push(scan(1, "pk_t1"));
+    b.bindings.insert("A".into(), col_binding(0, "c0"));
+    b.bindings.insert("B".into(), col_binding(1, "c0"));
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: Some(&["A".to_owned(), "B".to_owned()]),
+    };
+    let out = run(vec![b], &two_pk_tables(), &ctx);
+    assert_eq!(out.len(), 1);
+    assert!(out[0].distinct, "raw keys are not canonical literal keys");
+}
+
+#[test]
+fn boolean_primary_keys_can_collapse_to_one_canonical_literal_tuple() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    let mut schema = Vec::new();
+    for table in ["left_items", "right_items"] {
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE {table}(v BOOLEAN NOT NULL PRIMARY KEY, id INTEGER NOT NULL); \
+             INSERT INTO {table} VALUES(1,1),('true',2);"
+            ))
+            .unwrap();
+        let mut item = TableSchema::new(table);
+        item.primary_key = vec!["v".into()];
+        item.columns = vec![
+            Column::new("v", "BOOLEAN", true),
+            Column::new("id", "INTEGER", true),
+        ];
+        schema.push(item);
+    }
+    let maps = sf_mapping::parse_r2rml(
+        r#"
+        @prefix rr: <http://www.w3.org/ns/r2rml#> .
+        <#l> rr:logicalTable [rr:tableName "left_items"];
+          rr:subjectMap [rr:template "http://ex/l/{id}"];
+          rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "v"]].
+        <#r> rr:logicalTable [rr:tableName "right_items"];
+          rr:subjectMap [rr:template "http://ex/r/{id}"];
+          rr:predicateObjectMap [rr:predicate <http://ex/q>; rr:objectMap [rr:column "v"]].
+    "#,
+    )
+    .unwrap();
+    for (modifier, expected) in [("", 4), ("DISTINCT ", 1)] {
+        let query =
+            format!("SELECT {modifier}?a ?b WHERE {{ ?s <http://ex/p> ?a . ?t <http://ex/q> ?b }}");
+        let plan = sf_sparql::parse_and_translate_with(
+            &query,
+            &maps,
+            sf_sql::Dialect::Sqlite,
+            &sf_sparql::Tbox::default(),
+            &schema,
+        )
+        .unwrap();
+        let result = sf_sparql::exec::select(&plan, &connection).unwrap();
+        assert_eq!(result.rows.len(), expected, "{query}: {:?}", result.rows);
+        assert!(result.rows.iter().all(|row| row == &result.rows[0]));
+    }
 }
 
 // ── DistinctTest.testDistinctJoin5 (negative guard) ─────────────────────────
@@ -151,17 +220,15 @@ fn ontop_distinct_over_join_all_keys_two_tables() {
 /// `DISTINCT` over a join of two PK tables, projecting `A := t0.c0` (PK of t0)
 /// and `B := t0.c1` (non-key of t0).  The non-key column `c1` can carry duplicate
 /// values; `t1`'s PK is never projected.  Ontop keeps the `DISTINCT` — the join
-/// does not make it redundant.  sf also keeps it: pass 6 bails on multi-scan cores.
+/// does not make it redundant. sf also keeps it: the projected keys do not cover t1.
 ///
-/// This is the negative-direction complement of the RED-SPEC above.  It verifies
-/// that sf's multi-scan bail does NOT accidentally remove a semantically necessary
-/// `DISTINCT`.
+/// This is the negative-direction complement of the injective all-key proof.
 #[test]
 fn ontop_distinct_over_join_partial_key_kept() {
     let mut b = Branch::single(scan(0, "pk_t0"));
     b.core.push(scan(1, "pk_t1"));
-    b.bindings.insert("A".into(), col_binding(0, "c0")); // PK of t0 (projected)
-    b.bindings.insert("B".into(), col_binding(0, "c1")); // non-key of t0 (projected)
+    b.bindings.insert("A".into(), iri_binding(0, "c0")); // PK of t0 (projected)
+    b.bindings.insert("B".into(), iri_binding(0, "c1")); // non-key of t0 (projected)
                                                          // t1.c0 (PK of t1) is NOT projected — its uniqueness cannot anchor the output
 
     let ctx = CascadeCtx {

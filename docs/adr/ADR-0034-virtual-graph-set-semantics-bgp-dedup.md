@@ -39,6 +39,14 @@ preserves aligned IRI keys without replacing mixed literal payloads. Required
 HTTP/raw-compiler and owned TLS CLI checks cover the qualified paths in ADR-0015;
 the bounded federation reducer also uses typed identity without widening its profile.
 
+**Optimizer-oracle reconciliation (2026-09-09):** the workspace boundary exposed
+five historical assertions that equated raw PK uniqueness with natural-literal
+uniqueness. Positive one-/multi-scan and alias tests now use injective static IRI
+construction; literal-key and incomplete-key negatives remain active. A frozen
+SQLite BOOLEAN-PK execution test proves four bag occurrences collapse to one
+canonical DISTINCT tuple. This reconciles tests with the safety rule above; it
+does not relax serving constraint quarantine or claim general literal injectivity.
+
 ## Current wrapper boundary (2026-09-08)
 
 D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned

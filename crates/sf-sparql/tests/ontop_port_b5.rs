@@ -1,36 +1,11 @@
 //! Ontop-parity oracle port — batch 5 of 8 (ADR-0021 / ADR-0022).
 //!
-//! Assigned slice = sorted `*Test.java` indices `[25, 30)` over the combined
-//! `~/source/ontop/core/optimization/src/test/java/.../iq/{executor,optimizer}/`
-//! listing (tag `ontop-5.5.0`):
-//!
-//!   25  PushDownBooleanExpressionOptimizerTest   — BOUNDARY (see notes below)
-//!   26  PushUpBooleanExpressionOptimizerTest     — BOUNDARY (see notes below)
-//!   27  SelfJoinSameTermsTest                    — SUPPORTED (cascade pass 2c)
-//!   28  TrueNodesRemovalOptimizerTest            — BOUNDARY (no TrueNode in sf IR)
-//!   29  UniqueConstraintInferenceTest            — SUPPORTED (pass 6 proxy) / NEEDS_IMPL
-//!
-//! Only the SUPPORTED scenarios that are *faithfully expressible* against sf's
-//! flat-join IR (`iq.rs`) + cascade (`cascade::run`) are ported here as runnable
-//! oracle tests. Each builds an input `Branch`, runs the real cascade with a real
-//! schema, and asserts the optimized branch matches Ontop's scenario.
-//!
-//! Why 25/26/28 are BOUNDARY (not ported):
-//!   * 25 (PushDown) / 26 (PushUp) operate on Ontop's *tree* of InnerJoin /
-//!     LeftJoin / Filter nodes with implicit-join-by-shared-variable semantics,
-//!     moving boolean conditions between tree levels. sf flattens every inner
-//!     join into ONE `Branch` (core scans + a flat `where_conds`) and delegates
-//!     physical predicate placement to the source DB (ADR-0006: "the source DB
-//!     does the set-work"). The normalized flat form IS sf's base translation by
-//!     construction — there is no nested join node to push a condition into/out
-//!     of, hence no before/after oracle to assert. sf's only analog (pass 5
-//!     `selection_pushdown`) is a weaker flat stable-partition. The left-join /
-//!     union scenarios additionally need multi-scan LEFT JOIN right sides and
-//!     UNION-node construction that sf's `OptJoin` (single-scan) does not model.
-//!   * 28 (TrueNodesRemoval): a `TrueNode` is an Ontop IQ-tree artifact (an
-//!     arity-0 unit relation produced by substitution). sf's flat IR has no such
-//!     node — the join identity is an absorbed empty `Branch`, never an explicit
-//!     leaf — so there is nothing to "remove" and no oracle to assert.
+//! Historical Ontop 5.5.0 slice `[25,30)`: SelfJoinSameTerms (27) and
+//! UniqueConstraintInference (29) have flat-cascade analogues below.
+//! PushDown/PushUpBooleanExpression (25/26) and TrueNodesRemoval (28) operate
+//! on tree nodes absent from this cascade boundary (ADR-0006).
+//! DISTINCT-removal positives require injective RDF construction (ADR-0034);
+//! the literal-alias negatives retain the boundary, not exact Ontop parity.
 #![cfg(test)]
 
 use std::collections::BTreeMap;
@@ -400,23 +375,8 @@ fn st_non_elimination4_different_constants() {
     );
 }
 
-// ===========================================================================
-// CLASS 29 — UniqueConstraintInferenceTest
-//
-// Ontop's `tree.inferUniqueConstraints()` returns the SET of output-variable
-// sets that are unique. sf has no such variable-set API, but the *use* of that
-// fact is pass 6 (distinct-removal): a single-scan DISTINCT is redundant iff a
-// projected term is built from a non-null key. So the behavioural mapping is
-//   Ontop {{X}}  ⟺  sf removes the DISTINCT  (out.distinct == false)
-//   Ontop {}     ⟺  sf keeps   the DISTINCT  (out.distinct == true)
-// which faithfully ports the *single-column-PK* construction scenarios. The
-// composite-key / union / values scenarios need inference sf does not have
-// (NEEDS_IMPL) — they are NOT asserted here.
-//
-// `pk_ar2`: arity-2, single-column PK on col1 (Ontop `PK_TABLE1_AR2`,
-//           `createRelationWithPK` puts the PK on attribute 1).
-// `pk_ar3`: arity-3, single-column PK on col1 (Ontop `PK_TABLE1_AR3`).
-// ===========================================================================
+// UniqueConstraintInferenceTest: pass 6 consumes a non-null key only with
+// injective RDF construction. Both fixtures have a single-column PK on col1.
 
 fn pk_ar2_schema() -> Vec<TableSchema> {
     let mut t = TableSchema::new("pk_ar2");
@@ -475,55 +435,49 @@ fn uc_construction_template_over_nonkey_cols_distinct_kept() {
     );
 }
 
-/// **GREEN** — Ontop `testDuplicateColumn1` ⇒ `{{X},{A}}`. X is a plain alias of
-/// the PK column (X = A = col1). X reads the PK ⇒ unique ⇒ DISTINCT removed.
+/// Aliasing a raw PK cannot supply the missing literal construction proof.
+/// The corresponding identical IRI aliases do preserve uniqueness.
 #[test]
-fn uc_duplicate_column1_alias_of_pk_distinct_removed() {
-    let mut b = branch(vec![scan(0, "pk_ar2")], Vec::new(), true);
-    b.bindings.insert("X".into(), col_binding(0, "col1"));
-    b.bindings.insert("A".into(), col_binding(0, "col1"));
-
-    let out = run(
-        vec![b],
-        &pk_ar2_schema(),
-        &ctx(true, &["X".into(), "A".into()]),
-    );
-    assert!(
-        !out[0].distinct,
-        "X = A = PK col ⇒ unique ⇒ DISTINCT removed (Ontop {{{{X}},{{A}}}})"
-    );
+fn uc_duplicate_column1_alias_of_pk_requires_construction_proof() {
+    assert_alias_construction(&["X", "A"]);
 }
 
-/// **GREEN** — Ontop `testDuplicateColumn4` ⇒ `{{X},{Y},{A}}`. Two output
-/// variables both alias the single PK column (X = Y = A = col1) ⇒ each is unique
-/// ⇒ DISTINCT removed.
 #[test]
-fn uc_duplicate_column4_two_aliases_of_pk_distinct_removed() {
-    let mut b = branch(vec![scan(0, "pk_ar2")], Vec::new(), true);
-    b.bindings.insert("X".into(), col_binding(0, "col1"));
-    b.bindings.insert("Y".into(), col_binding(0, "col1"));
-
-    let out = run(
-        vec![b],
-        &pk_ar2_schema(),
-        &ctx(true, &["X".into(), "Y".into()]),
-    );
-    assert!(
-        !out[0].distinct,
-        "X = Y = PK col ⇒ unique ⇒ DISTINCT removed (Ontop {{{{X}},{{Y}},{{A}}}})"
-    );
+fn uc_duplicate_column4_two_aliases_of_pk_require_construction_proof() {
+    assert_alias_construction(&["X", "Y"]);
 }
 
-/// **GREEN — P0 soundness fix shipped.** Ontop `testConstructionNonInjectiveTemplate1`
-/// ⇒ `{}`: the template `ds2/{col1}{col2}` has two *adjacent* placeholders (no
-/// separator) and is therefore NON-injective — distinct rows can map to the same
-/// IRI, so X is NOT a unique constraint and the DISTINCT must be preserved.
-///
-/// Fixed by `Template::is_injective()` + `binding_is_injective()` in pass 6:
-/// adjacent `Column` slots ⇒ `is_injective() = false` ⇒ DISTINCT kept.
-///
-/// Expected (Ontop): DISTINCT kept (`out.distinct == true`).
-/// sf (after fix):   DISTINCT kept (`out.distinct == true`). ✓
+fn assert_alias_construction(aliases: &[&str]) {
+    for iri in [false, true] {
+        let def = if iri {
+            TermDef::Derived {
+                term_map: TermMap::Template(
+                    Template::from_segments(vec![
+                        Segment::Literal("http://example.test/key/".into()),
+                        Segment::Column("col1".into()),
+                    ])
+                    .unwrap(),
+                    TermSpec::iri(),
+                ),
+                alias: 0,
+            }
+        } else {
+            col_binding(0, "col1")
+        };
+        let mut b = branch(vec![scan(0, "pk_ar2")], Vec::new(), true);
+        for alias in aliases {
+            b.bindings.insert((*alias).into(), def.clone());
+        }
+        for projection in [&aliases[..1], aliases] {
+            let vars: Vec<_> = projection.iter().map(|v| (*v).to_owned()).collect();
+            let out = run(vec![b.clone()], &pk_ar2_schema(), &ctx(true, &vars));
+            assert_eq!(out[0].distinct, !iri, "iri={iri}, project={vars:?}");
+        }
+    }
+}
+
+/// Ontop `testConstructionNonInjectiveTemplate1`: adjacent slots can collide,
+/// so the projected template must retain DISTINCT even when it covers the PK.
 #[test]
 fn uc_construction_non_injective_template1_red() {
     let mut b = branch(vec![scan(0, "pk_ar2")], Vec::new(), true);

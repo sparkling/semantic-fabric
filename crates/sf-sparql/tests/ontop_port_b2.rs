@@ -1,5 +1,10 @@
 //! Ontop-parity oracle port — batch 2 of 8 (ADR-0022).
 //!
+//! Current DISTINCT boundary (2026-09-09, ADR-0034): projected raw keys need
+//! injective RDF construction. The positive fixtures below use static IRI
+//! templates; natural literal canonicalization does not inherit raw uniqueness.
+//! The scenario inventory below is historical, not current completion authority.
+//!
 //! Assigned slice `[10, 15)` over the combined, path-sorted `*Test.java` listing
 //! of `~/source/ontop/core/optimization/src/test/java/it/unibz/inf/ontop/iq/{executor,optimizer}/`
 //! (33 files, indices 0..=32). The slice resolves to five `iq/optimizer` classes:
@@ -129,7 +134,7 @@
 //! NEEDS_IMPL spec follow. See `src/cascade/ws_g.rs` / `ws_st.rs` / `ws_fk.rs` for
 //! the broader port pattern.
 
-use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
 use sf_core::{NamedNode, Term};
 use sf_sparql::cascade::{run, CascadeCtx};
 use sf_sparql::iq::{Branch, Scan, TermDef};
@@ -142,10 +147,17 @@ fn scan(alias: usize, table: &str) -> Scan {
     }
 }
 
-/// A plain-literal `rr:column` binding reading `col` of `alias`.
+/// An injective static IRI template reading `col` of `alias`.
 fn col_binding(alias: usize, col: &str) -> TermDef {
     TermDef::Derived {
-        term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
+        term_map: TermMap::Template(
+            Template::from_segments(vec![
+                Segment::Literal("http://example.test/key/".into()),
+                Segment::Column(col.into()),
+            ])
+            .unwrap(),
+            TermSpec::iri(),
+        ),
         alias,
     }
 }
@@ -201,10 +213,9 @@ fn ontop_distinct_preserved_when_projected_term_is_not_a_key() {
 
 /// **GREEN (positive baseline).** The load-bearing contrast that makes the guard
 /// above bite: the SAME single scan, but now `B := c0` (the NOT-NULL unique key).
-/// `DISTINCT` over a projected key is redundant, so pass 6 *fires* and drops it
+/// `DISTINCT` over an injectively constructed key is redundant, so pass 6 drops it
 /// (`b.distinct ← false`). This is the single-scan analogue of
-/// `DistinctTest.testDistinctJoin1`'s key-driven removal — which over a *join* sf
-/// does not yet perform (see the `#[ignore]`d spec below). Not a 1:1 Ontop port;
+/// `DistinctTest.testDistinctJoin1`'s key-driven removal. Not a 1:1 Ontop port;
 /// included so the "preserved" assertion is provably non-vacuous.
 #[test]
 fn sf_distinct_removed_when_a_projected_term_is_the_unique_key_baseline() {
@@ -237,15 +248,13 @@ fn three_pk_tables() -> Vec<TableSchema> {
     vec![mk("pk_t0"), mk("pk_t1"), mk("pk_t2")]
 }
 
-/// **NEEDS_IMPL spec (RED, `#[ignore]`d).** Ontop `DistinctTest.testDistinctJoin1`.
+/// **GREEN.** Ontop `DistinctTest.testDistinctJoin1`.
 ///
 /// `DISTINCT` over the cross product of three PK tables, projecting `A:=t0.c0(PK)`,
 /// `B:=t0.c1`, `C:=t1.c0(PK)`, `D:=t2.c0(PK)`. Each relation contributes its PK to
 /// the projection ⇒ every output tuple is unique ⇒ Ontop removes the `DISTINCT`.
-/// sf's pass 6 bails on a multi-scan core (it only proves redundancy for a single
-/// base-table scan), so it currently KEEPS the `DISTINCT`. This asserts the DESIRED
-/// post-impl state (`distinct == false`) and is `#[ignore]`d (RED) until multi-scan
-/// FD-closure DISTINCT removal lands. Run with `cargo test -- --ignored`.
+/// The static IRI templates preserve key injectivity; the multi-scan proof can
+/// therefore remove DISTINCT without equating raw uniqueness with literal identity.
 #[test]
 fn ontop_distinct_over_join_removed_when_all_relations_contribute_a_key_spec() {
     let mut b = Branch::single(scan(0, "pk_t0"));

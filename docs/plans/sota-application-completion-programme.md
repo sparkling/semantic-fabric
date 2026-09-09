@@ -24,6 +24,15 @@ dynamic datatype loss, raw grouping and comparison/projection authority confusio
 This is an exactness slice; broader native families, general natural BGP/arithmetic,
 total execution/lifecycle controls and exact-release qualification are still open.
 
+**Integration follow-up:** the locked workspace boundary passed its existing
+5,000-case generated component in 630.36 seconds, then exposed stale optimizer
+assertions about raw PK/literal uniqueness. Those fixtures now distinguish
+injective IRI keys from canonical literal collisions, including an executable
+SQLite BOOLEAN-PK counterexample. All remaining locked workspace tests now pass
+with only that unchanged, already-passed generated component excluded from the
+follow-up run. Runtime safeguards remain unchanged; this is combined integration
+evidence, not a fresh single-command release-candidate qualification.
+
 **PostgreSQL decoder prerequisite (2026-09-09):** corrected the signed digit-count
 interpretation so a valid 131,072-digit NUMERIC with `.00` scale reconstructs its
 exact IRI over authenticated owned PostgreSQL TLS. The wire boundary/truncation
