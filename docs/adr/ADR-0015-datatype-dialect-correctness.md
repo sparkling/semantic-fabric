@@ -127,9 +127,25 @@ Double conversion. It does not borrow natural identity or restore revoked
 FLOAT4/FLOAT8 natural facts. Required owned TLS tests cover all six operators/NOT,
 Float and Double constants, full-range rounding, invalid authorized NUMERIC
 failure/recovery and denied-row EXISTS/OPTIONAL through the explicit Double map.
-Rust output and identity keys are unchanged. General text/other typed-column
-parsing, wider arithmetic, other backends and exact-release qualification remain
-required follow-up, not removed capabilities or a complete numeric gate.
+PostgreSQL TEXT/CHAR authored numeric columns now additionally support floating
+promotion. ASCII XSD grammar, exact whitespace and all integer-derived facets are
+checked under `C` collation, independent of the source collation. Invalid lexicals
+remain expression errors under NOT. Float is parsed before any Double widening.
+The parser preserves scientific order and the first 1100 significant digits plus
+a nonzero sticky digit, without rounding the prefix. Every binary64 midpoint is
+`N * 2^e`, with `N < 2^54` and `-1075 <= e <= 970`; its terminating decimal
+coefficient has at most 1092 digits, so this representation preserves every
+rounding-boundary comparison. Exponents beyond ten significant digits cannot be
+cancelled within PostgreSQL's [1 GB field limit](https://www.postgresql.org/docs/16/limits.html).
+Only the resulting scientific order is range-classified; signed zero is retained.
+Numeric intermediates need at most 1101 significant digits and 1600 fractional
+digits. Guarded casts never consume invalid text. Live TEXT/CHAR tests cover all
+16 numeric datatypes, long exponent/mantissa cancellation, both sides of retained
+midpoints, nonfinite/invalid/NULL/NOT cases, nondeterministic source collation,
+unchanged raw RDF output and authorized/denied EXISTS/OPTIONAL bindings.
+Rust output and identity keys are unchanged. Non-floating integer/decimal value
+comparisons, other native typed overrides, wider arithmetic, other backends and
+exact-release qualification remain required follow-up, not removed capabilities.
 
 ### PostgreSQL NUMERIC decoder correction (2026-09-09)
 

@@ -1,5 +1,7 @@
 //! Floating identity follows Rust's native decoder, not SQL numeric equality.
 use super::*;
+#[path = "pg_float_text.rs"]
+mod text_values;
 #[path = "pg_float_values.rs"]
 mod values;
 
@@ -172,6 +174,7 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
     }
     assert_cross_width(fixture, database);
     values::assert_numeric(fixture, database);
+    text_values::assert_all(fixture, database);
     sql(database, "ALTER ROLE sf_tls RESET extra_float_digits");
     sql(database, "DELETE FROM items; ALTER TABLE items DROP COLUMN float_narrow; ALTER TABLE items DROP COLUMN float_wide");
 }
