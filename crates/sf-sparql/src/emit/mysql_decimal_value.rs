@@ -52,7 +52,7 @@ pub(super) fn comparison(
     )))
 }
 
-fn operand(
+pub(super) fn raw_operand(
     value: &LiteralOperand,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
@@ -62,12 +62,8 @@ fn operand(
     let unsupported = || {
         Error::Unsupported("exact MySQL numeric comparison requires compatible decoder and retained datatype provenance".into())
     };
-    let datatype = datatype(value, actuals).ok_or_else(unsupported)?;
     let raw = match value {
         LiteralOperand::Constant(literal) => {
-            if !exact(datatype) {
-                return Ok("CAST(NULL AS CHAR)".into());
-            }
             params.push(literal.value().to_owned());
             *pidx += 1;
             "CONVERT(? USING utf8mb4)".into()
@@ -121,6 +117,21 @@ fn operand(
             }
         }
     };
+    Ok(raw)
+}
+
+fn operand(
+    value: &LiteralOperand,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<String> {
+    let datatype = datatype(value, actuals).ok_or_else(|| Error::Unsupported("exact MySQL numeric comparison requires compatible decoder and retained datatype provenance".into()))?;
+    if matches!(value, LiteralOperand::Constant(_)) && !exact(datatype) {
+        return Ok("CAST(NULL AS CHAR)".into());
+    }
+    let raw = raw_operand(value, catalog, actuals, params, pidx)?;
     if !exact(datatype) {
         return Ok(format!("(WITH __sf_exact_checked AS (SELECT {raw} AS v LIMIT 18446744073709551615) SELECT CAST(NULLIF(LENGTH(v),LENGTH(v)) AS CHAR) FROM __sf_exact_checked)"));
     }
@@ -147,7 +158,7 @@ fn operand(
     ))
 }
 
-fn facets(kind: &str) -> String {
+pub(super) fn facets(kind: &str) -> String {
     let negative = "(neg AND d<>'')";
     let bounds = match kind {
         "nonPositiveInteger" => return format!("({negative} OR d='')"),

@@ -88,22 +88,28 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_source_validation(fixture, database);
 }
 
-fn assert_source_validation(fixture: &Fixture, database: &Database) {
+pub(super) fn assert_source_validation(fixture: &Fixture, database: &Database) {
     sql(database,"DELETE FROM sf_numeric_items; ALTER TABLE sf_numeric_items MODIFY v BIGINT UNSIGNED; INSERT INTO sf_numeric_items VALUES(0,1,'same'),(1,18446744073709551615,'denied')");
     sql(
         database,
         "ALTER TABLE sf_numeric_items ADD COLUMN nullable_decimal TEXT NULL",
     );
     let mapping = std::fs::read_to_string(fixture.root.join("first.ttl")).unwrap();
-    fixture.write("first.ttl",&format!("{mapping}\n @prefix rr: <http://www.w3.org/ns/r2rml#> . <#nullable> rr:logicalTable [rr:tableName \"sf_numeric_items\"]; rr:subjectMap [rr:template \"http://example.test/numeric/{{id}}\"]; rr:predicateObjectMap [rr:predicate <http://example.test/nullable>; rr:objectMap [rr:column \"nullable_decimal\"; rr:datatype <{XSD}decimal>]]."));
+    let nullable = [("nullable","decimal"),("nullable_double","double")].into_iter().map(|(name,kind)|format!("@prefix rr: <http://www.w3.org/ns/r2rml#> . <#{name}> rr:logicalTable [rr:tableName \"sf_numeric_items\"]; rr:subjectMap [rr:template \"http://example.test/numeric/{{id}}\"]; rr:predicateObjectMap [rr:predicate <http://example.test/{name}>; rr:objectMap [rr:column \"nullable_decimal\"; rr:datatype <{XSD}{kind}>]].")).collect::<Vec<_>>().join("\n");
+    fixture.write("first.ttl", &format!("{mapping}\n{nullable}"));
     let ontology = std::fs::read_to_string(fixture.root.join("ontology.ttl")).unwrap();
-    fixture.write("ontology.ttl",&format!("{ontology}\n <http://example.test/nullable> a <http://www.w3.org/2002/07/owl#DatatypeProperty>."));
+    fixture.write("ontology.ttl",&format!("{ontology}\n <http://example.test/nullable> a <http://www.w3.org/2002/07/owl#DatatypeProperty>. <http://example.test/nullable_double> a <http://www.w3.org/2002/07/owl#DatatypeProperty>."));
     let (server, address) = start(fixture, database);
     // A different datatype consumes the raw u64 lexical; matching/natural
     // integer still has the Rust constructor's i64 validation obligation.
     assert_rows(address,fixture,"SELECT ?s WHERE { ?s <http://example.test/unsignedLong> ?o FILTER(?o > 9223372036854775807) }",&BTreeSet::from(["http://example.test/numeric/1".into()]));
     for expression in [
         "?o > 0",
+        "?o > 0e0",
+        "?o = \"NaN\"^^<http://www.w3.org/2001/XMLSchema#double>",
+        "\"NaN\"^^<http://www.w3.org/2001/XMLSchema#double> = ?o",
+        "?o = \"inf\"^^<http://www.w3.org/2001/XMLSchema#float>",
+        "\"inf\"^^<http://www.w3.org/2001/XMLSchema#float> = ?o",
         "?o = \"inf\"^^<http://www.w3.org/2001/XMLSchema#decimal>",
         "\"inf\"^^<http://www.w3.org/2001/XMLSchema#decimal> = ?o",
         "?o = \"foo\"",
@@ -140,20 +146,22 @@ fn assert_source_validation(fixture: &Fixture, database: &Database) {
         // before typed operands; no source value is needed to prove no match.
         let static_empty=format!("SELECT ?s WHERE {{ VALUES ?r {{ UNDEF }} ?s <http://example.test/integer> ?o FILTER({expression}) }}");
         assert!(rows(address, fixture, &static_empty).is_empty());
-        let query=format!("SELECT ?s WHERE {{ ?s <http://example.test/integer> ?o OPTIONAL {{ ?s <http://example.test/nullable> ?r }} FILTER({expression}) }}");
-        let response = stop_matrix::wire(cancellation::begin(address, &query, &fixture.token));
-        assert!(
-            response.starts_with(b"HTTP/1.1 200") || response.starts_with(b"HTTP/1.1 500"),
-            "query rejected: {}",
-            String::from_utf8_lossy(&response)
-        );
-        assert!(
-            !response.ends_with(b"0\r\n\r\n"),
-            "source validation was skipped: {query}: {}",
-            String::from_utf8_lossy(&response)
-        );
-        stop_matrix::assert_no_complete_union_success(&response);
-        recovered(address, fixture);
+        for predicate in ["nullable", "nullable_double"] {
+            let query=format!("SELECT ?s WHERE {{ ?s <http://example.test/integer> ?o OPTIONAL {{ ?s <http://example.test/{predicate}> ?r }} FILTER({expression}) }}");
+            let response = stop_matrix::wire(cancellation::begin(address, &query, &fixture.token));
+            assert!(
+                response.starts_with(b"HTTP/1.1 200") || response.starts_with(b"HTTP/1.1 500"),
+                "query rejected: {}",
+                String::from_utf8_lossy(&response)
+            );
+            assert!(
+                !response.ends_with(b"0\r\n\r\n"),
+                "source validation was skipped: {query}: {}",
+                String::from_utf8_lossy(&response)
+            );
+            stop_matrix::assert_no_complete_union_success(&response);
+            recovered(address, fixture);
+        }
     }
     database.assert_encrypted_sessions();
     drop(server);

@@ -1,6 +1,8 @@
 //! Public exact numeric values over the owned MySQL wire/collation boundary.
 use super::*;
 use std::cmp::Ordering;
+#[path = "mysql_float_values.rs"]
+mod floating;
 #[path = "mysql_numeric_native.rs"]
 mod native;
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -124,6 +126,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     }
     native::assert_all(fixture, database);
     sql(database, "DROP TABLE sf_numeric_items");
+    floating::assert_all(fixture, database);
 }
 
 fn insert(database: &Database, lexicals: &[String]) {
@@ -342,8 +345,9 @@ fn rows(address: SocketAddr, fixture: &Fixture, query: &str) -> Vec<serde_json::
     let response = stop_matrix::wire(cancellation::begin(address, query, &fixture.token));
     assert!(
         response.starts_with(b"HTTP/1.1 200 ") && response.ends_with(b"0\r\n\r\n"),
-        "incomplete query {query}: {}",
-        String::from_utf8_lossy(&response)
+        "incomplete query {query}: {}; server: {}",
+        String::from_utf8_lossy(&response),
+        std::fs::read_to_string(fixture.root.join("query-profile.stderr")).unwrap_or_default()
     );
     let (_, body) = decode_response(response);
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
