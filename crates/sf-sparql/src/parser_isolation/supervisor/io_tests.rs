@@ -205,24 +205,48 @@ mod linux_tests {
     #[test]
     fn closed_input_pipe_is_contained_as_an_error() {
         let executable = prepared("/bin/true");
-        let mut child = spawn_fixture(&executable, short_limits(1), &[b"true"])
+        for expired in [false, true] {
+            // This tests a closed pipe, not 100ms scheduler responsiveness.
+            // wait_for_exit permits 1s; a shorter worker deadline made error
+            // precedence depend on parallel test load. Test both states explicitly.
+            let mut limits = v1_limits().values();
+            limits.max_input_bytes = 1;
+            let mut child = spawn_fixture(
+                &executable,
+                ParserWorkerLimits::new(limits).unwrap(),
+                &[b"true"],
+            )
             .expect("launch immediate-exit fixture");
-        let pidfd = child.duplicate_pidfd().unwrap();
-        wait_for_exit(&pidfd);
-
-        let error = child
-            .write_all_until_deadline(b"X")
-            .expect_err("a closed input pipe cannot accept a frame");
-        assert!(matches!(
-            error,
-            SupervisorError::InvalidState("parser worker exited before fixed I/O completed")
-                | SupervisorError::Operation {
-                    operation: "write parser worker input",
-                    ..
-                }
-        ));
-        assert!(child.child.is_none());
-        assert!(!pidfd_targets_live_process(&pidfd));
+            let pidfd = child.duplicate_pidfd().unwrap();
+            wait_for_exit(&pidfd);
+            if expired {
+                child.wall_deadline = Instant::now();
+            }
+            let error = child
+                .write_all_until_deadline(b"X")
+                .expect_err("a closed input pipe cannot accept a frame");
+            if expired {
+                assert!(
+                    matches!(error, SupervisorError::DeadlineExceeded),
+                    "{error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        SupervisorError::InvalidState(
+                            "parser worker exited before fixed I/O completed"
+                        ) | SupervisorError::Operation {
+                            operation: "write parser worker input",
+                            ..
+                        }
+                    ),
+                    "{error:?}"
+                );
+            }
+            assert!(child.child.is_none());
+            assert!(!pidfd_targets_live_process(&pidfd));
+        }
     }
 
     #[test]
