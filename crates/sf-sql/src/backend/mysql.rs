@@ -190,6 +190,9 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                 let code = mysql_xsd_code(column, self.type_profile)?;
                 let varying_text = bytes && code == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
+                    // DATE/DATETIME temp copies can change partial dates under
+                    // sql_mode. Their type alone proves no lexical identity.
+                    // *_2 temporal wire codes are not decoded by the locked driver.
                     native_scalar: match column.column_type() {
                         ColumnType::MYSQL_TYPE_TINY
                         | ColumnType::MYSQL_TYPE_SHORT
@@ -200,6 +203,11 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                         ColumnType::MYSQL_TYPE_NEWDECIMAL => {
                             Some(super::NativeScalarKey::MysqlDecimal)
                         }
+                        ColumnType::MYSQL_TYPE_BIT => Some(super::NativeScalarKey::MysqlBit),
+                        ColumnType::MYSQL_TYPE_TIMESTAMP => {
+                            Some(super::NativeScalarKey::MysqlTimestamp)
+                        }
+                        ColumnType::MYSQL_TYPE_TIME => Some(super::NativeScalarKey::MysqlTime),
                         _ if bytes && code == Some(XsdTypeCode::HexBinary) => {
                             Some(super::NativeScalarKey::MysqlBinaryBytes)
                         }

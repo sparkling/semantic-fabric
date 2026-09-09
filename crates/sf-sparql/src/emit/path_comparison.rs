@@ -207,9 +207,18 @@ pub(super) fn subplan_actuals(
                 column
                     .as_ref()
                     .and_then(|column| iri_cmp::scalar_column(column, &actuals))
-                    // UNION can widen decimal scale/display metadata. Do not
-                    // inherit a pre-coercion lexical proof through that boundary.
-                    .filter(|key| plan.branches.len() == 1 || *key != NativeScalarKey::MysqlDecimal)
+                    // UNION can change decimal display, BIT width/type or
+                    // temporal representation. No pre-coercion proof carries over.
+                    .filter(|key| {
+                        plan.branches.len() == 1
+                            || !matches!(
+                                key,
+                                NativeScalarKey::MysqlDecimal
+                                    | NativeScalarKey::MysqlBit
+                                    | NativeScalarKey::MysqlTimestamp
+                                    | NativeScalarKey::MysqlTime
+                            )
+                    })
                     .map(|key| (index, key))
             })
             .collect();

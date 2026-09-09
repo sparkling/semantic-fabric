@@ -125,6 +125,9 @@ fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
             "pg_catalog.encode(",
         ),
         (Dialect::MySql, NativeScalarKey::MysqlBinaryBytes, "HEX("),
+        (Dialect::MySql, NativeScalarKey::MysqlBit, "HEX(CAST("),
+        (Dialect::MySql, NativeScalarKey::MysqlTimestamp, "RPAD("),
+        (Dialect::MySql, NativeScalarKey::MysqlTime, "'-00:00:00'"),
         (
             Dialect::MySql,
             NativeScalarKey::MysqlDecimal,
@@ -187,6 +190,17 @@ fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
         )
         .unwrap();
         assert!(sql.contains(expression), "{sql}");
+        assert!(
+            !sql.contains("JSON_TABLE") && !sql.contains("unnest"),
+            "proved scalar alphabets need no generic byte encoder"
+        );
+        assert_eq!(
+            sql.contains("'%3A'"),
+            matches!(
+                key,
+                NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlTime
+            )
+        );
         dialect
             .emit_via_ast(&format!("SELECT {sql}"))
             .unwrap_or_else(|error| panic!("{dialect:?} {key:?}: {error}: {sql}"));
@@ -293,6 +307,9 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
     for key in [
         NativeScalarKey::Integer,
         NativeScalarKey::MysqlDecimal,
+        NativeScalarKey::MysqlBit,
+        NativeScalarKey::MysqlTimestamp,
+        NativeScalarKey::MysqlTime,
         NativeScalarKey::MysqlBinaryBytes,
     ] {
         let mut catalog = ColumnCatalog::default();
@@ -332,10 +349,16 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
         );
         plan.branches.push(branch.clone());
         let actuals = subplan_actuals(&plan, Dialect::MySql, &catalog);
-        if key == NativeScalarKey::MysqlDecimal {
+        if matches!(
+            key,
+            NativeScalarKey::MysqlDecimal
+                | NativeScalarKey::MysqlBit
+                | NativeScalarKey::MysqlTimestamp
+                | NativeScalarKey::MysqlTime
+        ) {
             assert!(
                 actuals.scalar_columns.is_empty(),
-                "decimal scale/display coercion has no identity proof"
+                "decimal, BIT and temporal UNION coercion has no identity proof"
             );
         } else {
             assert_eq!(actuals.scalar_columns, expected);

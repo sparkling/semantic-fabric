@@ -69,16 +69,18 @@ pub(super) fn template(
                     dialect.placeholder(*pidx)
                 }
                 IriPart::Column(column) => {
-                    let lexical = if path_comparison::column_text(column, actuals).is_some() {
-                        path_comparison::rdf_column(column, dialect, catalog, actuals)
+                    if path_comparison::column_text(column, actuals).is_some() {
+                        percent_encode_col(
+                            &path_comparison::rdf_column(column, dialect, catalog, actuals),
+                            dialect,
+                        )?
                     } else if let Some(key) = scalar_column(column, actuals) {
-                        scalar_lexical(key, &colref(column, dialect, actuals), dialect)?
+                        scalar_template_key(key, &colref(column, dialect, actuals), dialect)?
                     } else {
                         return Err(Error::Unsupported(
                             "static template identity requires a proven live native decoder".into(),
                         ));
-                    };
-                    percent_encode_col(&lexical, dialect)?
+                    }
                 }
             });
         }
@@ -116,16 +118,56 @@ fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<S
             format!("pg_catalog.translate(pg_catalog.encode({raw}, 'hex'), 'abcdef', 'ABCDEF')")
         }
         (Dialect::MySql, NativeScalarKey::MysqlBinaryBytes) => format!("HEX({raw})"),
+        // BIT's numeric HEX loses leading zero bytes. Its binary string is
+        // exactly the width-preserving byte vector received by the wire decoder.
+        (Dialect::MySql, NativeScalarKey::MysqlBit) => format!("HEX(CAST({raw} AS BINARY))"),
         (Dialect::MySql, NativeScalarKey::MysqlDecimal) => {
             // Keep the wire formatter's scale/ZEROFILL. Use CONVERT for the
             // charset: sqlparser does not admit CAST's CHARACTER SET suffix.
             format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)")
+        }
+        (Dialect::MySql, NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlTime) => {
+            let text = format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)");
+            let whole = format!("SUBSTRING_INDEX({text}, '.', 1)");
+            let fraction = format!("SUBSTRING_INDEX({text}, '.', -1)");
+            let no_fraction =
+                format!("(LOCATE('.', {text}) = 0 OR REPLACE({fraction}, '0', '') = '')");
+            let whole = if key == NativeScalarKey::MysqlTimestamp {
+                format!("REPLACE({whole}, ' ', 'T')")
+            } else {
+                whole
+            };
+            // Preserve zero timestamps, session-local timestamp fields,
+            // signed total hours, and the wire decoder's exact six-digit micros.
+            let zero = if key == NativeScalarKey::MysqlTime {
+                format!("WHEN {no_fraction} AND {whole} = '-00:00:00' THEN '00:00:00' ")
+            } else {
+                String::new()
+            };
+            format!("(CASE WHEN {raw} IS NULL THEN NULL {zero}WHEN {no_fraction} THEN {whole} ELSE CONCAT({whole}, '.', RPAD({fraction}, 6, '0')) END)")
         }
         _ => {
             return Err(Error::Unsupported(
                 "native decoder recipe belongs to another backend".into(),
             ))
         }
+    })
+}
+
+fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
+    let lexical = scalar_lexical(key, raw, dialect)?;
+    // These live wire recipes emit restricted ASCII, not arbitrary text. Avoid
+    // the generic per-byte SQL encoder only with this exhaustive alphabet proof.
+    Ok(match key {
+        NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlTime => {
+            format!("REPLACE({lexical}, ':', '%3A')")
+        }
+        NativeScalarKey::Integer
+        | NativeScalarKey::PostgresBoolean
+        | NativeScalarKey::PostgresBytea
+        | NativeScalarKey::MysqlBinaryBytes
+        | NativeScalarKey::MysqlBit
+        | NativeScalarKey::MysqlDecimal => lexical,
     })
 }
 

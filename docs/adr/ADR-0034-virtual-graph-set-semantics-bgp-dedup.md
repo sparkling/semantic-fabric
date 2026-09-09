@@ -225,9 +225,21 @@ Tests compare listed decoder values with lookup results: empty/leading/trailing
 zero bytes, uppercase hex, true/false, full decimal precision/scale and ZEROFILL.
 SQL AST round-trips and metadata tests protect raw projection, names-only revocation,
 provider separation and loss of decimal proof across scale-coercing UNIONs.
-MySQL BIT, PostgreSQL numeric and floating/temporal recipes remain unqualified:
-plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity;
-BIT needs byte-width proof, and temporal/float SQL spelling is not Rust spelling.
+MySQL BIT now preserves the wire byte width through binary conversion before HEX;
+TIME/TIMESTAMP preserve zero values, signed total hours, six-digit nonzero fractions
+and the reader's timestamp timezone. Required public checks cover BIT1/9/64,
+leading zeros, TIME extrema/negative zero and fractional/zero TIMESTAMP at +05:30.
+All these fixtures also check COUNT/OPTIONAL, NULL/negation and wrong IRI spellings.
+Live scalar alphabets avoid the generic SQL byte encoder; TIME/TIMESTAMP escape
+colons explicitly. Text retains full encoding. Decimal/BIT/TIME/TIMESTAMP facts do
+not cross unqualified multi-branch SQL coercion; unary raw projection retains them.
+MySQL DATE/DATETIME still need a projection repair: an owned stored DATE
+`2001-00-03` listed as `0000-00-00`, while its attempted constant-match CAST saw
+the original spelling and returned no row. Native temporary-field revalidation
+can explain the discrepancy; a global incomplete-date-to-zero rewrite is not sound.
+Preserve lexical values and natural datatype authority before lossy projection.
+PostgreSQL numeric/temporal and native floating recipes also remain unqualified:
+plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity.
 Unsupported recipes can reject formerly valid
 native lookups; restoring their decoder-exact behavior remains required work,
 not a scope deferral or a whole identity/release gate closure. Path-endpoint FILTERs

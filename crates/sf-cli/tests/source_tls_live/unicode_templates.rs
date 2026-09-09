@@ -193,6 +193,29 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
         ]
     } else {
         vec![
+            (
+                "TIMESTAMP(6) NULL",
+                "'2024-02-29 01:02:03.000001'",
+                "2024-02-29T01:02:03.000001",
+            ),
+            ("TIME(6)", "'-838:59:59'", "-838:59:59"),
+            ("TIME(6)", "'838:59:59'", "838:59:59"),
+            ("TIME(6)", "'-838:59:58.999999'", "-838:59:58.999999"),
+            ("TIME(1)", "'12:34:56.1'", "12:34:56.100000"),
+            ("TIME(1)", "'25:02:03.1'", "25:02:03.100000"),
+            (
+                "TIMESTAMP(6) NULL",
+                "'0000-00-00 00:00:00'",
+                "0000-00-00T00:00:00",
+            ),
+            ("TIME(6)", "'-00:00:00.000001'", "-00:00:00.000001"),
+            ("TIME(6)", "'-00:00:00.000000'", "00:00:00"),
+            ("BIT(1)", "b'0'", "00"),
+            ("BIT(1)", "b'1'", "01"),
+            ("BIT(9)", "b'1'", "0001"),
+            ("BIT(9)", "b'111111111'", "01FF"),
+            ("BIT(64)", "1", "0000000000000001"),
+            ("BIT(64)", "18446744073709551615", "FFFFFFFFFFFFFFFF"),
             ("VARBINARY(8)", "X'00FF61622F'", "00FF61622F"),
             ("VARBINARY(8)", "X''", ""),
             ("BLOB", "X'00'", "00"),
@@ -217,14 +240,27 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
             database,
             &format!("ALTER TABLE items ADD COLUMN src {kind}"),
         );
+        if kind.starts_with("TIMESTAMP") {
+            // New reader sessions inherit this owned fixture's non-UTC zone.
+            sql(database, "SET GLOBAL time_zone = '+05:30'");
+        }
+        let legacy_dates = if kind.starts_with("TIMESTAMP") {
+            // Fixture writer only: qualify existing zero timestamp values
+            // without relaxing the application reader's normal SQL mode.
+            "SET SESSION sql_mode = 'ALLOW_INVALID_DATES'; "
+        } else {
+            ""
+        };
         sql(
             database,
             &format!(
-                "INSERT INTO items(id,src,value) VALUES (1,{value},'match'),(2,NULL,'absent')"
+                "{legacy_dates}INSERT INTO items(id,src,value) VALUES (1,{value},'match'),(2,NULL,'absent')"
             ),
         );
         let (server, address) = start(fixture, database);
-        let iri = format!("http://example.test/n/{lexical}");
+        // The independent oracle's new temporal values escape colons only.
+        let suffix = lexical.replace(':', "%3A");
+        let iri = format!("http://example.test/n/{suffix}");
         let result = rows(
             address,
             fixture,
@@ -249,7 +285,7 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
             rows(address, fixture, &query).is_empty(),
             "NULL is not false: {query}"
         );
-        let mut wrongs = vec![format!("{lexical}x"), format!("{lexical}%20")];
+        let mut wrongs = vec![format!("{suffix}x"), format!("{suffix}%20")];
         let query = format!("SELECT ?s ?o WHERE {{ ?s <http://example.test/value> ?v OPTIONAL {{ ?s <{EDGE}> ?o FILTER(sameTerm(?o, <{iri}>)) }} }}");
         let optional = rows(address, fixture, &query);
         assert_eq!(optional.len(), 2, "{kind}: OPTIONAL preserves absent term");
@@ -263,11 +299,29 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
             .unwrap();
         assert_eq!(present["o"]["value"], iri);
         assert!(absent.get("o").is_none());
-        if lexical.to_lowercase() != lexical {
-            wrongs.push(lexical.to_lowercase());
+        if suffix.to_lowercase() != suffix {
+            wrongs.push(suffix.to_lowercase());
         }
         if kind == "BOOLEAN" {
             wrongs.extend([lexical.to_uppercase(), "1".into(), "t".into()]);
+        }
+        if kind.starts_with("BIT") {
+            let unpadded = lexical.trim_start_matches('0');
+            if unpadded != lexical {
+                wrongs.push(unpadded.into());
+            }
+        }
+        if kind.starts_with("TIME") {
+            wrongs.push(suffix.replace("%3A", ":"));
+            if lexical.contains('T') {
+                wrongs.push(suffix.replace('T', "%20"));
+            }
+            if let Some((whole, fraction)) = suffix.split_once('.') {
+                wrongs.push(format!("{whole}.{}", fraction.trim_end_matches('0')));
+            } else {
+                wrongs.push(format!("{suffix}.000000"));
+            }
+            wrongs.retain(|wrong| wrong != &suffix);
         }
         if kind.starts_with("DECIMAL") {
             wrongs.push(format!("{lexical}0"));
@@ -285,4 +339,7 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
         drop(server);
     }
     sql(database, "DELETE FROM items; ALTER TABLE items DROP COLUMN src; ALTER TABLE items ADD COLUMN src VARCHAR(64)");
+    if !postgres {
+        sql(database, "SET GLOBAL time_zone = '+00:00'");
+    }
 }

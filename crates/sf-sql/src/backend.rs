@@ -56,7 +56,10 @@ pub enum NativeScalarKey {
     PostgresBoolean,
     PostgresBytea,
     MysqlBinaryBytes,
+    MysqlBit,
     MysqlDecimal,
+    MysqlTimestamp,
+    MysqlTime,
 }
 
 /// Exact SQLite row decoder learned from a live prepare. `declared: None`
