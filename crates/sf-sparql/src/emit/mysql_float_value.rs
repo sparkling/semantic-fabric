@@ -84,6 +84,19 @@ fn operand(
         });
     }
     let datatype = datatype(value, actuals).ok_or_else(|| Error::Unsupported("MySQL floating comparison requires compatible decoder and retained datatype provenance".into()))?;
+    if let LiteralOperand::Column { column, spec } = value {
+        use sf_core::datatype::XsdTypeCode::Double;
+        if iri_cmp::scalar_column(column, actuals) == Some(NativeScalarKey::MysqlFloat8)
+            && literal_datatype::fact(column, actuals) == Some(Some(Double))
+            && spec.uses_natural_type(Some(Double))
+        {
+            // The wire f64's Rust shortest spelling parses back to this exact
+            // finite binary64 value. This does NOT prove authored Float parsing,
+            // native FLOAT widening, or the spelling used for RDF identity.
+            let raw = colref(column, Dialect::MySql, actuals);
+            return Ok(format!("JSON_ARRAY(CASE WHEN {raw} IS NULL THEN 3 ELSE 0 END,CAST(COALESCE({raw},0) AS DOUBLE))"));
+        }
+    }
     let raw = mysql_decimal_value::raw_operand(value, catalog, actuals, params, pidx)?;
     let kind = datatype
         .strip_prefix("http://www.w3.org/2001/XMLSchema#")

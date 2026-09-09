@@ -204,6 +204,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                         ColumnType::MYSQL_TYPE_NEWDECIMAL => {
                             Some(super::NativeScalarKey::MysqlDecimal)
                         }
+                        ColumnType::MYSQL_TYPE_DOUBLE => Some(super::NativeScalarKey::MysqlFloat8),
                         ColumnType::MYSQL_TYPE_BIT => Some(super::NativeScalarKey::MysqlBit),
                         ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => {
                             Some(super::NativeScalarKey::MysqlDate)

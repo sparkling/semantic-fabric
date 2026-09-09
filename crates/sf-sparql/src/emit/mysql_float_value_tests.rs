@@ -168,3 +168,178 @@ fn mysql_floating_nonnumeric_boolean_keeps_validation_and_policy() {
         }
     }
 }
+
+fn native_double() -> (LiteralComparison, ColumnCatalog, ActualColumns) {
+    let (cmp, _, _) = setup("double", None);
+    let source = LogicalSource::Table("items".into());
+    let mut catalog = ColumnCatalog::default();
+    catalog
+        .insert_live_result(
+            &source,
+            vec![sf_sql::backend::ResultColumn {
+                name: "v".into(),
+                natural_datatype: Some(XsdTypeCode::Double),
+                native_scalar: Some(NativeScalarKey::MysqlFloat8),
+                text_key: None,
+                sqlite_decode: None,
+            }],
+        )
+        .unwrap();
+    let actuals = HashMap::from([(0, source_actuals(&source, &catalog))]);
+    (cmp, catalog, actuals)
+}
+
+#[test]
+fn mysql_native_double_is_value_only_authority() {
+    let (cmp, catalog, actuals) = native_double();
+    for natural in [false, true] {
+        let mut cmp = cmp.clone();
+        if natural {
+            let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
+                unreachable!()
+            };
+            *spec = TermSpec::plain_literal();
+        }
+        assert!(!native_literal_key::renderable(&cmp.left, &actuals));
+        for reverse in [false, true] {
+            let mut cmp = cmp.clone();
+            if reverse {
+                std::mem::swap(&mut cmp.left, &mut cmp.right);
+            }
+            let mut params = vec![];
+            let sql = comparison(
+                &cmp,
+                Dialect::MySql,
+                &catalog,
+                &actuals,
+                &mut params,
+                &mut 0,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(params, ["1"]);
+            assert!(sql.contains("IS NULL THEN 3 ELSE 0"));
+            assert!(!sql.contains("AS CHAR"));
+            Dialect::MySql
+                .emit_via_ast(&format!("SELECT {sql} FROM items t0"))
+                .unwrap();
+        }
+    }
+    assert!(!native_literal_key::qualified_source(
+        XsdTypeCode::Double,
+        Some(NativeScalarKey::MysqlFloat8),
+        None
+    ));
+    assert_eq!(
+        natural_literal::source_code(NativeScalarKey::MysqlFloat8),
+        None
+    );
+    assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
+    for kind in ["float", "string", "decimal"] {
+        let mut cmp = cmp.clone();
+        let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
+            unreachable!()
+        };
+        *spec = TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(format!(
+            "http://www.w3.org/2001/XMLSchema#{kind}"
+        )));
+        assert!(!native_literal_key::renderable(&cmp.left, &actuals));
+        assert!(comparison(
+            &cmp,
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn mysql_native_double_requires_independent_retained_facts() {
+    let (cmp, catalog, actuals) = native_double();
+    for code in [None, Some(None), Some(Some(XsdTypeCode::Decimal))] {
+        let mut actuals = actuals.clone();
+        let facts = &mut actuals.get_mut(&0).unwrap().datatype_columns;
+        facts.remove("v");
+        if let Some(code) = code {
+            facts.insert("v".into(), code);
+        }
+        assert!(comparison(
+            &cmp,
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0
+        )
+        .is_err());
+    }
+    for key in [
+        None,
+        Some(NativeScalarKey::PostgresFloat8),
+        Some(NativeScalarKey::PostgresFloat4),
+    ] {
+        let mut actuals = actuals.clone();
+        let facts = &mut actuals.get_mut(&0).unwrap().scalar_columns;
+        facts.remove("v");
+        if let Some(key) = key {
+            facts.insert("v".into(), key);
+        }
+        assert!(comparison(
+            &cmp,
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn mysql_native_double_projection_retains_but_union_revokes_value_authority() {
+    let (_, catalog, _) = native_double();
+    let maps = sf_mapping::parse_r2rml(
+        r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+      <#m> rr:logicalTable [rr:tableName "items"]; rr:subject <http://ex/s>;
+      rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "v"]]."#,
+    )
+    .unwrap();
+    let mut plan = crate::parse_and_translate(
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+        &maps,
+        Dialect::MySql,
+    )
+    .unwrap();
+    let single = subplan_actuals(&plan, Dialect::MySql, &catalog);
+    assert_eq!(single.scalar_columns["c0"], NativeScalarKey::MysqlFloat8);
+    assert_eq!(single.datatype_columns["c0"], Some(XsdTypeCode::Double));
+    let branch = &plan.prepared_branches()[0];
+    let raw = ref_atom::actuals(branch, &branch.projection(), Dialect::MySql, &catalog);
+    assert_eq!(raw.scalar_columns["c0"], NativeScalarKey::MysqlFloat8);
+    plan.branches.push(plan.branches[0].clone());
+    let union = subplan_actuals(&plan, Dialect::MySql, &catalog);
+    // Even same-width DOUBLE(M,D) arms can impose UNION display rounding. No
+    // positional lexical/decoder normalization has been qualified here yet.
+    assert!(!union.scalar_columns.contains_key("c0"));
+    let cmp = LiteralComparison {
+        left: LiteralOperand::Column {
+            column: ColRef::new(0, "c0"),
+            spec: TermSpec::plain_literal(),
+        },
+        right: LiteralOperand::Constant(Literal::new_typed_literal("1", XsdTypeCode::Double.iri())),
+        value_op: Some(crate::iq::CmpOp::Eq),
+    };
+    assert!(comparison(
+        &cmp,
+        Dialect::MySql,
+        &catalog,
+        &HashMap::from([(0, union)]),
+        &mut vec![],
+        &mut 0
+    )
+    .is_err());
+}

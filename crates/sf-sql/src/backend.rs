@@ -48,8 +48,8 @@ pub enum TextKey {
     PostgresCharacter,
 }
 
-/// Live wire-decoder equivalence for static template identity, not SQL value
-/// equality or source-key authority. Unknown families must remain unproven.
+/// Live wire-decoder identity. Each consumer must separately qualify its value
+/// or lexical recipe; a descriptor alone is not source-key authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeScalarKey {
     Integer,
@@ -61,6 +61,8 @@ pub enum NativeScalarKey {
     MysqlBinaryBytes,
     MysqlBit,
     MysqlDecimal,
+    /// Value-only binary64 authority; Rust shortest lexical identity is unproven.
+    MysqlFloat8,
     /// Direct native field only; temporal materialization needs lexical preservation.
     MysqlDate,
     MysqlDateTime,
@@ -83,7 +85,7 @@ pub struct ResultColumn {
     /// Natural RDF datatype from this native prepare/type profile. This is
     /// datatype evidence only, never authority for a lexical comparison recipe.
     pub natural_datatype: Option<XsdTypeCode>,
-    /// Exact lexical recipe, authorized only by native result metadata.
+    /// Exact decoder descriptor, authorized only by native result metadata.
     pub native_scalar: Option<NativeScalarKey>,
     /// How to expose the decoder's exact text value to relational comparisons.
     /// Unknown and non-text families are never guessed or blanket-cast.

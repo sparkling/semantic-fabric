@@ -31,7 +31,8 @@ pub(super) fn renderable(value: &LiteralOperand, actuals: &ActualColumns) -> boo
                 return natural_literal::natural(value, actuals).is_some();
             }
             natural_literal::natural(value, actuals).is_some()
-                || iri_cmp::scalar_column(column, actuals).is_some()
+                || iri_cmp::scalar_column(column, actuals)
+                    .is_some_and(|key| key != NativeScalarKey::MysqlFloat8)
                 || path_comparison::column_text(column, actuals).is_some()
         }
     }

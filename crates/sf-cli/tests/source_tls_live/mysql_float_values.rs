@@ -1,5 +1,7 @@
 //! Public MySQL floating-promotion checks use Rust IEEE values as their oracle.
 use super::*;
+#[path = "mysql_native_floats.rs"]
+mod native_floats;
 
 #[test]
 #[ignore = "requires owned pinned MySQL TLS fixture"]
@@ -348,6 +350,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     }
     native::assert_source_validation(fixture, database);
     sql(database, "DROP TABLE sf_numeric_items");
+    native_floats::assert_all(fixture, database);
 }
 
 fn policy(fixture: &Fixture, database: &Database, values: &[String]) {

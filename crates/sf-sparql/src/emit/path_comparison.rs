@@ -278,6 +278,7 @@ pub(super) fn subplan_actuals(
                             || !matches!(
                                 key,
                                 NativeScalarKey::MysqlDecimal
+                                    | NativeScalarKey::MysqlFloat8
                                     | NativeScalarKey::MysqlBit
                                     | NativeScalarKey::MysqlTimestamp
                                     | NativeScalarKey::MysqlTime
