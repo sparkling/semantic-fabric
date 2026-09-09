@@ -99,6 +99,78 @@ fn parse(value: &str, datatype: &str) -> Result<Option<Number>> {
     }))
 }
 
+/// Promote a numeric RDF lexical to double without first narrowing unbounded
+/// integer/decimal values to this module's fixed-size exact representations.
+/// This is only authority for a comparison whose promoted type is double.
+/// Authored xsd:float values round to float *before* widening to double.
+pub fn promote_to_double(value: &str, datatype: &str) -> Option<f64> {
+    let kind = datatype.strip_prefix("http://www.w3.org/2001/XMLSchema#")?;
+    let value = value.trim_matches([' ', '\t', '\r', '\n']);
+    let integer = is_integer_datatype(datatype);
+    if (!integer && !matches!(kind, "decimal" | "float" | "double"))
+        || !valid_lexical(value, if integer { "integer" } else { kind })
+        || (integer && !integer_facets(value, kind))
+    {
+        return None;
+    }
+    match value {
+        "INF" => Some(f64::INFINITY),
+        "-INF" => Some(f64::NEG_INFINITY),
+        "NaN" => Some(f64::NAN),
+        _ if kind == "float" => value.parse::<f32>().ok().map(f64::from),
+        _ => value.parse().ok(),
+    }
+}
+
+/// Standard XSD integer derivations participate in numeric promotion. Authored
+/// columns still need their own lexical/decoder and facet-validation proof.
+pub fn is_integer_datatype(datatype: &str) -> bool {
+    matches!(
+        datatype.strip_prefix("http://www.w3.org/2001/XMLSchema#"),
+        Some(
+            "integer"
+                | "nonPositiveInteger"
+                | "negativeInteger"
+                | "long"
+                | "int"
+                | "short"
+                | "byte"
+                | "nonNegativeInteger"
+                | "unsignedLong"
+                | "unsignedInt"
+                | "unsignedShort"
+                | "unsignedByte"
+                | "positiveInteger"
+        )
+    )
+}
+
+fn integer_facets(value: &str, kind: &str) -> bool {
+    let digits = value.trim_start_matches(['+', '-']).trim_start_matches('0');
+    let negative = value.starts_with('-') && !digits.is_empty();
+    let bounded = |positive: &str, negative_bound: &str| {
+        let bound = if negative { negative_bound } else { positive };
+        !bound.is_empty()
+            && (digits.len() < bound.len() || (digits.len() == bound.len() && digits <= bound))
+    };
+    match kind {
+        "nonPositiveInteger" => negative || digits.is_empty(),
+        "negativeInteger" => negative,
+        "nonNegativeInteger" => !negative,
+        "positiveInteger" => !negative && !digits.is_empty(),
+        "long" => bounded("9223372036854775807", "9223372036854775808"),
+        "int" => bounded("2147483647", "2147483648"),
+        "short" => bounded("32767", "32768"),
+        "byte" => bounded("127", "128"),
+        "unsignedLong" => bounded("18446744073709551615", ""),
+        "unsignedInt" => bounded("4294967295", ""),
+        "unsignedShort" => bounded("65535", ""),
+        "unsignedByte" => bounded("255", ""),
+        "integer" => true,
+        _ => false,
+    }
+}
+
 fn valid_lexical(value: &str, kind: &str) -> bool {
     let floating = matches!(kind, "float" | "double");
     if floating && matches!(value, "INF" | "-INF" | "NaN") {
@@ -144,6 +216,78 @@ fn valid_lexical(value: &str, kind: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_promotion_validates_before_rounding_full_range_lexicals() {
+        let promote = |v: &str, kind: &str| {
+            promote_to_double(v, &format!("http://www.w3.org/2001/XMLSchema#{kind}"))
+        };
+        assert_eq!(promote("1.1", "double"), Some(1.1));
+        assert_eq!(promote("1.1", "float"), Some(f64::from(1.1_f32)));
+        assert_ne!(promote("1.1", "float"), promote("1.1", "double"));
+        assert_eq!(
+            promote("9007199254740993", "integer"),
+            Some(9007199254740992.0)
+        );
+        assert_eq!(promote(&"9".repeat(400), "integer"), Some(f64::INFINITY));
+        assert_eq!(
+            promote(&format!("0.{}1", "0".repeat(400)), "decimal"),
+            Some(0.0)
+        );
+        assert_eq!(
+            promote("  -1e-9999\t", "double").unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert_eq!(promote("5e-324", "double"), Some(f64::from_bits(1)));
+        assert_eq!(promote("INF", "float"), Some(f64::INFINITY));
+        assert!(promote("NaN", "double").unwrap().is_nan());
+        for value in [
+            "inf", "nan", "Infinity", "+INF", "1e", ".", "1_0", "\u{a0}1",
+        ] {
+            assert_eq!(promote(value, "double"), None, "{value}");
+        }
+        assert_eq!(promote("1e2", "integer"), None);
+        assert_eq!(promote("1e2", "decimal"), None);
+        assert_eq!(promote("1", "string"), None);
+        for (kind, lower, upper) in [
+            ("long", "-9223372036854775808", "9223372036854775807"),
+            ("int", "-2147483648", "2147483647"),
+            ("short", "-32768", "32767"),
+            ("byte", "-128", "127"),
+            ("unsignedLong", "0", "18446744073709551615"),
+            ("unsignedInt", "0", "4294967295"),
+            ("unsignedShort", "0", "65535"),
+            ("unsignedByte", "0", "255"),
+        ] {
+            assert_eq!(promote(lower, kind), lower.parse().ok());
+            assert_eq!(promote(upper, kind), upper.parse().ok());
+            assert_eq!(
+                promote(&(lower.parse::<i128>().unwrap() - 1).to_string(), kind),
+                None
+            );
+            assert_eq!(
+                promote(&(upper.parse::<i128>().unwrap() + 1).to_string(), kind),
+                None
+            );
+        }
+        assert_eq!(promote(" +0001 ", "int"), Some(1.0));
+        assert_eq!(promote("-000", "unsignedByte"), Some(-0.0));
+        for kind in ["negativeInteger", "positiveInteger"] {
+            assert_eq!(promote("-0", kind), None);
+        }
+        assert_eq!(promote("-1", "positiveInteger"), None);
+        assert_eq!(promote("1", "nonPositiveInteger"), None);
+        assert_eq!(promote("1", "negativeInteger"), None);
+        assert_eq!(promote("-1", "nonNegativeInteger"), None);
+        assert_eq!(
+            promote(&"9".repeat(400), "positiveInteger"),
+            Some(f64::INFINITY)
+        );
+        assert_eq!(
+            promote(&format!("-{}", "9".repeat(400)), "negativeInteger"),
+            Some(f64::NEG_INFINITY)
+        );
+    }
     fn check(a: &str, at: &str, b: &str, bt: &str, op: NumericOp) -> Option<bool> {
         compare(
             a,

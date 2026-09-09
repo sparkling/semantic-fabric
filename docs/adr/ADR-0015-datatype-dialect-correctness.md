@@ -85,8 +85,29 @@ duplicates and NULL, with deliberately degraded PostgreSQL text precision.
 Same-width SQL pools and independently executed unlike-width UNIONs retain their
 descriptors; consumed mixed-width SQL pools reject before coercion can alter RDF
 output. Hidden in-arm float guards do not reject safe integer-subject pools.
-General floating value arithmetic, coercing-pool preservation, other native
-families and exact-release qualification remain open; no backend is removed.
+The separate double value-comparison refinement below does not grant identity
+or pooled-output authority. Coercing-pool preservation, other native families
+and exact-release qualification remain open; no backend is removed.
+
+### PostgreSQL double value-comparison refinement (2026-09-09)
+
+All six operators now compare qualified native operands after RDF double
+promotion. Natural FLOAT4 first uses the decoder's shortest decimal, whereas an
+authored xsd:float constant rounds to f32 before widening. FLOAT8 remains native;
+integer and finite full-range NUMERIC promote without fixed-size decimal limits.
+Exact nearest-even overflow/underflow boundaries yield signed infinity/zero;
+NaN is unordered, while malformed lexicals/facets remain errors under negation.
+Standard integer-derived constants receive exact lexical and facet validation.
+Both operand obligations are materialized before NULL/NaN dispatch. Even a string
+override over NUMERIC retains finite wire validation; policy CASE dominates all
+six operators inside EXISTS/OPTIONAL. Missing/incompatible numeric decoder proofs
+and unqualified authored numeric-column overrides reject, not raw-compare.
+Required owned TLS CLI tests cover both-width cross comparisons, signed-zero bags,
+extrema/subnormals, full-range NUMERIC rounding boundaries, subtype constants,
+invalid source/override failure and cap-one recovery, and denied-row isolation.
+Rust output and identity keys are unchanged. Float-only promotion, broader typed
+column parsing/arithmetic, other backends and exact-release qualification remain
+required follow-up, not removed capabilities or a complete numeric gate.
 
 ### PostgreSQL NUMERIC decoder correction (2026-09-09)
 

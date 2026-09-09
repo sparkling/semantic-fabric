@@ -56,6 +56,7 @@ mod natural_decimal;
 mod natural_literal;
 mod path_comparison;
 mod pg_float;
+mod pg_float_value;
 mod pg_numeric;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};

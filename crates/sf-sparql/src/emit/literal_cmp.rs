@@ -13,6 +13,9 @@ pub(super) fn render(
     if let Some(sql) = literal_datatype::mismatch(cmp, dialect, actuals)? {
         return Ok(sql);
     }
+    if let Some(sql) = pg_float_value::comparison(cmp, dialect, actuals, params, pidx)? {
+        return Ok(sql);
+    }
     if let (LiteralOperand::Constant(left), LiteralOperand::Constant(right)) =
         (&cmp.left, &cmp.right)
     {

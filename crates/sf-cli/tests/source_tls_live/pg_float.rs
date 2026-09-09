@@ -1,5 +1,7 @@
 //! Floating identity follows Rust's native decoder, not SQL numeric equality.
 use super::*;
+#[path = "pg_float_values.rs"]
+mod values;
 
 const NATURAL: &str = "http://example.test/natural";
 const EXPLICIT: &str = "http://example.test/explicit";
@@ -156,10 +158,12 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
                 "{column}: {query}"
             );
         }
+        values::assert_constants(address, fixture, NATURAL, &expected);
         database.assert_encrypted_sessions();
         drop(server);
     }
     assert_cross_width(fixture, database);
+    values::assert_numeric(fixture, database);
     sql(database, "ALTER ROLE sf_tls RESET extra_float_digits");
     sql(database, "DELETE FROM items; ALTER TABLE items DROP COLUMN float_narrow; ALTER TABLE items DROP COLUMN float_wide");
 }
@@ -187,6 +191,23 @@ fn assert_cross_width(fixture: &Fixture, database: &Database) {
             BTreeSet::from(["1.1E0", "0.0E0", "-0.0E0"])
         );
     }
+    let query =
+        format!("SELECT ?o ?v WHERE {{ ?s <{NATURAL}> ?o . ?t <{EXPLICIT}> ?v FILTER(?o = ?v) }}");
+    let values = complete_rows(address, fixture, &query);
+    assert_eq!(
+        values.len(),
+        5,
+        "equal signed zero values retain both lexical bags"
+    );
+    let one = values
+        .iter()
+        .find(|row| row["o"]["value"] == "1.1E0")
+        .unwrap();
+    assert_eq!(
+        one["v"]["value"], "1.1E0",
+        "FLOAT4 must compare its RDF value, not binary widening: {query}: {values:?}"
+    );
+    values::assert_cross_width(address, fixture);
     // Same-width pooled pass-through keeps its decoder; separate public UNION
     // arms can also return unlike widths without a native SQL promotion.
     let same = format!("{{ ?s <{NATURAL}> ?o }} UNION {{ ?s <{NATURAL}> ?o }}");
