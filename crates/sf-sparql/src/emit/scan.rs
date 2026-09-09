@@ -2,6 +2,8 @@
 use super::*;
 use crate::iq::scan::LexicalMode;
 use crate::iq::{CmpOp, Scan, ScanSource};
+#[path = "scan_template.rs"]
+mod template;
 
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
     match &scan.source {
@@ -20,13 +22,7 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
             let sqlite_columns: HashMap<_, _> = columns
                 .iter()
                 .filter_map(|(name, term)| {
-                    let TermMap::Column(raw, _) = term else {
-                        return None;
-                    };
-                    inner
-                        .sqlite_columns
-                        .get(resolve_col(raw, Some(&inner.columns)))
-                        .copied()
+                    template::output_decode(term, dialect, &inner)
                         .map(|decode| (name.to_string(), decode))
                 })
                 .collect();
@@ -116,27 +112,25 @@ fn projection_sql(
         colref(&ColRef::new(input.alias, name), dialect, &actuals)
     };
     let mut items = Vec::with_capacity(columns.len());
+    let mut expressions = Vec::with_capacity(columns.len());
     for (name, term) in columns {
         let expression = match term {
             TermMap::Column(name, _) => column(name),
-            TermMap::Template(template, spec) => render_template_inline(
-                template.segments(),
-                spec.term_type == sf_core::ir::TermType::Iri,
+            TermMap::Template(recipe, spec) => template::render(
+                recipe,
+                spec,
+                input.alias,
+                distinct,
                 dialect,
-                |name| {
-                    path_comparison::rdf_column(
-                        &ColRef::new(input.alias, name),
-                        dialect,
-                        catalog,
-                        &actuals,
-                    )
-                },
+                catalog,
+                &actuals,
             )?,
             TermMap::Constant(_) => {
                 return Err(Error::Unsupported("constant projection recipe".into()))
             }
         };
         items.push(format!("{expression} AS {}", dialect.quote_ident(name)));
+        expressions.push(expression);
     }
     if items.is_empty() {
         items.push("1 AS __sf_dummy".into());
@@ -167,7 +161,7 @@ fn projection_sql(
     let window = distinct
         && native_keys.is_empty()
         && !columns.is_empty()
-        && (columns.iter().all(|(_, term)| {
+        && ((dialect == Dialect::Sqlite && columns.iter().all(|(_, term)| template::supports_distinct(term))) || columns.iter().all(|(_, term)| {
             matches!(term, TermMap::Column(raw, _) if iri_column(raw) || lexical(raw).is_some() || path_comparison::column_text(
                 &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
         }) || (!guards.iter().any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
@@ -197,9 +191,10 @@ fn projection_sql(
     }
     if window {
         let mut keys = Vec::new();
-        for (name, term) in columns {
+        for ((name, term), expression) in columns.iter().zip(&expressions) {
             let TermMap::Column(raw, _) = term else {
-                return Err(Error::Unsupported("distinct computed scan recipe".into()));
+                keys.push(template::distinct_key(term, expression, dialect)?);
+                continue;
             };
             let native = native_keys.iter().find(|(key, _)| key == name);
             if iri_column(raw) {

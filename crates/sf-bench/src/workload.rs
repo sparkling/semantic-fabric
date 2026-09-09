@@ -14,6 +14,9 @@
 //! drives the engine with a **self-contained, cross-reference-consistent subset**
 //! (six tables, every `rr:parentTriplesMap` resolvable) so every query is valid
 //! at any scale. Full provenance: `crates/sf-bench/README.md`.
+//! The derived StopTime key uses `/` separators: `-` can occur in encoded GTFS
+//! identifiers and cannot prove injectivity (ADR-0034). Vendored originals are
+//! unchanged; compare performance only with matching mapping digests (ADR-0005).
 //!
 //! ## Scale (ADR-0006)
 //!
@@ -111,7 +114,7 @@ pub const MAPPING_TTL: &str = r#"
 <#stoptimes_0> a rr:TriplesMap ;
     rr:logicalTable [ rr:tableName "STOP_TIMES" ] ;
     rr:subjectMap [
-        rr:template "http://transport.linkeddata.es/madrid/metro/stoptimes/{trip_id}-{stop_id}-{arrival_time}" ;
+        rr:template "http://transport.linkeddata.es/madrid/metro/stoptimes/{trip_id}/{stop_id}/{arrival_time}" ;
         rr:class gtfs:StopTime
     ] ;
     rr:predicateObjectMap [ rr:predicate gtfs:arrivalTime ; rr:objectMap [ rr:column "arrival_time" ] ] ;

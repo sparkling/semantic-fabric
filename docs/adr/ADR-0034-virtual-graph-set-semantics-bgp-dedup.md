@@ -26,11 +26,12 @@ nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
 Raw columns retain native descriptors. Live-proven text template operands now
 normalize to decoder text; transparent non-text operands retain their descriptors
 on PostgreSQL/SQLite. Template encoding and parameter isolation remain.
-Only guard-free same-named raw-column DISTINCT over one table may receive portable
-policy predicates or be restored by the existing bounded-join proof. Authorization
+Only guard-free same-named raw-column DISTINCT over one table may be restored by
+the existing bounded-join proof. Its portable row authorization
 adds same-input native-equality guards before dedup, without widening RDF outputs
-or keys; nonempty guards revoke restore authority. Computed/nested wrappers gain
-no such authority. Shared RDF-term dedup follows relation aliases, not
+or keys; nonempty guards revoke restore authority. The separately proved rendered
+IRI atom below admits policy insertion but never table restoration. Other
+computed/nested wrappers gain no such authority. Shared RDF-term dedup follows relation aliases, not
 authored-source authority, and remains source-sized/fail-closed on serving paths.
 
 Required owned TLS public SELECT now resolves mapping SRC/DST against native
@@ -145,6 +146,26 @@ column generator follows R2RML §11.2 verbatim prefixing, not RFC3986 normalizat
 relative `../x` and absolute `base/../x` dedup together, but not with `base-parent/x`.
 Required authenticated CLI/HTTP and parser tests cover this correction. No
 release/admission flag is promoted by this slice.
+
+**Template separator correction (2026-09-09):** nonempty separators are not an
+injectivity proof. ASCII unreserved text, Unicode and percent triplets can occur
+inside encoded substitutions; `{a}-{b}` has real collisions. The proof now requires
+a delimiter absent from encoded values. Unit collision witnesses cover `-` and `%`;
+fixtures intended to test injective grouping/transitive pooling now use proven
+delimiters while retaining their original grouping, width and collision assertions.
+For a single SQLite atom containing only static IRI-template bindings/constants
+and NULL guards, D1 renders every bound RDF key inside the existing typed Projection
+before joins or final projection. Live decoders precede percent encoding; exact
+rendered keys dedup in SQL, including final IRI validation under COUNT. Synthetic
+outputs have generated string/no-padding authority, never source constraints.
+A separate original-table proof places portable policy predicates before ranking;
+policy-only columns are not RDF keys. Required authenticated tests cover collisions,
+SELECT/DISTINCT/COUNT, hidden graph/object bags, rendered-to-rendered BGP/FILTER,
+CHAR padding, signed zero, NULL/empty values and policy-before-dedup. No source-sized
+Rust set or release-admission promotion is introduced. Native rendered atoms,
+mixed rendered-column/static-template joins, multi-arm noninjective pooling,
+general same-shape template unification and late processor-base generation remain
+open; this is not universal template identity.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

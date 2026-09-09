@@ -256,21 +256,15 @@ impl Template {
         &self.segments
     }
 
-    /// Returns `true` when the template is syntactically injective: no two
-    /// distinct tuples of column values can produce the same expanded string.
+    /// Prove that distinct column tuples produce distinct encoded expansions.
     ///
-    /// A template is injective when every pair of adjacent [`Segment::Column`]
-    /// slots is separated by at least one non-empty [`Segment::Literal`].
-    /// Adjacent column slots with no separator (or only empty literals between
-    /// them) are **not** injective: `("a","bc")` and `("ab","c")` both expand
-    /// to `"abc"`.
-    ///
-    /// **Soundness note for IRI templates**: R2RML percent-encoding ensures a
-    /// literal separator character cannot appear verbatim in a column value, so
-    /// a non-empty separator between columns is sufficient to guarantee
-    /// injectivity.  For literal/blank-node templates (no encoding) the caller
-    /// must additionally require at most one column slot (see
-    /// `cascade::distinct_removal`).
+    /// Every adjacent column pair needs a fixed character absent from encoded
+    /// values. ASCII unreserved characters, Unicode and `%` can all occur in
+    /// those values, so separators such as `-`, `é` and `%2F` prove nothing.
+    /// A reserved ASCII delimiter such as `/` does prove separation. This is a
+    /// conservative proof: false means no proof, not necessarily a collision.
+    /// For literal/blank-node templates (no encoding), callers must additionally
+    /// require at most one column slot (`cascade::distinct_removal`).
     pub fn is_injective(&self) -> bool {
         let mut prev_col = false;
         for seg in &self.segments {
@@ -281,10 +275,16 @@ impl Template {
                     }
                     prev_col = true;
                 }
-                Segment::Literal(text) if !text.is_empty() => {
-                    prev_col = false; // non-empty separator resets adjacency
+                Segment::Literal(text)
+                    if text.bytes().any(|byte| {
+                        byte.is_ascii()
+                            && !byte.is_ascii_alphanumeric()
+                            && !matches!(byte, b'-' | b'.' | b'_' | b'~' | b'%')
+                    }) =>
+                {
+                    prev_col = false; // delimiter cannot appear in encoded values
                 }
-                Segment::Literal(_) => {} // empty literal — adjacency unchanged
+                Segment::Literal(_) => {} // no proven delimiter
             }
         }
         true
@@ -355,6 +355,8 @@ fn percent_encode_iri(value: &str, out: &mut String) {
     }
 }
 
+#[cfg(test)]
+mod injectivity_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,7 +493,7 @@ mod tests {
 
     #[test]
     fn is_injective_true_for_three_columns_each_separated() {
-        let t = Template::parse("{a}-{b}-{c}").unwrap();
+        let t = Template::parse("{a}/{b}/{c}").unwrap();
         assert!(t.is_injective());
     }
 }

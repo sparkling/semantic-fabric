@@ -3849,7 +3849,7 @@ mod tests {
             subst.insert(
                 "s".into(),
                 BindDef::Resolved(TermDef::Derived {
-                    term_map: template_iri("http://ex/{cc}-{num}"),
+                    term_map: template_iri("http://ex/{cc}/{num}"),
                     alias,
                 }),
             );

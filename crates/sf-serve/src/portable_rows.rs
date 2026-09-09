@@ -145,6 +145,15 @@ impl PortableRowPolicy {
             authorize_branch(self, source, dialect, input)?;
             return Ok(Vec::new());
         }
+        if dialect == Dialect::Sqlite && scan.source.is_rendered_iri_atom() {
+            let ScanSource::Projection { input, guards, .. } = &mut scan.source else {
+                unreachable!("rendered atom proof requires a projection")
+            };
+            // Authorize original rows before choosing any RDF representative.
+            // Policy witnesses never become rendered RDF dedup keys.
+            guards.extend(self.conditions(source, dialect, input)?);
+            return Ok(Vec::new());
+        }
         let table = if let Some(table) = scan.source.distinct_table() {
             table.to_owned()
         } else {

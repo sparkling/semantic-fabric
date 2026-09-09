@@ -1593,7 +1593,7 @@ const TEMPLATE_KEY_R2RML: &str = r#"
     rr:subjectMap [ rr:template "http://ex/m4/{id}" ] ;
     rr:predicateObjectMap [
         rr:predicate ex:grp ;
-        rr:objectMap [ rr:template "http://ex/g/{cc}-{num}" ]
+        rr:objectMap [ rr:template "http://ex/g/{cc}/{num}" ]
     ] ;
     rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "p1" ] ] ;
     rr:predicateObjectMap [ rr:predicate ex:p2  ; rr:objectMap [ rr:column "p2" ] ] .
@@ -1601,15 +1601,15 @@ const TEMPLATE_KEY_R2RML: &str = r#"
 
 const TEMPLATE_KEY_TTL: &str = r#"
 @prefix ex: <http://ex/> .
-<http://ex/m4/1> ex:grp <http://ex/g/g1-x> ; ex:p1 "a" ; ex:p2 "b" .
-<http://ex/m4/2> ex:grp <http://ex/g/g1-x> ; ex:p1 "c" ; ex:p2 "f" .
-<http://ex/m4/3> ex:grp <http://ex/g/g2-y> ; ex:p1 "d" ; ex:p2 "e" .
+<http://ex/m4/1> ex:grp <http://ex/g/g1/x> ; ex:p1 "a" ; ex:p2 "b" .
+<http://ex/m4/2> ex:grp <http://ex/g/g1/x> ; ex:p1 "c" ; ex:p2 "f" .
+<http://ex/m4/3> ex:grp <http://ex/g/g2/y> ; ex:p1 "d" ; ex:p2 "e" .
 "#;
 
 /// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2, LIVE SQL
 /// proof): `GROUP BY ?g` where `?g` is a 2-column injective Template must ACTUALLY
-/// push down to a multi-column SQL `GROUP BY` and execute correctly — g1-x (rows
-/// 1,2): `{a,b,c,f}` ⇒ COUNT 4; g2-y (row 3): `{d,e}` ⇒ COUNT 2. Gated vs the
+/// push down to a multi-column SQL `GROUP BY` and execute correctly — g1/x (rows
+/// 1,2): `{a,b,c,f}` ⇒ COUNT 4; g2/y (row 3): `{d,e}` ⇒ COUNT 2. Gated vs the
 /// independent spareval oracle (not just row-count).
 #[test]
 fn agg_over_union_template_group_key_pushes_down_and_executes_correctly() {

@@ -90,6 +90,27 @@ impl ScanSource {
         }
     }
 
+    /// Rendered IRI atom proof permits authorization on its original table only.
+    /// It deliberately confers no raw-column/table-restore authority.
+    pub fn is_rendered_iri_atom(&self) -> bool {
+        let Self::Projection {
+            input,
+            columns,
+            guards,
+            distinct: true,
+            native_keys,
+            lexical_keys,
+        } = self
+        else {
+            return false;
+        };
+        matches!(input.source, Self::Logical(LogicalSource::Table(_)))
+            && !columns.is_empty() && native_keys.is_empty() && lexical_keys.is_empty()
+            && columns.iter().all(|(_, term)| matches!(term, TermMap::Template(_, spec)
+                if spec.term_type == sf_core::ir::TermType::Iri && spec.base.is_none()))
+            && guards.iter().all(|guard| matches!(guard, SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == input.alias))
+    }
+
     /// The sealed same-named raw-column D1 shape, not arbitrary projections.
     /// This proof permits policy-guard insertion / guard-free bounded-join restore;
     /// it does not confer general optimizer or source metadata authority.
@@ -166,4 +187,56 @@ impl Branch {
 pub struct Scan {
     pub alias: usize,
     pub source: ScanSource,
+}
+
+#[cfg(test)]
+mod rendered_atom_tests {
+    use super::*;
+    use sf_core::ir::{Template, TermSpec};
+
+    #[test]
+    fn rendered_atom_proof_never_confers_raw_table_restore_authority() {
+        let source = ScanSource::Projection {
+            input: Box::new(Scan {
+                alias: 0,
+                source: LogicalSource::Table("items".into()).into(),
+            }),
+            columns: vec![(
+                "rv0".into(),
+                TermMap::Template(
+                    Template::parse("http://ex/{a}-{b}").unwrap(),
+                    TermSpec::iri(),
+                ),
+            )],
+            guards: vec![SqlCond::IsNotNull(ColRef::new(0, "a"))],
+            distinct: true,
+            native_keys: vec![],
+            lexical_keys: vec![],
+        };
+        assert!(source.is_rendered_iri_atom());
+        assert!(source.distinct_table().is_none());
+        for mutation in 0..5 {
+            let mut changed = source.clone();
+            let ScanSource::Projection {
+                input,
+                columns,
+                guards,
+                distinct,
+                native_keys,
+                ..
+            } = &mut changed
+            else {
+                unreachable!()
+            };
+            match mutation {
+                0 => guards.push(SqlCond::IsNotNull(ColRef::new(1, "a"))),
+                1 => *distinct = false,
+                2 => native_keys.push(("rv0".into(), false)),
+                3 => input.source = LogicalSource::Query("SELECT a,b FROM items".into()).into(),
+                _ => columns[0].1 = TermMap::Column("a".into(), TermSpec::iri()),
+            }
+            assert!(!changed.is_rendered_iri_atom(), "mutation {mutation}");
+            assert!(changed.distinct_table().is_none(), "mutation {mutation}");
+        }
+    }
 }

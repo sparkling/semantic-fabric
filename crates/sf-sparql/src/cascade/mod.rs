@@ -72,6 +72,7 @@ pub(crate) mod distinct_scan;
 mod fd;
 mod joinelim;
 mod optional_prune;
+mod rendered_distinct;
 use optional_prune::distinct_prune_unused_opts;
 #[cfg(test)]
 mod pool_source_authority_tests;
@@ -1403,6 +1404,9 @@ fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect
         .filter(|scan| !scan_key_covered(scan, schema, &b.bindings))
         .map(|scan| scan.alias)
         .collect();
+    if !uncovered.is_empty() && rendered_distinct::wrap(b, dialect) {
+        return;
+    }
     let mut need_flag = false;
     for alias in uncovered {
         let cols = alias_used_columns(b, alias);

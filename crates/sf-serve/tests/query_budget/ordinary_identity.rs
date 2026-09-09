@@ -4,6 +4,8 @@ use super::*;
 mod mixed_identity;
 #[path = "policy_identity.rs"]
 mod policy_identity;
+#[path = "template_identity.rs"]
+mod template_identity;
 
 const MAP: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .

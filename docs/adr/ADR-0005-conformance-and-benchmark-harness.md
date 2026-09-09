@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-06
+updated: 2026-09-09
 tags: [conformance, benchmarks, w3c, rdb2rdf, earl, gtfs-madrid, obda-oracle, ontop, m-join-t, shacl, fitness-function]
 supersedes: []
 depends-on:
@@ -53,6 +53,16 @@ Vendor the suite into `tests/w3c/rdb2rdf/` (~49–63 named cases across D000–D
 
 ### Performance benchmark — GTFS-Madrid-Bench (OBDA track)
 The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting track** (scale factors 1×–1000×): match or beat **Ontop** query latency, and — the differentiator — hold **constant engine memory and bounded first-result latency under growing source data** (the streaming invariant, ADR-0006 / ADR-0010). Materialisation benchmarks (KROWN) do not apply. Driven by `criterion`; results feed the Path-B objective.
+
+**2026-09-09 derived-fixture correction:** the self-contained Rust GTFS workload
+uses `/` rather than `-` between StopTime key placeholders. Unreserved `-` can
+occur in encoded identifiers and is not an injectivity proof (ADR-0034); the old
+fixture accidentally depended on that optimizer defect. Source rows, workload
+queries, expected cardinality and memory assertions are unchanged. This is an
+explicit deviation in the derived development fixture, not an edit to vendored
+GTFS/W3C inputs or a claim of universal template support. Performance receipts
+already bind the mapping bytes: old/new mapping measurements are not directly
+comparable and this correction does not refresh or qualify historical scores.
 
 ### Differential oracle — native in-memory (Oxigraph) + Ontop
 Ground truth for an OBDA answer: load the case's **expected RDF graph into an in-memory store and evaluate the same SPARQL** (`spareval`, ADR-0004), diffed against the virtualiser's live-SQL answer. This tests rewriter correctness directly, keeps CI **zero-JVM**, and — since the in-memory evaluator handles property paths — validates `P+`/`P*`. **Ontop** is retained as an *optional, offline* cross-check on a shared R2RML set (and the tier-2 OWL-QL oracle, ADR-0008), never a CI dependency.

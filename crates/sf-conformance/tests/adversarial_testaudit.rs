@@ -738,7 +738,7 @@ fn pool_rendered_width_mismatch_answers_correctly_with_percent_encoding() {
 // row the SAME triple, and B's second row and C's row the SAME triple, so a
 // partition that drops either bridging edge double-counts one collision. No
 // existing cell has 3+ arms; every `disjoint_groups`/`pool_group` cell
-// elsewhere is 2 arms. C's subject template also has an extra column slot
+// elsewhere is 2 arms. B's subject template also has an extra column slot
 // (forcing `pool_rendered`'s width-mismatch fallback for the whole group),
 // so this is deliberately a DIFFERENT trigger shape from Cell G above (both
 // paths must handle 3-arm transitivity correctly).
@@ -747,11 +747,11 @@ fn pool_rendered_width_mismatch_answers_correctly_with_percent_encoding() {
 const D2_TRANS_SQL: &str = r#"
 CREATE TABLE d2ta (id INTEGER PRIMARY KEY, k TEXT NOT NULL, v TEXT NOT NULL);
 INSERT INTO d2ta VALUES (1, '1', 'X');
-CREATE TABLE d2tb (id INTEGER PRIMARY KEY, k TEXT NOT NULL, v TEXT NOT NULL);
-INSERT INTO d2tb VALUES (1, 'a1', 'X');
-INSERT INTO d2tb VALUES (2, 'b1-Z', 'Y');
-CREATE TABLE d2tc (id INTEGER PRIMARY KEY, k1 TEXT NOT NULL, k2 TEXT NOT NULL, v TEXT NOT NULL);
-INSERT INTO d2tc VALUES (1, '1', 'Z', 'Y');
+CREATE TABLE d2tb (id INTEGER PRIMARY KEY, k1 TEXT NOT NULL, k2 TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO d2tb VALUES (1, 'a', '1', 'X');
+INSERT INTO d2tb VALUES (2, 'b', 'Z', 'Y');
+CREATE TABLE d2tc (id INTEGER PRIMARY KEY, k TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO d2tc VALUES (1, 'Z', 'Y');
 "#;
 
 const D2_TRANS_R2RML: &str = r#"
@@ -759,25 +759,25 @@ const D2_TRANS_R2RML: &str = r#"
 @prefix ex: <http://example.com/> .
 <#A>
     rr:logicalTable [ rr:tableName "d2ta" ] ;
-    rr:subjectMap [ rr:template "http://example.com/aa{k}" ] ;
+    rr:subjectMap [ rr:template "http://example.com/aa/{k}" ] ;
     rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
 <#B>
     rr:logicalTable [ rr:tableName "d2tb" ] ;
-    rr:subjectMap [ rr:template "http://example.com/a{k}" ] ;
+    rr:subjectMap [ rr:template "http://example.com/a{k1}/{k2}" ] ;
     rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
 <#C>
     rr:logicalTable [ rr:tableName "d2tc" ] ;
-    rr:subjectMap [ rr:template "http://example.com/ab{k1}-{k2}" ] ;
+    rr:subjectMap [ rr:template "http://example.com/ab/{k}" ] ;
     rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
 "#;
 
-/// LOCK: A's subject template (`aa{k}`) and C's (`ab{k1}-{k2}`) have
+/// LOCK: A's subject template (`aa/{k}`) and C's (`ab/{k}`) have
 /// CONFLICTING leading literal prefixes (`aa` vs `ab`) — provably disjoint on
-/// their own. B's (`a{k}`) is a PREFIX of both, so A-B and B-C are each NOT
+/// their own. B's (`a{k1}/{k2}`) starts with a PREFIX of both, so A-B and B-C are each NOT
 /// provably disjoint — a chain, A~B~C, not a clique. Row data: A's one row
 /// and B's first row render the IDENTICAL triple
-/// (`http://example.com/aa1`, ex:p, "X"); B's second row and C's one row
-/// render the IDENTICAL triple (`http://example.com/ab1-Z`, ex:p, "Y"). The
+/// (`http://example.com/aa/1`, ex:p, "X"); B's second row and C's one row
+/// render the IDENTICAL triple (`http://example.com/ab/Z`, ex:p, "Y"). The
 /// union-find must pool all three as ONE group (transitivity through B),
 /// deduping BOTH collisions; a partition that drops either bridging edge
 /// leaves one collision un-deduped (3 rows instead of 2).
