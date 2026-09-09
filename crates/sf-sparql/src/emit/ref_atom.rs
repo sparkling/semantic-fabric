@@ -14,7 +14,14 @@ pub(super) fn actuals(
             .iter()
             .enumerate()
             .filter_map(|(i, column)| {
-                iri_cmp::scalar_column(column, &sources).map(|key| (format!("c{i}"), key))
+                iri_cmp::scalar_column(column, &sources)
+                    .filter(|key| {
+                        !matches!(
+                            key,
+                            NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
+                        )
+                    })
+                    .map(|key| (format!("c{i}"), key))
             })
             .collect(),
         sqlite_columns: columns

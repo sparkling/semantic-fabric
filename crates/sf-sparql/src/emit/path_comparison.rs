@@ -207,6 +207,12 @@ pub(super) fn subplan_actuals(
                 column
                     .as_ref()
                     .and_then(|column| iri_cmp::scalar_column(column, &actuals))
+                    .filter(|key| {
+                        !matches!(
+                            key,
+                            NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
+                        )
+                    })
                     // UNION can change decimal display, BIT width/type or
                     // temporal representation. No pre-coercion proof carries over.
                     .filter(|key| {

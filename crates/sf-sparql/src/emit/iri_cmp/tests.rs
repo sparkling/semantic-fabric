@@ -307,6 +307,8 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
     for key in [
         NativeScalarKey::Integer,
         NativeScalarKey::MysqlDecimal,
+        NativeScalarKey::MysqlDate,
+        NativeScalarKey::MysqlDateTime,
         NativeScalarKey::MysqlBit,
         NativeScalarKey::MysqlTimestamp,
         NativeScalarKey::MysqlTime,
@@ -342,7 +344,14 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
             },
         );
         plan.branches = vec![branch.clone()];
-        let expected = HashMap::from([("c0".into(), key)]);
+        let expected = if matches!(
+            key,
+            NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
+        ) {
+            HashMap::new()
+        } else {
+            HashMap::from([("c0".into(), key)])
+        };
         assert_eq!(
             subplan_actuals(&plan, Dialect::MySql, &catalog).scalar_columns,
             expected
@@ -352,6 +361,8 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
         if matches!(
             key,
             NativeScalarKey::MysqlDecimal
+                | NativeScalarKey::MysqlDate
+                | NativeScalarKey::MysqlDateTime
                 | NativeScalarKey::MysqlBit
                 | NativeScalarKey::MysqlTimestamp
                 | NativeScalarKey::MysqlTime

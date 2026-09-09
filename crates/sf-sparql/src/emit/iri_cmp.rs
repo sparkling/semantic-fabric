@@ -103,7 +103,7 @@ pub(super) fn template(
     )
 }
 
-fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
+pub(super) fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
     Ok(match (dialect, key) {
         (Dialect::Postgres, NativeScalarKey::Integer) => format!("CAST({raw} AS TEXT)"),
         // YEAR zero and ZEROFILL displays differ from integer wire decoding.
@@ -121,18 +121,26 @@ fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<S
         // BIT's numeric HEX loses leading zero bytes. Its binary string is
         // exactly the width-preserving byte vector received by the wire decoder.
         (Dialect::MySql, NativeScalarKey::MysqlBit) => format!("HEX(CAST({raw} AS BINARY))"),
-        (Dialect::MySql, NativeScalarKey::MysqlDecimal) => {
+        (Dialect::MySql, NativeScalarKey::MysqlDecimal | NativeScalarKey::MysqlDate) => {
             // Keep the wire formatter's scale/ZEROFILL. Use CONVERT for the
             // charset: sqlparser does not admit CAST's CHARACTER SET suffix.
             format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)")
         }
-        (Dialect::MySql, NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlTime) => {
+        (
+            Dialect::MySql,
+            NativeScalarKey::MysqlTimestamp
+            | NativeScalarKey::MysqlDateTime
+            | NativeScalarKey::MysqlTime,
+        ) => {
             let text = format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)");
             let whole = format!("SUBSTRING_INDEX({text}, '.', 1)");
             let fraction = format!("SUBSTRING_INDEX({text}, '.', -1)");
             let no_fraction =
                 format!("(LOCATE('.', {text}) = 0 OR REPLACE({fraction}, '0', '') = '')");
-            let whole = if key == NativeScalarKey::MysqlTimestamp {
+            let whole = if matches!(
+                key,
+                NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlDateTime
+            ) {
                 format!("REPLACE({whole}, ' ', 'T')")
             } else {
                 whole
@@ -159,7 +167,9 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
     // These live wire recipes emit restricted ASCII, not arbitrary text. Avoid
     // the generic per-byte SQL encoder only with this exhaustive alphabet proof.
     Ok(match key {
-        NativeScalarKey::MysqlTimestamp | NativeScalarKey::MysqlTime => {
+        NativeScalarKey::MysqlTimestamp
+        | NativeScalarKey::MysqlDateTime
+        | NativeScalarKey::MysqlTime => {
             format!("REPLACE({lexical}, ':', '%3A')")
         }
         NativeScalarKey::Integer
@@ -167,6 +177,7 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
         | NativeScalarKey::PostgresBytea
         | NativeScalarKey::MysqlBinaryBytes
         | NativeScalarKey::MysqlBit
+        | NativeScalarKey::MysqlDate
         | NativeScalarKey::MysqlDecimal => lexical,
     })
 }
@@ -190,6 +201,12 @@ pub(super) fn projected_scalars(
             TermMap::Column(raw, _) => inner
                 .scalar_columns
                 .get(resolve_col(raw, Some(&inner.columns)))
+                .filter(|key| {
+                    !matches!(
+                        key,
+                        NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
+                    )
+                })
                 .map(|key| (name.to_string(), *key)),
             _ => None,
         })

@@ -58,6 +58,9 @@ pub enum NativeScalarKey {
     MysqlBinaryBytes,
     MysqlBit,
     MysqlDecimal,
+    /// Direct native field only; temporal materialization needs lexical preservation.
+    MysqlDate,
+    MysqlDateTime,
     MysqlTimestamp,
     MysqlTime,
 }

@@ -169,6 +169,9 @@ pub(super) fn assert_static_constants(fixture: &Fixture, database: &Database, po
     );
     drop(server);
     assert_scalar_constants(fixture, database, postgres);
+    if !postgres {
+        assert_date_bags(fixture, database);
+    }
 }
 
 #[test]
@@ -182,6 +185,63 @@ fn native_static_template_constants_are_exact() {
     }
 }
 
+fn assert_date_bags(fixture: &Fixture, database: &Database) {
+    sql(database, "DELETE FROM items; ALTER TABLE items MODIFY src DATE; SET SESSION sql_mode='ALLOW_INVALID_DATES'; INSERT INTO items(id,src,value) VALUES (1,'2001-00-03','one'),(2,'2001-00-03','duplicate'),(3,'2001-00-04','two'),(4,NULL,'absent')");
+    fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"];
+ rr:subject <http://example.test/item>;
+ rr:predicateObjectMap [rr:predicate <http://example.test/edge>; rr:objectMap [rr:template "http://example.test/n/{src}"]];
+ rr:predicateObjectMap [rr:predicate <http://example.test/date>; rr:objectMap [rr:column "src"; rr:datatype <http://www.w3.org/2001/XMLSchema#date>]]."#);
+    fixture.write("ontology.ttl", "<http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> . <http://example.test/date> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
+    let (server, address) = start(fixture, database);
+    let listing = rows(
+        address,
+        fixture,
+        &format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    let actual: BTreeSet<_> = listing
+        .iter()
+        .map(|row| row["o"]["value"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listing.len(),
+        2,
+        "D1 removes duplicate triples, not distinct partial dates"
+    );
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            "http://example.test/n/2001-00-03",
+            "http://example.test/n/2001-00-04"
+        ])
+    );
+    let count = rows(
+        address,
+        fixture,
+        &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> ?o }}"),
+    );
+    assert_eq!(count[0]["n"]["value"], "2");
+    let literal = rows(
+        address,
+        fixture,
+        "SELECT ?o WHERE { ?s <http://example.test/date> ?o }",
+    );
+    let actual: BTreeSet<_> = literal
+        .iter()
+        .map(|row| {
+            assert_eq!(
+                row["o"]["datatype"],
+                "http://www.w3.org/2001/XMLSchema#date"
+            );
+            row["o"]["value"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(literal.len(), 2);
+    assert_eq!(actual, BTreeSet::from(["2001-00-03", "2001-00-04"]));
+    database.assert_encrypted_sessions();
+    drop(server);
+}
+
 fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: bool) {
     let cases = if postgres {
         vec![
@@ -193,6 +253,43 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
         ]
     } else {
         vec![
+            ("DATE", "'2024-02-29'", "2024-02-29"),
+            ("DATE", "'0001-01-01'", "0001-01-01"),
+            ("DATE", "'0000-00-00'", "0000-00-00"),
+            ("DATE", "'2001-00-03'", "2001-00-03"),
+            ("DATE", "'2001-02-00'", "2001-02-00"),
+            ("DATE", "'2001-02-31'", "2001-02-31"),
+            ("DATE", "'9999-12-31'", "9999-12-31"),
+            (
+                "DATETIME(6)",
+                "'2024-02-29 01:02:03.000001'",
+                "2024-02-29T01:02:03.000001",
+            ),
+            (
+                "DATETIME(6)",
+                "'0000-00-00 00:00:00'",
+                "0000-00-00T00:00:00",
+            ),
+            (
+                "DATETIME(6)",
+                "'2001-00-03 12:34:56.000001'",
+                "2001-00-03T12:34:56.000001",
+            ),
+            (
+                "DATETIME(6)",
+                "'2001-02-31 12:34:56.000001'",
+                "2001-02-31T12:34:56.000001",
+            ),
+            (
+                "DATETIME(1)",
+                "'2001-02-00 12:34:56.1'",
+                "2001-02-00T12:34:56.100000",
+            ),
+            (
+                "DATETIME(6)",
+                "'2001-00-03 00:00:00.000000'",
+                "2001-00-03T00:00:00",
+            ),
             (
                 "TIMESTAMP(6) NULL",
                 "'2024-02-29 01:02:03.000001'",
@@ -244,8 +341,8 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
             // New reader sessions inherit this owned fixture's non-UTC zone.
             sql(database, "SET GLOBAL time_zone = '+05:30'");
         }
-        let legacy_dates = if kind.starts_with("TIMESTAMP") {
-            // Fixture writer only: qualify existing zero timestamp values
+        let legacy_dates = if kind.starts_with("TIMESTAMP") || kind.starts_with("DATE") {
+            // Fixture writer only: qualify existing partial/invalid/zero dates
             // without relaxing the application reader's normal SQL mode.
             "SET SESSION sql_mode = 'ALLOW_INVALID_DATES'; "
         } else {
@@ -311,7 +408,7 @@ fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: boo
                 wrongs.push(unpadded.into());
             }
         }
-        if kind.starts_with("TIME") {
+        if kind.starts_with("TIME") || kind.starts_with("DATETIME") {
             wrongs.push(suffix.replace("%3A", ":"));
             if lexical.contains('T') {
                 wrongs.push(suffix.replace('T', "%20"));

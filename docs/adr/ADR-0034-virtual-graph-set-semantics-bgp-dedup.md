@@ -233,11 +233,15 @@ All these fixtures also check COUNT/OPTIONAL, NULL/negation and wrong IRI spelli
 Live scalar alphabets avoid the generic SQL byte encoder; TIME/TIMESTAMP escape
 colons explicitly. Text retains full encoding. Decimal/BIT/TIME/TIMESTAMP facts do
 not cross unqualified multi-branch SQL coercion; unary raw projection retains them.
-MySQL DATE/DATETIME still need a projection repair: an owned stored DATE
-`2001-00-03` listed as `0000-00-00`, while its attempted constant-match CAST saw
-the original spelling and returned no row. Native temporary-field revalidation
-can explain the discrepancy; a global incomplete-date-to-zero rewrite is not sound.
-Preserve lexical values and natural datatype authority before lossy projection.
+MySQL DATE/DATETIME lexical-only D1 now preserves values before temporary copies:
+the captured window changed stored `2001-00-03` to `0000-00-00`. Both projection
+and PARTITION keys now use decoder-exact text with original lexical-consumer proof;
+native/natural/unknown consumers withhold that substitution. Raw temporal authority
+is revoked through Projection/RefAtom/SubPlan; transformed outputs are text only.
+Required owned CLI checks cover valid/partial/invalid/zero dates, DATETIME fractions,
+fixed/equality/COUNT/OPTIONAL, duplicate-vs-distinct partial dates and explicit xsd:date
+literal bags. Natural datatype preservation and native-consumer copies remain open;
+a global incomplete-date-to-zero rewrite is not sound and is not implemented.
 PostgreSQL numeric/temporal and native floating recipes also remain unqualified:
 plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity.
 Unsupported recipes can reject formerly valid

@@ -6,71 +6,7 @@ use crate::iq::{CmpOp, Scan, ScanSource};
 mod template;
 
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
-    match &scan.source {
-        ScanSource::RefAtom { input, columns } => {
-            ref_atom::actuals(input, columns, dialect, catalog)
-        }
-        ScanSource::Logical(source) => source_actuals(source, catalog),
-        ScanSource::Path { closure, .. } => path_actuals(closure, catalog),
-        ScanSource::Projection {
-            input,
-            columns,
-            lexical_keys,
-            ..
-        } => {
-            let inner = scan_actuals(input, dialect, catalog);
-            let sqlite_columns: HashMap<_, _> = columns
-                .iter()
-                .filter_map(|(name, term)| {
-                    template::output_decode(term, dialect, &inner)
-                        .map(|decode| (name.to_string(), decode))
-                })
-                .collect();
-            let lexical_columns = sqlite_columns
-                .iter()
-                .filter(|(name, _)| {
-                    lexical_keys.iter().any(|key| {
-                        key.column.as_ref() == name.as_str() && key.mode == LexicalMode::Decoded
-                    })
-                })
-                .map(|(name, decode)| (name.clone(), *decode))
-                .collect();
-            AliasActuals {
-                scalar_columns: iri_cmp::projected_scalars(columns, &inner),
-                sqlite_columns,
-                lexical_columns,
-                source_kind: AliasSourceKind::Derived,
-                columns: columns.iter().map(|(name, _)| name.to_string()).collect(),
-                path: false,
-                text_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| {
-                        let key = match term {
-                            TermMap::Column(column, _) => inner
-                                .text_columns
-                                .get(resolve_col(column, Some(&inner.columns)))
-                                .copied(),
-                            TermMap::Template(template, spec) => match template.segments() {
-                                [Segment::Column(column)]
-                                    if dialect != Dialect::MySql
-                                        && spec.term_type != sf_core::ir::TermType::Iri =>
-                                {
-                                    inner
-                                        .text_columns
-                                        .get(resolve_col(column, Some(&inner.columns)))
-                                        .copied()
-                                        .map(|_| TextKey::Verbatim)
-                                }
-                                _ => Some(TextKey::Verbatim),
-                            },
-                            TermMap::Constant(_) => None,
-                        };
-                        key.map(|key| (name.to_string(), key))
-                    })
-                    .collect(),
-            }
-        }
-    }
+    template::actuals(scan, dialect, catalog)
 }
 
 fn projection_sql(
@@ -93,6 +29,7 @@ fn projection_sql(
     };
     let distinct = *distinct;
     let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
+    let temporals = template::mysql_temporals(source, dialect, &actuals[&input.alias]);
     let column = |name: &str| {
         // Raw/offline APIs retain their existing authored-AS fallback. Live
         // execution always probes the original source and takes the typed path.
@@ -116,7 +53,10 @@ fn projection_sql(
     let mut expressions = Vec::with_capacity(columns.len());
     for (name, term) in columns {
         let expression = match term {
-            TermMap::Column(name, _) => column(name),
+            TermMap::Column(raw, _) => match temporals.get(name.as_ref()) {
+                Some(key) => iri_cmp::scalar_lexical(*key, &column(raw), dialect)?,
+                None => column(raw),
+            },
             TermMap::Template(recipe, spec) => template::render(
                 recipe,
                 spec,
@@ -198,6 +138,10 @@ fn projection_sql(
                 continue;
             };
             let native = native_keys.iter().find(|(key, _)| key == name);
+            if temporals.contains_key(name.as_ref()) {
+                keys.push(path_comparison::exact_text(expression.clone(), dialect));
+                continue;
+            }
             if iri_column(raw) {
                 for key in lexical_keys
                     .iter()
