@@ -124,7 +124,7 @@ the retained paths are compatibility boundaries, not completion evidence.
 
 **Resolved column-IRI correction (2026-09-09):** `IriCmp` preserves each operand's
 base for constant matching, BGP identity, `=` and `sameTerm`. Live SQLite keys
-decode and resolve through shared Rust functions; ordered IRI comparisons remain
+decode and generate through shared Rust functions; ordered IRI comparisons remain
 expression errors. Source UNIQUE keys cannot elide base-resolved RDF dedup.
 D1 retains separate resolved/decoded keys for multiple consumers and keeps raw
 outputs. Ref atoms join/filter first, then dedup resolved subjects and decoded
@@ -138,8 +138,13 @@ without live decoder authority. Public regression coverage includes SELECT/COUNT
 constant/BGP/FILTER matching, unique keys, unbound errors and native Ref witnesses;
 W3C compatibility expectations remain unchanged. Native resolved-key execution,
 general mixed/natural identities, broader DISTINCT/GROUP/SubPlan qualification
-and effective document-base propagation remain open. No release/admission flag
-is promoted by this slice.
+and dynamic-scheme template qualification remain open. Processor-base configuration
+now flows independently of Turtle document bases through the public parser and
+both serving sources, with exact compiler identity and reload retention. The shared
+column generator follows R2RML §11.2 verbatim prefixing, not RFC3986 normalization;
+relative `../x` and absolute `base/../x` dedup together, but not with `base-parent/x`.
+Required authenticated CLI/HTTP and parser tests cover this correction. No
+release/admission flag is promoted by this slice.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

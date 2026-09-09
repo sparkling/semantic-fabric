@@ -141,6 +141,12 @@ fn merge(lower: &mut Layer, higher: Layer) -> Result<(), ConfigError> {
         ][..],
     ] {
         if group.iter().any(|name| higher.contains_key(*name)) {
+            if higher.contains_key("direct-mapping-base") && group.contains(&"mapping") {
+                lower.remove("mapping-base");
+            }
+            if higher.contains_key("direct-mapping-base-2") && group.contains(&"mapping-2") {
+                lower.remove("mapping-base-2");
+            }
             for name in group {
                 lower.remove(*name);
             }

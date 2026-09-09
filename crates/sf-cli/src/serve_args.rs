@@ -107,6 +107,9 @@ pub(super) struct MappingArgs {
         conflicts_with = "direct_mapping_base"
     )]
     pub(super) mapping: Option<String>,
+    /// Output IRI prefix for authored R2RML, independent of Turtle @base (default http://example.com/base/).
+    #[arg(long, requires = "mapping", conflicts_with = "direct_mapping_base")]
+    pub(super) mapping_base: Option<String>,
     #[arg(long, required_unless_present = "mapping", conflicts_with = "mapping")]
     pub(super) direct_mapping_base: Option<String>,
 }
@@ -114,7 +117,10 @@ pub(super) struct MappingArgs {
 impl MappingArgs {
     pub(super) fn into_mapping_ref(self) -> MappingRef {
         match (self.mapping, self.direct_mapping_base) {
-            (Some(path), None) => MappingRef::r2rml_file(path),
+            (Some(path), None) => match self.mapping_base {
+                Some(base) => MappingRef::r2rml_file_with_base(path, base),
+                None => MappingRef::r2rml_file(path),
+            },
             (None, Some(base_iri)) => MappingRef::direct(base_iri),
             _ => unreachable!("clap requires exactly one mapping input"),
         }
@@ -123,6 +129,14 @@ impl MappingArgs {
 
 #[derive(clap::Args)]
 pub(super) struct AdditionalSourceArgs {
+    /// Independent output IRI prefix for the second authored mapping.
+    #[arg(
+        id = "mapping_base_2",
+        long = "mapping-base-2",
+        requires = "mapping_2",
+        conflicts_with = "direct_mapping_base_2"
+    )]
+    pub(super) mapping_base: Option<String>,
     #[command(flatten)]
     pub(super) source_input: AdditionalSourceSelector,
     #[command(flatten)]
@@ -169,7 +183,10 @@ impl AdditionalSourceArgs {
             self.mapping_input.mapping,
             self.mapping_input.direct_mapping_base,
         ) {
-            (Some(path), None) => Some(MappingRef::r2rml_file(path)),
+            (Some(path), None) => Some(match self.mapping_base {
+                Some(base) => MappingRef::r2rml_file_with_base(path, base),
+                None => MappingRef::r2rml_file(path),
+            }),
             (None, Some(base_iri)) => Some(MappingRef::direct(base_iri)),
             (None, None) => None,
             _ => unreachable!("clap allows at most one secondary mapping input"),

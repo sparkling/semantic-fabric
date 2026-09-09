@@ -25,6 +25,10 @@ use sql::{
 
 mod star;
 use star::StarAssertion;
+mod options;
+pub use options::{
+    validate_r2rml_base, R2rmlOptions, DEFAULT_R2RML_BASE_IRI, MAX_R2RML_BASE_IRI_BYTES,
+};
 
 // --- R2RML vocabulary (namespace `http://www.w3.org/ns/r2rml#`, R2RML §11) ----
 
@@ -83,12 +87,6 @@ const RDF_PROPOSITION_FORM_OBJECT: &str =
 /// `sf-sparql/src/star.rs`'s own copy (`oxrdf::vocab::rdf::REIFIES`) exactly.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
-/// Base IRI applied to the mapping document so relative triples-map identifiers
-/// (`<#TriplesMap1>`, ubiquitous in R2RML) resolve to absolute IRIs consistently;
-/// a `@base` directive in the document overrides it. R2RML's own examples use
-/// exactly this base.
-const DEFAULT_BASE_IRI: &str = "http://example.com/base/";
-
 /// Parse an R2RML mapping document into the shared IR (ADR-0003 R1).
 ///
 /// Triples maps are returned sorted by identifier so the result is deterministic
@@ -102,7 +100,16 @@ const DEFAULT_BASE_IRI: &str = "http://example.com/base/";
 /// map; the quoted triples map it references is suppressed from the result
 /// when every `rml:starMap` referencing it marks it `rml:nonAssertedTriplesMap`.
 pub fn parse_r2rml(turtle: &str) -> Result<Vec<TriplesMap>> {
-    let graph = Graph::load(turtle)?;
+    parse_r2rml_with_options(turtle, R2rmlOptions::default())
+}
+
+/// Parse with separate processor/output and initial Turtle/document bases.
+pub fn parse_r2rml_with_options(
+    turtle: &str,
+    options: R2rmlOptions<'_>,
+) -> Result<Vec<TriplesMap>> {
+    options.validate()?;
+    let graph = Graph::load_with_options(turtle, options)?;
 
     let mut subjects: Vec<(String, &NamedOrBlankNode)> = graph
         .spo
@@ -523,11 +530,11 @@ fn parse_term_map(g: &Graph, node: &NamedOrBlankNode, position: Position) -> Res
             // A template placeholder column may be a delimited identifier
             // (`{"job"}`, R2RML §7.3); normalise it the same way as `rr:column`.
             let template = normalize_template_idents(Template::parse(lexical(tmpl)?)?);
-            // R2RML §11/§7.3: a relative-IRI template is resolved against the
-            // mapping base IRI. Templates that already begin with a URI scheme are
-            // absolute and left untouched (the common case, allocation-free).
+            // Statically relative templates receive the processor prefix (§11.2).
+            // Templates already beginning with a scheme are left untouched.
+            // Dynamic schemes still require per-row qualification (ADR-0015).
             let template = if spec.term_type == TermType::Iri {
-                resolve_iri_template(template, DEFAULT_BASE_IRI)
+                resolve_iri_template(template, &g.processor_base)
             } else {
                 template
             };
@@ -604,10 +611,10 @@ fn build_term_spec(
     } else {
         (None, None)
     };
-    // An `rr:column` IRI term map resolves its per-row value against the mapping
-    // base (R2RML §7.3); `rr:template` IRIs already bake the base in at parse time.
+    // Column IRI generation applies the processor prefix per row (§11.2).
+    // Static relative templates currently bake that prefix in at parse time.
     let base = if term_type == TermType::Iri && is_column {
-        Some(DEFAULT_BASE_IRI.into())
+        Some(g.processor_base.clone())
     } else {
         None
     };
@@ -706,12 +713,18 @@ fn lexical(term: &Term) -> Result<&str> {
 /// per-subject `Vec` scanned by predicate is more than enough.
 struct Graph {
     spo: HashMap<NamedOrBlankNode, Vec<(NamedNode, Term)>>,
+    processor_base: Box<str>,
 }
 
 impl Graph {
+    #[cfg(test)]
     fn load(turtle: &str) -> Result<Self> {
+        Self::load_with_options(turtle, R2rmlOptions::default())
+    }
+
+    fn load_with_options(turtle: &str, options: R2rmlOptions<'_>) -> Result<Self> {
         let parser = TurtleParser::new()
-            .with_base_iri(DEFAULT_BASE_IRI)
+            .with_base_iri(options.document_base_iri)
             .map_err(|e| Error::Mapping(format!("invalid default base IRI: {e}")))?;
         let mut spo: HashMap<NamedOrBlankNode, Vec<(NamedNode, Term)>> = HashMap::new();
         for triple in parser.for_slice(turtle) {
@@ -722,7 +735,10 @@ impl Graph {
             } = triple.map_err(|e| Error::Mapping(format!("R2RML Turtle parse error: {e}")))?;
             spo.entry(subject).or_default().push((predicate, object));
         }
-        Ok(Self { spo })
+        Ok(Self {
+            spo,
+            processor_base: options.processor_base_iri.into(),
+        })
     }
 
     /// Every object of `s p ?o`, in document order.
@@ -745,6 +761,8 @@ impl Graph {
     }
 }
 
+#[cfg(test)]
+mod processor_base_tests;
 #[cfg(test)]
 mod tests;
 

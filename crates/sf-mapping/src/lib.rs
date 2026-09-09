@@ -21,13 +21,25 @@ pub use projection::{
     MAX_MAPPING_PROJECTION_BYTES, MAX_MAPPING_PROJECTION_OCCURRENCES,
     MAX_MAPPING_PROJECTION_TRIPLES,
 };
-pub use r2rml::parse_r2rml;
+pub use r2rml::{
+    parse_r2rml, parse_r2rml_with_options, validate_r2rml_base, R2rmlOptions,
+    DEFAULT_R2RML_BASE_IRI, MAX_R2RML_BASE_IRI_BYTES,
+};
 
 use sf_core::{Result, SourceId, SourceMapping, TableSchema};
 
 /// Parse R2RML and associate the unchanged IR with one pre-admission source ID.
 pub fn parse_r2rml_for_source(turtle: &str, source_id: SourceId) -> Result<SourceMapping> {
     parse_r2rml(turtle).map(|maps| SourceMapping::new(source_id, maps))
+}
+
+/// Parse source-local R2RML with explicit, independent output and document bases.
+pub fn parse_r2rml_for_source_with_options(
+    turtle: &str,
+    source_id: SourceId,
+    options: R2rmlOptions<'_>,
+) -> Result<SourceMapping> {
+    parse_r2rml_with_options(turtle, options).map(|maps| SourceMapping::new(source_id, maps))
 }
 
 /// Generate Direct Mapping IR and associate it with one pre-admission source ID.

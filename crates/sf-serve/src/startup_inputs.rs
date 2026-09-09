@@ -35,12 +35,14 @@ impl SemanticInputs {
 fn mapping(mapping: &MappingRef) -> Result<Option<String>, ServeError> {
     match mapping {
         MappingRef::Direct { .. } => Ok(None),
-        MappingRef::R2rmlFile(path) => read_regular(path).map(Some).map_err(|error| {
-            ServeError::new(StartupCause::MappingRead {
-                path: path.clone(),
-                error: error.to_string(),
+        MappingRef::R2rmlFile(path) | MappingRef::R2rmlFileWithBase { path, .. } => {
+            read_regular(path).map(Some).map_err(|error| {
+                ServeError::new(StartupCause::MappingRead {
+                    path: path.clone(),
+                    error: error.to_string(),
+                })
             })
-        }),
+        }
     }
 }
 

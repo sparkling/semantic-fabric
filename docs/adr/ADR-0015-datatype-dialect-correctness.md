@@ -84,16 +84,19 @@ checks cover this SQLite slice. Native/natural/mixed-descriptor generalization
 remains open under ADR-0034; missing metadata is never proof of xsd:string.
 
 **Column-IRI refinement (2026-09-09).** SQLite identity predicates retain each
-operand's mapping base and resolve decoded values through the same
+operand's processor output base and generate decoded IRIs through the same
 `sf-core::term::column_iri` function as RDF reconstruction. Absolute spellings
-remain verbatim; relative resolution is not concatenation or URI normalization.
+remain verbatim. **Normative correction:** [R2RML §4/§11.2](https://www.w3.org/TR/r2rml/#generated-rdf-term) requires simple base/value concatenation, not RFC3986 resolution; leading slashes and dot segments remain. The earlier resolver and non-concatenation wording were incorrect.
 The query-owned callback charges value/base bytes before UTF-8 validation and
 resolution, preserves NULL/data errors and releases request state. D1 and native
 reference atoms retain raw values/descriptors while partitioning on every
 required decoded/resolved RDF key. Column blank labels retain separate graph
 identity. Missing decoder authority and native IRI-resolution operations reject;
-PostgreSQL/MySQL resolved-key support and effective document-base propagation
-remain required follow-up, not completed capabilities (ADR-0034).
+Independent processor/document bases now flow through `R2rmlOptions`; serving exposes
+per-source fixed `--mapping-base` / `--mapping-base-2`, with bounded validation,
+layered precedence, compiler identity and reload retention. Turtle `@base` changes
+mapping syntax only. PostgreSQL/MySQL resolved-key support and dynamic-scheme
+template generation remain required follow-up, not completed capabilities (ADR-0034).
 
 R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) identifiers are case-insensitive; delimited identifiers are case-sensitive; an all-upper-case delimited identifier equals the undelimited form (`DEPTNO` = `"DEPTNO"`) but a mixed-case delimited one does not (`"Name"` ≠ regular `Name`). A strict processor therefore **rejects** a mapping that references a mixed-case delimited column with a regular identifier.
 

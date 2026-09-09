@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -200,6 +200,8 @@ Limit-hit / timeout / rejection / injection-attempt emit **both** a `tracing` wa
 
 ### Configuration model
 Layered precedence: **defaults < config file (TOML) < env vars < CLI**, validated at startup and fail-fast. Secret references are resolved once after settings merge, not as another settings tier. The implemented boundary uses a bounded `serde`/TOML model and validates effective values through the typed Clap contract; a general `figment`/`config` dependency is not required. Sections: `[source]` (connections — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level and metrics enablement), `[serve]` (endpoint config), and `[security]` (environment references and explicit anonymous permission). OTLP endpoint/metrics-port settings are not implemented. **Secrets** are referenced, never inline (e.g. `auth_token_env = "SF_QUERY_BEARER"`); direct external secret-store transport remains separate work.
+
+**2026-09-09 authored output bases:** `serve --mapping mapping.ttl --mapping-base https://data.example/` selects the R2RML processor base independently of Turtle `@base`; `--mapping-base-2` applies only to `--mapping-2`. Defaults remain `http://example.com/base/`. Equivalent `[mappings]` TOML keys are `mapping_base` / `mapping_base_2`; environment variables are `SEMANTIC_FABRIC_MAPPING_BASE` / `SEMANTIC_FABRIC_MAPPING_BASE_2`. CLI beats environment beats TOML. Supplying an authored mapping path retains a lower-tier base; switching to Direct Mapping clears that authored-only option. Bases must be absolute IRIs of at most 8 KiB UTF-8, checked before source or semantic-file I/O; errors remain redacted. R2RML recommends slash-ending bases without query/fragment, but those recommendations are not additional rejection rules. The fixed source-local bases survive automatic mapping reload and participate in compiler identity through the parsed mapping. Required real-child tests prove authenticated two-source exact results, precedence, reload and early redacted rejection. Library callers use `R2rmlOptions` to set processor and initial document bases separately. See [ADR-0015](ADR-0015-datatype-dialect-correctness.md) for term-generation semantics and remaining native/template limits.
 
 ### Health, readiness, and bounded shutdown
 

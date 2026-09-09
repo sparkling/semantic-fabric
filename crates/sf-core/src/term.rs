@@ -46,7 +46,7 @@ impl GenTerm<'_> {
 ///
 /// Returns `Ok(None)` when a referenced column is SQL `NULL`/absent — no value,
 /// so no term, so no triple (R2RML §11). `buf` is the caller's reusable scratch
-/// buffer; it is only touched (and cleared) for the `rr:template` path.
+/// buffer; templates and relative column IRIs write through it.
 pub fn generate_into<'a, R: Row + ?Sized>(
     term_map: &'a TermMap,
     row: &'a R,
@@ -56,8 +56,8 @@ pub fn generate_into<'a, R: Row + ?Sized>(
         TermMap::Constant(term) => constant(term).map(Some),
         TermMap::Column(column, spec) => match row.value(column) {
             None => Ok(None),
-            // An `rr:column` IRI value is resolved against the mapping base and
-            // validated per row (R2RML §7.3); other term types pass through.
+            // R2RML §11.2 prefixes relative IRI values with the processor base
+            // and validates per row; other term types pass through.
             Some(value) if spec.term_type == TermType::Iri => {
                 column_iri(value, spec.base.as_deref(), buf).map(Some)
             }
@@ -73,10 +73,10 @@ pub fn generate_into<'a, R: Row + ?Sized>(
     }
 }
 
-/// Generate an IRI term from an `rr:column` value (R2RML §7.3 IRI generation): a
-/// valid absolute IRI is used as is; otherwise the value is resolved against the
-/// mapping base IRI; if neither yields a valid IRI it is a **data error** (the
-/// W3C suite's "conforming mapping with data error" cases). The resolved form is
+/// Generate an IRI term from an `rr:column` value (R2RML §11.2): a valid absolute
+/// IRI is used as is; otherwise prepend the processor base verbatim and validate.
+/// This is not RFC3986 URL resolution: dot segments and leading slashes remain.
+/// If neither yields a valid IRI it is a **data error**. The prefixed form is
 /// written through `buf` so the absolute-IRI fast path stays allocation-free.
 pub fn column_iri<'a>(
     value: &'a str,
@@ -87,9 +87,11 @@ pub fn column_iri<'a>(
         return Ok(GenTerm::NamedNode(NamedNodeRef::new_unchecked(value)));
     }
     if let Some(base) = base {
-        if let Ok(base_iri) = oxiri::Iri::parse(base) {
+        if oxiri::Iri::parse(base).is_ok() {
             buf.clear();
-            if base_iri.resolve_into(value, buf).is_ok() {
+            buf.push_str(base);
+            buf.push_str(value);
+            if oxiri::Iri::parse(buf.as_str()).is_ok() {
                 return Ok(GenTerm::NamedNode(NamedNodeRef::new_unchecked(
                     buf.as_str(),
                 )));
@@ -97,7 +99,7 @@ pub fn column_iri<'a>(
         }
     }
     Err(Error::Term(format!(
-        "rr:column IRI value {value:?} is not a valid IRI and does not resolve against the base"
+        "rr:column IRI value {value:?} is invalid both directly and with the processor base prefix"
     )))
 }
 
@@ -192,7 +194,7 @@ mod tests {
 
     #[test]
     fn column_iri_relative_value_resolves_against_base() {
-        // R2RML §7.3: a relative `rr:column` IRI value resolves against the base.
+        // R2RML §11.2: prefix a relative column IRI with the processor base.
         let tm = TermMap::Column(
             "u".into(),
             TermSpec::iri().with_base("http://example.com/base/"),
@@ -204,6 +206,35 @@ mod tests {
                 "http://example.com/base/Carlos"
             )))
         );
+    }
+
+    #[test]
+    fn column_iri_prefixes_processor_base_without_url_normalization() {
+        for (base, value, expected) in [
+            ("http://ex/base/", "../x", "http://ex/base/../x"),
+            ("http://ex/base/", "/x", "http://ex/base//x"),
+            ("http://ex/base/", "//other/x", "http://ex/base///other/x"),
+            ("http://ex/base/", "?q", "http://ex/base/?q"),
+            ("http://ex/base/?old", "?new", "http://ex/base/?old?new"),
+            ("http://ex/base/#old", "x", "http://ex/base/#oldx"),
+            ("http://ex/base/", "", "http://ex/base/"),
+            ("http://ex/base", "x", "http://ex/basex"),
+            ("http://ex/base/", "é/%ab", "http://ex/base/é/%ab"),
+            (
+                "http://ex/base/",
+                "http://other/a/../x",
+                "http://other/a/../x",
+            ),
+        ] {
+            let mut scratch = String::from("old-buffer");
+            assert_eq!(
+                column_iri(value, Some(base), &mut scratch).unwrap(),
+                GenTerm::NamedNode(NamedNodeRef::new(expected).unwrap())
+            );
+        }
+        let mut scratch = String::new();
+        assert!(column_iri("#new", Some("http://ex/#old"), &mut scratch).is_err());
+        assert!(column_iri("bad value", Some("http://ex/"), &mut scratch).is_err());
     }
 
     #[test]
@@ -224,8 +255,8 @@ mod tests {
 
     #[test]
     fn column_iri_invalid_value_is_a_data_error() {
-        // A value that is neither a valid absolute IRI nor a resolvable relative
-        // reference (a space is illegal in an IRI) is a data error (R2RML §7.3).
+        // Invalid both directly and after prefixing (a space is illegal in an
+        // IRI) means a data error (R2RML §11.2).
         let tm = TermMap::Column(
             "u".into(),
             TermSpec::iri().with_base("http://example.com/base/"),

@@ -15,6 +15,8 @@ const QUERY: &str = "SELECT ?s ?value WHERE { \
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 #[path = "federated_union_serve/join.rs"]
 mod join;
+#[path = "federated_union_serve/processor_base.rs"]
+mod processor_base;
 #[path = "federated_union_serve/reload.rs"]
 mod reload;
 

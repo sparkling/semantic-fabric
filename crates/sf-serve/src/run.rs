@@ -56,6 +56,7 @@ pub struct AdditionalSourceOptions {
 /// Mapping generated from the live observed schema.
 pub enum MappingRef {
     R2rmlFile(String),
+    R2rmlFileWithBase { path: String, base_iri: String },
     Direct { base_iri: String },
 }
 
@@ -69,10 +70,33 @@ impl MappingRef {
             base_iri: base_iri.into(),
         }
     }
+
+    /// Authored mapping with a fixed processor output base, independent of Turtle @base.
+    pub fn r2rml_file_with_base(path: impl Into<String>, base_iri: impl Into<String>) -> Self {
+        Self::R2rmlFileWithBase {
+            path: path.into(),
+            base_iri: base_iri.into(),
+        }
+    }
+
+    fn validate_base(&self) -> Result<(), ServeError> {
+        if let Self::R2rmlFileWithBase { base_iri, .. } = self {
+            sf_mapping::validate_r2rml_base(base_iri).map_err(|_| {
+                ServeError::new(StartupCause::Configuration {
+                    error: "invalid or oversized R2RML processor base IRI".into(),
+                })
+            })?;
+        }
+        Ok(())
+    }
 }
 
 /// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
+    opts.mapping.validate_base()?;
+    if let Some(additional) = &opts.additional_source {
+        additional.mapping.validate_base()?;
+    }
     crate::reload::validate_interval(opts.reload_interval)?;
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;

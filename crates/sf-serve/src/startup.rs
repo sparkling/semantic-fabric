@@ -148,10 +148,14 @@ impl PreparedMapping {
         turtle: Option<&str>,
     ) -> Result<Self, ServeError> {
         match mapping {
-            MappingRef::R2rmlFile(_) => {
+            MappingRef::R2rmlFile(_) | MappingRef::R2rmlFileWithBase { .. } => {
                 let turtle =
                     turtle.ok_or_else(|| configuration_error("missing captured mapping"))?;
-                sf_mapping::parse_r2rml_for_source(turtle, source_id)
+                let mut options = sf_mapping::R2rmlOptions::default();
+                if let MappingRef::R2rmlFileWithBase { base_iri, .. } = mapping {
+                    options.processor_base_iri = base_iri;
+                }
+                sf_mapping::parse_r2rml_for_source_with_options(turtle, source_id, options)
                     .map_err(mapping_error)
                     .and_then(|mapping| {
                         ValidatedMapping::preflight(&mapping, ontology)

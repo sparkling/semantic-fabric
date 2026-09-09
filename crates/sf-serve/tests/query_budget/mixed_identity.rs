@@ -59,11 +59,42 @@ fn literal_mapping() -> String {
 }
 
 fn column_iri_mapping() -> String {
-    // parse_r2rml currently assigns its document fallback base to column maps.
+    // Legacy parse_r2rml uses the documented default processor base.
     MAP.replace(
         "rr:template \"http://ex/n/{o}\"; rr:termType rr:IRI",
         "rr:column \"o\"; rr:termType rr:IRI",
     )
+}
+
+#[tokio::test]
+async fn column_iri_output_uses_r2rml_prefix_not_turtle_base_or_url_resolution() {
+    let mapping = format!(
+        "@base <http://document.example/maps/> .\n{}",
+        column_iri_mapping()
+    );
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','../AB'),('a','http://example.com/base/../AB'),('a','http://example.com/AB');";
+    let json = answer(
+        configured_mixed(setup, &mapping),
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+    )
+    .await;
+    let mut values: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["o"]["value"].as_str().unwrap())
+        .collect();
+    values.sort();
+    assert_eq!(
+        values,
+        ["http://example.com/AB", "http://example.com/base/../AB"]
+    );
+    let json = answer(
+        configured_mixed(setup, &mapping),
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o }",
+    )
+    .await;
+    assert_eq!(json["results"]["bindings"][0]["n"]["value"], "2");
 }
 
 #[tokio::test]

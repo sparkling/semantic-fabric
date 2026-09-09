@@ -5,6 +5,45 @@ use std::path::PathBuf;
 use crate::Cli;
 
 #[test]
+fn base_override_retains_authored_selector_but_direct_clears_stale_base() {
+    for (mapping, base, source, direct) in [
+        ("mapping", "mapping-base", "source", "direct-mapping-base"),
+        (
+            "mapping-2",
+            "mapping-base-2",
+            "source-2",
+            "direct-mapping-base-2",
+        ),
+    ] {
+        let mut layer = Layer::from([
+            (mapping.into(), "old.ttl".into()),
+            (base.into(), "http://old/".into()),
+            (source.into(), "sqlite:old.db".into()),
+        ]);
+        merge(
+            &mut layer,
+            Layer::from([(base.into(), "http://new/".into())]),
+        )
+        .unwrap();
+        assert_eq!(layer.get(mapping).unwrap(), "old.ttl");
+        assert_eq!(layer.get(base).unwrap(), "http://new/");
+        merge(
+            &mut layer,
+            Layer::from([(mapping.into(), "new.ttl".into())]),
+        )
+        .unwrap();
+        assert_eq!(layer.get(base).unwrap(), "http://new/");
+        merge(
+            &mut layer,
+            Layer::from([(direct.into(), "http://direct/".into())]),
+        )
+        .unwrap();
+        assert!(!layer.contains_key(base));
+        assert!(!layer.contains_key(mapping));
+    }
+}
+
+#[test]
 fn file_environment_and_cli_have_exact_precedence() {
     let path = temp_config(
         r#"

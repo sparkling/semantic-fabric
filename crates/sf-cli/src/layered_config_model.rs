@@ -30,8 +30,10 @@ struct SourceConfig {
 #[serde(default, deny_unknown_fields)]
 struct MappingConfig {
     mapping: Option<String>,
+    mapping_base: Option<String>,
     direct_mapping_base: Option<String>,
     mapping_2: Option<String>,
+    mapping_base_2: Option<String>,
     direct_mapping_base_2: Option<String>,
 }
 
@@ -103,8 +105,10 @@ impl FileConfig {
         section!(
             mappings,
             mapping,
+            mapping_base,
             direct_mapping_base,
             mapping_2,
+            mapping_base_2,
             direct_mapping_base_2
         );
         section!(graphs, ontology);

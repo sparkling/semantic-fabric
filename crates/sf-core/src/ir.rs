@@ -102,9 +102,9 @@ pub struct TermSpec {
     pub term_type: TermType,
     pub datatype: Option<NamedNode>,
     pub language: Option<Box<str>>,
-    /// The mapping document's base IRI, kept only for an `rr:column` IRI term map
-    /// so a per-row relative-IRI column value can be resolved against it (R2RML
-    /// §7.3 IRI generation). `rr:template` IRIs bake the base in at parse time, so
+    /// The processor's output base, distinct from Turtle's document base, kept
+    /// for `rr:column` IRIs. Relative values receive this verbatim prefix (R2RML
+    /// §11.2). Static `rr:template` IRIs bake the base in at parse time, so
     /// this is `None` for them and for non-IRI term maps.
     pub base: Option<Box<str>>,
 }
@@ -160,7 +160,7 @@ impl TermSpec {
         }
     }
 
-    /// Attach the mapping base IRI (for an `rr:column` IRI term map).
+    /// Attach the processor output base (for an `rr:column` IRI term map).
     pub fn with_base(mut self, base: impl Into<Box<str>>) -> Self {
         self.base = Some(base.into());
         self

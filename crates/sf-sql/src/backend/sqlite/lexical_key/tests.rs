@@ -271,11 +271,15 @@ fn iri_callback_resolves_without_normalizing_absolute_iris_and_releases_state() 
     let mut guard = CharacterKeyGuard::install_lexical(&conn, true, None).unwrap();
     for (value, base, expected) in [
         (Some("AB"), Some("http://ex/"), Some("http://ex/AB")),
-        (Some("../AB"), Some("http://ex/dir/"), Some("http://ex/AB")),
+        (
+            Some("../AB"),
+            Some("http://ex/dir/"),
+            Some("http://ex/dir/../AB"),
+        ),
         (
             Some("//other/AB"),
             Some("http://ex/"),
-            Some("http://other/AB"),
+            Some("http://ex///other/AB"),
         ),
         (Some("#x"), Some("http://ex/AB"), Some("http://ex/AB#x")),
         (Some("http://ex/a/../AB"), None, Some("http://ex/a/../AB")),

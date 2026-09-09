@@ -292,9 +292,11 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
         },
         mapping_input: MappingArgs {
             mapping: Some("/nonexistent/path/does-not-exist.ttl".to_owned()),
+            mapping_base: None,
             direct_mapping_base: None,
         },
         additional_source_input: AdditionalSourceArgs {
+            mapping_base: None,
             source_input: AdditionalSourceSelector {
                 source: None,
                 source_env: None,

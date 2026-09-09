@@ -45,6 +45,36 @@ fn binding(
 }
 
 #[test]
+fn processor_base_partitions_mapping_and_compile_identity() {
+    for term in ["rr:column \"id\"", "rr:template \"items/{id}\""] {
+        let turtle = format!("@prefix rr: <http://www.w3.org/ns/r2rml#>. <urn:map> rr:logicalTable [rr:tableName \"items\"]; rr:subjectMap [{term}].");
+        let compile = |base| {
+            let mapping = sf_mapping::parse_r2rml_for_source_with_options(
+                &turtle,
+                SourceId::new(3).unwrap(),
+                sf_mapping::R2rmlOptions {
+                    processor_base_iri: base,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            binding(
+                mapping,
+                Dialect::Sqlite,
+                Tbox::default(),
+                schema("items", "text", 1),
+            )
+        };
+        let a = compile("http://data.example/a/");
+        let same = compile("http://data.example/a/");
+        let b = compile("http://data.example/b/");
+        assert_eq!(a.digests(), same.digests());
+        assert_ne!(a.digests().mapping(), b.digests().mapping());
+        assert_ne!(a.scope(), b.scope());
+    }
+}
+
+#[test]
 fn identical_inputs_have_identical_deterministic_provenance() {
     let source_id = SourceId::new(3).unwrap();
     let first = binding(
