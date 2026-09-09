@@ -321,6 +321,20 @@ pub(super) fn subplan_actuals(
             Some(common) => common.retain(|index, key| text.get(index) == Some(key)),
         }
     }
+    // Equal XSD double types do not prove equal native float decoders. A
+    // FLOAT4/FLOAT8 UNION widens the former and changes Rust's raw spelling.
+    if dialect == Dialect::Postgres {
+        for (index, code) in common_temporals.iter_mut().flat_map(|keys| keys.iter_mut()) {
+            if *code == Some(sf_core::datatype::XsdTypeCode::Double)
+                && !common_scalars
+                    .as_ref()
+                    .and_then(|keys| keys.get(index))
+                    .is_some_and(|key| pg_float::is_float(*key))
+            {
+                *code = None;
+            }
+        }
+    }
     let columns: Vec<_> = (0..width).map(|i| format!("c{i}")).collect();
     let text_columns = common
         .unwrap_or_default()

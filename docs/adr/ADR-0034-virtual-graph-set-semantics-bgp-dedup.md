@@ -16,56 +16,21 @@ implements: []
 
 ## NUMERIC wrapper refinement (2026-09-09)
 
-PostgreSQL finite NUMERIC now uses decoded lexical keys for authored static IRI
-consumers while retaining raw numeric output. D1 keeps original consumer roles;
-final DISTINCT uses only output consumers, so hidden lexical roles do not split
-natural-only results. Mixed known-natural roles are explicit, not unknown vetoes.
-Native-only Ref keys retain native equality alongside required RDF keys. Every
-new numeric-window companion needs its own role/type proof; unknowns fail closed.
-Admitted nested bag UNIONs rebase each arm's PostgreSQL parameters. Compatible
-compiler DISTINCT pools use UNION ALL plus a raw-preserving numeric-key window;
-disagreeing numeric roles reject. This does not relax serving's existing
-source-sized multi-arm DISTINCT gate. Required owned TLS CLI checks verify that
-rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy
-isolation; compiler tests cover the DISTINCT SQL wrapper. ADR-0015 now separately qualifies full-range natural decimal construction and fixed/sameTerm/Eq/Ne keys with raw payload preservation. Positional natural provenance survives raw Projection/Ref/SubPlan only with compatible decoder proof; coercing MySQL decimal UNIONs retain rejection markers, not raw-equality authority.
+PostgreSQL finite NUMERIC now uses decoded lexical keys for authored static IRI consumers while retaining raw numeric output. D1 keeps original consumer roles; final DISTINCT uses only output consumers, so hidden lexical roles do not split natural-only results. Mixed known-natural roles are explicit, not unknown vetoes. Native-only Ref keys retain native equality alongside required RDF keys. Every new numeric-window companion needs its own role/type proof; unknowns fail closed.
+Admitted nested bag UNIONs rebase each arm's PostgreSQL parameters. Compatible compiler DISTINCT pools use UNION ALL plus a raw-preserving numeric-key window; disagreeing numeric roles reject. This does not relax serving's existing source-sized multi-arm DISTINCT gate. Required owned TLS CLI checks verify that rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy isolation; compiler tests cover the DISTINCT SQL wrapper. ADR-0015 now separately qualifies full-range natural decimal construction and fixed/sameTerm/Eq/Ne keys with raw payload preservation. Positional natural provenance survives raw Projection/Ref/SubPlan only with compatible decoder proof; coercing MySQL decimal UNIONs retain rejection markers, not raw-equality authority.
 The 2026-09-09 natural/explicit column BGP correction retains identity until live datatype/decoder resolution. Required SQLite HTTP and owned PostgreSQL/MySQL decimal/integer CLI tests cover BGP/EXISTS/OPTIONAL exact bags, lexical overrides, disjoint datatypes and NULLs. MySQL integer validation remains policy-dominated without narrowing raw unsigned IRI keys. Datatype facts alone confer no canonical authority; Integer/Boolean UNION promotions retain incompatible markers, as do existing decimal range hazards. General mixed/native, floating/temporal and coercing-UNION identity and release qualification remain open (ADR-0015).
 
-**Explicit natural datatype correction (2026-09-09):** D1 retains `TypedLiteral`
-until live type resolution; matching datatypes use natural identity, not raw text.
-SQLite partition tuples retain dynamic datatype and every typed/decoded consumer;
-output DISTINCT and literal GROUP BY preserve raw representatives. Raw UNIQUE
-keys cannot erase literal DISTINCT. Separate comparison-only decoded authority
-preserves aligned IRI keys without replacing mixed literal payloads. Required
-HTTP/raw-compiler and owned TLS CLI checks cover the qualified paths in ADR-0015;
-the bounded federation reducer also uses typed identity without widening its profile.
+**PostgreSQL floating refinement (2026-09-09):** ADR-0015's exact raw/canonical FLOAT4/FLOAT8 keys now support natural/matching-explicit BGP, fixed/sameTerm and raw string/IRI identity. D1 and final DISTINCT use raw-preserving windows with width-specific binary identity, collapsing NaN payloads but never signed zero. Native-only keys retain their native comparator. Pooled consumed float outputs require identical native decoders; equal XSD double facts alone do not survive FLOAT4/FLOAT8 promotion. Hidden trailing in-arm guards do not authorize outer reconstruction and do not block otherwise safe pools. Same-width pass-through and independent unlike-width UNIONs remain supported. Required owned TLS CLI edge/NULL/bag checks and compiler pooling tests cover this slice; source-sized OPTIONAL/multi-arm DISTINCT gates and general coercing-pool qualification remain unchanged.
 
-**Optimizer-oracle reconciliation (2026-09-09):** the workspace boundary exposed
-five historical assertions that equated raw PK uniqueness with natural-literal
-uniqueness. Positive one-/multi-scan and alias tests now use injective static IRI
-construction; literal-key and incomplete-key negatives remain active. A frozen
-SQLite BOOLEAN-PK execution test proves four bag occurrences collapse to one
-canonical DISTINCT tuple. This reconciles tests with the safety rule above; it
-does not relax serving constraint quarantine or claim general literal injectivity.
+**Explicit natural datatype correction (2026-09-09):** D1 retains `TypedLiteral` until live type resolution; matching datatypes use natural identity, not raw text. SQLite partition tuples retain dynamic datatype and every typed/decoded consumer; output DISTINCT and literal GROUP BY preserve raw representatives. Raw UNIQUE keys cannot erase literal DISTINCT. Separate comparison-only decoded authority preserves aligned IRI keys without replacing mixed literal payloads. Required HTTP/raw-compiler and owned TLS CLI checks cover the qualified paths in ADR-0015; the bounded federation reducer also uses typed identity without widening its profile.
+
+**Optimizer-oracle reconciliation (2026-09-09):** the workspace boundary exposed five historical assertions that equated raw PK uniqueness with natural-literal uniqueness. Positive one-/multi-scan and alias tests now use injective static IRI construction; literal-key and incomplete-key negatives remain active. A frozen SQLite BOOLEAN-PK execution test proves four bag occurrences collapse to one canonical DISTINCT tuple. This reconciles tests with the safety rule above; it does not relax serving constraint quarantine or claim general literal injectivity.
 
 ## Current wrapper boundary (2026-09-08)
 
-D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned
-input scan, ordered raw-column/template recipes, NULL or bound native-equality
-guards and a DISTINCT flag. SQL is emitted only after original Table/Query metadata is
-available. Generated wrappers are not authored queries or catalog/constraint
-authority. Stable quoted output labels carry resolved native columns through
-nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
+D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned input scan, ordered raw-column/template recipes, NULL or bound native-equality guards and a DISTINCT flag. SQL is emitted only after original Table/Query metadata is available. Generated wrappers are not authored queries or catalog/constraint authority. Stable quoted output labels carry resolved native columns through nested wrappers; PostgreSQL synthetic rowid becomes CTID only at a table leaf.
 
-Raw columns retain native descriptors. Live-proven text template operands now
-normalize to decoder text; transparent non-text operands retain their descriptors
-on PostgreSQL/SQLite. Template encoding and parameter isolation remain.
-Only guard-free same-named raw-column DISTINCT over one table may be restored by
-the existing bounded-join proof. Its portable row authorization
-adds same-input native-equality guards before dedup, without widening RDF outputs
-or keys; nonempty guards revoke restore authority. The separately proved rendered
-IRI atom below admits policy insertion but never table restoration. Other
-computed/nested wrappers gain no such authority. Shared RDF-term dedup follows relation aliases, not
-authored-source authority, and remains source-sized/fail-closed on serving paths.
+Raw columns retain native descriptors. Live-proven text template operands now normalize to decoder text; transparent non-text operands retain their descriptors on PostgreSQL/SQLite. Template encoding and parameter isolation remain. Only guard-free same-named raw-column DISTINCT over one table may be restored by the existing bounded-join proof. Its portable row authorization adds same-input native-equality guards before dedup, without widening RDF outputs or keys; nonempty guards revoke restore authority. The separately proved rendered IRI atom below admits policy insertion but never table restoration. Other computed/nested wrappers gain no such authority. Shared RDF-term dedup follows relation aliases, not authored-source authority, and remains source-sized/fail-closed on serving paths.
 
 Required owned TLS public SELECT now resolves mapping SRC/DST against native
 lowercase columns on PostgreSQL16.15/MySQL8.4.11. Boundary tests cover original

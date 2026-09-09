@@ -378,6 +378,8 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
                     Type::BOOL => Some(super::NativeScalarKey::PostgresBoolean),
                     Type::BYTEA => Some(super::NativeScalarKey::PostgresBytea),
                     Type::NUMERIC => Some(super::NativeScalarKey::PostgresNumeric),
+                    Type::FLOAT4 => Some(super::NativeScalarKey::PostgresFloat4),
+                    Type::FLOAT8 => Some(super::NativeScalarKey::PostgresFloat8),
                     _ => None,
                 },
                 sqlite_decode: None,

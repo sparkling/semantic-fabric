@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 mod natural_temporal;
 #[path = "ordinary_identity.rs"]
 mod ordinary_identity;
+#[path = "pg_float.rs"]
+mod pg_float;
 #[path = "pg_numeric.rs"]
 mod pg_numeric;
 #[path = "unicode_templates.rs"]
@@ -483,6 +485,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         drop(server);
         if postgres {
             pg_numeric::assert_all(&fixture, &database);
+            pg_float::assert_identity(&fixture, &database);
         } else {
             pg_numeric::assert_mysql_range(&fixture, &database);
             natural_temporal::assert_responses(&fixture, &database);

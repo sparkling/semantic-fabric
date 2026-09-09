@@ -18,7 +18,8 @@ pub(super) fn qualified_source(
         X::Decimal => matches!(scalar, Some(PostgresNumeric | MysqlDecimal)),
         X::Date => scalar == Some(MysqlDate),
         X::DateTime => scalar == Some(MysqlDateTime),
-        X::Double | X::Time => false,
+        X::Double => matches!(scalar, Some(PostgresFloat4 | PostgresFloat8)),
+        X::Time => false,
     }
 }
 
@@ -53,6 +54,10 @@ pub(super) fn key(
         }
         (Dialect::MySql, XsdTypeCode::Boolean) => Ok(format!("CASE WHEN {raw} IS NULL THEN NULL WHEN {raw} = 0 THEN 'false' WHEN {raw} = 1 THEN 'true' ELSE {invalid} END")),
         (Dialect::MySql | Dialect::Postgres, XsdTypeCode::Decimal) => Ok(natural_decimal::key(&raw, dialect)),
+        (Dialect::Postgres, XsdTypeCode::Double) => {
+            let scalar = iri_cmp::scalar_column(column, actuals).filter(|key| pg_float::is_float(*key)).ok_or_else(|| Error::Unsupported("natural double lost its exact native float decoder".into()))?;
+            Ok(pg_float::lexical(&raw, scalar, true))
+        }
         (Dialect::MySql, XsdTypeCode::Date | XsdTypeCode::DateTime) => Ok(natural_literal::key(&raw, code)),
         (Dialect::Postgres, XsdTypeCode::Integer | XsdTypeCode::Boolean)
         | (Dialect::Postgres | Dialect::MySql, XsdTypeCode::HexBinary) => {

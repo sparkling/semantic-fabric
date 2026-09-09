@@ -106,6 +106,9 @@ pub(super) fn template(
 pub(super) fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
     Ok(match (dialect, key) {
         (Dialect::Postgres, NativeScalarKey::Integer) => format!("CAST({raw} AS TEXT)"),
+        (Dialect::Postgres, NativeScalarKey::PostgresFloat4 | NativeScalarKey::PostgresFloat8) => {
+            pg_float::lexical(raw, key, false)
+        }
         (Dialect::Postgres, NativeScalarKey::PostgresNumeric) => {
             // JSON validates finite number syntax while retaining the input
             // text exactly. JSONB/to_json would normalize or quote it instead.
@@ -181,6 +184,8 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
         | NativeScalarKey::PostgresBoolean
         | NativeScalarKey::PostgresBytea
         | NativeScalarKey::PostgresNumeric
+        | NativeScalarKey::PostgresFloat4
+        | NativeScalarKey::PostgresFloat8
         | NativeScalarKey::MysqlBinaryBytes
         | NativeScalarKey::MysqlBit
         | NativeScalarKey::MysqlDate

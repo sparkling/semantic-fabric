@@ -63,6 +63,31 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 > remain rejected by serving admission; raw compiler predicate tests do not widen
 > that profile. General key equality, source bounds and release remain separate.
 
+### PostgreSQL floating identity refinement (2026-09-09)
+
+Live FLOAT4/FLOAT8 metadata now carries distinct decoder recipes. Comparison keys
+derive Rust's shortest decimal from IEEE wire bits with exact bounded NUMERIC
+arithmetic: at most 9/17 precisions, two adjacent candidates each, interval/parity
+checks and Rust's upward midpoint choice. No float-to-text cast, float widening,
+session precision option or database extension supplies identity authority.
+Raw IRI/string consumers use fixed-decimal spelling; natural/matching-double
+consumers use the corresponding scientific key. Rust still constructs every
+returned RDF term from the unchanged native payload. NULL, signed zero, NaN and
+infinities have explicit branches; an impossible missing candidate fails closed.
+Within an unchanged float decoder, binary partition keys normalize only NaN
+payloads and preserve signed zero through D1 and output DISTINCT (ADR-0034).
+
+The existing required owned PostgreSQL TLS CLI aggregate now includes exact
+BGP, EXISTS, OPTIONAL, sameTerm/fixed constants, COUNT/DISTINCT, raw string/IRI,
+nested pass-through and cross-width identity checks. Edge vectors include minimum
+normal/subnormal, maximum finite, midpoint ties, noncanonical query literals,
+duplicates and NULL, with deliberately degraded PostgreSQL text precision.
+Same-width SQL pools and independently executed unlike-width UNIONs retain their
+descriptors; consumed mixed-width SQL pools reject before coercion can alter RDF
+output. Hidden in-arm float guards do not reject safe integer-subject pools.
+General floating value arithmetic, coercing-pool preservation, other native
+families and exact-release qualification remain open; no backend is removed.
+
 ### PostgreSQL NUMERIC decoder correction (2026-09-09)
 
 The binary digit count is unsigned 16-bit; its weight remains signed. The reader

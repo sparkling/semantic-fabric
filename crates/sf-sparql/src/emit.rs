@@ -55,6 +55,7 @@ mod native_literal_key;
 mod natural_decimal;
 mod natural_literal;
 mod path_comparison;
+mod pg_float;
 mod pg_numeric;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
@@ -891,7 +892,7 @@ fn emit_branch_keys(
     } else {
         Vec::new()
     };
-    let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(|key| *key);
+    let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(Option::is_some);
     let literal_window = (b.distinct && !term_dedup && dialect == Dialect::Sqlite)
         .then(|| literal_roles::sqlite_distinct(b, catalog, &actuals))
         .flatten();
@@ -1590,8 +1591,13 @@ fn emit_subplan_sql(
                 std::sync::Arc::make_mut(&mut catalog.scalars_by_source)
                     .insert(source_key(source), scalars.clone());
             }
+            if let Some(datatypes) = live_catalog.datatypes_by_source.get(&source_key(source)) {
+                std::sync::Arc::make_mut(&mut catalog.datatypes_by_source)
+                    .insert(source_key(source), datatypes.clone());
+            }
         }
     }
+    pg_float::validate_union(&branches, dialect, &catalog, plan.distinct)?;
     let emitted = branches
         .iter()
         .map(|branch| emit_branch_keys(branch, dialect, &catalog, plan.distinct || branch.distinct))

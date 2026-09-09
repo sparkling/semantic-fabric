@@ -1,11 +1,9 @@
-//! Native NUMERIC payloads and decoded RDF lexical keys are separate authorities.
+//! Raw-preserving PostgreSQL NUMERIC/float identity wrappers.
 use super::*;
 use crate::iq::scan::LexicalMode;
-
 pub(super) fn lexical_mode(mode: &LexicalMode) -> bool {
     matches!(mode, LexicalMode::Decoded | LexicalMode::DecodedWithNatural)
 }
-
 pub(super) fn native_companion(
     column: &ColRef,
     dialect: Dialect,
@@ -35,12 +33,10 @@ pub(super) fn is_numeric(column: &ColRef, dialect: Dialect, actuals: &ActualColu
     dialect == Dialect::Postgres
         && iri_cmp::scalar_column(column, actuals) == Some(NativeScalarKey::PostgresNumeric)
 }
-
 pub(super) fn lexical(raw: &str) -> String {
     // PostgreSQL JSON, unlike JSONB, preserves its validated input text.
     format!("CAST(CAST(CAST({raw} AS TEXT) AS JSON) AS TEXT)")
 }
-
 pub(super) fn validates(condition: &SqlCond, actuals: &ActualColumns) -> bool {
     match condition {
         SqlCond::DecodedIsNotNull(column) => is_numeric(column, Dialect::Postgres, actuals),
@@ -69,20 +65,50 @@ pub(super) fn key(
     actuals: &ActualColumns,
     modes: &[crate::iq::LexicalKey],
 ) -> Option<String> {
-    (is_numeric(column, dialect, actuals)
-        && modes
-            .iter()
-            .any(|key| key.column == column.column && lexical_mode(&key.mode)))
-    .then(|| path_comparison::exact_text(lexical(&colref(column, dialect, actuals)), dialect))
+    decoder_key(column, dialect, actuals, modes)
+        .map(|key| identity(&colref(column, dialect, actuals), key))
 }
 
-pub(super) fn distinct_keys(b: &Branch, dialect: Dialect, actuals: &ActualColumns) -> Vec<bool> {
+fn decoder_key(
+    column: &ColRef,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+    modes: &[crate::iq::LexicalKey],
+) -> Option<NativeScalarKey> {
+    if dialect != Dialect::Postgres {
+        return None;
+    }
+    let key = iri_cmp::scalar_column(column, actuals)?;
+    modes
+        .iter()
+        .any(|mode| {
+            mode.column == column.column
+                && ((key == NativeScalarKey::PostgresNumeric && lexical_mode(&mode.mode))
+                    || (pg_float::is_float(key)
+                        && (lexical_mode(&mode.mode) || mode.mode == LexicalMode::Natural)))
+        })
+        .then_some(key)
+}
+
+fn identity(raw: &str, key: NativeScalarKey) -> String {
+    if pg_float::is_float(key) {
+        pg_float::identity(raw, key)
+    } else {
+        path_comparison::exact_text(lexical(raw), Dialect::Postgres)
+    }
+}
+
+pub(super) fn distinct_keys(
+    b: &Branch,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+) -> Vec<Option<NativeScalarKey>> {
     if !actuals.values().any(|a| {
         a.scalar_columns
             .values()
-            .any(|k| *k == NativeScalarKey::PostgresNumeric)
+            .any(|k| *k == NativeScalarKey::PostgresNumeric || pg_float::is_float(*k))
     }) {
-        return vec![false; b.projection().len()];
+        return vec![None; b.projection().len()];
     }
     let modes: HashMap<_, _> = actuals
         .keys()
@@ -100,11 +126,9 @@ pub(super) fn distinct_keys(b: &Branch, dialect: Dialect, actuals: &ActualColumn
     b.projection()
         .iter()
         .map(|column| {
-            is_numeric(column, dialect, actuals)
-                && modes.get(&column.alias).is_some_and(|keys| {
-                    keys.iter()
-                        .any(|key| key.column == column.column && lexical_mode(&key.mode))
-                })
+            modes
+                .get(&column.alias)
+                .and_then(|keys| decoder_key(column, dialect, actuals, keys))
         })
         .collect()
 }
@@ -115,7 +139,7 @@ pub(super) fn union_keys(
     branches: &[Branch],
     dialect: Dialect,
     catalog: &ColumnCatalog,
-) -> Result<Option<Vec<bool>>> {
+) -> Result<Option<Vec<Option<NativeScalarKey>>>> {
     if dialect != Dialect::Postgres {
         return Ok(None);
     }
@@ -123,33 +147,27 @@ pub(super) fn union_keys(
         .iter()
         .map(|b| distinct_keys(b, dialect, &branch_actuals(b, dialect, catalog)))
         .collect();
-    if !keys.iter().flatten().any(|key| *key) {
+    if !keys.iter().flatten().any(Option::is_some) {
         return Ok(None);
     }
     if branches.iter().any(|b| b.agg.is_some() || b.path.is_some())
         || keys.iter().any(|key| key != &keys[0])
     {
         return Err(Error::Unsupported(
-            "numeric UNION requires agreeing raw decoder and output consumer roles".into(),
+            "native UNION requires agreeing raw decoder and output consumer roles".into(),
         ));
     }
     Ok(keys.into_iter().next())
 }
 
-pub(super) fn distinct_sql(raw: String, keys: &[bool]) -> String {
+pub(super) fn distinct_sql(raw: String, keys: &[Option<NativeScalarKey>]) -> String {
     let columns = (0..keys.len())
         .map(|i| format!("__sf_numeric_raw.c{i}"))
         .collect::<Vec<_>>();
     let partition = columns
         .iter()
         .zip(keys)
-        .map(|(column, decoded)| {
-            if *decoded {
-                path_comparison::exact_text(lexical(column), Dialect::Postgres)
-            } else {
-                column.clone()
-            }
-        })
+        .map(|(column, key)| key.map_or_else(|| column.clone(), |key| identity(column, key)))
         .collect::<Vec<_>>()
         .join(", ");
     let output = (0..keys.len())
@@ -382,7 +400,10 @@ rr:predicateObjectMap [rr:predicate <http://ex/edge>; rr:objectMap [rr:template 
             },
         );
         b.distinct = true;
-        assert_eq!(distinct_keys(&b, Dialect::Postgres, &actuals), [true]);
+        assert_eq!(
+            distinct_keys(&b, Dialect::Postgres, &actuals),
+            [Some(NativeScalarKey::PostgresNumeric)]
+        );
         let operand = crate::iq::iri_cmp::IriOperand::from_map(&iri, 0).unwrap();
         b.where_conds.push(SqlCond::IriCmp(Box::new(
             crate::iq::iri_cmp::IriComparison {
@@ -393,14 +414,14 @@ rr:predicateObjectMap [rr:predicate <http://ex/edge>; rr:objectMap [rr:template 
         b.bindings.remove("iri");
         assert_eq!(
             distinct_keys(&b, Dialect::Postgres, &actuals),
-            [false],
+            [None],
             "hidden IRI must not over-distinguish natural output"
         );
         assert!(
             !crate::cascade::distinct_scan::lexical_keys(&b, 0).is_empty(),
             "D1 keeps original hidden consumer"
         );
-        assert_eq!(distinct_keys(&b, Dialect::MySql, &actuals), [false]);
+        assert_eq!(distinct_keys(&b, Dialect::MySql, &actuals), [None]);
     }
 
     #[test]
