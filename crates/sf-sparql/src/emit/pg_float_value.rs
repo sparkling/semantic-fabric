@@ -136,6 +136,21 @@ fn operand(
     {
         return authored_float(&raw, scalar.ok_or_else(unsupported)?, promotion);
     }
+    if spec.language.is_none()
+        && spec
+            .datatype
+            .as_ref()
+            .is_some_and(|dt| dt.as_str() == XsdTypeCode::Double.iri().as_str())
+        && matches!(promotion, Promotion::Double)
+    {
+        // INTEGER/NUMERIC wire lexicals are parsed directly as Double. This
+        // override does not borrow natural identity or revive float metadata.
+        match scalar {
+            Some(NativeScalarKey::Integer) => return Ok(format!("CAST({raw} AS {sql_type})")),
+            Some(NativeScalarKey::PostgresNumeric) => return Ok(numeric(&raw, promotion)),
+            _ => {}
+        }
+    }
     if kind(value, actuals) == Kind::Nonnumeric {
         return Ok(if scalar == Some(NativeScalarKey::PostgresNumeric) {
             // Even an actual datatype override consumes the NUMERIC decoder.
@@ -322,33 +337,56 @@ mod tests {
     }
 
     #[test]
-    fn matching_datatype_does_not_restore_revoked_decoder_or_authorize_overrides() {
-        let mut actuals = actuals(XsdTypeCode::Double, NativeScalarKey::PostgresFloat4);
-        actuals
-            .get_mut(&0)
-            .unwrap()
-            .natural_columns
-            .insert("src".into(), None);
-        for spec in [
-            TermSpec::plain_literal(),
-            TermSpec::typed_literal(XsdTypeCode::Double.iri().into_owned()),
+    fn matching_datatype_needs_natural_proof_but_double_override_uses_exact_numeric_wire() {
+        for scalar in [
+            NativeScalarKey::PostgresFloat4,
+            NativeScalarKey::PostgresFloat8,
         ] {
-            for op in [crate::iq::CmpOp::Eq, crate::iq::CmpOp::Lt] {
-                let cmp = comparison_with(spec.clone(), op);
-                assert!(
-                    comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0)
-                        .unwrap_err()
-                        .to_string()
-                        .contains("exact native decoder")
-                );
+            let mut actuals = actuals(XsdTypeCode::Double, scalar);
+            actuals
+                .get_mut(&0)
+                .unwrap()
+                .natural_columns
+                .insert("src".into(), None);
+            for spec in [
+                TermSpec::plain_literal(),
+                TermSpec::typed_literal(XsdTypeCode::Double.iri().into_owned()),
+            ] {
+                for op in [crate::iq::CmpOp::Eq, crate::iq::CmpOp::Lt] {
+                    let cmp = comparison_with(spec.clone(), op);
+                    assert!(
+                        comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0)
+                            .unwrap_err()
+                            .to_string()
+                            .contains("exact native decoder")
+                    );
+                }
             }
         }
-        let actuals = self::actuals(XsdTypeCode::Integer, NativeScalarKey::Integer);
         let cmp = comparison_with(
             TermSpec::typed_literal(XsdTypeCode::Double.iri().into_owned()),
             crate::iq::CmpOp::Gt,
         );
-        assert!(comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0).is_err());
+        for scalar in [NativeScalarKey::Integer, NativeScalarKey::PostgresNumeric] {
+            let mut actuals = self::actuals(XsdTypeCode::Integer, scalar);
+            actuals.get_mut(&0).unwrap().natural_columns.clear();
+            let sql = comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                sql.contains("AS JSON"),
+                scalar == NativeScalarKey::PostgresNumeric
+            );
+            assert!(sql.contains("DOUBLE PRECISION"));
+            actuals.get_mut(&0).unwrap().scalar_columns.clear();
+            assert!(comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0).is_err());
+            actuals
+                .get_mut(&0)
+                .unwrap()
+                .scalar_columns
+                .insert("src".into(), NativeScalarKey::MysqlDecimal);
+            assert!(comparison(&cmp, Dialect::Postgres, &actuals, &mut vec![], &mut 0).is_err());
+        }
     }
 
     #[test]

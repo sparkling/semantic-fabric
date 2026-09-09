@@ -121,6 +121,12 @@ boundaries and decimal/BIGINT double-rounding counterexamples, authored Float
 columns, raw FLOAT8 midpoint spelling, all six operators/NOT, invalid source
 recovery and policy-first EXISTS/OPTIONAL. Focused core/compiler tests retain
 subtype facets and reject missing, inconsistent and foreign decoder facts.
+Authored xsd:double over native INTEGER/NUMERIC now uses the same exact retained
+wire proof: signed integers convert directly and finite NUMERIC uses the guarded
+Double conversion. It does not borrow natural identity or restore revoked
+FLOAT4/FLOAT8 natural facts. Required owned TLS tests cover all six operators/NOT,
+Float and Double constants, full-range rounding, invalid authorized NUMERIC
+failure/recovery and denied-row EXISTS/OPTIONAL through the explicit Double map.
 Rust output and identity keys are unchanged. General text/other typed-column
 parsing, wider arithmetic, other backends and exact-release qualification remain
 required follow-up, not removed capabilities or a complete numeric gate.

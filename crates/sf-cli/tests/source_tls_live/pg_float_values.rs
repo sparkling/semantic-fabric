@@ -1,6 +1,9 @@
 //! Public value comparisons use independent Rust IEEE operators as the oracle.
 use super::*;
 
+const DOUBLE: &str = "http://example.test/double";
+const INTEGER_DOUBLE: &str = "http://example.test/integer-double";
+
 fn compare(left: f64, right: f64, op: &str) -> bool {
     match op {
         "=" => left == right,
@@ -65,6 +68,7 @@ pub(super) fn assert_constants(
         format!("\"{lexical}\"^^<http://www.w3.org/2001/XMLSchema#{kind}>")
     };
     let source_float = predicate == "http://example.test/float";
+    let source_double = matches!(predicate, NATURAL | DOUBLE | INTEGER_DOUBLE);
     for (literal, number) in [
         (typed("0", "double"), Some(0.0)),
         (typed("1.1", "double"), Some(1.1)),
@@ -90,12 +94,9 @@ pub(super) fn assert_constants(
         ("\"1\"@en".into(), None),
     ] {
         // Decimal/integer-only comparisons retain their exact, non-IEEE lane.
-        let float_only = (predicate != NATURAL && literal.contains("XMLSchema#float>"))
+        let float_only = (!source_double && literal.contains("XMLSchema#float>"))
             || (source_float && !literal.contains("XMLSchema#double>"));
-        if predicate != NATURAL
-            && !source_float
-            && !float_only
-            && !literal.contains("XMLSchema#double>")
+        if !source_double && !source_float && !float_only && !literal.contains("XMLSchema#double>")
         {
             continue;
         }
@@ -149,9 +150,27 @@ pub(super) fn assert_numeric(fixture: &Fixture, database: &Database) {
       <#n> rr:logicalTable [rr:tableName "items"]; rr:subject <http://example.test/item>;
       rr:predicateObjectMap [rr:predicate <http://example.test/number>; rr:objectMap [rr:column "float_decimal"]];
       rr:predicateObjectMap [rr:predicate <http://example.test/float>; rr:objectMap [rr:column "float_decimal"; rr:datatype <http://www.w3.org/2001/XMLSchema#float>]];
+      rr:predicateObjectMap [rr:predicate <http://example.test/double>; rr:objectMap [rr:column "float_decimal"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>]];
+      rr:predicateObjectMap [rr:predicate <http://example.test/integer-double>; rr:objectMap [rr:column "float_integer"; rr:datatype <http://www.w3.org/2001/XMLSchema#double>]];
       rr:predicateObjectMap [rr:predicate <http://example.test/raw>; rr:objectMap [rr:column "float_decimal"; rr:datatype <http://www.w3.org/2001/XMLSchema#string>]];
       rr:predicateObjectMap [rr:predicate <http://example.test/integer>; rr:objectMap [rr:column "float_integer"]]."#);
-    fixture.write("ontology.ttl", "<http://example.test/number> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/integer> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/raw> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/float> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
+    fixture.write(
+        "ontology.ttl",
+        &([
+            "number",
+            "integer",
+            "raw",
+            "float",
+            "double",
+            "integer-double",
+        ]
+        .map(|name| {
+            format!(
+                "<http://example.test/{name}> a <http://www.w3.org/2002/07/owl#DatatypeProperty> ."
+            )
+        })
+        .join("\n")),
+    );
     sql(database, "DELETE FROM items; ALTER TABLE items ADD COLUMN float_decimal NUMERIC; ALTER TABLE items ADD COLUMN float_integer BIGINT");
     // Exercise exact rounding boundaries and the complete native NUMERIC
     // exponent range without a bounded-i64/decimal intermediate representation.
@@ -199,6 +218,8 @@ pub(super) fn assert_numeric(fixture: &Fixture, database: &Database) {
     sql(database, &format!("INSERT INTO items(float_decimal,float_integer,value) VALUES {inserts},(NULL,NULL,'same'),(NULL,16777217,'same'),(NULL,4611686293305294849,'same')"));
     let (server, address) = start(fixture, database);
     for predicate in [
+        DOUBLE,
+        INTEGER_DOUBLE,
         "http://example.test/number",
         "http://example.test/integer",
         "http://example.test/float",
@@ -237,6 +258,9 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
                 format!("?s <http://example.test/raw> ?o FILTER(!({expression}))"),
                 format!("?s <http://example.test/float> ?o FILTER({expression})"),
                 format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/float> ?o FILTER({expression}) }}"),
+                format!("?s <{DOUBLE}> ?o FILTER({expression})"),
+                format!("?s <{DOUBLE}> ?o FILTER(!({expression}))"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <{DOUBLE}> ?o FILTER({expression}) }}"),
             ] {
                 let query = format!("SELECT ?s WHERE {{ {pattern} }}");
                 let response = stop_matrix::wire(cancellation::begin(address, &query, &fixture.token));
@@ -286,6 +310,9 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
                 format!("?s <http://example.test/float> ?o FILTER(?o {op} {float_constant})"),
                 format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/float> ?o FILTER(?o {op} {float_constant}) }}"),
                 format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/float> ?o FILTER(?o {op} {float_constant}) }}"),
+                format!("?s <{DOUBLE}> ?o FILTER(?o {op} {constant})"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <{DOUBLE}> ?o FILTER(?o {op} {constant}) }}"),
+                format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <{DOUBLE}> ?o FILTER(?o {op} {constant}) }}"),
             ] {
                 let query = format!("SELECT ?s WHERE {{ {pattern} }}");
                 assert_eq!(complete_rows(address, fixture, &query).len(), 1, "{invalid}: {query}");
