@@ -61,6 +61,8 @@ pub enum NativeScalarKey {
     MysqlBinaryBytes,
     MysqlBit,
     MysqlDecimal,
+    /// Value-only binary32 descriptor; no generic lexical or pooled authority.
+    MysqlFloat4,
     /// Value-only binary64 authority; Rust shortest lexical identity is unproven.
     MysqlFloat8,
     /// Direct native field only; temporal materialization needs lexical preservation.

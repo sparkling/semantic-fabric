@@ -170,6 +170,10 @@ fn mysql_floating_nonnumeric_boolean_keeps_validation_and_policy() {
 }
 
 fn native_double() -> (LiteralComparison, ColumnCatalog, ActualColumns) {
+    native_with(NativeScalarKey::MysqlFloat8)
+}
+
+fn native_with(key: NativeScalarKey) -> (LiteralComparison, ColumnCatalog, ActualColumns) {
     let (cmp, _, _) = setup("double", None);
     let source = LogicalSource::Table("items".into());
     let mut catalog = ColumnCatalog::default();
@@ -179,7 +183,7 @@ fn native_double() -> (LiteralComparison, ColumnCatalog, ActualColumns) {
             vec![sf_sql::backend::ResultColumn {
                 name: "v".into(),
                 natural_datatype: Some(XsdTypeCode::Double),
-                native_scalar: Some(NativeScalarKey::MysqlFloat8),
+                native_scalar: Some(key),
                 text_key: None,
                 sqlite_decode: None,
             }],
@@ -235,7 +239,7 @@ fn mysql_native_double_is_value_only_authority() {
         None
     );
     assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
-    for kind in ["float", "string", "decimal"] {
+    for kind in ["string", "decimal"] {
         let mut cmp = cmp.clone();
         let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
             unreachable!()
@@ -253,6 +257,108 @@ fn mysql_native_double_is_value_only_authority() {
             &mut 0
         )
         .is_err());
+    }
+}
+
+#[test]
+fn mysql_native_floating_widths_keep_value_and_lexical_authority_separate() {
+    for key in [NativeScalarKey::MysqlFloat4, NativeScalarKey::MysqlFloat8] {
+        let (mut cmp, catalog, actuals) = native_with(key);
+        for kind in ["float", "double"] {
+            let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
+                unreachable!()
+            };
+            *spec = TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(format!(
+                "http://www.w3.org/2001/XMLSchema#{kind}"
+            )));
+            assert!(!native_literal_key::renderable(&cmp.left, &actuals));
+            let sql = comparison(
+                &cmp,
+                Dialect::MySql,
+                &catalog,
+                &actuals,
+                &mut vec![],
+                &mut 0,
+            )
+            .unwrap()
+            .unwrap();
+            Dialect::MySql
+                .emit_via_ast(&format!("SELECT {sql} FROM items t0"))
+                .unwrap();
+            if key == NativeScalarKey::MysqlFloat4 && kind == "double" {
+                assert!(sql.contains("WHEN -151 THEN"));
+                assert!(sql.contains("SELECT 9 AS precision_digits"));
+                assert!(!sql.contains("SELECT 10 AS precision_digits"));
+            }
+            if key == NativeScalarKey::MysqlFloat8 && kind == "float" {
+                assert!(sql.contains("SELECT 17 AS precision_digits"));
+                assert!(
+                    sql.contains("WHERE CAST(lexical AS DOUBLE) = x")
+                        || sql.contains("WHERE CAST(lexical AS DOUBLE)=x")
+                );
+            }
+            let mut revoked = actuals.clone();
+            revoked
+                .get_mut(&0)
+                .unwrap()
+                .datatype_columns
+                .insert("v".into(), None);
+            assert!(comparison(
+                &cmp,
+                Dialect::MySql,
+                &catalog,
+                &revoked,
+                &mut vec![],
+                &mut 0
+            )
+            .is_err());
+        }
+        assert_eq!(natural_literal::source_code(key), None);
+        assert!(!native_literal_key::qualified_source(
+            XsdTypeCode::Double,
+            Some(key),
+            None
+        ));
+        assert!(iri_cmp::scalar_lexical(key, "v", Dialect::MySql).is_err());
+        let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
+            unreachable!()
+        };
+        spec.language = Some("en".into());
+        assert!(comparison(
+            &cmp,
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0
+        )
+        .is_err());
+        let maps = sf_mapping::parse_r2rml(
+            r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+          <#m> rr:logicalTable [rr:tableName "items"]; rr:subject <http://ex/s>;
+          rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "v"]]."#,
+        )
+        .unwrap();
+        let mut plan = crate::parse_and_translate(
+            "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+            &maps,
+            Dialect::MySql,
+        )
+        .unwrap();
+        assert_eq!(
+            subplan_actuals(&plan, Dialect::MySql, &catalog).scalar_columns["c0"],
+            key
+        );
+        let branch = &plan.prepared_branches()[0];
+        assert_eq!(
+            ref_atom::actuals(branch, &branch.projection(), Dialect::MySql, &catalog)
+                .scalar_columns["c0"],
+            key
+        );
+        plan.branches.push(plan.branches[0].clone());
+        assert!(!subplan_actuals(&plan, Dialect::MySql, &catalog)
+            .scalar_columns
+            .contains_key("c0"));
     }
 }
 

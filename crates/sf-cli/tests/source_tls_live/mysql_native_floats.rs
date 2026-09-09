@@ -1,5 +1,7 @@
 //! Public native floating source values must follow their actual wire decoder.
 use super::*;
+#[path = "mysql_native_float_values.rs"]
+mod float_overrides;
 
 #[test]
 #[ignore = "requires owned pinned MySQL TLS fixture"]
@@ -203,4 +205,5 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
         drop(server);
         sql(database, "DROP TABLE sf_numeric_items");
     }
+    float_overrides::assert_all(fixture, database);
 }
