@@ -33,6 +33,22 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                 .map(|(name, decode)| (name.clone(), *decode))
                 .collect();
             AliasActuals {
+                natural_temporals: columns
+                    .iter()
+                    .filter_map(|(name, term)| {
+                        let TermMap::Column(raw, _) = term else {
+                            return None;
+                        };
+                        (!temporals.contains_key(name.as_ref()))
+                            .then(|| {
+                                inner
+                                    .natural_temporals
+                                    .get(resolve_col(raw, Some(&inner.columns)))
+                            })
+                            .flatten()
+                            .map(|code| (name.to_string(), *code))
+                    })
+                    .collect(),
                 scalar_columns: iri_cmp::projected_scalars(columns, &inner),
                 sqlite_columns,
                 lexical_columns,

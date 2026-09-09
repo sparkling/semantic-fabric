@@ -2,6 +2,31 @@
 use super::{CmpOp, ColRef};
 use sf_core::{ir::TermSpec, Literal};
 
+/// Keep natural construction observable when projection/aggregation hides it.
+/// The live emitter qualifies decoder-specific validation, never a text cast.
+pub(crate) fn validate_term(def: &super::TermDef, conditions: &mut Vec<super::SqlCond>) {
+    if let super::TermDef::Derived {
+        term_map: sf_core::ir::TermMap::Column(column, spec),
+        alias,
+    } = def
+    {
+        if spec.term_type == sf_core::ir::TermType::Literal
+            && spec.datatype.is_none()
+            && spec.language.is_none()
+        {
+            let left = LiteralOperand::Column {
+                column: ColRef::new(*alias, column.clone()),
+                spec: spec.clone(),
+            };
+            conditions.push(super::SqlCond::LiteralCmp(Box::new(LiteralComparison {
+                right: left.clone(),
+                left,
+                value_op: None,
+            })));
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LiteralOperand {
     Column { column: ColRef, spec: TermSpec },

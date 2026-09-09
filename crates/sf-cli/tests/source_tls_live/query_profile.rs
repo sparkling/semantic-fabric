@@ -1,6 +1,8 @@
 //! Actual public query results against only owned, pinned, TLS-enabled providers.
 use super::*;
 use std::collections::BTreeSet;
+#[path = "natural_temporal.rs"]
+mod natural_temporal;
 #[path = "ordinary_identity.rs"]
 mod ordinary_identity;
 #[path = "unicode_templates.rs"]
@@ -476,8 +478,12 @@ fn native_describe_and_recursive_paths_are_exact() {
         unicode_templates::assert_native_encoding(&fixture, &database, postgres);
         unicode_templates::assert_static_constants(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
-        let _server = assert_character_paths(&fixture, &database, postgres);
+        let server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();
+        drop(server);
+        if !postgres {
+            natural_temporal::assert_responses(&fixture, &database);
+        }
         eprintln!(
             "exact native DESCRIBE/path profile: {}",
             database.sql(if postgres {

@@ -63,6 +63,19 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 > remain rejected by serving admission; raw compiler predicate tests do not widen
 > that profile. General key equality, source bounds and release remain separate.
 
+### Natural temporal identity refinement (2026-09-09)
+
+MySQL natural DATE/DATETIME now retains native payload and datatype while decoder-qualified identity keys match canonical Rust output; query constants remain verbatim. Required owned TLS CLI checks cover canonical/noncanonical fixed and sameTerm matches, DATE/leap/year-zero/extrema and DATETIME fractions, duplicate bags, nested projection, mixed literal/IRI joins, NULL/negation, invalid hidden SELECT/COUNT/ASK terms, cap-one recovery and denied-invalid-row policy/existential/OPTIONAL isolation. Coercing mixed temporal SubPlans retain a rejection marker instead of falling back to raw equality. Wider natural/native identity and native-consumer copies remain open.
+
+Rust remains the final natural-literal canonicalizer; source DATE/DATETIME fields
+and their datatype codes are not text-replaced. SQL set-work compares only a
+separately qualified canonical identity key: calendar validity (including accepted
+year zero) and trimmed DATETIME fractional zeros. Explicit datatype/language and
+IRI construction retain decoder lexicals; sameTerm constants are never canonicalized.
+Original natural-term guards survive hidden projection/COUNT/ASK. Missing or
+incompatible temporal provenance is not xsd:string or native-equality authority.
+These are existing ADR-0007/0034 comparison refinements, not a second RDF generator.
+
 ### Identifier resolution — lenient against the live schema (decision 2026-06-28)
 
 **Literal comparison refinement (2026-09-09).** RDF identity is the decoded

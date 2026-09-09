@@ -49,6 +49,7 @@ mod projection_layout;
 pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
+mod natural_temporal;
 mod path_comparison;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
@@ -625,6 +626,9 @@ enum AliasSourceKind {
 
 #[derive(Clone, Debug)]
 struct AliasActuals {
+    // None retains incompatible temporal provenance; it must not fall back to
+    // native equality after a coercing SubPlan loses a common decoder.
+    natural_temporals: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
     scalar_columns: HashMap<String, NativeScalarKey>,
     source_kind: AliasSourceKind,
     columns: Vec<String>,
@@ -638,6 +642,15 @@ type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
     AliasActuals {
+        natural_temporals: catalog
+            .scalars_by_source
+            .get(&source_key(source))
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, key)| {
+                natural_temporal::source_code(*key).map(|code| (name.clone(), Some(code)))
+            })
+            .collect(),
         scalar_columns: catalog
             .scalars_by_source
             .get(&source_key(source))
@@ -1497,6 +1510,10 @@ fn emit_subplan_sql(
                 std::sync::Arc::make_mut(&mut catalog.sqlite_by_source)
                     .insert(source_key(source), sqlite.clone());
             }
+            if let Some(scalars) = live_catalog.scalars_by_source.get(&source_key(source)) {
+                std::sync::Arc::make_mut(&mut catalog.scalars_by_source)
+                    .insert(source_key(source), scalars.clone());
+            }
         }
     }
     let emitted = branches
@@ -1599,6 +1616,11 @@ fn render_conjunction(
 ) -> Result<String> {
     if conds.is_empty() {
         return Ok("1 = 1".to_owned());
+    }
+    if let Some(sql) =
+        natural_temporal::authorized_conjunction(conds, dialect, catalog, actuals, params, pidx)?
+    {
+        return Ok(sql);
     }
     Ok(conds
         .iter()

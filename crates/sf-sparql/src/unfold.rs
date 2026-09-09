@@ -823,6 +823,9 @@ impl<'a> Unfolder<'a> {
         // These atom-local conditions remain inside OPTIONAL ON / anti-joins.
         for def in [&subj_def, &pred_def, &obj_def] {
             crate::iq::iri_cmp::validate_term(def, &mut branch.where_conds);
+            if self.dialect == sf_sql::Dialect::MySql {
+                crate::iq::literal_cmp::validate_term(def, &mut branch.where_conds);
+            }
         }
         for col in subj_def
             .columns()

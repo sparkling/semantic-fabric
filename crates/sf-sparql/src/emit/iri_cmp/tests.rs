@@ -394,3 +394,33 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
             .is_empty());
     }
 }
+
+#[test]
+fn nested_emission_preserves_live_scalar_projection_recipes() {
+    let maps = sf_mapping::parse_r2rml(r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+        <#m> rr:logicalTable [rr:tableName "items"];
+        rr:subject <http://ex/s>;
+        rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:template "http://ex/{id}"]]."#).unwrap();
+    let plan = crate::parse_and_translate(
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+        &maps,
+        Dialect::MySql,
+    )
+    .unwrap();
+    let mut catalog = ColumnCatalog::default();
+    catalog
+        .insert_live_result(
+            &maps[0].source,
+            vec![sf_sql::backend::ResultColumn {
+                name: "id".into(),
+                native_scalar: Some(NativeScalarKey::MysqlDate),
+                text_key: None,
+                sqlite_decode: None,
+            }],
+        )
+        .unwrap();
+    let top = emit_branch_with(&plan.prepared_branches()[0], Dialect::MySql, &catalog).unwrap();
+    assert!(top.sql.contains("CAST(t0.`id` AS CHAR)"), "{}", top.sql);
+    let (nested, _) = emit_subplan_sql(&plan, Dialect::MySql, &catalog).unwrap();
+    assert!(nested.contains("CAST(t0.`id` AS CHAR)"), "{nested}");
+}

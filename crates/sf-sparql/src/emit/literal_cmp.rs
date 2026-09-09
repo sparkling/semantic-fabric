@@ -49,6 +49,9 @@ pub(super) fn render(
         }
         .into());
     }
+    if let Some(sql) = natural_temporal::comparison(cmp, dialect, catalog, actuals, params, pidx)? {
+        return Ok(sql);
+    }
     let mut bind = |value: &str| {
         params.push(value.to_owned());
         *pidx += 1;

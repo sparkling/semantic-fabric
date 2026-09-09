@@ -10,6 +10,13 @@ pub(super) fn actuals(
 ) -> AliasActuals {
     let sources = branch_actuals(input, dialect, catalog);
     AliasActuals {
+        natural_temporals: columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, column)| {
+                natural_temporal::column_fact(column, &sources).map(|code| (format!("c{i}"), code))
+            })
+            .collect(),
         scalar_columns: columns
             .iter()
             .enumerate()

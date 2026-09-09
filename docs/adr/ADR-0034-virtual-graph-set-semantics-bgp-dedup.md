@@ -240,8 +240,13 @@ native/natural/unknown consumers withhold that substitution. Raw temporal author
 is revoked through Projection/RefAtom/SubPlan; transformed outputs are text only.
 Required owned CLI checks cover valid/partial/invalid/zero dates, DATETIME fractions,
 fixed/equality/COUNT/OPTIONAL, duplicate-vs-distinct partial dates and explicit xsd:date
-literal bags. Natural datatype preservation and native-consumer copies remain open;
-a global incomplete-date-to-zero rewrite is not sound and is not implemented.
+literal bags. A global incomplete-date-to-zero rewrite is not sound and is not implemented.
+
+MySQL natural DATE/DATETIME now retains native payload and datatype while decoder-qualified identity keys match canonical Rust output; query constants remain verbatim. Required owned TLS CLI checks cover canonical/noncanonical fixed and sameTerm matches, DATE/leap/year-zero/extrema and DATETIME fractions, duplicate bags, nested projection, mixed literal/IRI joins, NULL/negation, invalid hidden SELECT/COUNT/ASK terms, cap-one recovery and denied-invalid-row policy/existential/OPTIONAL isolation. Coercing mixed temporal SubPlans retain a rejection marker instead of falling back to raw equality. Wider natural/native identity and native-consumer copies remain open.
+Natural validation is captured on the original MySQL atom before projection or
+aggregation hides it. Rust remains the output canonicalizer; only proved natural
+identity uses the SQL calendar/fraction recipe. Raw IRI/explicit literal recipes
+retain decoded spellings, and natural facts do not confer raw-IRI authority.
 PostgreSQL numeric/temporal and native floating recipes also remain unqualified:
 plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity.
 Unsupported recipes can reject formerly valid

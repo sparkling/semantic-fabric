@@ -245,6 +245,18 @@ fn projection_sql(
             dialect.quote_ident(&rank)
         );
     }
+    if dialect == Dialect::MySql
+        && !actuals[&input.alias].natural_temporals.is_empty()
+        && guards
+            .iter()
+            .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+    {
+        // MySQL pushes predicates on window partition keys below ROW_NUMBER.
+        // Its no-limit sentinel is a structural merge/pushdown barrier: natural
+        // validation outside this relation can only inspect authorized rows.
+        sql.push_str(" LIMIT ");
+        sql.push_str(dialect.bare_offset_limit_sentinel().unwrap());
+    }
     Ok(sql)
 }
 

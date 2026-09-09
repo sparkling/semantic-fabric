@@ -163,6 +163,24 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > metadata callers. The existing weak-reference and callback-removal assertions
 > are retained unchanged. This fixes owner ordering, not wider source governance.
 
+> **Natural temporal metadata refinement (2026-09-09).** MySQL DATE/DATETIME
+> natural identity proof is separate from raw scalar/text authority. Exact raw
+> positions retain it through Projection/RefAtom/SubPlan; mixed-arm incompatibility
+> remains a rejection marker, never an implicit raw-equality fallback. Nested SQL
+> emission now receives the same live scalar facts as outer metadata inference.
+> Native payloads and Rust natural reconstruction are unchanged.
+>
+> Fallible natural validation must inspect only authorized rows. MySQL can push
+> predicates below DISTINCT/window wrappers; policy-filtered temporal D1 therefore
+> uses the existing no-limit LIMIT sentinel as a structural merge/pushdown fence.
+> Direct existential bodies use trusted native admission predicates in a CASE
+> before validation. This is not textual AND ordering or an advisory optimizer
+> hint. The [pinned MySQL pushdown implementation](https://raw.githubusercontent.com/mysql/mysql-server/mysql-8.4.11/sql/sql_derived.cc)
+> makes LIMIT a hard boundary. Required owned TLS CLI and SQL-shape tests cover
+> authorized valid/denied invalid rows, COUNT, EXISTS/NOT EXISTS and OPTIONAL;
+> invalid admitted terms fail terminally and cap-one admission recovers.
+> Existing native stop/work limits remain; wider source governance is not closed.
+
 ## More Information
 
 * **Evidence (2026-07-01):** the live Ontop 5.5.0 vs semantic-fabric head-to-head (`BENCHMARKS.md`, `scripts/compare/race.sh`) — five Postgres-path-only correctness defects (q9 agg-over-union, q10 sequence path, q11 MINUS, q12 FILTER-EXISTS/typed-column, q15 DISTINCT-over-join) + one perf blowup (q14), all invisible to the green SQLite differential; fixed in `exec_pg.rs`/`unfold.rs`/`iq.rs`/`leftjoin.rs` and re-verified at row-parity on the live PG endpoint.

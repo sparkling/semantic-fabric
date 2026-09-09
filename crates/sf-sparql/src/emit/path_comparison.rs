@@ -75,6 +75,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
+        natural_temporals: HashMap::new(),
         scalar_columns: HashMap::new(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
@@ -191,6 +192,7 @@ pub(super) fn subplan_actuals(
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
     let mut common_scalars: Option<HashMap<usize, NativeScalarKey>> = None;
+    let mut common_temporals: Option<HashMap<usize, Option<sf_core::datatype::XsdTypeCode>>> = None;
     for branch in &plan.branches {
         let effective_distinct = if plan.branches.len() == 1 {
             plan.distinct
@@ -200,6 +202,29 @@ pub(super) fn subplan_actuals(
         let projection = source_projection(branch, effective_distinct, dialect);
         width = width.max(projection.len());
         let actuals = branch_actuals(branch, dialect, catalog);
+        let temporals = projection
+            .iter()
+            .enumerate()
+            .filter_map(|(index, column)| {
+                column
+                    .as_ref()
+                    .and_then(|column| natural_temporal::column_fact(column, &actuals))
+                    .map(|code| (index, code))
+            })
+            .collect::<HashMap<_, _>>();
+        match common_temporals.as_mut() {
+            None => common_temporals = Some(temporals),
+            Some(common) => {
+                for (index, code) in common.iter_mut() {
+                    if temporals.get(index) != Some(code) {
+                        *code = None;
+                    }
+                }
+                for index in temporals.keys() {
+                    common.entry(*index).or_insert(None);
+                }
+            }
+        }
         let scalars: HashMap<_, _> = projection
             .iter()
             .enumerate()
@@ -270,6 +295,11 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
+        natural_temporals: common_temporals
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(i, code)| (format!("c{i}"), code))
+            .collect(),
         scalar_columns: common_scalars
             .unwrap_or_default()
             .into_iter()
