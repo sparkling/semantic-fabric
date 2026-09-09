@@ -29,6 +29,8 @@ fn projection_sql(
     };
     let distinct = *distinct;
     let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
+    let resolved_keys = literal_roles::resolved(lexical_keys, dialect, &actuals[&input.alias]);
+    let lexical_keys = resolved_keys.as_slice();
     let temporals = template::mysql_temporals(source, dialect, &actuals[&input.alias]);
     let column = |name: &str| {
         // Raw/offline APIs retain their existing authored-AS fallback. Live
@@ -79,12 +81,16 @@ fn projection_sql(
     // Original lexical consumer proof plus a live decoder makes mixed SQLite
     // keys exact. Natural/base-IRI consumers cannot borrow that authority.
     let lexical = |raw: &str| {
-        (dialect == Dialect::Sqlite
-            && lexical_keys
-                .iter()
-                .any(|key| key.column.as_ref() == raw && key.mode == LexicalMode::Decoded))
-        .then(|| lexical_key::column_decode(&ColRef::new(input.alias, raw), &actuals))
-        .flatten()
+        (dialect == Dialect::Sqlite)
+            .then(|| {
+                literal_roles::sqlite_key(
+                    &ColRef::new(input.alias, raw),
+                    lexical_keys,
+                    catalog,
+                    &actuals,
+                )
+            })
+            .flatten()
     };
     let numeric = |raw: &str| {
         pg_numeric::key(
@@ -185,20 +191,20 @@ fn projection_sql(
                 }
             }
             if native.is_none_or(|(_, both)| *both) {
-                keys.push(if let Some(key) = numeric(raw) {
-                    key
-                } else if let Some(decode) = lexical(raw).filter(|_| {
+                keys.extend(if let Some(key) = numeric(raw) {
+                    vec![key]
+                } else if let Some(key) = lexical(raw).filter(|_| {
                     path_comparison::column_text(&ColRef::new(input.alias, raw.clone()), &actuals)
                         .is_none()
                 }) {
-                    lexical_key::expression(column(raw), decode, catalog)
+                    key
                 } else {
-                    path_comparison::rdf_column(
+                    vec![path_comparison::rdf_column(
                         &ColRef::new(input.alias, raw.clone()),
                         dialect,
                         catalog,
                         &actuals,
-                    )
+                    )]
                 });
             }
             if native.is_some() {

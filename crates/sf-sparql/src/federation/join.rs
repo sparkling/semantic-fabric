@@ -376,15 +376,27 @@ impl BoundedJoin {
             .get(&self.variables[self.key])
             .ok_or_else(|| Error::Mapping("bounded join key missing".into()))?;
         let mut values = BTreeSet::new();
+        let literal = key::literal(def);
+        let mut identities = Vec::new();
         for row in rows {
             if row.len() != self.variables.len() {
                 return Err(Error::Mapping("bounded join row arity mismatch".into()));
             }
             if let Some(term) = &row[self.key] {
+                if let Some(left) = &literal {
+                    if let Term::Literal(value) = term {
+                        identities.push(key::identity(left, value));
+                    }
+                    continue;
+                }
                 if let Some(value) = key::inverse(def, term)? {
                     values.insert(value);
                 }
             }
+        }
+        if literal.is_some() {
+            branch.where_conds.push(crate::iq::SqlCond::Or(identities));
+            return Ok(result);
         }
         let column =
             key::column(def).ok_or_else(|| Error::Mapping("bounded join key changed".into()))?;

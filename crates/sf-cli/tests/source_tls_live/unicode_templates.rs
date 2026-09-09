@@ -221,23 +221,30 @@ fn assert_date_bags(fixture: &Fixture, database: &Database) {
         &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> ?o }}"),
     );
     assert_eq!(count[0]["n"]["value"], "2");
-    let literal = rows(
-        address,
-        fixture,
+    // Explicit xsd:date equals the native DATE type, so R2RML §11.2
+    // requires natural construction and rejects these invalid calendars.
+    // The independently queried IRI terms above remain valid lexical terms.
+    for query in [
         "SELECT ?o WHERE { ?s <http://example.test/date> ?o }",
-    );
-    let actual: BTreeSet<_> = literal
-        .iter()
-        .map(|row| {
-            assert_eq!(
-                row["o"]["datatype"],
-                "http://www.w3.org/2001/XMLSchema#date"
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://example.test/date> ?o }",
+        "ASK { ?s <http://example.test/date> ?o }",
+    ] {
+        let response = stop_matrix::wire(cancellation::begin(address, query, &fixture.token));
+        stop_matrix::assert_no_complete_union_success(&response);
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            let (status, _) = request(address, "ASK {}", Some(&fixture.token)).unwrap();
+            if status == 200 {
+                break;
+            }
+            assert_eq!(status, 503);
+            assert!(
+                Instant::now() < until,
+                "explicit date error did not release admission"
             );
-            row["o"]["value"].as_str().unwrap()
-        })
-        .collect();
-    assert_eq!(literal.len(), 2);
-    assert_eq!(actual, BTreeSet::from(["2001-00-03", "2001-00-04"]));
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
     database.assert_encrypted_sessions();
     drop(server);
 }

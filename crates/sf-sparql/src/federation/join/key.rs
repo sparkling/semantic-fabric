@@ -35,6 +35,32 @@ pub(super) fn supported(def: &TermDef) -> bool {
     column(def).is_some()
 }
 
+pub(super) fn literal(def: &TermDef) -> Option<crate::iq::literal_cmp::LiteralOperand> {
+    match def {
+        TermDef::Derived {
+            term_map: TermMap::Column(column, spec),
+            alias,
+        } if spec.term_type == TermType::Literal => {
+            Some(crate::iq::literal_cmp::LiteralOperand::Column {
+                column: ColRef::new(*alias, column.clone()),
+                spec: spec.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn identity(
+    left: &crate::iq::literal_cmp::LiteralOperand,
+    value: &sf_core::Literal,
+) -> crate::iq::SqlCond {
+    crate::iq::SqlCond::LiteralCmp(Box::new(crate::iq::literal_cmp::LiteralComparison {
+        left: left.clone(),
+        right: crate::iq::literal_cmp::LiteralOperand::Constant(value.clone()),
+        value_op: None,
+    }))
+}
+
 pub(super) fn inverse(def: &TermDef, term: &Term) -> Result<Option<String>> {
     let TermDef::Derived { term_map, .. } = def else {
         return Ok(None);

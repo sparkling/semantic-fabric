@@ -112,6 +112,17 @@ pub struct TermSpec {
 }
 
 impl TermSpec {
+    /// R2RML §11.2: an explicit datatype equal to the resolved source type is
+    /// not an override. This applies to column literals, not template values.
+    pub fn uses_natural_type(&self, code: Option<crate::datatype::XsdTypeCode>) -> bool {
+        self.term_type == TermType::Literal
+            && self.language.is_none()
+            && self
+                .datatype
+                .as_ref()
+                .is_none_or(|datatype| code.is_some_and(|code| datatype.as_ref() == code.iri()))
+    }
+
     /// An IRI-valued term map.
     pub fn iri() -> Self {
         Self {

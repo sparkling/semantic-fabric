@@ -257,7 +257,7 @@ async fn explicit_literal_identity_preserves_signed_zero_terms_before_count() {
                 .map(|r| r["o"]["value"].as_str().unwrap())
                 .collect();
             values.sort();
-            assert_eq!(values, vec!["-0", "0"], "{json}");
+            assert_eq!(values, vec!["-0.0E0", "0.0E0"], "{json}");
         }
     }
 }
@@ -275,12 +275,13 @@ async fn literal_bgp_identity_is_not_numeric_filter_equality() {
     let setup =
         format!("{ZERO} CREATE TABLE right_values(o); INSERT INTO right_values VALUES (0.0);");
     for (pattern, expected) in [
-        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?o", vec!["0"]),
-        ("?s <http://ex/p> ?o FILTER(?o = 0)", vec!["-0", "0"]),
-        ("?s <http://ex/p> ?o FILTER(0 = ?o)", vec!["-0", "0"]),
-        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?o = ?x)", vec!["-0", "0"]),
-        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?x = ?o)", vec!["-0", "0"]),
-        ("?s <http://ex/p> ?o FILTER(sameTerm(?o, \"-0\"^^<http://www.w3.org/2001/XMLSchema#double>))", vec!["-0"]),
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?o", vec!["0.0E0"]),
+        ("?s <http://ex/p> ?o FILTER(?o = 0)", vec!["-0.0E0", "0.0E0"]),
+        ("?s <http://ex/p> ?o FILTER(0 = ?o)", vec!["-0.0E0", "0.0E0"]),
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?o = ?x)", vec!["-0.0E0", "0.0E0"]),
+        ("?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?x FILTER(?x = ?o)", vec!["-0.0E0", "0.0E0"]),
+        ("?s <http://ex/p> ?o FILTER(sameTerm(?o, \"-0.0E0\"^^<http://www.w3.org/2001/XMLSchema#double>))", vec!["-0.0E0"]),
+        ("?s <http://ex/p> ?o FILTER(sameTerm(?o, \"-0\"^^<http://www.w3.org/2001/XMLSchema#double>))", vec![]),
     ] {
         let query = format!("SELECT ?o WHERE {{ {pattern} }}");
         let json = answer(configured_mixed(&setup, &mapping), &query).await;
@@ -292,7 +293,7 @@ async fn literal_bgp_identity_is_not_numeric_filter_equality() {
 
 #[tokio::test]
 async fn literal_constant_constraints_survive_dedup_without_a_projected_object() {
-    for value in ["0", "-0"] {
+    for value in ["0.0E0", "-0.0E0"] {
         let query = format!("SELECT ?s WHERE {{ ?s <http://ex/p> \"{value}\"^^<http://www.w3.org/2001/XMLSchema#double> }}");
         let json = answer(configured_mixed(ZERO, &literal_mapping()), &query).await;
         let rows = json["results"]["bindings"].as_array().unwrap();

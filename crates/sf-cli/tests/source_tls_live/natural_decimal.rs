@@ -128,3 +128,71 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
         drop(server);
     }
 }
+
+#[test]
+#[ignore = "requires owned pinned PostgreSQL/MySQL TLS fixtures"]
+fn explicit_natural_decimal_is_coherent() {
+    for postgres in [true, false] {
+        let fixture = Fixture::new();
+        let database = Database::start(&fixture, postgres);
+        sql(
+            &database,
+            if postgres {
+                "ALTER TABLE items ADD COLUMN id INTEGER; ALTER TABLE items ADD COLUMN src NUMERIC"
+            } else {
+                "ALTER TABLE items ADD COLUMN id INTEGER; ALTER TABLE items ADD COLUMN src DECIMAL(30,6)"
+            },
+        );
+        assert_explicit(&fixture, &database);
+    }
+}
+
+pub(super) fn assert_explicit(fixture: &Fixture, database: &Database) {
+    let mapping = NUMERIC_MAPPING.replace(
+        "rr:column \"src\"",
+        "rr:column \"src\"; rr:datatype <http://www.w3.org/2001/XMLSchema#decimal>",
+    );
+    fixture.write("first.ttl", &mapping);
+    fixture.write("ontology.ttl", "<http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> . <http://example.test/number> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
+    sql(database, "DELETE FROM items; INSERT INTO items(id,src,value) VALUES (1,1.0,'same'),(2,1.00,'same'),(3,0.000,'same'),(4,NULL,'same')");
+    let (server, address) = start(fixture, database);
+    for modifier in ["", "DISTINCT "] {
+        let query = format!("SELECT {modifier}?n WHERE {{ ?s <{NUMBER}> ?n }}");
+        let actual = rows(address, fixture, &query);
+        assert_eq!(actual.len(), 2, "explicit natural bag: {query}: {actual:?}");
+        for lexical in ["0", "1"] {
+            assert!(
+                actual.iter().any(|row| row["n"]["value"] == lexical),
+                "{actual:?}"
+            );
+        }
+    }
+    for (lexical, expected) in [("1", 1), ("1.0", 0), ("1.00", 0)] {
+        let literal = format!("\"{lexical}\"^^<http://www.w3.org/2001/XMLSchema#decimal>");
+        for pattern in [
+            format!("?s <{NUMBER}> {literal}"),
+            format!("?s <{NUMBER}> ?n FILTER(sameTerm(?n, {literal}))"),
+        ] {
+            let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+            assert_eq!(rows(address, fixture, &query).len(), expected, "{query}");
+        }
+    }
+    assert_eq!(
+        rows(
+            address,
+            fixture,
+            &format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{NUMBER}> ?o }}")
+        )[0]["n"]["value"],
+        "2"
+    );
+    assert_eq!(
+        rows(
+            address,
+            fixture,
+            &format!("SELECT ?n WHERE {{ ?s <{NUMBER}> ?n FILTER(?n = 1.00) }}")
+        )
+        .len(),
+        1
+    );
+    drop(server);
+}

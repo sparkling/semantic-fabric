@@ -111,10 +111,8 @@ and an output-byte failure releases cap-one admission. Owned MySQL TLS SELECT an
 DISTINCT also preserve the full `DECIMAL(65,30)` value. Raw driver data and IRI
 construction are unchanged; normalization is linear, with output at most input
 bytes plus one. Ordered/floating numeric comparison and AVG remain separate work;
-the following refinement covers natural decimal identity and Eq/Ne. Existing explicit-datatype lexical behavior is unchanged:
-the [same-natural-datatype case in R2RML §11.2](https://www.w3.org/TR/r2rml/#generated-rdf-term)
-requires separate correction, not a claim that every explicit datatype overrides
-natural construction.
+the following refinements cover natural decimal identity/Eq/Ne and the explicit
+datatype case. An explicit datatype is not always an override of natural construction.
 
 ### Natural decimal comparison refinement (2026-09-09)
 
@@ -140,8 +138,34 @@ dominate fallible literal keys, including direct EXISTS bodies. Owned TLS CLI
 checks cover both providers' fixed/sameTerm/value matches, noncanonical and
 wrong-datatype constants, NULL/OPTIONAL, invalid-lexical negation, ZEROFILL, and
 PostgreSQL denied non-finite values with cap-one recovery. General natural BGP
-unification, same-natural explicit datatype construction, arithmetic breadth
+unification, broader native-family identity and arithmetic breadth
 and full native/release qualification remain required, unclosed work.
+
+### Explicit natural datatype correction (2026-09-09)
+
+[R2RML §11.2](https://www.w3.org/TR/r2rml/#generated-rdf-term) uses natural
+construction when an explicit datatype exactly equals the resolved natural type;
+only a different datatype selects the override. `TermSpec::uses_natural_type`
+now shares this decision between Rust column reconstruction and qualified SQL
+identity. No language-tag or template rule is changed. Unknown native types do
+not prove equality; SQLite dynamic values decide through their live storage type.
+
+Authored typed roles survive D1 until source metadata resolves them. SQLite keys
+retain all required lexical/datatype components, including simultaneous decoded,
+natural and unresolved typed consumers. DISTINCT and literal GROUP BY retain raw
+representatives, with separate canonical keys; raw UNIQUE metadata cannot erase
+literal DISTINCT. Comparison-only decoded authority restores aligned template
+keys without granting text projection or numeric/native comparison authority.
+Bounded federated literal reduction uses exact typed comparisons, not inverse
+raw spelling, while retaining existing row/payload/admission bounds.
+
+Required HTTP checks cover canonical Boolean/dateTime/dynamic-double output,
+fixed/sameTerm, signed zero, mixed IRI roles, DISTINCT/slice, GROUP BY and different
+datatype/language behavior; raw compiler tests preserve dynamic datatype identity.
+Owned TLS CLI checks cover explicit PostgreSQL/MySQL decimal identity and MySQL
+DATE/DATETIME, including hidden invalid-calendar errors, policy and recovery.
+Wider native families, general natural BGP, arithmetic and release qualification
+remain open; this does not establish validation of every different-datatype override.
 
 ### Natural temporal identity refinement (2026-09-09)
 
@@ -150,7 +174,7 @@ MySQL natural DATE/DATETIME now retains native payload and datatype while decode
 Rust remains the final natural-literal canonicalizer; source DATE/DATETIME fields
 and their datatype codes are not text-replaced. SQL set-work compares only a
 separately qualified canonical identity key: calendar validity (including accepted
-year zero) and trimmed DATETIME fractional zeros. Explicit datatype/language and
+year zero) and trimmed DATETIME fractional zeros. Different explicit datatypes, language and
 IRI construction retain decoder lexicals; sameTerm constants are never canonicalized.
 Original natural-term guards survive hidden projection/COUNT/ASK. Missing or
 incompatible temporal provenance is not xsd:string or native-equality authority.
@@ -161,7 +185,7 @@ These are existing ADR-0007/0034 comparison refinements, not a second RDF genera
 **Literal comparison refinement (2026-09-09).** RDF identity is the decoded
 lexical/datatype/language tuple, separate from numeric FILTER value promotion.
 SQLite compiler-owned predicates use shared Rust decoding and natural-literal
-canonicalization, not SQL casts; explicit datatype/language literals preserve
+canonicalization, not SQL casts; different-datatype overrides and language literals preserve
 their original lexical form. `sf-core::numeric_compare` validates the original
 four base numeric lexical spaces before integer/decimal/float/double promotion,
 avoids decimal-to-float double rounding and keeps NaN out of total-order rules.

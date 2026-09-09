@@ -50,3 +50,33 @@ pub(super) fn natural_datatype(raw: &str, decode: SqliteDecode) -> String {
     }
     format!("CASE typeof({raw}) WHEN 'integer' THEN 'http://www.w3.org/2001/XMLSchema#integer' WHEN 'real' THEN 'http://www.w3.org/2001/XMLSchema#double' WHEN 'blob' THEN 'http://www.w3.org/2001/XMLSchema#hexBinary' ELSE 'http://www.w3.org/2001/XMLSchema#string' END")
 }
+
+/// An explicit datatype may equal the runtime storage-class type. Select the
+/// existing callback's natural mode without changing the literal's datatype.
+pub(super) fn typed(
+    raw: String,
+    decode: SqliteDecode,
+    datatype: &str,
+    catalog: &ColumnCatalog,
+) -> String {
+    if let Some(code) = decode.declared {
+        return with_mode(raw, decode, code.iri().as_str() == datatype, catalog);
+    }
+    catalog
+        .lexical_keys
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let mode = format!(
+        "CASE WHEN {} = {} THEN 16 ELSE 0 END",
+        natural_datatype(&raw, decode),
+        sql_string_literal(datatype)
+    );
+    let padding = decode
+        .padding
+        .map_or_else(|| "-1".to_owned(), |n| n.to_string());
+    let expression = format!("__sf_lexical_key_v1({raw}, {mode}, {padding})");
+    if catalog.suppress_path_collation {
+        expression
+    } else {
+        path_comparison::exact_text(expression, Dialect::Sqlite)
+    }
+}

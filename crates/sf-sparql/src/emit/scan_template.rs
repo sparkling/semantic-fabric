@@ -16,6 +16,8 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
             ..
         } => {
             let inner = scan_actuals(input, dialect, catalog);
+            let original_lexical_keys = lexical_keys;
+            let lexical_keys = literal_roles::resolved(lexical_keys, dialect, &inner);
             let temporals = mysql_temporals(&scan.source, dialect, &inner);
             let sqlite_columns: HashMap<_, _> = columns
                 .iter()
@@ -26,7 +28,20 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
             let lexical_columns = sqlite_columns
                 .iter()
                 .filter(|(name, _)| {
-                    lexical_keys.iter().any(|key| {
+                    let mut modes = lexical_keys
+                        .iter()
+                        .filter(|key| key.column.as_ref() == name.as_str());
+                    modes.clone().any(|key| key.mode == LexicalMode::Decoded)
+                        && modes.all(|key| {
+                            matches!(key.mode, LexicalMode::Decoded | LexicalMode::Iri { .. })
+                        })
+                })
+                .map(|(name, decode)| (name.clone(), *decode))
+                .collect();
+            let lexical_comparison_columns = sqlite_columns
+                .iter()
+                .filter(|(name, _)| {
+                    original_lexical_keys.iter().any(|key| {
                         key.column.as_ref() == name.as_str() && key.mode == LexicalMode::Decoded
                     })
                 })
@@ -52,6 +67,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                 scalar_columns: iri_cmp::projected_scalars(columns, &inner),
                 sqlite_columns,
                 lexical_columns,
+                lexical_comparison_columns,
                 source_kind: AliasSourceKind::Derived,
                 columns: columns.iter().map(|(name, _)| name.to_string()).collect(),
                 path: false,
@@ -105,6 +121,7 @@ pub(super) fn mysql_temporals(
     else {
         return HashMap::new();
     };
+    let lexical_keys = literal_roles::resolved(lexical_keys, dialect, inner);
     columns
         .iter()
         .filter_map(|(name, term)| {

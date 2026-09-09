@@ -75,6 +75,23 @@ async fn distinct_rdf_keys_are_not_collapsed_by_source_collation() {
 }
 
 #[tokio::test]
+async fn canonical_literal_reducer_does_not_compare_raw_source_spelling() {
+    let object = "rr:column \"value\"; rr:datatype <http://www.w3.org/2001/XMLSchema#boolean>";
+    let (cfg, _, _files) = joined_config(
+        [&[("l", "true")], &[("r", "1"), ("r", "true"), ("no", "0")]],
+        object,
+        "BOOLEAN",
+    );
+    let cfg = Arc::new(cfg);
+    for query in [JOIN, "SELECT ?left ?right WHERE { ?right <http://example.test/right> ?key . ?left <http://example.test/left> ?key }"] {
+        let answer = json(cfg.clone(), query).await;
+        let rows = answer["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{query}: {answer}");
+        assert_eq!(rows[0]["right"]["value"], "http://example.test/item/r");
+    }
+}
+
+#[tokio::test]
 async fn unsupported_join_shapes_reject_before_source_admission() {
     for query in [
         "SELECT DISTINCT ?left WHERE { ?left <http://example.test/left> ?key . ?right <http://example.test/right> ?key }",

@@ -13,9 +13,7 @@ pub(super) fn value_equality(
 ) -> Result<Option<String>> {
     use crate::iq::CmpOp;
     let natural = |value: &LiteralOperand| {
-        matches!(value,
-        LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none()
-            && natural_literal::column_code(column, actuals) == Some(XsdTypeCode::Decimal))
+        natural_literal::natural(value, actuals) == Some(XsdTypeCode::Decimal)
     };
     let qualified = |value: &LiteralOperand| {
         natural(value)
@@ -27,10 +25,14 @@ pub(super) fn value_equality(
     {
         return Ok(None);
     }
-    if [&cmp.left, &cmp.right].iter().any(|value| matches!(value,
-        LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none()
-            && natural_literal::column_fact(column, actuals) == Some(None))) {
-        return Err(Error::Unsupported("natural numeric equality requires a compatible decoder in every SubPlan arm".into()));
+    if [&cmp.left, &cmp.right].iter().any(|value| {
+        matches!(value,
+        LiteralOperand::Column { column, spec } if spec.language.is_none()
+            && natural_literal::column_fact(column, actuals) == Some(None))
+    }) {
+        return Err(Error::Unsupported(
+            "natural numeric equality requires a compatible decoder in every SubPlan arm".into(),
+        ));
     }
     if ![&cmp.left, &cmp.right].iter().any(|v| natural(v)) {
         return Ok(None);

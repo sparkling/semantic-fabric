@@ -15,6 +15,15 @@ nothing moved to post-1.0 is relabelled implemented, supported, or complete.
 
 ## Immediate delivery queue (2026-09-09)
 
+**Explicit datatype closure:** R2RML's matching-natural-datatype rule is wired
+through Rust construction, source-qualified identity and raw-preserving set-work.
+Qualified PostgreSQL/MySQL decimal and MySQL temporal CLI cases, SQLite public
+DISTINCT/GROUP BY/mixed-IRI cases and bounded literal federation reduction are
+covered by existing required checks (ADR-0015/0034). Review caught and corrected
+dynamic datatype loss, raw grouping and comparison/projection authority confusion.
+This is an exactness slice; broader native families, general natural BGP/arithmetic,
+total execution/lifecycle controls and exact-release qualification are still open.
+
 **PostgreSQL decoder prerequisite (2026-09-09):** corrected the signed digit-count
 interpretation so a valid 131,072-digit NUMERIC with `.00` scale reconstructs its
 exact IRI over authenticated owned PostgreSQL TLS. The wire boundary/truncation
@@ -28,7 +37,7 @@ multi-arm DISTINCT rejection stays tested and closed; compiler UNION-key repair
 does not promote its serving admission. Natural decimal construction now also
 passes full-range lexical normalization and authenticated owned TLS SELECT,
 DISTINCT, hidden COUNT/ASK, mixed raw-IRI and output-cap recovery checks. Natural
-decimal fixed/sameTerm and separate integer/decimal Eq/Ne now have owned TLS CLI evidence on both providers, including malformed-literal negation, ZEROFILL, NULL/OPTIONAL and PostgreSQL denied-invalid-row policy isolation. Raw payload/provenance remains separate; coercing UNIONs cannot inherit identity proof. General natural BGP/mixed identity, same-natural explicit datatype, ordered/floating arithmetic and other
+decimal fixed/sameTerm and separate integer/decimal Eq/Ne now have owned TLS CLI evidence on both providers, including malformed-literal negation, ZEROFILL, NULL/OPTIONAL and PostgreSQL denied-invalid-row policy isolation. Raw payload/provenance remains separate; coercing UNIONs cannot inherit identity proof. General natural BGP/mixed identity, ordered/floating arithmetic and other
 families remain open. This closes exactness slices, not whole-family or release
 qualification (ADR-0015/0024/0034).
 The full-workspace GTFS Q5 regression was repaired first (`ae4146f`): verified-key

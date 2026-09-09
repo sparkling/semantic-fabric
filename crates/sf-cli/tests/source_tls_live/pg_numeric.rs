@@ -18,6 +18,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     range::assert_range(fixture, database);
     assert_identity(fixture, database);
     natural_decimal::assert_identity(fixture, database);
+    natural_decimal::assert_explicit(fixture, database);
     assert_references(fixture, database);
     assert_invalid(fixture, database);
 }
@@ -25,6 +26,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
 pub(super) fn assert_mysql_range(fixture: &Fixture, database: &Database) {
     range::assert_mysql(fixture, database);
     natural_decimal::assert_identity(fixture, database);
+    natural_decimal::assert_explicit(fixture, database);
 }
 
 #[test]

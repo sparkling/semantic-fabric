@@ -527,9 +527,10 @@ fn distinct_not_removed_on_nullable_unique_key() {
 }
 
 #[test]
-fn distinct_removed_on_notnull_unique_key() {
-    // Contrast: a NOT-NULL single-column UNIQUE col IS a true key, so a DISTINCT
-    // over a var derived from it is provably redundant → removed.
+fn distinct_retained_on_natural_literal_notnull_unique_key() {
+    // A raw SQL key is not an injectivity proof for the live natural decoder.
+    // For example, SQLite BOOLEAN 1 and 'true' can be distinct UNIQUE cells
+    // that construct the same RDF literal. Cached schema text is no authority.
     let mut b = Branch::single(scan(0, "emp"));
     b.bindings.insert("e".into(), col_binding(0, "email"));
     let mut ts = TableSchema::new("emp");
@@ -541,8 +542,8 @@ fn distinct_removed_on_notnull_unique_key() {
     };
     let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
     assert!(
-        !out[0].distinct,
-        "NOT-NULL UNIQUE key ⇒ DISTINCT redundant → removed"
+        out[0].distinct,
+        "natural literal may normalize distinct SQL keys → DISTINCT retained"
     );
 }
 

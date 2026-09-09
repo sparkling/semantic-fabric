@@ -49,6 +49,7 @@ mod projection_layout;
 pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
+mod literal_roles;
 mod natural_decimal;
 mod natural_literal;
 mod path_comparison;
@@ -639,6 +640,9 @@ struct AliasActuals {
     text_columns: HashMap<String, TextKey>,
     sqlite_columns: HashMap<String, SqliteDecode>,
     lexical_columns: HashMap<String, SqliteDecode>,
+    // A retained decoded consumer can license an aligned RDF comparison while
+    // another natural/typed consumer still forbids replacing the raw payload.
+    lexical_comparison_columns: HashMap<String, SqliteDecode>,
 }
 
 type ActualColumns = HashMap<usize, AliasActuals>;
@@ -665,6 +669,7 @@ fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActua
             .cloned()
             .unwrap_or_default(),
         lexical_columns: HashMap::new(),
+        lexical_comparison_columns: HashMap::new(),
         source_kind: match source {
             LogicalSource::Table(_) => AliasSourceKind::Table,
             LogicalSource::Query(_) => AliasSourceKind::Query,
@@ -858,7 +863,23 @@ fn emit_branch_keys(
         Vec::new()
     };
     let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(|key| *key);
-    let distinct = if b.distinct && !term_dedup && !numeric_distinct {
+    let literal_window = (b.distinct && !term_dedup && dialect == Dialect::Sqlite)
+        .then(|| literal_roles::sqlite_distinct(b, catalog, &actuals))
+        .flatten();
+    let (select_list, literal_output) = match &literal_window {
+        Some(keys) => {
+            let raw = projection
+                .iter()
+                .enumerate()
+                .map(|(i, c)| format!("{} AS c{i}", colref(c, dialect, &actuals)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (select, output) = literal_roles::window(&raw, keys, projection.len());
+            (select, Some(output))
+        }
+        None => (select_list, None),
+    };
+    let distinct = if b.distinct && !term_dedup && !numeric_distinct && literal_window.is_none() {
         "DISTINCT "
     } else {
         ""
@@ -874,8 +895,11 @@ fn emit_branch_keys(
     if numeric_distinct {
         skeleton = pg_numeric::distinct_sql(skeleton, &numeric_keys);
     }
+    if let Some(output) = literal_output {
+        skeleton = format!("SELECT {output} FROM ({skeleton}) __sf_literal_raw WHERE __sf_literal_raw.__sf_literal_rank = 1");
+    }
     // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
-    if let Some(order) = if numeric_distinct {
+    if let Some(order) = if numeric_distinct || literal_window.is_some() {
         pg_numeric::order(b, &projection)?
     } else {
         render_order(
@@ -1210,7 +1234,14 @@ fn emit_agg_branch(
         let expression = match item {
             AggregateProjection::Key(column) => {
                 let rendered = colref(column, dialect, actuals);
-                group_cols.push(rendered.clone());
+                if let Some(keys) = (dialect == Dialect::Sqlite)
+                    .then(|| literal_roles::sqlite_group_keys(b, agg, column, catalog, actuals))
+                    .flatten()
+                {
+                    group_cols.extend(keys);
+                } else {
+                    group_cols.push(rendered.clone());
+                }
                 rendered
             }
             AggregateProjection::Aggregate(aggregate) => agg_expr_sql(aggregate, dialect, actuals),

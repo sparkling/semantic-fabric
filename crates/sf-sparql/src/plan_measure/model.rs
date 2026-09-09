@@ -168,6 +168,9 @@ pub(super) fn visit_scan<'a>(
                 if let crate::iq::scan::LexicalMode::Iri { base: Some(base) } = &key.mode {
                     walker.payload(base.len())?;
                 }
+                if let crate::iq::scan::LexicalMode::TypedLiteral { datatype } = &key.mode {
+                    walker.payload(datatype.as_str().len())?;
+                }
             }
             push_conditions(walker, guards, depth)
         }

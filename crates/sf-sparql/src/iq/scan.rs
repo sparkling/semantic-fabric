@@ -21,6 +21,11 @@ pub enum LexicalMode {
     DecodedWithNatural,
     /// Known plain natural literal only; no raw-lexical output authority.
     Natural,
+    /// Authored column datatype retained until live decoder metadata decides
+    /// natural construction versus a lexical datatype override.
+    TypedLiteral {
+        datatype: sf_core::NamedNode,
+    },
     Iri {
         base: Option<Box<str>>,
     },

@@ -109,7 +109,13 @@ pub(super) fn render(
                     .flatten();
                 if part == 0 {
                     return Ok(if let Some(decode) = decode {
-                        lexical_key::with_mode(raw.clone(), decode, natural, catalog)
+                        if let Some(datatype) =
+                            spec.datatype.as_ref().filter(|_| spec.language.is_none())
+                        {
+                            lexical_key::typed(raw.clone(), decode, datatype.as_str(), catalog)
+                        } else {
+                            lexical_key::with_mode(raw.clone(), decode, natural, catalog)
+                        }
                     } else {
                         path_comparison::rdf_column(column, dialect, catalog, actuals)
                     });

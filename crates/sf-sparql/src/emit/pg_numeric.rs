@@ -89,7 +89,11 @@ pub(super) fn distinct_keys(b: &Branch, dialect: Dialect, actuals: &ActualColumn
         .map(|alias| {
             (
                 *alias,
-                crate::cascade::distinct_scan::binding_lexical_keys(b, *alias),
+                literal_roles::resolved(
+                    &crate::cascade::distinct_scan::binding_lexical_keys(b, *alias),
+                    dialect,
+                    &actuals[alias],
+                ),
             )
         })
         .collect();

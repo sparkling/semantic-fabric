@@ -226,14 +226,12 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
 }
 
 /// Build a derived term, applying the R2RML §10 natural datatype mapping
-/// (ADR-0015) when — and only when — the term map is a column-valued literal with
-/// no explicit `rr:datatype` / `rr:language`. Templates, IRIs, blank nodes, and
-/// explicitly-typed/lang-tagged literals go through the plain `sf-core` term-gen
-/// path unchanged.
+/// (ADR-0015) to column literals without an override, including an explicit
+/// datatype equal to the resolved source datatype (R2RML §11.2). Templates,
+/// IRIs, blank nodes, different datatypes and language retain their own path.
 fn derived_term(term_map: &TermMap, alias: usize, raw: &RawRow<'_>) -> Result<Option<Term>> {
     if let TermMap::Column(col, spec) = term_map {
-        if spec.term_type == TermType::Literal && spec.datatype.is_none() && spec.language.is_none()
-        {
+        if spec.uses_natural_type(raw.code_for(alias, col)) {
             let row = AliasRow { raw, alias };
             let Some(value) = row.value(col) else {
                 return Ok(None);
@@ -423,7 +421,7 @@ pub(crate) fn reconstruct(interned: &InternedBindings<'_>, raw: &RawRow<'_>) -> 
 use std::sync::Arc;
 
 use sf_core::datatype::{self, XsdTypeCode};
-use sf_core::ir::{TermMap, TermType};
+use sf_core::ir::TermMap;
 use sf_core::{Literal, Row, Term, Triple};
 
 use crate::graph_map::RR_DEFAULT_GRAPH;

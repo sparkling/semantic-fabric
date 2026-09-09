@@ -39,6 +39,7 @@ pub(super) fn actuals(
             })
             .collect(),
         lexical_columns: HashMap::new(),
+        lexical_comparison_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns: (0..columns.len()).map(|i| format!("c{i}")).collect(),
         path: false,
@@ -76,7 +77,11 @@ pub(super) fn sql(
         .map(|scan| {
             (
                 scan.alias,
-                crate::cascade::distinct_scan::lexical_keys(input, scan.alias),
+                literal_roles::resolved(
+                    &crate::cascade::distinct_scan::lexical_keys(input, scan.alias),
+                    dialect,
+                    &actuals[&scan.alias],
+                ),
             )
         })
         .collect();
@@ -100,8 +105,10 @@ pub(super) fn sql(
         } else {
             path_comparison::column_text(c, &actuals).is_some()
                 || (dialect == Dialect::Sqlite
-                    && column_modes(c, &modes).any(|key| key.mode == LexicalMode::Decoded)
-                    && lexical_key::column_decode(c, &actuals).is_some())
+                    && modes
+                        .get(&c.alias)
+                        .and_then(|keys| literal_roles::sqlite_key(c, keys, catalog, &actuals))
+                        .is_some())
         }
     });
     let legacy = if window {
@@ -142,17 +149,20 @@ pub(super) fn sql(
             }
             if !resolved || column_modes(column, &modes).any(|key| key.mode == LexicalMode::Decoded)
             {
-                keys.push(
-                    if let Some(decode) =
-                        lexical_key::column_decode(column, &actuals).filter(|_| {
-                            dialect == Dialect::Sqlite
-                                && column_modes(column, &modes)
-                                    .any(|key| key.mode == LexicalMode::Decoded)
+                keys.extend(
+                    if let Some(key) = (dialect == Dialect::Sqlite)
+                        .then(|| {
+                            modes.get(&column.alias).and_then(|keys| {
+                                literal_roles::sqlite_key(column, keys, catalog, &actuals)
+                            })
                         })
+                        .flatten()
                     {
-                        lexical_key::expression(colref(column, dialect, &actuals), decode, catalog)
+                        key
                     } else {
-                        path_comparison::rdf_column(column, dialect, catalog, &actuals)
+                        vec![path_comparison::rdf_column(
+                            column, dialect, catalog, &actuals,
+                        )]
                     },
                 );
             }

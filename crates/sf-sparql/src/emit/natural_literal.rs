@@ -26,10 +26,10 @@ pub(super) fn column_fact(column: &ColRef, actuals: &ActualColumns) -> Option<Op
         .copied()
 }
 
-fn natural(value: &LiteralOperand, actuals: &ActualColumns) -> Option<XsdTypeCode> {
+pub(super) fn natural(value: &LiteralOperand, actuals: &ActualColumns) -> Option<XsdTypeCode> {
     match value {
         LiteralOperand::Column { column, spec }
-            if spec.datatype.is_none() && spec.language.is_none() =>
+            if spec.uses_natural_type(column_code(column, actuals)) =>
         {
             column_code(column, actuals)
         }
@@ -119,7 +119,7 @@ pub(super) fn comparison(
     pidx: &mut usize,
 ) -> Result<Option<String>> {
     if matches!(dialect, Dialect::MySql | Dialect::Postgres) && cmp.value_op.is_none() && [&cmp.left, &cmp.right].iter().any(|value| {
-        matches!(value, LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none() && column_fact(column, actuals) == Some(None))
+        matches!(value, LiteralOperand::Column { column, spec } if spec.language.is_none() && column_fact(column, actuals) == Some(None))
     }) {
         return Err(Error::Unsupported("natural literal identity requires a compatible decoder in every SubPlan arm".into()));
     }

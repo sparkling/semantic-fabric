@@ -1,6 +1,43 @@
 use super::*;
 use sf_core::ir::TermSpec;
 
+#[test]
+fn explicit_matching_datatype_uses_the_resolved_natural_constructor() {
+    let schema = vec![ColRef::new(0, "value")];
+    let index = build_col_index(&schema);
+    for (code, lexical, expected) in [
+        (XsdTypeCode::Decimal, "+0001.2300", "1.23"),
+        (XsdTypeCode::Integer, "+0001", "1"),
+        (XsdTypeCode::Boolean, "1", "true"),
+        (XsdTypeCode::Double, "1", "1.0E0"),
+        (
+            XsdTypeCode::DateTime,
+            "2024-03-15 00:00:00.120000",
+            "2024-03-15T00:00:00.12",
+        ),
+    ] {
+        let values = vec![Some(lexical.to_owned())];
+        let codes = vec![Some(code)];
+        let raw = RawRow {
+            values: &values,
+            codes: &codes,
+            index: &index,
+        };
+        let term_map = TermMap::Column(
+            "value".into(),
+            TermSpec::typed_literal(code.iri().into_owned()),
+        );
+        let term = derived_term(&term_map, 0, &raw).unwrap().unwrap();
+        assert_eq!(
+            term,
+            Term::Literal(Literal::new_typed_literal(expected, code.iri())),
+            "{code:?}"
+        );
+        let natural = TermMap::Column("value".into(), TermSpec::plain_literal());
+        assert_eq!(derived_term(&natural, 0, &raw).unwrap(), Some(term));
+    }
+}
+
 fn blank(graph: R2rmlGraphScope, graph_value: &str) -> Term {
     let schema = vec![ColRef::new(0, "id"), ColRef::new(0, "graph")];
     let index = build_col_index(&schema);

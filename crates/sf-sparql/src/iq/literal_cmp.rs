@@ -10,10 +10,7 @@ pub(crate) fn validate_term(def: &super::TermDef, conditions: &mut Vec<super::Sq
         alias,
     } = def
     {
-        if spec.term_type == sf_core::ir::TermType::Literal
-            && spec.datatype.is_none()
-            && spec.language.is_none()
-        {
+        if spec.term_type == sf_core::ir::TermType::Literal && spec.language.is_none() {
             let left = LiteralOperand::Column {
                 column: ColRef::new(*alias, column.clone()),
                 spec: spec.clone(),

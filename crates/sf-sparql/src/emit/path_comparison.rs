@@ -79,6 +79,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         scalar_columns: HashMap::new(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
+        lexical_comparison_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns: vec!["sf_s".into(), "sf_o".into()],
         path: true,
@@ -319,6 +320,7 @@ pub(super) fn subplan_actuals(
             .collect(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
+        lexical_comparison_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns,
         path: plan.branches.iter().any(branch_has_path),
@@ -333,17 +335,26 @@ pub(super) fn render_key_equality(
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
 ) -> String {
+    let comparison_decode = |column: &ColRef| {
+        let source = actuals.get(&column.alias)?;
+        source
+            .lexical_comparison_columns
+            .get(resolve_col(&column.column, Some(&source.columns)))
+            .copied()
+    };
     if dialect == Dialect::Sqlite
         && [a, b].iter().all(|column| {
-            lexical_key::proven_column(column, actuals).is_some()
-                || column_text(column, actuals).is_some()
+            comparison_decode(column).is_some() || column_text(column, actuals).is_some()
         })
     {
-        return format!(
-            "{} = {}",
-            rdf_column(a, dialect, catalog, actuals),
-            rdf_column(b, dialect, catalog, actuals)
-        );
+        let comparison = |column: &ColRef| {
+            comparison_decode(column)
+                .map(|decode| {
+                    lexical_key::expression(colref(column, dialect, actuals), decode, catalog)
+                })
+                .unwrap_or_else(|| rdf_text_column(column, dialect, catalog, actuals))
+        };
+        return format!("{} = {}", comparison(a), comparison(b));
     }
     let (mut left, mut right) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
     let path = [a, b]

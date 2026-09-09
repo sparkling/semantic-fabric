@@ -11,11 +11,17 @@ fn mysql_natural_temporal_identity_is_exact() {
 }
 
 pub(super) fn assert_responses(fixture: &Fixture, database: &Database) {
-    fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+    for explicit in [false, true] {
+        assert_profile(fixture, database, explicit);
+    }
+}
+
+fn assert_profile(fixture: &Fixture, database: &Database, explicit: bool) {
+    let mapping = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
 <#items> rr:logicalTable [rr:tableName "items"];
  rr:subject <http://example.test/item>;
  rr:predicateObjectMap [rr:predicate <http://example.test/date>; rr:objectMap [rr:column "src"]];
- rr:predicateObjectMap [rr:predicate <http://example.test/edge>; rr:objectMap [rr:template "http://example.test/n/{src}"]]."#);
+ rr:predicateObjectMap [rr:predicate <http://example.test/edge>; rr:objectMap [rr:template "http://example.test/n/{src}"]]."#;
     fixture.write("ontology.ttl", "<http://example.test/date> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> .");
     for (native, datatype, values, invalid) in [
         (
@@ -43,6 +49,9 @@ pub(super) fn assert_responses(fixture: &Fixture, database: &Database) {
             "1900-02-29",
         ),
     ] {
+        fixture.write("first.ttl", &if explicit {
+            mapping.replace("rr:column \"src\"", &format!("rr:column \"src\"; rr:datatype <http://www.w3.org/2001/XMLSchema#{datatype}>"))
+        } else { mapping.to_owned() });
         sql(
             database,
             &format!("DELETE FROM items; ALTER TABLE items MODIFY src {native}"),

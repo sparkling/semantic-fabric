@@ -30,6 +30,15 @@ rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy
 isolation; compiler tests cover the DISTINCT SQL wrapper. ADR-0015 now separately qualifies full-range natural decimal construction and fixed/sameTerm/Eq/Ne keys with raw payload preservation. Positional natural provenance survives raw Projection/Ref/SubPlan only with compatible decoder proof; coercing MySQL decimal UNIONs retain rejection markers, not raw-equality authority.
 General natural BGP unification, mixed/native identity and release qualification remain open.
 
+**Explicit natural datatype correction (2026-09-09):** D1 retains `TypedLiteral`
+until live type resolution; matching datatypes use natural identity, not raw text.
+SQLite partition tuples retain dynamic datatype and every typed/decoded consumer;
+output DISTINCT and literal GROUP BY preserve raw representatives. Raw UNIQUE
+keys cannot erase literal DISTINCT. Separate comparison-only decoded authority
+preserves aligned IRI keys without replacing mixed literal payloads. Required
+HTTP/raw-compiler and owned TLS CLI checks cover the qualified paths in ADR-0015;
+the bounded federation reducer also uses typed identity without widening its profile.
+
 ## Current wrapper boundary (2026-09-08)
 
 D1 DISTINCT and D2 rendered-width wrappers use `ScanSource::Projection`: owned
@@ -255,13 +264,15 @@ and PARTITION keys now use decoder-exact text with original lexical-consumer pro
 native/natural/unknown consumers withhold that substitution. Raw temporal authority
 is revoked through Projection/RefAtom/SubPlan; transformed outputs are text only.
 Required owned CLI checks cover valid/partial/invalid/zero dates, DATETIME fractions,
-fixed/equality/COUNT/OPTIONAL, duplicate-vs-distinct partial dates and explicit xsd:date
-literal bags. A global incomplete-date-to-zero rewrite is not sound and is not implemented.
+fixed/equality/COUNT/OPTIONAL and duplicate-vs-distinct partial-date IRI bags.
+Matching explicit xsd:date now requires natural validation: invalid calendars
+fail terminally even when hidden by COUNT/ASK; cap-one recovery is required.
+A global incomplete-date-to-zero rewrite is not sound and is not implemented.
 
 MySQL natural DATE/DATETIME now retains native payload and datatype while decoder-qualified identity keys match canonical Rust output; query constants remain verbatim. Required owned TLS CLI checks cover canonical/noncanonical fixed and sameTerm matches, DATE/leap/year-zero/extrema and DATETIME fractions, duplicate bags, nested projection, mixed literal/IRI joins, NULL/negation, invalid hidden SELECT/COUNT/ASK terms, cap-one recovery and denied-invalid-row policy/existential/OPTIONAL isolation. Coercing mixed temporal SubPlans retain a rejection marker instead of falling back to raw equality. Wider natural/native identity and native-consumer copies remain open.
 Natural validation is captured on the original MySQL atom before projection or
 aggregation hides it. Rust remains the output canonicalizer; only proved natural
-identity uses the SQL calendar/fraction recipe. Raw IRI/explicit literal recipes
+identity uses the SQL calendar/fraction recipe. Raw IRI/different-datatype literal recipes
 retain decoded spellings, and natural facts do not confer raw-IRI authority.
 PostgreSQL numeric/temporal and native floating recipes also remain unqualified:
 plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity.

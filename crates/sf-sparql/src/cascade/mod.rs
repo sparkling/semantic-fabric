@@ -1197,6 +1197,12 @@ fn term_map_is_injective(term_map: &TermMap) -> bool {
     }
 }
 
+fn binding_preserves_source_uniqueness(def: &TermDef) -> bool {
+    !matches!(def, TermDef::Derived { term_map: TermMap::Column(_, spec), .. }
+        if spec.term_type == TermType::Literal && spec.language.is_none())
+        && binding_is_injective(def)
+}
+
 /// Drop a `DISTINCT` already implied by a **projected unique key** (DISTINCT over
 /// a key is a no-op — R4: never *add* DISTINCT, only remove a provably redundant
 /// one). Sound proof: the branch is a single base-table scan with no OPTIONAL, so
@@ -1232,7 +1238,7 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
         // Single-column key: any projected injective binding reads a unique key col.
         let redundant_single = b.bindings.iter().any(|(var, def)| {
             projected(var)
-                && binding_is_injective(def)
+                && binding_preserves_source_uniqueness(def)
                 && keys
                     .iter()
                     .any(|k| def.columns().contains(&ColRef::new(scan.alias, k.clone())))
@@ -1243,7 +1249,7 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
         let redundant_composite = !redundant_single
             && ts.primary_key.len() > 1
             && b.bindings.iter().any(|(var, def)| {
-                if !projected(var) || !binding_is_injective(def) {
+                if !projected(var) || !binding_preserves_source_uniqueness(def) {
                     return false;
                 }
                 let TermDef::Derived {
@@ -1288,7 +1294,7 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
                 && ts.primary_key.iter().all(|pk_col| {
                     b.bindings.iter().any(|(var, def)| {
                         projected(var)
-                            && binding_is_injective(def)
+                            && binding_preserves_source_uniqueness(def)
                             && def.columns().iter().any(|c| {
                                 c.alias == scan.alias && c.column.as_ref() == pk_col.as_str()
                             })

@@ -38,9 +38,8 @@ fn keys(branch: &Branch, alias: usize, with_conditions: bool) -> Vec<crate::iq::
             TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::BlankNode => {
                 Some(LexicalMode::Decoded)
             }
-            TermMap::Column(_, spec) => (spec.term_type == sf_core::ir::TermType::Literal
-                && (spec.datatype.is_some() || spec.language.is_some()))
-            .then_some(LexicalMode::Decoded),
+            TermMap::Column(_, spec) if spec.language.is_some() => Some(LexicalMode::Decoded),
+            TermMap::Column(_, spec) => spec.datatype.clone().map(|datatype| LexicalMode::TypedLiteral { datatype }),
             TermMap::Constant(_) => return,
         }.map(Consumer::Lexical).or_else(|| {
             matches!(map, TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::Literal
@@ -179,10 +178,15 @@ fn keys(branch: &Branch, alias: usize, with_conditions: bool) -> Vec<crate::iq::
                     .iter()
                     .any(|m| matches!(m, Consumer::Lexical(LexicalMode::Iri { .. })));
             let natural_only = modes.len() == 1 && natural;
+            let modes_have_typed = modes
+                .iter()
+                .any(|m| matches!(m, Consumer::Lexical(LexicalMode::TypedLiteral { .. })));
             modes
                 .into_iter()
                 .filter_map(move |consumer| match consumer {
-                    Consumer::Natural if natural_only => Some(LexicalMode::Natural),
+                    Consumer::Natural if natural_only || modes_have_typed => {
+                        Some(LexicalMode::Natural)
+                    }
                     Consumer::Natural => None,
                     Consumer::Lexical(_) if veto => None,
                     Consumer::Lexical(LexicalMode::Decoded) if natural => {
@@ -293,15 +297,18 @@ mod tests {
         branch.bindings.insert("typed".into(), typed);
         assert_eq!(
             lexical_keys(&branch, 3).len(),
-            1,
-            "explicit literal identity is now condition-owned"
+            2,
+            "authored datatype proof must survive independently of raw IRI consumption"
         );
         branch.bindings.remove("iri");
         assert_eq!(lexical_keys(&branch, 3).len(), 1);
         branch.bindings.insert("natural".into(), natural);
         let mixed = lexical_keys(&branch, 3);
-        assert_eq!(mixed.len(), 1);
-        assert_eq!(mixed[0].mode, LexicalMode::DecodedWithNatural);
+        assert_eq!(mixed.len(), 2);
+        assert!(mixed.iter().any(|key| key.mode == LexicalMode::Natural));
+        assert!(mixed
+            .iter()
+            .any(|key| matches!(key.mode, LexicalMode::TypedLiteral { .. })));
         branch.bindings.clear();
         branch.bindings.insert("iri".into(), iri);
         branch.bindings.insert(
