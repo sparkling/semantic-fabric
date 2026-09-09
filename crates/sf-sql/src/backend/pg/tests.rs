@@ -219,7 +219,7 @@ fn pg_value_numeric_nan_and_infinity_surface_as_unsupported() {
     });
 }
 
-fn numeric_wire(ndigits: i16, weight: i16, sign: u16, dscale: u16, digits: &[i16]) -> Vec<u8> {
+fn numeric_wire(ndigits: u16, weight: i16, sign: u16, dscale: u16, digits: &[i16]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(8 + digits.len() * 2);
     bytes.extend_from_slice(&ndigits.to_be_bytes());
     bytes.extend_from_slice(&weight.to_be_bytes());
@@ -229,6 +229,18 @@ fn numeric_wire(ndigits: i16, weight: i16, sign: u16, dscale: u16, digits: &[i16
         bytes.extend_from_slice(&digit.to_be_bytes());
     }
     bytes
+}
+
+#[test]
+fn decode_pg_numeric_unsigned_digit_count_preserves_large_finite_values() {
+    let digits = vec![1111; 32768];
+    let wire = numeric_wire(32768, 32767, 0x0000, 2, &digits);
+    let expected = format!("{}.00", "1111".repeat(32768));
+    assert_eq!(decode_pg_numeric(&wire).unwrap(), expected);
+    assert!(matches!(
+        decode_pg_numeric(&wire[..wire.len() - 2]),
+        Err(Error::Marshal(message)) if message.contains("digit array truncated")
+    ));
 }
 
 #[test]

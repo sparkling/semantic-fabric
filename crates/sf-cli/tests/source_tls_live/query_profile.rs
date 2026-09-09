@@ -5,9 +5,10 @@ use std::collections::BTreeSet;
 mod natural_temporal;
 #[path = "ordinary_identity.rs"]
 mod ordinary_identity;
+#[path = "pg_numeric.rs"]
+mod pg_numeric;
 #[path = "unicode_templates.rs"]
 mod unicode_templates;
-
 const EDGE: &str = "http://example.test/edge";
 const MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
 <#edges> a rr:TriplesMap ; rr:logicalTable [ rr:tableName "items" ] ;
@@ -481,7 +482,9 @@ fn native_describe_and_recursive_paths_are_exact() {
         let server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();
         drop(server);
-        if !postgres {
+        if postgres {
+            pg_numeric::assert_large_decoder(&fixture, &database);
+        } else {
             natural_temporal::assert_responses(&fixture, &database);
         }
         eprintln!(

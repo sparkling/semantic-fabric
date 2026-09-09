@@ -63,6 +63,17 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 > remain rejected by serving admission; raw compiler predicate tests do not widen
 > that profile. General key equality, source bounds and release remain separate.
 
+### PostgreSQL NUMERIC decoder correction (2026-09-09)
+
+The binary digit count is unsigned 16-bit; its weight remains signed. The reader
+now accepts 32,768 digit groups instead of rejecting a valid large value as a
+negative count. It preserves arbitrary-precision lexical digits and display scale,
+retains truncated-array checks, and still rejects NaN/infinities as unsupported.
+The required owned PostgreSQL TLS query-profile aggregate includes authenticated
+IRI reconstruction of a 131,072-digit NUMERIC with `.00` display scale. A synthetic
+wire regression also covers the unsigned boundary and truncation. This repairs
+the raw decoder, not natural-decimal range or numeric IRI comparison/deduplication.
+
 ### Natural temporal identity refinement (2026-09-09)
 
 MySQL natural DATE/DATETIME now retains native payload and datatype while decoder-qualified identity keys match canonical Rust output; query constants remain verbatim. Required owned TLS CLI checks cover canonical/noncanonical fixed and sameTerm matches, DATE/leap/year-zero/extrema and DATETIME fractions, duplicate bags, nested projection, mixed literal/IRI joins, NULL/negation, invalid hidden SELECT/COUNT/ASK terms, cap-one recovery and denied-invalid-row policy/existential/OPTIONAL isolation. Coercing mixed temporal SubPlans retain a rejection marker instead of falling back to raw equality. Wider natural/native identity and native-consumer copies remain open.

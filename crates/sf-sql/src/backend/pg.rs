@@ -151,7 +151,7 @@ impl<'a> FromSql<'a> for PgNumeric {
 
 /// Decode a PostgreSQL `NUMERIC` binary wire value into its arbitrary-precision
 /// decimal LEXICAL STRING — never through a float (M3 fix 2). Wire format (PG's
-/// `numeric_send`/`numeric_recv`): `i16 ndigits`, `i16 weight`, `u16 sign`, `u16
+/// `numeric_send`/`numeric_recv`): `u16 ndigits`, `i16 weight`, `u16 sign`, `u16
 /// dscale`, then `ndigits` × `i16` base-10000 digits (most significant first);
 /// `value = sign * Σ digits[i] * 10000^(weight-i)`. `dscale` is the DISPLAY
 /// fractional-digit count independent of how many digit groups are actually
@@ -185,7 +185,7 @@ fn decode_pg_numeric(raw: &[u8]) -> Result<String> {
             raw.len()
         )));
     }
-    let ndigits = be_i16(&raw[0..2])?;
+    let ndigits = usize::from(be_u16(&raw[0..2])?);
     let weight = be_i16(&raw[2..4])?;
     let sign = be_u16(&raw[4..6])?;
     let dscale = be_u16(&raw[6..8])?;
@@ -212,12 +212,6 @@ fn decode_pg_numeric(raw: &[u8]) -> Result<String> {
             )));
         }
     }
-    if ndigits < 0 {
-        return Err(Error::Marshal(format!(
-            "PG NUMERIC: negative ndigits {ndigits}"
-        )));
-    }
-    let ndigits = ndigits as usize;
     if raw.len() < 8 + ndigits * 2 {
         return Err(Error::Marshal(format!(
             "PG NUMERIC: digit array truncated (need {} bytes, have {})",
