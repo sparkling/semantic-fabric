@@ -143,9 +143,38 @@ digits. Guarded casts never consume invalid text. Live TEXT/CHAR tests cover all
 16 numeric datatypes, long exponent/mantissa cancellation, both sides of retained
 midpoints, nonfinite/invalid/NULL/NOT cases, nondeterministic source collation,
 unchanged raw RDF output and authorized/denied EXISTS/OPTIONAL bindings.
-Rust output and identity keys are unchanged. Non-floating integer/decimal value
-comparisons, other native typed overrides, wider arithmetic, other backends and
-exact-release qualification remain required follow-up, not removed capabilities.
+Rust output and identity keys are unchanged. The exact non-floating refinement
+below is separate; other native typed overrides, wider arithmetic, other backends
+and exact-release qualification remain required follow-up, not removed capabilities.
+
+### PostgreSQL exact integer/decimal comparisons (2026-09-09)
+
+All six value operators have a separate full-digit lane for TEXT/CHAR and retained
+native INTEGER/NUMERIC decoders, covering decimal and all 13 integer-family types.
+ASCII grammar, XSD whitespace and facets precede normalization. Integral leading
+zeros and fractional trailing zeros are removed; fractional leading zeros remain.
+Compare sign, then integral length, integral digits and fractional digits under
+`C` collation, reversing the entire magnitude order for negatives. Signed zeros
+are equal. Every digit participates: no bounded NUMERIC cast, floating conversion
+or 1100-digit prefix is authority for exact comparison. Constants remain bound.
+Invalid NUL-containing numeric constants become expression NULL before binding:
+PostgreSQL cannot transport NUL text, but a query lexical error must not fail the
+transport. The other operand still discharges its native source obligation.
+Raw NUMERIC display scale is preserved before an authored integer grammar check:
+`1.0` is invalid as integer, even though the native value is integral. Both operands
+produce a materialized row, including NULL/invalid lexicals, so the other operand's
+finite NUMERIC decoder obligation remains observable. Existing policy fences stay
+before conversion. Missing/foreign descriptors and unqualified native overrides
+reject; the intentionally offline renderer is not live-execution authority.
+Offline detection uses the catalog's live-result metadata marker, not alias-map
+emptiness; ordinary and synthetic offline branches retain their renderer path.
+Required owned TLS CLI coverage includes TEXT/CHAR under nondeterministic source
+collation, equivalent spellings, negative fractions, all operators/NOT, facets,
+1500-digit integer and fractional tails, NUMERIC scale, BIGINT boundaries and
+ordinary/EXISTS/OPTIONAL policy isolation and invalid-source recovery. The test
+oracle aligns full decimal digit sequences; it never compares floating values.
+RDF output/identity and other backends are unchanged. Wider native typed overrides,
+arithmetic, lifecycle/bounds and exact-release gates remain open.
 
 ### PostgreSQL NUMERIC decoder correction (2026-09-09)
 

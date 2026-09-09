@@ -1,5 +1,7 @@
 //! Native SQL numeric text must agree with the independent Rust lexical parser.
 use super::*;
+#[path = "pg_decimal_text.rs"]
+mod exact;
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const TYPES: &[&str] = &[
@@ -112,6 +114,21 @@ fn lexicals() -> Vec<String> {
         values.push(format!("-{below}"));
     }
     values.extend([
+        "2".into(),
+        "10".into(),
+        "+0001.00".into(),
+        "-0.000".into(),
+        "0.1001".into(),
+        "0.1000".into(),
+        "-0.1001".into(),
+        "-0.1".into(),
+        ".001".into(),
+        ".01".into(),
+        format!("1.{}1", "0".repeat(1500)),
+        format!("-1.{}1", "0".repeat(1500)),
+        "9".repeat(1500),
+        format!("1{}", "0".repeat(1499)),
+        format!("1{}1", "0".repeat(1498)),
         format!("0.{}1e1301", "0".repeat(1300)),
         format!("1{}e-1300", "0".repeat(1300)),
         format!("1e{}1", "0".repeat(1300)),
@@ -163,6 +180,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
             );
         }
         let (server, address) = start(fixture, database);
+        exact::assert_values(address, fixture, &lexicals);
         for kind in TYPES {
             for (right_lexical, right_kind) in [
                 ("0", "double"),
@@ -262,6 +280,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
         drop(server);
     }
     assert_policy(fixture, database, &lexicals);
+    exact::assert_native(fixture, database);
     sql(
         database,
         "DELETE FROM items; ALTER TABLE items DROP COLUMN numeric_text; ALTER TABLE items DROP COLUMN numeric_id; DROP COLLATION sf_float_lexical",
@@ -284,6 +303,7 @@ fn assert_policy(fixture: &Fixture, database: &Database, lexicals: &[String]) {
         "portableRows":[{"sourceIndex":0,"table":"items","column":"value","valueEnv":"SF_POLICY_VALUE"}]
     }]}).to_string());
     let (server, address) = start_command(fixture, command, address);
+    exact::assert_policy(address, fixture, lexicals);
     let subjects = (0..lexicals.len())
         .map(|id| format!("<http://example.test/text/{id}>"))
         .collect::<Vec<_>>()

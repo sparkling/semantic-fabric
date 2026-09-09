@@ -17,6 +17,10 @@ fn postgres_floating_literal_identity_is_exact() {
 }
 
 pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
+    // The aggregate fixture has an id PK with constant default0; standalone
+    // fixtures have no id. Allocate real distinct row IDs in either fixture
+    // instead of dropping the aggregate constraint or masking duplicate rows.
+    sql(database, "DELETE FROM items; ALTER TABLE items ADD COLUMN IF NOT EXISTS id INTEGER; CREATE SEQUENCE sf_float_fixture_ids; ALTER TABLE items ALTER COLUMN id SET DEFAULT nextval('sf_float_fixture_ids')");
     sql(database, "DELETE FROM items; ALTER TABLE items ADD COLUMN float_narrow REAL; ALTER TABLE items ADD COLUMN float_wide DOUBLE PRECISION");
     // Deliberately degrade PostgreSQL text formatting. Wire-owned keys must not
     // depend on this role/session option; only this disposable fixture is changed.
@@ -177,6 +181,10 @@ pub(super) fn assert_identity(fixture: &Fixture, database: &Database) {
     text_values::assert_all(fixture, database);
     sql(database, "ALTER ROLE sf_tls RESET extra_float_digits");
     sql(database, "DELETE FROM items; ALTER TABLE items DROP COLUMN float_narrow; ALTER TABLE items DROP COLUMN float_wide");
+    sql(
+        database,
+        "ALTER TABLE items ALTER COLUMN id SET DEFAULT 0; DROP SEQUENCE sf_float_fixture_ids",
+    );
 }
 
 fn assert_cross_width(fixture: &Fixture, database: &Database) {

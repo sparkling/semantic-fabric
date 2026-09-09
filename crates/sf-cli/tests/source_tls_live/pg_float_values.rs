@@ -244,6 +244,9 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
         sql(database, &format!("DELETE FROM items; INSERT INTO items(float_decimal,value) VALUES ('{invalid}','same')"));
         let (server, address) = start(fixture, database);
         for expression in [
+            "?o > 0",
+            "\"inf\"^^<http://www.w3.org/2001/XMLSchema#decimal> = ?o",
+            "?o = 1.00",
             "?o > 0e0",
             "\"NaN\"^^<http://www.w3.org/2001/XMLSchema#double> = ?o",
             "\"inf\"^^<http://www.w3.org/2001/XMLSchema#double> = ?o",
@@ -300,7 +303,11 @@ fn assert_invalid_and_policy(fixture: &Fixture, database: &Database) {
                 "\"{}\"^^<http://www.w3.org/2001/XMLSchema#float>",
                 constant.trim_end_matches("e0")
             );
+            let decimal_constant = constant.trim_end_matches("e0");
             for pattern in [
+                format!("?s <http://example.test/number> ?o FILTER(?o {op} {decimal_constant})"),
+                format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/number> ?o FILTER(?o {op} {decimal_constant}) }}"),
+                format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/number> ?o FILTER(?o {op} {decimal_constant}) }}"),
                 format!("?s <http://example.test/number> ?o FILTER(?o {op} {constant})"),
                 format!("VALUES ?s {{ <http://example.test/item> }} FILTER EXISTS {{ ?s <http://example.test/number> ?o FILTER(?o {op} {constant}) }}"),
                 format!("VALUES ?s {{ <http://example.test/item> }} OPTIONAL {{ ?s <http://example.test/number> ?o FILTER(?o {op} {constant}) }}"),

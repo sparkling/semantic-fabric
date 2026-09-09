@@ -16,6 +16,14 @@ pub(super) fn render(
     if let Some(sql) = pg_float_value::comparison(cmp, dialect, actuals, params, pidx)? {
         return Ok(sql);
     }
+    // Offline branches can have aliases and synthetic names, but no live
+    // result metadata. A live prepare inserts a datatype map even when all
+    // facts are absent: those columns must reach the strict decoder check.
+    if !catalog.datatypes_by_source.is_empty() || cmp.columns().next().is_none() {
+        if let Some(sql) = pg_decimal_value::comparison(cmp, dialect, actuals, params, pidx)? {
+            return Ok(sql);
+        }
+    }
     if let (LiteralOperand::Constant(left), LiteralOperand::Constant(right)) =
         (&cmp.left, &cmp.right)
     {

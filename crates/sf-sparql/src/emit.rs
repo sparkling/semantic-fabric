@@ -55,6 +55,7 @@ mod native_literal_key;
 mod natural_decimal;
 mod natural_literal;
 mod path_comparison;
+mod pg_decimal_value;
 mod pg_float;
 mod pg_float_value;
 mod pg_numeric;
