@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
-updated: 2026-09-08
+updated: 2026-09-09
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -150,6 +150,18 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > proof gates ordinary D1 use (ADR-0034), independently of numeric value comparison.
 > Native adapters provide no SQLite decoder authority. This extends the thin
 > adapter seam, not the executor architecture or general identity admission.
+
+> **Request teardown ordering correction (2026-09-09).** A workspace cleanup
+> assertion exposed a real race: worker-body lease locals dropped before a
+> closure-captured request control; the backend's field order had the same gap.
+> The final worker/backend owner now drops its request control before releasing
+> connection admission. Metadata workers bind control inside the lease scope too,
+> including early exit/unwind. Existing statement/callback/mutex order remains.
+> Deterministic Drop probes observe zero available permits without queuing a new
+> acquirer that could mask premature release. Checks cover backend-only teardown,
+> success, receiver drop, setup/execution error, cancelled checkpoint and aborted
+> metadata callers. The existing weak-reference and callback-removal assertions
+> are retained unchanged. This fixes owner ordering, not wider source governance.
 
 ## More Information
 

@@ -4,9 +4,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rusqlite::Connection;
-use sf_core::query_control::{QueryBudget, QueryLimits};
+use sf_core::query_control::{
+    QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+};
 
-use crate::backend::SqlBackend;
+use crate::backend::{BranchStream, SqlBackend};
 
 use super::super::cancellation::{SqliteCancellationEvent, SqliteCancellationObserver};
 use super::{SqliteOwnedBackend, SqliteOwnedConnection};
@@ -139,4 +141,142 @@ async fn open_branch_worker_keeps_lease_after_stream_and_backend_drop() {
         .expect("worker did not release admission")
         .expect("admission unexpectedly closed");
     drop(reacquired);
+}
+
+struct ControlDropProbe {
+    member: SqliteOwnedConnection,
+    observed: Option<tokio::sync::oneshot::Sender<usize>>,
+    reject: bool,
+}
+
+impl QueryControl for ControlDropProbe {
+    fn checkpoint(&self) -> Result<(), QueryControlError> {
+        if self.reject {
+            Err(QueryControlError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+    fn consume(&self, _: QueryCharge, _: u64) -> Result<(), QueryControlError> {
+        self.checkpoint()
+    }
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+        reason
+    }
+}
+
+impl Drop for ControlDropProbe {
+    fn drop(&mut self) {
+        let _ = self
+            .observed
+            .take()
+            .unwrap()
+            .send(self.member.available_permits());
+    }
+}
+
+#[tokio::test]
+async fn final_backend_control_drops_before_admission_reopens() {
+    let member = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let backend = SqliteOwnedBackend::new_controlled_leased(
+        member.acquire().await.unwrap(),
+        Arc::new(ControlDropProbe {
+            member: member.clone(),
+            observed: Some(tx),
+            reject: false,
+        }),
+    );
+    drop(backend);
+    assert_eq!(
+        rx.await.unwrap(),
+        0,
+        "request state must drop while permit is still held"
+    );
+    assert_eq!(member.available_permits(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_worker_control_drops_before_admission_on_every_terminal_path() {
+    for (sql, receiver_drop, reject) in [
+        ("SELECT 1 UNION ALL SELECT 2", false, false),
+        ("SELECT 1 UNION ALL SELECT 2", true, false),
+        ("SELECT missing FROM absent", false, false),
+        ("SELECT json_extract('invalid-json', '$')", false, false),
+        ("SELECT 1", false, true),
+    ] {
+        let member = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let probe = Arc::new(ControlDropProbe {
+            member: member.clone(),
+            observed: Some(tx),
+            reject,
+        });
+        let barrier = Arc::new(MutexBarrier::default());
+        let release = ReleaseOnDrop(Arc::clone(&barrier));
+        let mut backend = SqliteOwnedBackend::new_controlled_leased_observed(
+            member.acquire().await.unwrap(),
+            probe,
+            barrier.observer(),
+        );
+        let mut stream = backend.open_branch(sql, &[]).await.unwrap();
+        barrier.wait_until_entered();
+        drop(backend); // only the worker now owns request control and admission
+        drop(release);
+        if !receiver_drop {
+            while matches!(stream.next_row().await, Ok(Some(_))) {}
+        }
+        drop(stream);
+        let permits = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(permits, 0, "{sql}: control outlived admission");
+        let _next = tokio::time::timeout(Duration::from_secs(2), member.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_metadata_control_drops_before_admission_after_caller_abort() {
+    for result_columns in [false, true] {
+        let member = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let probe = Arc::new(ControlDropProbe {
+            member: member.clone(),
+            observed: Some(tx),
+            reject: false,
+        });
+        let barrier = Arc::new(MutexBarrier::default());
+        let release = ReleaseOnDrop(Arc::clone(&barrier));
+        let mut backend = SqliteOwnedBackend::new_controlled_leased_observed(
+            member.acquire().await.unwrap(),
+            probe,
+            barrier.observer(),
+        );
+        let task = tokio::spawn(async move {
+            if result_columns {
+                backend.result_columns("SELECT 1").await.map(|_| ())
+            } else {
+                backend.column_names("SELECT 1").await.map(|_| ())
+            }
+        });
+        barrier.wait_until_entered();
+        task.abort();
+        let _ = task.await;
+        drop(release);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        let _next = tokio::time::timeout(Duration::from_secs(2), member.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }

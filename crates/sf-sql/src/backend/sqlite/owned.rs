@@ -86,9 +86,10 @@ struct SqliteOwnedLeaseState {
 /// bound hold across `tokio::spawn`.
 pub struct SqliteOwnedBackend {
     conn: Arc<Mutex<Connection>>,
-    lease: Option<Arc<SqliteOwnedLeaseState>>,
     control: Option<Arc<dyn QueryControl>>,
     observer: SqliteCancellationObserver,
+    // Fields drop in declaration order: request state must go before admission.
+    lease: Option<Arc<SqliteOwnedLeaseState>>,
 }
 
 impl SqliteOwnedBackend {
@@ -211,6 +212,7 @@ impl SqlBackend for SqliteOwnedBackend {
         let probe_sql = probe_sql.to_owned();
         let joined = tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let control = control;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
             match control {
@@ -244,6 +246,7 @@ impl SqlBackend for SqliteOwnedBackend {
         let probe_sql = probe_sql.to_owned();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let control = control;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
             let cancellation = match control {
@@ -321,6 +324,9 @@ impl SqlBackend for SqliteOwnedBackend {
         // reactor consumes ⇒ explicit backpressure (strengthens bounded memory).
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            // Locals drop in reverse order, before unused closure captures.
+            // Keep control local so every exit drops it before releasing _lease.
+            let control = control;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
             let cancellation = match control.as_ref() {
