@@ -110,11 +110,38 @@ DISTINCT and hidden COUNT/ASK; mixed raw-IRI/natural columns retain scale identi
 and an output-byte failure releases cap-one admission. Owned MySQL TLS SELECT and
 DISTINCT also preserve the full `DECIMAL(65,30)` value. Raw driver data and IRI
 construction are unchanged; normalization is linear, with output at most input
-bytes plus one. Fixed-range numeric comparison/AVG and native natural `sameTerm`
-remain separate work. Existing explicit-datatype lexical behavior is unchanged:
+bytes plus one. Ordered/floating numeric comparison and AVG remain separate work;
+the following refinement covers natural decimal identity and Eq/Ne. Existing explicit-datatype lexical behavior is unchanged:
 the [same-natural-datatype case in R2RML §11.2](https://www.w3.org/TR/r2rml/#generated-rdf-term)
 requires separate correction, not a claim that every explicit datatype overrides
 natural construction.
+
+### Natural decimal comparison refinement (2026-09-09)
+
+Live PostgreSQL NUMERIC and MySQL NEWDECIMAL facts now authorize canonical
+comparison keys, not replacement output columns. PostgreSQL uses
+`pg_catalog.trim_scale` followed by the existing JSON finite-number validation;
+MySQL normalizes its full decimal text, including ZEROFILL, sign and scale.
+Rust remains the final RDF constructor. Fixed literals and `sameTerm` compare
+lexical/datatype/language tuples exactly; query constants remain verbatim.
+Raw NULL operands preserve expression errors under negation.
+
+A separate finite natural-decimal Eq/Ne lane promotes base integer/decimal
+constants using the full-range Rust normalizer. Integer grammar is validated
+independently; malformed typed lexicals yield expression errors, not matches
+under NOT. No bounded numeric cast or float conversion is introduced. This
+repairs the public PostgreSQL numeric-versus-text binding failure without
+canonicalizing `sameTerm` operands or granting ordered/float comparison authority.
+
+Natural provenance follows raw Projection/Ref/SubPlan positions. Mixed or
+coercing arms retain an incompatible marker: MySQL multi-arm DECIMAL is not
+range-safe merely because every arm is decimal. PostgreSQL policy predicates
+dominate fallible literal keys, including direct EXISTS bodies. Owned TLS CLI
+checks cover both providers' fixed/sameTerm/value matches, noncanonical and
+wrong-datatype constants, NULL/OPTIONAL, invalid-lexical negation, ZEROFILL, and
+PostgreSQL denied non-finite values with cap-one recovery. General natural BGP
+unification, same-natural explicit datatype construction, arithmetic breadth
+and full native/release qualification remain required, unclosed work.
 
 ### Natural temporal identity refinement (2026-09-09)
 

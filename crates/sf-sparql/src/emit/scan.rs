@@ -230,7 +230,7 @@ fn projection_sql(
         items.join(", "),
         scan_ref(input, dialect, catalog, params, pidx)?
     );
-    let protected = natural_temporal::authorized_conjunction(
+    let protected = natural_literal::authorized_conjunction(
         &guards.iter().collect::<Vec<_>>(),
         dialect,
         catalog,
@@ -275,7 +275,14 @@ fn projection_sql(
         );
     }
     if dialect == Dialect::MySql
-        && !actuals[&input.alias].natural_temporals.is_empty()
+        && actuals[&input.alias].natural_columns.values().any(|code| {
+            matches!(
+                code,
+                Some(
+                    sf_core::datatype::XsdTypeCode::Date | sf_core::datatype::XsdTypeCode::DateTime
+                )
+            )
+        })
         && guards
             .iter()
             .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))

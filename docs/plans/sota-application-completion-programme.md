@@ -27,8 +27,8 @@ cap-one requests recover. Native payloads remain unchanged. Existing source-size
 multi-arm DISTINCT rejection stays tested and closed; compiler UNION-key repair
 does not promote its serving admission. Natural decimal construction now also
 passes full-range lexical normalization and authenticated owned TLS SELECT,
-DISTINCT, hidden COUNT/ASK, mixed raw-IRI and output-cap recovery checks. Native
-natural identity, same-natural explicit datatype, arithmetic range and other
+DISTINCT, hidden COUNT/ASK, mixed raw-IRI and output-cap recovery checks. Natural
+decimal fixed/sameTerm and separate integer/decimal Eq/Ne now have owned TLS CLI evidence on both providers, including malformed-literal negation, ZEROFILL, NULL/OPTIONAL and PostgreSQL denied-invalid-row policy isolation. Raw payload/provenance remains separate; coercing UNIONs cannot inherit identity proof. General natural BGP/mixed identity, same-natural explicit datatype, ordered/floating arithmetic and other
 families remain open. This closes exactness slices, not whole-family or release
 qualification (ADR-0015/0024/0034).
 The full-workspace GTFS Q5 regression was repaired first (`ae4146f`): verified-key

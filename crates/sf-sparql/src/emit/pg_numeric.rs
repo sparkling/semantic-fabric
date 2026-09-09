@@ -47,6 +47,16 @@ pub(super) fn validates(condition: &SqlCond, actuals: &ActualColumns) -> bool {
         SqlCond::IriCmp(cmp) => cmp
             .columns()
             .any(|c| is_numeric(c, Dialect::Postgres, actuals)),
+        SqlCond::LiteralCmp(cmp) => {
+            (cmp.value_op.is_none()
+                || matches!(
+                    cmp.value_op,
+                    Some(crate::iq::CmpOp::Eq | crate::iq::CmpOp::Ne)
+                ))
+                && cmp
+                    .columns()
+                    .any(|c| is_numeric(c, Dialect::Postgres, actuals))
+        }
         SqlCond::Not(inner) => validates(inner, actuals),
         SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(|c| validates(c, actuals)),
         _ => false,

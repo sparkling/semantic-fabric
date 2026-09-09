@@ -49,7 +49,12 @@ pub(super) fn render(
         }
         .into());
     }
-    if let Some(sql) = natural_temporal::comparison(cmp, dialect, catalog, actuals, params, pidx)? {
+    if let Some(sql) =
+        natural_decimal::value_equality(cmp, dialect, catalog, actuals, params, pidx)?
+    {
+        return Ok(sql);
+    }
+    if let Some(sql) = natural_literal::comparison(cmp, dialect, catalog, actuals, params, pidx)? {
         return Ok(sql);
     }
     let mut bind = |value: &str| {

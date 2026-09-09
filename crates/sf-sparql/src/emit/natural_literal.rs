@@ -1,4 +1,4 @@
-//! Natural temporal identity is separate from raw IRI and SQL value authority.
+//! Decoder-qualified natural literal identity, separate from SQL value authority.
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use sf_core::datatype::XsdTypeCode;
@@ -7,6 +7,9 @@ pub(super) fn source_code(key: NativeScalarKey) -> Option<XsdTypeCode> {
     match key {
         NativeScalarKey::MysqlDate => Some(XsdTypeCode::Date),
         NativeScalarKey::MysqlDateTime => Some(XsdTypeCode::DateTime),
+        NativeScalarKey::PostgresNumeric | NativeScalarKey::MysqlDecimal => {
+            Some(XsdTypeCode::Decimal)
+        }
         _ => None,
     }
 }
@@ -18,7 +21,7 @@ pub(super) fn column_code(column: &ColRef, actuals: &ActualColumns) -> Option<Xs
 pub(super) fn column_fact(column: &ColRef, actuals: &ActualColumns) -> Option<Option<XsdTypeCode>> {
     let source = actuals.get(&column.alias)?;
     source
-        .natural_temporals
+        .natural_columns
         .get(resolve_col(&column.column, Some(&source.columns)))
         .copied()
 }
@@ -46,9 +49,12 @@ pub(super) fn authorized_conjunction(
         match cond {
             SqlCond::LiteralCmp(cmp) => {
                 cmp.value_op.is_none()
-                    && [&cmp.left, &cmp.right]
-                        .iter()
-                        .any(|v| natural(v, actuals).is_some())
+                    && [&cmp.left, &cmp.right].iter().any(|v| {
+                        matches!(
+                            natural(v, actuals),
+                            Some(XsdTypeCode::Date | XsdTypeCode::DateTime)
+                        )
+                    })
             }
             SqlCond::Not(c) => validates(c, actuals),
             SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(|c| validates(c, actuals)),
@@ -112,18 +118,23 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
-    if dialect == Dialect::MySql && cmp.value_op.is_none() && [&cmp.left, &cmp.right].iter().any(|value| {
+    if matches!(dialect, Dialect::MySql | Dialect::Postgres) && cmp.value_op.is_none() && [&cmp.left, &cmp.right].iter().any(|value| {
         matches!(value, LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none() && column_fact(column, actuals) == Some(None))
     }) {
-        return Err(Error::Unsupported("natural temporal identity requires a compatible decoder in every SubPlan arm".into()));
+        return Err(Error::Unsupported("natural literal identity requires a compatible decoder in every SubPlan arm".into()));
     }
-    if dialect != Dialect::MySql
+    if !matches!(dialect, Dialect::MySql | Dialect::Postgres)
         || cmp.value_op.is_some()
         || ![&cmp.left, &cmp.right]
             .iter()
             .any(|value| natural(value, actuals).is_some())
     {
         return Ok(None);
+    }
+    if [&cmp.left, &cmp.right].iter().any(|value| matches!(value,
+        LiteralOperand::Column { column, spec } if spec.datatype.is_none() && spec.language.is_none()
+            && column_code(column, actuals).is_none())) {
+        return Err(Error::Unsupported("natural literal identity requires each operand's natural decoder".into()));
     }
     let mut bind = |value: &str| {
         params.push(value.to_owned());
@@ -144,7 +155,11 @@ pub(super) fn comparison(
                 }
                 if let Some(code) = natural(value, actuals) {
                     return Ok(if part == 0 {
-                        key(&raw, code)
+                        if code == XsdTypeCode::Decimal {
+                            natural_decimal::key(&raw, dialect)
+                        } else {
+                            key(&raw, code)
+                        }
                     } else {
                         bind(code.iri().as_str())
                     });
@@ -160,7 +175,11 @@ pub(super) fn comparison(
                         ),
                     ));
                 }
-                if let Some(code) = column_code(column, actuals) {
+                if let Some(scalar) = iri_cmp::scalar_column(column, actuals) {
+                    iri_cmp::scalar_lexical(scalar, &raw, dialect)
+                } else if let Some(code) = column_code(column, actuals)
+                    .filter(|code| matches!(code, XsdTypeCode::Date | XsdTypeCode::DateTime))
+                {
                     iri_cmp::scalar_lexical(
                         if code == XsdTypeCode::Date {
                             NativeScalarKey::MysqlDate
@@ -176,7 +195,7 @@ pub(super) fn comparison(
                     ))
                 } else {
                     Err(Error::Unsupported(
-                        "natural temporal identity requires each operand's decoder".into(),
+                        "natural literal identity requires each operand's decoder".into(),
                     ))
                 }
             }
@@ -268,14 +287,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            subplan_actuals(&plan, Dialect::MySql, &catalog).natural_temporals["c0"],
+            subplan_actuals(&plan, Dialect::MySql, &catalog).natural_columns["c0"],
             Some(XsdTypeCode::Date)
         );
         let mut branch = plan.branches[0].clone();
         branch.core[0].source = other.into();
         plan.branches.push(branch);
         let actual = subplan_actuals(&plan, Dialect::MySql, &catalog);
-        assert_eq!(actual.natural_temporals["c0"], None);
+        assert_eq!(actual.natural_columns["c0"], None);
         let cmp = LiteralComparison {
             left: LiteralOperand::Column {
                 column: ColRef::new(7, "c0"),

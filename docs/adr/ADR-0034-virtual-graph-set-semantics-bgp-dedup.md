@@ -27,8 +27,8 @@ compiler DISTINCT pools use UNION ALL plus a raw-preserving numeric-key window;
 disagreeing numeric roles reject. This does not relax serving's existing
 source-sized multi-arm DISTINCT gate. Required owned TLS CLI checks verify that
 rejection as well as scale-distinct single-atom/Ref/SQLQuery bags and policy
-isolation; compiler tests cover the DISTINCT SQL wrapper. General mixed/native
-identity, natural-decimal range and release qualification remain open.
+isolation; compiler tests cover the DISTINCT SQL wrapper. ADR-0015 now separately qualifies full-range natural decimal construction and fixed/sameTerm/Eq/Ne keys with raw payload preservation. Positional natural provenance survives raw Projection/Ref/SubPlan only with compatible decoder proof; coercing MySQL decimal UNIONs retain rejection markers, not raw-equality authority.
+General natural BGP unification, mixed/native identity and release qualification remain open.
 
 ## Current wrapper boundary (2026-09-08)
 

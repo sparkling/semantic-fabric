@@ -49,7 +49,8 @@ mod projection_layout;
 pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
-mod natural_temporal;
+mod natural_decimal;
+mod natural_literal;
 mod path_comparison;
 mod pg_numeric;
 mod ref_atom;
@@ -628,9 +629,9 @@ enum AliasSourceKind {
 
 #[derive(Clone, Debug)]
 struct AliasActuals {
-    // None retains incompatible temporal provenance; it must not fall back to
+    // None retains incompatible natural provenance; it must not fall back to
     // native equality after a coercing SubPlan loses a common decoder.
-    natural_temporals: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
+    natural_columns: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
     scalar_columns: HashMap<String, NativeScalarKey>,
     source_kind: AliasSourceKind,
     columns: Vec<String>,
@@ -644,13 +645,13 @@ type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
     AliasActuals {
-        natural_temporals: catalog
+        natural_columns: catalog
             .scalars_by_source
             .get(&source_key(source))
             .into_iter()
             .flatten()
             .filter_map(|(name, key)| {
-                natural_temporal::source_code(*key).map(|code| (name.clone(), Some(code)))
+                natural_literal::source_code(*key).map(|code| (name.clone(), Some(code)))
             })
             .collect(),
         scalar_columns: catalog
@@ -1617,7 +1618,7 @@ fn render_conjunction(
         return Ok("1 = 1".to_owned());
     }
     if let Some(sql) =
-        natural_temporal::authorized_conjunction(conds, dialect, catalog, actuals, params, pidx)?
+        natural_literal::authorized_conjunction(conds, dialect, catalog, actuals, params, pidx)?
     {
         return Ok(sql);
     }

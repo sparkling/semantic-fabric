@@ -75,7 +75,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
-        natural_temporals: HashMap::new(),
+        natural_columns: HashMap::new(),
         scalar_columns: HashMap::new(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
@@ -208,7 +208,19 @@ pub(super) fn subplan_actuals(
             .filter_map(|(index, column)| {
                 column
                     .as_ref()
-                    .and_then(|column| natural_temporal::column_fact(column, &actuals))
+                    .and_then(|column| natural_literal::column_fact(column, &actuals))
+                    // MySQL UNION caps decimal precision at 65 while growing
+                    // scale: even two DECIMAL arms can lose integral digits.
+                    .map(|code| {
+                        if dialect == Dialect::MySql
+                            && plan.branches.len() > 1
+                            && code == Some(sf_core::datatype::XsdTypeCode::Decimal)
+                        {
+                            None
+                        } else {
+                            code
+                        }
+                    })
                     .map(|code| (index, code))
             })
             .collect::<HashMap<_, _>>();
@@ -295,7 +307,7 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
-        natural_temporals: common_temporals
+        natural_columns: common_temporals
             .unwrap_or_default()
             .into_iter()
             .map(|(i, code)| (format!("c{i}"), code))

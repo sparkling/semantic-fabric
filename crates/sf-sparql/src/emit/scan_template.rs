@@ -33,7 +33,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                 .map(|(name, decode)| (name.clone(), *decode))
                 .collect();
             AliasActuals {
-                natural_temporals: columns
+                natural_columns: columns
                     .iter()
                     .filter_map(|(name, term)| {
                         let TermMap::Column(raw, _) = term else {
@@ -42,7 +42,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                         (!temporals.contains_key(name.as_ref()))
                             .then(|| {
                                 inner
-                                    .natural_temporals
+                                    .natural_columns
                                     .get(resolve_col(raw, Some(&inner.columns)))
                             })
                             .flatten()

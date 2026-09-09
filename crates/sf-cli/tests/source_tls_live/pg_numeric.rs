@@ -1,5 +1,7 @@
 //! PostgreSQL NUMERIC uses its native arbitrary-precision lexical decoder.
 use super::*;
+#[path = "natural_decimal.rs"]
+mod natural_decimal;
 #[path = "pg_numeric_range.rs"]
 mod range;
 
@@ -15,12 +17,14 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_large_decoder(fixture, database);
     range::assert_range(fixture, database);
     assert_identity(fixture, database);
+    natural_decimal::assert_identity(fixture, database);
     assert_references(fixture, database);
     assert_invalid(fixture, database);
 }
 
 pub(super) fn assert_mysql_range(fixture: &Fixture, database: &Database) {
     range::assert_mysql(fixture, database);
+    natural_decimal::assert_identity(fixture, database);
 }
 
 #[test]
@@ -317,6 +321,7 @@ pub(super) fn assert_invalid(fixture: &Fixture, database: &Database) {
             "SELECT ?s WHERE { ?s <http://example.test/edge> ?o }",
             "ASK { ?s <http://example.test/edge> ?o }",
             "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://example.test/number> ?o }",
+            "SELECT ?s WHERE { ?s <http://example.test/number> ?o FILTER(sameTerm(?o, ?o)) }",
             "SELECT DISTINCT ?s WHERE { VALUES ?s { <http://example.test/item> } OPTIONAL { ?s <http://example.test/edge> ?o } }",
         ] {
             eprintln!("invalid numeric {invalid}: {query}");
@@ -349,6 +354,9 @@ pub(super) fn assert_invalid(fixture: &Fixture, database: &Database) {
             "?s <http://example.test/edge> <http://example.test/n/1.00>",
             "VALUES ?s { <http://example.test/item> } FILTER EXISTS { ?s <http://example.test/edge> ?o }",
             "VALUES ?s { <http://example.test/item> } OPTIONAL { ?s <http://example.test/edge> ?o }",
+            "?s <http://example.test/number> ?o FILTER(sameTerm(?o, \"1\"^^<http://www.w3.org/2001/XMLSchema#decimal>))",
+            "VALUES ?s { <http://example.test/item> } FILTER EXISTS { ?s <http://example.test/number> ?o FILTER(?o = 1.0) }",
+            "VALUES ?s { <http://example.test/item> } OPTIONAL { ?s <http://example.test/number> ?o FILTER(?o = 1.0) }",
         ] {
             let query = format!("SELECT (COUNT(*) AS ?n) WHERE {{ {pattern} }}");
             assert_eq!(rows(address, fixture, &query)[0]["n"]["value"], "1", "{invalid}: {query}");
