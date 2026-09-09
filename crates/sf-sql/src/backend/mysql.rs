@@ -189,6 +189,15 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                 ) && mysql_xsd_code(column, self.type_profile)?
                     == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
+                    integer_lexical: matches!(
+                        column.column_type(),
+                        ColumnType::MYSQL_TYPE_TINY
+                            | ColumnType::MYSQL_TYPE_SHORT
+                            | ColumnType::MYSQL_TYPE_LONG
+                            | ColumnType::MYSQL_TYPE_LONGLONG
+                            | ColumnType::MYSQL_TYPE_INT24
+                            | ColumnType::MYSQL_TYPE_YEAR
+                    ),
                     sqlite_decode: None,
                     name: column.name_str().into_owned(),
                     text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),

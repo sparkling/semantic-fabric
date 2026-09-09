@@ -36,6 +36,7 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
                 .map(|(name, decode)| (name.clone(), *decode))
                 .collect();
             AliasActuals {
+                integer_columns: iri_cmp::projected_integers(columns, &inner),
                 sqlite_columns,
                 lexical_columns,
                 source_kind: AliasSourceKind::Derived,
@@ -443,6 +444,7 @@ mod tests {
                     .insert_live_result(
                         &source,
                         vec![sf_sql::backend::ResultColumn {
+                            integer_lexical: false,
                             sqlite_decode: None,
                             name: "key".into(),
                             text_key: key,

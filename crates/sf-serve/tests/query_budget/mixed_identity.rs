@@ -454,18 +454,17 @@ async fn explicit_numeric_literal_keeps_value_comparison_separate_from_identity(
 }
 
 #[tokio::test]
-async fn unsupported_template_constant_filters_keep_their_pre_source_rejection() {
-    let query = "SELECT ?o WHERE { ?s <http://ex/p> ?o FILTER(?o = <http://ex/n/-0>) }";
-    let maps = sf_mapping::parse_r2rml(MAP).unwrap();
-    let error = sf_sparql::parse_and_translate(query, &maps, sf_sql::Dialect::Sqlite)
-        .expect_err("existing template-vs-constant FILTER is outside the admitted profile");
-    assert!(
-        error.to_string().contains("needs a plain column binding"),
-        "{error}"
-    );
-    let response = router(Arc::new(configured_mixed(ZERO, MAP)))
-        .oneshot(authenticated(query))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+async fn template_constant_filters_use_mixed_storage_decoder_identity() {
+    for (expression, expected) in [
+        ("?o = <http://ex/n/-0>", "-0"),
+        ("<http://ex/n/-0> = ?o", "-0"),
+        ("sameTerm(?o, <http://ex/n/-0>)", "-0"),
+        ("?o != <http://ex/n/-0>", "0"),
+    ] {
+        let query = format!("SELECT ?o WHERE {{ ?s <http://ex/p> ?o FILTER({expression}) }}");
+        let json = answer(configured_mixed(ZERO, MAP), &query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{query}: {json}");
+        assert_eq!(rows[0]["o"]["value"], format!("http://ex/n/{expected}"));
+    }
 }

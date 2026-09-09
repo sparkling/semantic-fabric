@@ -24,7 +24,7 @@ use crate::iq::{
 };
 use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
-use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
+use crate::unify::{filter_branch as filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
 
 mod graph_inventory;
@@ -1066,7 +1066,7 @@ impl<'a> Unfolder<'a> {
                 self.lower_filter_expr(a, outer)?,
                 self.lower_filter_expr(b, outer)?,
             ])),
-            other => filter_cond(other, &outer.bindings, self.dialect).map_err(Error::Unsupported),
+            other => filter_cond(other, outer, self.dialect).map_err(Error::Unsupported),
         }
     }
 

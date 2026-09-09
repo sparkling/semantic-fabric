@@ -67,6 +67,107 @@ fn configured(setup: &str, mapping: &str) -> ServeConfig {
 }
 
 #[tokio::test]
+async fn static_template_constants_match_encoded_rdf_identity_not_raw_keys() {
+    let mapping = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"];
+ rr:subjectMap [rr:template "http://ex/{id}"];
+ rr:predicateObjectMap [rr:predicate <http://ex/value>; rr:objectMap [rr:column "value"]];
+ rr:predicateObjectMap [rr:predicate <http://ex/edge>; rr:objectMap [rr:template "http://ex/{id}"]].
+"#;
+    let setup = "CREATE TABLE items(id TEXT COLLATE NOCASE PRIMARY KEY, value TEXT NOT NULL); INSERT INTO items VALUES('a/b','slash'),('a%2Fb','percent'),('a','plain'),('a ','space'),('','empty'),('+','plus'),('%','percent-only'),('你好','unicode'),(char(0),'nul'),(NULL,'absent');";
+    for (key, expected) in [
+        ("a%2Fb", vec!["slash"]),
+        ("a%252Fb", vec!["percent"]),
+        ("a", vec!["plain"]),
+        ("a%20", vec!["space"]),
+        ("", vec!["empty"]),
+        ("%2B", vec!["plus"]),
+        ("%25", vec!["percent-only"]),
+        ("你好", vec!["unicode"]),
+        ("%00", vec!["nul"]),
+        ("a%2fb", vec![]),
+        ("A%2Fb", vec![]),
+        ("%61", vec![]),
+    ] {
+        for pattern in [
+            format!("<http://ex/{key}> <http://ex/value> ?value"),
+            format!("?s <http://ex/value> ?value; <http://ex/edge> <http://ex/{key}>"),
+            format!("?s <http://ex/value> ?value FILTER(?s = <http://ex/{key}>)"),
+            format!("?s <http://ex/value> ?value FILTER(<http://ex/{key}> = ?s)"),
+            format!("?s <http://ex/value> ?value FILTER(sameTerm(<http://ex/{key}>, ?s))"),
+        ] {
+            let query = format!("SELECT ?value WHERE {{ {pattern} }}");
+            let json = answer(configured(setup, mapping), &query).await;
+            let actual: Vec<_> = json["results"]["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["value"]["value"].as_str().unwrap())
+                .collect();
+            assert_eq!(actual, expected, "{query}: {json}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn static_template_identity_preserves_optional_count_null_and_blob_behavior() {
+    let mapping = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"]; rr:subject <http://ex/row>;
+ rr:predicateObjectMap [rr:predicate <http://ex/edge>; rr:objectMap [rr:template "http://ex/{id}"]]."#;
+    let setup = "CREATE TABLE items(id); INSERT INTO items VALUES(1),(1.0),(X'ABFF'),(NULL);";
+    for (pattern, expected) in [
+        ("?s <http://ex/edge> <http://ex/1>", "1"),
+        ("?s <http://ex/edge> ?o FILTER(?o = <http://ex/ABFF>)", "1"),
+        ("?s <http://ex/edge> ?o FILTER(?o != <http://ex/1>)", "1"),
+        ("VALUES ?s {<http://ex/row>} OPTIONAL {?s <http://ex/edge> <http://ex/missing>}", "1"),
+        ("VALUES ?s {<http://ex/row>} OPTIONAL {?s <http://ex/edge> ?o FILTER(?o = <http://ex/missing>)} FILTER(?o != <http://ex/1>)", "0"),
+    ] {
+        let query = format!("SELECT (COUNT(*) AS ?n) WHERE {{ {pattern} }}");
+        let json = answer(configured(setup, mapping), &query).await;
+        assert_eq!(json["results"]["bindings"][0]["n"]["value"], expected, "{query}: {json}");
+    }
+}
+
+#[tokio::test]
+async fn static_constant_subject_keeps_distinct_values_and_declared_decoder_identity() {
+    let mapping = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"]; rr:subjectMap [rr:template "http://ex/{id}"];
+ rr:predicateObjectMap [rr:predicate <http://ex/value>; rr:objectMap [rr:column "value"]]."#;
+    for (kind, data, key) in [
+        (
+            "CHARACTER(4)",
+            "('a','one'),('a ','two'),('a ','two'),(NULL,'absent')",
+            "a%20%20%20",
+        ),
+        (
+            "INTEGER",
+            "(1,'one'),(1,'two'),(1,'two'),(NULL,'absent')",
+            "1",
+        ),
+    ] {
+        let setup =
+            format!("CREATE TABLE items(id {kind}, value TEXT); INSERT INTO items VALUES {data};");
+        let query = format!("SELECT ?value WHERE {{ <http://ex/{key}> <http://ex/value> ?value }}");
+        let json = answer(configured(&setup, mapping), &query).await;
+        let mut values: Vec<_> = json["results"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["value"]["value"].as_str().unwrap())
+            .collect();
+        values.sort();
+        assert_eq!(values, ["one", "two"], "{json}");
+        let json = answer(
+            configured(&setup, mapping),
+            &query.replace("SELECT ?value", "SELECT (COUNT(*) AS ?n)"),
+        )
+        .await;
+        assert_eq!(json["results"]["bindings"][0]["n"]["value"], "2");
+    }
+}
+
+#[tokio::test]
 async fn unicode_template_escaping_matches_rdf_identity_and_count() {
     let mapping = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .

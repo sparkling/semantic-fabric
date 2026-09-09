@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use sf_core::ir::Segment;
 
 use crate::iq::{Branch, CmpOp, ColRef, OptJoin, SqlCond, TermDef};
-use crate::unify::{filter_cond, unify, Unify};
+use crate::unify::{filter_scopes, unify, Unify};
 use crate::{Error, Result};
 
 /// OPTIONAL → NULL-safe branches (ADR-0007 R1–R5).
@@ -177,7 +177,9 @@ pub(crate) fn inner_join_one(
 
     // FILTER inside the OPTIONAL goes in the inner-join WHERE (R5 analogue).
     if let Some(e) = expr {
-        where_conds.push(filter_cond(e, &bindings, dialect).map_err(Error::Unsupported)?);
+        where_conds.push(
+            filter_scopes(e, &bindings, dialect, &[left, right]).map_err(Error::Unsupported)?,
+        );
     }
 
     for (var, rdef) in nullable_shared {
@@ -306,7 +308,9 @@ pub(crate) fn not_exists_cond_for(
         for (v, d) in &right.bindings {
             combined.entry(v.clone()).or_insert_with(|| d.clone());
         }
-        conds.push(filter_cond(e, &combined, dialect).map_err(Error::Unsupported)?);
+        conds.push(
+            filter_scopes(e, &combined, dialect, &[left, right]).map_err(Error::Unsupported)?,
+        );
     }
 
     Ok(Some(SqlCond::NotExists {
@@ -412,7 +416,10 @@ fn build_left_join(
     }
     // Combined bindings for the inner FILTER (R5: it goes in the ON, not WHERE).
     if let Some(e) = expr {
-        extra.push(filter_cond(e, &left.bindings, dialect).map_err(Error::Unsupported)?);
+        extra.push(
+            filter_scopes(e, &left.bindings, dialect, &[&left, right])
+                .map_err(Error::Unsupported)?,
+        );
     }
     for (var, rdef) in nullable_shared {
         let (var, ldef) = left

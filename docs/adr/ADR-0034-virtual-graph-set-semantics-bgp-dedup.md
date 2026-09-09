@@ -98,8 +98,8 @@ Required public SELECT/COUNT, self-join/OPTIONAL/UNION, BLOB/date and
 numeric-filter checks pass. Owned PostgreSQL/MySQL mixed integer/case-insensitive
 text checks protect the existing native window path. This does not promote general natural
 literal identity/value comparison, base-resolved column IRIs, native scalar identity,
-mixed-decoder SubPlans/paths or unknown Ref keys. The existing unsupported
-template-vs-constant FILTER still rejects before source work; no admission flag changes.
+mixed-decoder SubPlans/paths or unknown Ref keys. The single-slot static
+template/constant FILTER boundary is extended by the correction below; no release flag changes.
 
 **Literal comparison correction (2026-09-09):** explicit SQLite column literals
 now compare decoded lexical/datatype/language tuples for BGP identity and sameTerm,
@@ -202,6 +202,31 @@ Native resolved-template execution, mixed natural/literal-column atoms, referenc
 atoms, recursive hop identity, late proposition components and wider pooling are
 not qualified. They reject instead of borrowing raw tuple identity. The same-shape
 static-template and broader identity backlog remains open; no release flag changes.
+
+**Static-template constant correction (2026-09-09):** single-slot static IRI
+templates use `IriCmp`, decoding then encoding substitutions exactly once and
+comparing the complete IRI byte-exactly. Raw `a/b` must match `a%2Fb`; raw
+`a%2Fb` must instead match `a%252Fb`. Lowercase/noncanonical escapes are distinct.
+SQLite retains every live storage/declared/padding decoder, including mixed
+INTEGER/REAL/BLOB and signed zero. Native text/CHAR reuses its own decoder;
+native integers carry a separate live wire-type lexical proof through raw scans,
+Ref outputs and compatible SubPlan positions. Names-only refresh revokes that proof;
+it never licenses text comparisons, native-join substitution or source constraints.
+Authenticated SQLite tests cover fixed subject/object matches, reversed equality,
+sameTerm, negation, NULL, empty/NUL/Unicode, COUNT and OPTIONAL. Required owned
+PostgreSQL16.15/MySQL8.4.11 CLI checks add encoded text, CHAR and integer spelling
+(`1` versus `01`, `%2B1`, `1.0`), alongside the existing native profile aggregate.
+Signed integer limits, unsigned u64, MySQL YEAR zero and ZEROFILL are checked:
+an exact decimal intermediate removes native display padding without narrowing.
+Static multi-slot constant and template/template boundaries are unchanged.
+Native floating, decimal, temporal and binary template-constant identities without
+an equivalent live recipe fail explicitly. This can reject previously successful
+native lookups; restoring their decoder-exact behavior remains required work,
+not a scope deferral or a whole identity/release gate closure. Path-endpoint FILTERs
+retain pre-source rejection through OPTIONAL ON/outer and SubPlan projections;
+the check follows the referenced output, not unrelated columns sharing a path query.
+Focused commands: `cargo test --locked -p sf-serve --test query_budget` and
+`cargo test --locked -p sf-cli --no-default-features --test source_tls_live native_static_template_constants_are_exact -- --ignored --test-threads=1`.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

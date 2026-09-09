@@ -157,9 +157,12 @@ fn combine_unify(left: Unify, right: Unify) -> Unify {
     }
 }
 
-/// Unify a constant against a column/template term map: the raw column(s) must
-/// equal the constant's lexical form.
+/// Unify a constant against a derived term, retaining decoder identity where
+/// raw-column equality cannot prove equality of the generated RDF terms.
 fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
+    if let Some(identity) = iri_cmp::static_constant(c, tm, alias) {
+        return identity;
+    }
     if let (Term::NamedNode(value), Some(column)) = (
         c,
         crate::iq::iri_cmp::needs_resolution(tm)
@@ -638,6 +641,27 @@ use std::collections::BTreeMap;
 /// FILTER would be unsound). `bindings` resolves a variable to its raw column (the
 /// variable must be a plain `rr:column` binding in v1); `dialect` gates the
 /// dialect-specific string-match pushdown (e.g. PostgreSQL regex).
+pub(crate) fn filter_branch(
+    expression: &Expression,
+    branch: &crate::iq::Branch,
+    dialect: Dialect,
+) -> std::result::Result<SqlCond, String> {
+    filter_scopes(expression, &branch.bindings, dialect, &[branch])
+}
+
+pub(crate) fn filter_scopes(
+    expression: &Expression,
+    bindings: &BTreeMap<String, TermDef>,
+    dialect: Dialect,
+    scopes: &[&crate::iq::Branch],
+) -> std::result::Result<SqlCond, String> {
+    let condition = filter_cond(expression, bindings, dialect)?;
+    for branch in scopes {
+        crate::iq::iri_cmp::validate_filter_source(&condition, branch, dialect)?;
+    }
+    Ok(condition)
+}
+
 pub fn filter_cond(
     expr: &Expression,
     bindings: &BTreeMap<String, TermDef>,

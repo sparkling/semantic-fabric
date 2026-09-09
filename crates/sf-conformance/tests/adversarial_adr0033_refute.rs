@@ -1017,7 +1017,13 @@ fn filter_on_path_endpoint_hits_the_same_pre_existing_v1_boundary() {
     );
     let solo_subj_filtered =
         parse("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s ex:reaches+ ?o . FILTER(?s != <http://ex/n/1>) }");
+    let optional_on = parse("PREFIX ex: <http://ex/> SELECT * WHERE { VALUES ?k {1} OPTIONAL { ?s ex:reaches+ ?o FILTER(?o = <http://ex/n/2>) } }");
+    let optional_outer = parse("PREFIX ex: <http://ex/> SELECT * WHERE { VALUES ?k {1} OPTIONAL { ?s ex:reaches+ ?o } FILTER(?o = <http://ex/n/2>) }");
+    let subquery = parse("PREFIX ex: <http://ex/> SELECT * WHERE { { SELECT DISTINCT ?s ?o WHERE { ?s ex:reaches+ ?o } } FILTER(?o = <http://ex/n/2>) }");
     for (label, q) in [
+        ("OPTIONAL ON endpoint filter", &optional_on),
+        ("post-OPTIONAL endpoint filter", &optional_outer),
+        ("SubPlan endpoint filter", &subquery),
         ("joined, subject-endpoint filter", &subj_filtered),
         ("joined, object-endpoint filter", &obj_filtered),
         (
@@ -1031,6 +1037,21 @@ fn filter_on_path_endpoint_hits_the_same_pre_existing_v1_boundary() {
             "{label}: expected the pre-existing v1 FILTER-on-template 501, got {t:?}"
         );
     }
+}
+
+#[test]
+fn subplan_path_boundary_does_not_reject_an_independent_column_iri() {
+    let mapping = RJ_R2RML.replace(
+        "rr:column \"name\"",
+        "rr:column \"name\"; rr:termType rr:IRI",
+    );
+    let maps = sf_mapping::parse_r2rml(&mapping).unwrap();
+    let query = parse("PREFIX ex: <http://ex/> SELECT * WHERE { { SELECT ?s ?o ?nm WHERE { ?s ex:reaches+ ?o . ?o ex:name ?nm } ORDER BY ?nm } FILTER(?nm = <http://ex/Bob>) }");
+    let result = tree(&maps, &query, &[]);
+    assert!(
+        result.is_ok(),
+        "only the path endpoint loses FILTER admission: {result:?}"
+    );
 }
 
 /// The positive counterpart: a FILTER on a variable bound ALONGSIDE the path

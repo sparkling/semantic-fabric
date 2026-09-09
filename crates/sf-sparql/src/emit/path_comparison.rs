@@ -75,6 +75,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
+        integer_columns: HashSet::new(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
@@ -189,29 +190,30 @@ pub(super) fn subplan_actuals(
     METADATA_VISITS.with(|visits| visits.set(visits.get() + 1));
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
+    let mut common_integers: Option<HashSet<usize>> = None;
     for branch in &plan.branches {
         let effective_distinct = if plan.branches.len() == 1 {
             plan.distinct
         } else {
             branch.distinct
         };
-        let projection: Vec<_> = match &branch.agg {
-            Some(agg) if branch.path.is_none() => aggregate_projection(agg, dialect)
-                .iter()
-                .map(|item| item.source_column().cloned())
-                .collect(),
-            _ => branch
-                .projection_with_distinct(if plan.branches.len() == 1 {
-                    plan.distinct
-                } else {
-                    branch.distinct
-                })
-                .into_iter()
-                .map(Some)
-                .collect(),
-        };
+        let projection = source_projection(branch, effective_distinct, dialect);
         width = width.max(projection.len());
         let actuals = branch_actuals(branch, dialect, catalog);
+        let integers: HashSet<_> = projection
+            .iter()
+            .enumerate()
+            .filter_map(|(index, column)| {
+                column
+                    .as_ref()
+                    .filter(|column| iri_cmp::integer_column(column, &actuals))
+                    .map(|_| index)
+            })
+            .collect();
+        match common_integers.as_mut() {
+            None => common_integers = Some(integers),
+            Some(common) => common.retain(|index| integers.contains(index)),
+        }
         let text: HashMap<_, _> = projection
             .iter()
             .enumerate()
@@ -250,6 +252,11 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
+        integer_columns: common_integers
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| format!("c{i}"))
+            .collect(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,

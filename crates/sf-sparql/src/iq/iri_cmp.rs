@@ -146,6 +146,89 @@ pub(crate) fn contains_late_template(condition: &super::SqlCond) -> bool {
     }
 }
 
+/// Path endpoints do not yet carry the original per-cell decoder through a
+/// fixed point. Preserve their pre-source FILTER boundary, not a guessed key.
+pub(crate) fn validate_filter_source(
+    condition: &super::SqlCond,
+    branch: &super::Branch,
+    dialect: sf_sql::Dialect,
+) -> Result<(), String> {
+    match condition {
+        super::SqlCond::IriCmp(cmp)
+            if cmp
+                .columns()
+                .any(|column| path_column(column, branch, dialect)) =>
+        {
+            Err("FILTER on a path endpoint requires an unimplemented decoder identity proof".into())
+        }
+        super::SqlCond::Not(inner) => validate_filter_source(inner, branch, dialect),
+        super::SqlCond::And(parts) | super::SqlCond::Or(parts) => parts
+            .iter()
+            .try_for_each(|part| validate_filter_source(part, branch, dialect)),
+        _ => Ok(()),
+    }
+}
+
+fn path_column(column: &ColRef, branch: &super::Branch, dialect: sf_sql::Dialect) -> bool {
+    if branch
+        .path
+        .as_ref()
+        .is_some_and(|path| path.alias == column.alias)
+    {
+        return true;
+    }
+    if branch
+        .core
+        .iter()
+        .chain(branch.opts.iter().map(|opt| &opt.scan))
+        .any(|scan| {
+            scan.alias == column.alias && path_scan_column(&column.column, &scan.source, dialect)
+        })
+    {
+        return true;
+    }
+    branch
+        .subplan_joins
+        .iter()
+        .filter(|join| join.alias == column.alias)
+        .any(|join| {
+            join.plan.branches.iter().any(|inner| {
+                let distinct = if join.plan.branches.len() == 1 {
+                    join.plan.distinct
+                } else {
+                    inner.distinct
+                };
+                crate::emit::source_projection(inner, distinct, dialect)
+                    .iter()
+                    .enumerate()
+                    .any(|(index, source)| {
+                        column.column.as_ref() == format!("c{index}")
+                            && source
+                                .as_ref()
+                                .is_some_and(|source| path_column(source, inner, dialect))
+                    })
+            })
+        })
+}
+
+fn path_scan_column(name: &str, source: &super::ScanSource, dialect: sf_sql::Dialect) -> bool {
+    match source {
+        super::ScanSource::Logical(_) => false,
+        super::ScanSource::Path { .. } => true,
+        super::ScanSource::RefAtom { input, columns } => columns.iter().enumerate()
+            .any(|(index, column)| name == format!("c{index}") && path_column(column, input, dialect)),
+        super::ScanSource::Projection { input, columns, .. } => columns.iter()
+            .find(|(output, _)| output.as_ref() == name)
+            .is_some_and(|(_, map)| match map {
+                TermMap::Column(column, _) => path_scan_column(column, &input.source, dialect),
+                TermMap::Template(template, _) => template.segments().iter().any(|part| {
+                    matches!(part, Segment::Column(column) if path_scan_column(column, &input.source, dialect))
+                }),
+                _ => false,
+            }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

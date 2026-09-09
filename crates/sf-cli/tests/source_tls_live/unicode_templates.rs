@@ -67,3 +67,116 @@ pub(super) fn assert_native_encoding(fixture: &Fixture, database: &Database, pos
     database.assert_encrypted_sessions();
     drop(server);
 }
+
+pub(super) fn assert_static_constants(fixture: &Fixture, database: &Database, postgres: bool) {
+    fixture.write("first.ttl", r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"];
+ rr:subjectMap [rr:template "http://example.test/id/{id}"];
+ rr:predicateObjectMap [rr:predicate <http://example.test/value>; rr:objectMap [rr:column "value"]];
+ rr:predicateObjectMap [rr:predicate <http://example.test/edge>; rr:objectMap [rr:template "http://example.test/n/{src}"]]."#);
+    fixture.write("ontology.ttl", "<http://example.test/value> a <http://www.w3.org/2002/07/owl#DatatypeProperty> . <http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> .");
+    sql(database, "DELETE FROM items; INSERT INTO items(id,src,value) VALUES (1,'a/b','slash'),(2,'a%2Fb','percent'),(3,'a','plain'),(4,'a ','space'),(5,NULL,'null')");
+    let (server, address) = start(fixture, database);
+    for (key, expected) in [
+        ("a%2Fb", vec!["slash"]),
+        ("a%252Fb", vec!["percent"]),
+        ("a", vec!["plain"]),
+        ("a%20", vec!["space"]),
+        ("a%2fb", vec![]),
+        ("A%2Fb", vec![]),
+        ("%61", vec![]),
+    ] {
+        for pattern in [
+            format!("?s <{EDGE}> <http://example.test/n/{key}>; <http://example.test/value> ?value"),
+            format!("?s <{EDGE}> ?o; <http://example.test/value> ?value FILTER(?o = <http://example.test/n/{key}>)"),
+            format!("?s <{EDGE}> ?o; <http://example.test/value> ?value FILTER(sameTerm(<http://example.test/n/{key}>, ?o))"),
+        ] {
+            let query = format!("SELECT ?value WHERE {{ {pattern} }}");
+            let result = rows(address, fixture, &query);
+            let actual: Vec<_> = result.iter().map(|r| r["value"]["value"].as_str().unwrap()).collect();
+            assert_eq!(actual, expected, "{query}");
+        }
+    }
+    for (key, count) in [("1", 1), ("01", 0), ("%2B1", 0), ("1.0", 0)] {
+        for pattern in [
+            format!("<http://example.test/id/{key}> <http://example.test/value> ?value"),
+            format!(
+                "?s <http://example.test/value> ?value FILTER(?s = <http://example.test/id/{key}>)"
+            ),
+        ] {
+            let query = format!("SELECT ?value WHERE {{ {pattern} }}");
+            assert_eq!(rows(address, fixture, &query).len(), count, "{query}");
+        }
+    }
+    database.assert_encrypted_sessions();
+    drop(server);
+    let mut integers = vec![
+        ("SMALLINT", "-32768"),
+        ("INTEGER", "-2147483648"),
+        ("BIGINT", "-9223372036854775808"),
+        ("BIGINT", "9223372036854775807"),
+    ];
+    if !postgres {
+        integers.extend([
+            ("BIGINT UNSIGNED", "18446744073709551615"),
+            ("YEAR", "0"),
+            ("INT(5) ZEROFILL", "1"),
+        ]);
+    }
+    for (kind, lexical) in integers {
+        sql(database, "DELETE FROM items");
+        let alter = if postgres {
+            format!("ALTER TABLE items ALTER COLUMN src TYPE {kind} USING src::{kind}")
+        } else {
+            format!("ALTER TABLE items MODIFY src {kind}")
+        };
+        sql(database, &alter);
+        sql(
+            database,
+            &format!("INSERT INTO items(id,src,value) VALUES(1,{lexical},'integer')"),
+        );
+        let (server, address) = start(fixture, database);
+        let expected = format!("http://example.test/n/{lexical}");
+        let query = format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}");
+        assert_eq!(rows(address, fixture, &query)[0]["o"]["value"], expected);
+        let query = format!("SELECT ?s WHERE {{ ?s <{EDGE}> <{expected}> }}");
+        assert_eq!(rows(address, fixture, &query).len(), 1, "{kind}: {query}");
+        drop(server);
+    }
+    sql(database, "DELETE FROM items");
+    sql(
+        database,
+        if postgres {
+            "ALTER TABLE items ALTER COLUMN src TYPE CHAR(8)"
+        } else {
+            "ALTER TABLE items MODIFY src CHAR(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+        },
+    );
+    sql(
+        database,
+        "INSERT INTO items(id,src,value) VALUES(1,'a/b','slash')",
+    );
+    let (server, address) = start(fixture, database);
+    let suffix = if postgres {
+        "a%2Fb%20%20%20%20%20"
+    } else {
+        "a%2Fb"
+    };
+    let query = format!("SELECT ?s WHERE {{ ?s <{EDGE}> <http://example.test/n/{suffix}> }}");
+    assert_eq!(
+        rows(address, fixture, &query)[0]["s"]["value"],
+        "http://example.test/id/1"
+    );
+    drop(server);
+}
+
+#[test]
+#[ignore = "requires owned pinned PostgreSQL/MySQL TLS fixtures"]
+fn native_static_template_constants_are_exact() {
+    for postgres in [true, false] {
+        let fixture = Fixture::new();
+        let database = Database::start(&fixture, postgres);
+        sql(&database, "ALTER TABLE items ADD COLUMN id INTEGER PRIMARY KEY DEFAULT 0; ALTER TABLE items ADD COLUMN src VARCHAR(64)");
+        assert_static_constants(&fixture, &database, postgres);
+    }
+}

@@ -474,6 +474,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         ordinary_identity::assert_policies(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
         unicode_templates::assert_native_encoding(&fixture, &database, postgres);
+        unicode_templates::assert_static_constants(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
         let _server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();

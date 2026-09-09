@@ -46,7 +46,7 @@ mod encoding_tests;
 mod encoding_ucschar;
 mod iri_cmp;
 mod projection_layout;
-pub(crate) use projection_layout::projection_layout;
+pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
 mod path_comparison;
@@ -65,6 +65,7 @@ pub struct ColumnCatalog {
     by_source: std::sync::Arc<HashMap<String, Vec<String>>>,
     text_by_source: std::sync::Arc<HashMap<String, HashMap<String, TextKey>>>,
     sqlite_by_source: std::sync::Arc<HashMap<String, HashMap<String, SqliteDecode>>>,
+    integers_by_source: std::sync::Arc<HashMap<String, HashSet<String>>>,
     suppress_path_collation: bool,
     character_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lexical_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -75,6 +76,7 @@ impl ColumnCatalog {
     pub fn insert(&mut self, source: &LogicalSource, columns: Vec<String>) {
         std::sync::Arc::make_mut(&mut self.text_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).remove(&source_key(source));
+        std::sync::Arc::make_mut(&mut self.integers_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.by_source).insert(source_key(source), columns);
     }
 
@@ -83,6 +85,11 @@ impl ColumnCatalog {
         source: &LogicalSource,
         columns: Vec<sf_sql::backend::ResultColumn>,
     ) -> Result<()> {
+        let integers = columns
+            .iter()
+            .filter(|column| column.integer_lexical)
+            .map(|column| column.name.clone())
+            .collect();
         let sqlite = columns
             .iter()
             .filter_map(|column| column.sqlite_decode.map(|key| (column.name.clone(), key)))
@@ -97,6 +104,7 @@ impl ColumnCatalog {
         )?;
         std::sync::Arc::make_mut(&mut self.text_by_source).insert(source_key(source), text);
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).insert(source_key(source), sqlite);
+        std::sync::Arc::make_mut(&mut self.integers_by_source).insert(source_key(source), integers);
         Ok(())
     }
 
@@ -618,6 +626,7 @@ enum AliasSourceKind {
 
 #[derive(Clone, Debug)]
 struct AliasActuals {
+    integer_columns: HashSet<String>,
     source_kind: AliasSourceKind,
     columns: Vec<String>,
     path: bool,
@@ -630,6 +639,11 @@ type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
     AliasActuals {
+        integer_columns: catalog
+            .integers_by_source
+            .get(&source_key(source))
+            .cloned()
+            .unwrap_or_default(),
         sqlite_columns: catalog
             .sqlite_by_source
             .get(&source_key(source))

@@ -378,6 +378,7 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
             .columns()
             .iter()
             .map(|column| crate::backend::ResultColumn {
+                integer_lexical: matches!(*column.type_(), Type::INT2 | Type::INT4 | Type::INT8),
                 sqlite_decode: None,
                 name: column.name().to_owned(),
                 text_key: match *column.type_() {

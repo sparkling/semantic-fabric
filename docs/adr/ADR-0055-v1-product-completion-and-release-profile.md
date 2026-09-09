@@ -164,15 +164,15 @@ ADR-0010/0011 record the endpoint, constructor and shutdown limits. This closes
 the pinned native cancellation slice, not wider backend qualification, total
 governance, protected generations or exact-artifact release admission.
 
-This is an explicit priority and evidence-scope change, not an implementation
-claim. Moving an item to post-1.0 does not make it complete, supported, or
+This is an explicit priority and evidence-scope change, not an implementation claim.
+Moving an item to post-1.0 does not make it complete, supported, or
 production-admitted. ADR-0002's virtualisation and cross-RDBMS product charter,
 ADR-0048's Rust runtime boundary, and the accepted security, governance, and
-operability contracts remain in force. ADR-0037 remains the accepted
-engineering control-plane design, but its full transaction is no longer a gate
-on every v1 commit.
+operability contracts remain in force. ADR-0037 remains the accepted engineering control-plane design; its full transaction is no longer a per-commit gate.
 
 ## Context
+
+**Static IRI-constant delta (2026-09-09):** ADR-0007/0034 replace inverse raw-slot comparison with decoded forward identity for static single-slot IRI constants. Authenticated SQLite and owned TLS PostgreSQL16.15/MySQL8.4.11 checks cover text/CHAR, native integer spelling, percent collisions and surrounding native query profiles; SQLite adds mixed-storage/signed-zero, NULL/negation and COUNT/OPTIONAL. Native integer lexical proof is independent of text or constraint authority. Other native scalar recipes and existing multi-slot/template-pair identities remain required, unclosed work; no release-blocking flag changes. Saved `fb7b684` delivery history is now fast-forward integrated into local `main`; GitHub `main` remains unchanged, and the saved delivery branch is retained.
 
 **Query-profile delta (2026-09-08):** required owned-TLS PostgreSQL 16.15/MySQL 8.4.11 CLI checks cover one-hop DESCRIBE, duplicate-edge cycles, complete 258-edge closures and joined-path folded identifiers. The text-comparison repair now preserves case/trailing-space-distinct nodes under SQLite NOCASE, PostgreSQL nondeterministic ICU and MySQL PAD SPACE collations. Live varying-text facts gate native decorations; SQLite uses a same-IR prepare-only metadata twin, retaining CHAR/DATE decoding and authored SQL. Authenticated JOIN/OPTIONAL/EXISTS/NOT EXISTS/MINUS regressions pass. SubPlan metadata shares actual aggregate projection order, retains standalone paths and avoids width-exponential recursion. Required CHARACTER duplicate/connectivity tests now pass: per-backend decoder recipes normalize path leaves before joins/UNION, keep normalized metadata as text and preserve each endpoint width. SQLite uses an explicitly requested, query-local Rust scalar with shared decoding, pre-allocation source charges and tested cleanup/collision safety; native 4/2, 2/4 and 4/4 CHAR fixtures pass. General typed/mixed-key identity, ordinary source-collation behavior, total source controls and exact release remain open; no path exactness/admission flag is promoted. ADR-0033/0049 record the precise boundary.
 

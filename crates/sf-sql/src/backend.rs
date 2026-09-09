@@ -60,6 +60,9 @@ pub struct SqliteDecode {
 #[derive(Clone, Debug)]
 pub struct ResultColumn {
     pub name: String,
+    /// Live native integer wire decoding is canonical decimal text. This does
+    /// not confer text-column or general numeric equality authority.
+    pub integer_lexical: bool,
     /// How to expose the decoder's exact text value to relational comparisons.
     /// Unknown and non-text families are never guessed or blanket-cast.
     pub text_key: Option<TextKey>,
@@ -107,6 +110,7 @@ pub trait SqlBackend {
             .into_iter()
             .map(|name| ResultColumn {
                 name,
+                integer_lexical: false,
                 text_key: None,
                 sqlite_decode: None,
             })

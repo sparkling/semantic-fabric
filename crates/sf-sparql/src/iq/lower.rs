@@ -69,7 +69,7 @@ use crate::leftjoin::{
 };
 use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches_with_work_mode, single_column_of};
-use crate::unify::{bind_term_def, filter_cond, unify, Unify};
+use crate::unify::{bind_term_def, filter_branch as filter_cond, unify, Unify};
 use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 
 /// Scan the entire `IqNode` tree to find the maximum scan alias in use.
@@ -905,7 +905,7 @@ fn lower_iq_cond(
 ) -> Result<SqlCond> {
     match cond {
         IqCond::Sql(s) => Ok(s.clone()),
-        IqCond::Expr(e) => filter_cond(e, &outer.bindings, dialect).map_err(Error::Unsupported),
+        IqCond::Expr(e) => filter_cond(e, outer, dialect).map_err(Error::Unsupported),
         IqCond::And(cs) => Ok(SqlCond::And(
             cs.iter()
                 .map(|c| lower_iq_cond(c, outer, dialect, work_mode))
@@ -935,7 +935,7 @@ fn lower_owned_iq_cond(
     match cond {
         IqCond::Sql(sql) => Ok(sql),
         IqCond::Expr(expression) => {
-            filter_cond(&expression, &outer.bindings, dialect).map_err(Error::Unsupported)
+            filter_cond(&expression, outer, dialect).map_err(Error::Unsupported)
         }
         IqCond::And(conditions) => Ok(SqlCond::And(
             conditions

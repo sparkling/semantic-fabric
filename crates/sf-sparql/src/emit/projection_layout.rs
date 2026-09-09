@@ -1,6 +1,26 @@
 //! Positional row layout is compiler-owned; it does not require executable SQL.
 use super::*;
 
+/// Original source columns by emitted position; aggregate values have no raw
+/// decoder authority. Shared by metadata and pre-source identity checks.
+pub(crate) fn source_projection(
+    branch: &Branch,
+    distinct: bool,
+    dialect: Dialect,
+) -> Vec<Option<ColRef>> {
+    match &branch.agg {
+        Some(agg) if branch.path.is_none() => aggregate_projection(agg, dialect)
+            .iter()
+            .map(|item| item.source_column().cloned())
+            .collect(),
+        _ => branch
+            .projection_with_distinct(distinct)
+            .into_iter()
+            .map(Some)
+            .collect(),
+    }
+}
+
 pub(crate) fn projection_layout(b: &Branch, dialect: Dialect) -> Result<Vec<ColRef>> {
     // Keep the same path-before-aggregate precedence as actual emission.
     if b.path.is_some() {

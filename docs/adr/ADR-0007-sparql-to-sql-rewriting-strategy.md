@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -101,7 +101,9 @@ those rules are therefore conservative no-ops while structural rules continue.
 
 ### Term-construction lifting (translation discipline)
 
-IRI/literal construction (`concat`/`cast` over `rr:template` segments) is **lifted to the final projection**: joins and FILTERs are expressed over the **raw key columns**, never over constructed term strings, and RDF terms are materialised only in the outermost SELECT list. This is mandatory in the base translation, not a cascade pass — building terms inside join/filter predicates both defeats source indexes *and* blinds the source optimizer's row estimates (databases cannot see through IRI-template structure — the same blindness the cascade's IRI-template-mismatch pruning handles at the algebra level). Lifting keeps equi-joins on indexed key columns and keeps the source's own cardinality estimator accurate; it is the single-source half of the cost-driven design (the cross-source half is the semi-join cost model, ADR-0006), and it is costly to retrofit once the unfold/emit paths exist, so it is baked in from the start.
+Lift IRI/literal construction to the final projection **only where raw-column comparisons are proved equivalent to generated RDF identity**. Indexed native joins remain desirable, but encoding, CHAR padding, signed zero, processor bases and source collations invalidate a universal raw-key rule. Otherwise compare decoder-owned generated keys at the correct relational boundary (ADR-0034), retaining Rust term generation and bound query values. The former unconditional "never constructed strings" wording was incorrect: it licensed encoded IRI constants to match raw percent text and select the wrong row.
+
+**Static constant correction (2026-09-09):** single-slot static IRI templates now compare forward-generated, byte-exact IRIs for fixed subject/object matches and `=`/`!=`/`sameTerm` filters. SQLite uses the shared live row decoder; native text/CHAR and integer templates use separately proved live lexical recipes. Integer authority is not text-column, constraint or general numeric-comparison authority. Fixed prefix/suffix disjointness still prunes mappings before source work. Multi-slot constant and template/template boundaries are unchanged; unproved native scalar families fail explicitly and remain required follow-up, not a completed or removed product capability.
 
 ### v1 SPARQL coverage
 

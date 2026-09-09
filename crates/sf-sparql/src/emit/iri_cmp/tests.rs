@@ -11,6 +11,7 @@ fn iri_dedup_never_falls_through_to_raw_distinct_for_an_unproven_sibling_key() {
             &source,
             ["u", "v"]
                 .map(|name| sf_sql::backend::ResultColumn {
+                    integer_lexical: false,
                     name: name.into(),
                     text_key: None,
                     sqlite_decode: Some(SqliteDecode {
@@ -106,4 +107,142 @@ fn zero_slot_template_registers_its_finalizer_without_a_column_decoder() {
         .lexical_keys
         .load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(params, ["http://ex/", "http://ex/1:x"]);
+}
+
+#[test]
+fn native_integer_proof_survives_raw_projection_but_not_names_only_refresh() {
+    for dialect in [Dialect::Postgres, Dialect::MySql] {
+        let source = LogicalSource::Table("items".into());
+        let mut catalog = ColumnCatalog::default();
+        catalog
+            .insert_live_result(
+                &source,
+                vec![sf_sql::backend::ResultColumn {
+                    name: "id".into(),
+                    integer_lexical: true,
+                    text_key: None,
+                    sqlite_decode: None,
+                }],
+            )
+            .unwrap();
+        let scan = Scan {
+            alias: 7,
+            source: ScanSource::Projection {
+                input: Box::new(Scan {
+                    alias: 3,
+                    source: source.clone().into(),
+                }),
+                columns: vec![(
+                    "renamed".into(),
+                    TermMap::Column("ID".into(), TermSpec::plain_literal()),
+                )],
+                guards: vec![],
+                distinct: true,
+                native_keys: vec![],
+                lexical_keys: vec![],
+            },
+        };
+        let comparison = IriComparison {
+            left: IriOperand::Template {
+                parts: vec![
+                    IriPart::Literal("http://ex/".into()),
+                    IriPart::Column(ColRef::new(7, "renamed")),
+                ],
+                base: None,
+            },
+            right: IriOperand::Constant(sf_core::NamedNode::new_unchecked("http://ex/01")),
+        };
+        let actual = scan_actuals(&scan, dialect, &catalog);
+        assert!(
+            actual.text_columns.is_empty(),
+            "integer proof is not text authority"
+        );
+        let mut params = vec![];
+        let sql = render(
+            &comparison,
+            dialect,
+            &catalog,
+            &HashMap::from([(7, actual)]),
+            &mut params,
+            &mut 0,
+        )
+        .unwrap();
+        assert!(sql.contains("CAST("));
+        assert!(!sql.contains("http://ex/01"), "query values stay bound");
+        assert_eq!(params, ["http://ex/", "http://ex/01"]);
+        catalog.insert(&source, vec!["id".into()]);
+        let actuals = HashMap::from([(7, scan_actuals(&scan, dialect, &catalog))]);
+        assert!(matches!(
+            render(
+                &comparison,
+                dialect,
+                &catalog,
+                &actuals,
+                &mut vec![],
+                &mut 0
+            ),
+            Err(Error::Unsupported(_))
+        ));
+    }
+}
+
+#[test]
+fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding() {
+    for dialect in [Dialect::Postgres, Dialect::MySql] {
+        for key in [
+            None,
+            Some(TextKey::Verbatim),
+            Some(TextKey::PostgresCharacter),
+        ] {
+            if dialect == Dialect::MySql && key == Some(TextKey::PostgresCharacter) {
+                continue;
+            }
+            let source = LogicalSource::Table("items".into());
+            let mut catalog = ColumnCatalog::default();
+            catalog
+                .insert_live_result(
+                    &source,
+                    vec![sf_sql::backend::ResultColumn {
+                        name: "id".into(),
+                        integer_lexical: false,
+                        text_key: key,
+                        sqlite_decode: None,
+                    }],
+                )
+                .unwrap();
+            let actuals = HashMap::from([(0, source_actuals(&source, &catalog))]);
+            let comparison = IriComparison {
+                left: IriOperand::Template {
+                    parts: vec![
+                        IriPart::Literal("http://ex/".into()),
+                        IriPart::Column(ColRef::new(0, "id")),
+                    ],
+                    base: None,
+                },
+                right: IriOperand::Constant(sf_core::NamedNode::new_unchecked("http://ex/a%20")),
+            };
+            let result = render(
+                &comparison,
+                dialect,
+                &catalog,
+                &actuals,
+                &mut vec![],
+                &mut 0,
+            );
+            if key.is_none() {
+                assert!(
+                    matches!(result, Err(Error::Unsupported(ref reason)) if reason.contains("live native text or integer decoder"))
+                );
+            } else {
+                let sql = result.unwrap();
+                assert_eq!(
+                    sql.contains("bpcharsend"),
+                    key == Some(TextKey::PostgresCharacter)
+                );
+                if dialect == Dialect::MySql {
+                    assert!(sql.contains("CONCAT(") && sql.contains("utf8mb4_0900_bin"));
+                }
+            }
+        }
+    }
 }
