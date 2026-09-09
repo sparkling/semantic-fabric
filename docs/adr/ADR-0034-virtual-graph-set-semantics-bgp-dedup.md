@@ -209,7 +209,7 @@ comparing the complete IRI byte-exactly. Raw `a/b` must match `a%2Fb`; raw
 `a%2Fb` must instead match `a%252Fb`. Lowercase/noncanonical escapes are distinct.
 SQLite retains every live storage/declared/padding decoder, including mixed
 INTEGER/REAL/BLOB and signed zero. Native text/CHAR reuses its own decoder;
-native integers carry a separate live wire-type lexical proof through raw scans,
+native scalars carry a separate live wire-type lexical proof through raw scans,
 Ref outputs and compatible SubPlan positions. Names-only refresh revokes that proof;
 it never licenses text comparisons, native-join substitution or source constraints.
 Authenticated SQLite tests cover fixed subject/object matches, reversed equality,
@@ -219,8 +219,16 @@ PostgreSQL16.15/MySQL8.4.11 CLI checks add encoded text, CHAR and integer spelli
 Signed integer limits, unsigned u64, MySQL YEAR zero and ZEROFILL are checked:
 an exact decimal intermediate removes native display padding without narrowing.
 Static multi-slot constant and template/template boundaries are unchanged.
-Native floating, decimal, temporal and binary template-constant identities without
-an equivalent live recipe fail explicitly. This can reject previously successful
+The required native aggregate also restores PostgreSQL boolean/BYTEA and MySQL
+binary string/blob/NEWDECIMAL fixed/`=`/`sameTerm` matches, COUNT, OPTIONAL and NULL/negation.
+Tests compare listed decoder values with lookup results: empty/leading/trailing
+zero bytes, uppercase hex, true/false, full decimal precision/scale and ZEROFILL.
+SQL AST round-trips and metadata tests protect raw projection, names-only revocation,
+provider separation and loss of decimal proof across scale-coercing UNIONs.
+MySQL BIT, PostgreSQL numeric and floating/temporal recipes remain unqualified:
+plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity;
+BIT needs byte-width proof, and temporal/float SQL spelling is not Rust spelling.
+Unsupported recipes can reject formerly valid
 native lookups; restoring their decoder-exact behavior remains required work,
 not a scope deferral or a whole identity/release gate closure. Path-endpoint FILTERs
 retain pre-source rejection through OPTIONAL ON/outer and SubPlan projections;

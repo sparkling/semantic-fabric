@@ -11,7 +11,7 @@ fn iri_dedup_never_falls_through_to_raw_distinct_for_an_unproven_sibling_key() {
             &source,
             ["u", "v"]
                 .map(|name| sf_sql::backend::ResultColumn {
-                    integer_lexical: false,
+                    native_scalar: None,
                     name: name.into(),
                     text_key: None,
                     sqlite_decode: Some(SqliteDecode {
@@ -110,8 +110,27 @@ fn zero_slot_template_registers_its_finalizer_without_a_column_decoder() {
 }
 
 #[test]
-fn native_integer_proof_survives_raw_projection_but_not_names_only_refresh() {
-    for dialect in [Dialect::Postgres, Dialect::MySql] {
+fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
+    for (dialect, key, expression) in [
+        (Dialect::Postgres, NativeScalarKey::Integer, "CAST("),
+        (Dialect::MySql, NativeScalarKey::Integer, "DECIMAL(20, 0)"),
+        (
+            Dialect::Postgres,
+            NativeScalarKey::PostgresBoolean,
+            "CASE WHEN",
+        ),
+        (
+            Dialect::Postgres,
+            NativeScalarKey::PostgresBytea,
+            "pg_catalog.encode(",
+        ),
+        (Dialect::MySql, NativeScalarKey::MysqlBinaryBytes, "HEX("),
+        (
+            Dialect::MySql,
+            NativeScalarKey::MysqlDecimal,
+            "AS CHAR) USING utf8mb4",
+        ),
+    ] {
         let source = LogicalSource::Table("items".into());
         let mut catalog = ColumnCatalog::default();
         catalog
@@ -119,7 +138,7 @@ fn native_integer_proof_survives_raw_projection_but_not_names_only_refresh() {
                 &source,
                 vec![sf_sql::backend::ResultColumn {
                     name: "id".into(),
-                    integer_lexical: true,
+                    native_scalar: Some(key),
                     text_key: None,
                     sqlite_decode: None,
                 }],
@@ -155,7 +174,7 @@ fn native_integer_proof_survives_raw_projection_but_not_names_only_refresh() {
         let actual = scan_actuals(&scan, dialect, &catalog);
         assert!(
             actual.text_columns.is_empty(),
-            "integer proof is not text authority"
+            "scalar proof is not text authority"
         );
         let mut params = vec![];
         let sql = render(
@@ -167,7 +186,10 @@ fn native_integer_proof_survives_raw_projection_but_not_names_only_refresh() {
             &mut 0,
         )
         .unwrap();
-        assert!(sql.contains("CAST("));
+        assert!(sql.contains(expression), "{sql}");
+        dialect
+            .emit_via_ast(&format!("SELECT {sql}"))
+            .unwrap_or_else(|error| panic!("{dialect:?} {key:?}: {error}: {sql}"));
         assert!(!sql.contains("http://ex/01"), "query values stay bound");
         assert_eq!(params, ["http://ex/", "http://ex/01"]);
         catalog.insert(&source, vec!["id".into()]);
@@ -204,7 +226,7 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
                     &source,
                     vec![sf_sql::backend::ResultColumn {
                         name: "id".into(),
-                        integer_lexical: false,
+                        native_scalar: None,
                         text_key: key,
                         sqlite_decode: None,
                     }],
@@ -231,7 +253,7 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
             );
             if key.is_none() {
                 assert!(
-                    matches!(result, Err(Error::Unsupported(ref reason)) if reason.contains("live native text or integer decoder"))
+                    matches!(result, Err(Error::Unsupported(ref reason)) if reason.contains("proven live native decoder"))
                 );
             } else {
                 let sql = result.unwrap();
@@ -244,5 +266,97 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
                 }
             }
         }
+    }
+}
+
+#[test]
+fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
+    for (dialect, key) in [
+        (Dialect::Postgres, NativeScalarKey::MysqlDecimal),
+        (Dialect::MySql, NativeScalarKey::PostgresBoolean),
+        (Dialect::Sqlite, NativeScalarKey::Integer),
+    ] {
+        assert!(matches!(
+            scalar_lexical(key, "c", dialect),
+            Err(Error::Unsupported(_))
+        ));
+    }
+    let maps = sf_mapping::parse_r2rml(
+        r#"
+        @prefix rr: <http://www.w3.org/ns/r2rml#> .
+        <#m> rr:logicalTable [rr:tableName "items"];
+          rr:subjectMap [rr:template "http://ex/{id}"];
+          rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "id"]].
+    "#,
+    )
+    .unwrap();
+    for key in [
+        NativeScalarKey::Integer,
+        NativeScalarKey::MysqlDecimal,
+        NativeScalarKey::MysqlBinaryBytes,
+    ] {
+        let mut catalog = ColumnCatalog::default();
+        catalog
+            .insert_live_result(
+                &maps[0].source,
+                vec![sf_sql::backend::ResultColumn {
+                    name: "id".into(),
+                    native_scalar: Some(key),
+                    text_key: None,
+                    sqlite_decode: None,
+                }],
+            )
+            .unwrap();
+        let mut plan = crate::parse_and_translate(
+            "SELECT ?s WHERE { ?s <http://ex/p> ?o }",
+            &maps,
+            Dialect::MySql,
+        )
+        .unwrap();
+        let mut branch = Branch::single(Scan {
+            alias: 0,
+            source: maps[0].source.clone().into(),
+        });
+        branch.bindings.insert(
+            "s".into(),
+            TermDef::Derived {
+                alias: 0,
+                term_map: TermMap::Column("id".into(), TermSpec::plain_literal()),
+            },
+        );
+        plan.branches = vec![branch.clone()];
+        let expected = HashMap::from([("c0".into(), key)]);
+        assert_eq!(
+            subplan_actuals(&plan, Dialect::MySql, &catalog).scalar_columns,
+            expected
+        );
+        plan.branches.push(branch.clone());
+        let actuals = subplan_actuals(&plan, Dialect::MySql, &catalog);
+        if key == NativeScalarKey::MysqlDecimal {
+            assert!(
+                actuals.scalar_columns.is_empty(),
+                "decimal scale/display coercion has no identity proof"
+            );
+        } else {
+            assert_eq!(actuals.scalar_columns, expected);
+        }
+        // Identical names with different native recipes must not confer authority.
+        let other = LogicalSource::Table("other".into());
+        catalog
+            .insert_live_result(
+                &other,
+                vec![sf_sql::backend::ResultColumn {
+                    name: "id".into(),
+                    native_scalar: Some(NativeScalarKey::PostgresBytea),
+                    text_key: None,
+                    sqlite_decode: None,
+                }],
+            )
+            .unwrap();
+        branch.core[0].source = other.into();
+        plan.branches[1] = branch;
+        assert!(subplan_actuals(&plan, Dialect::MySql, &catalog)
+            .scalar_columns
+            .is_empty());
     }
 }

@@ -71,19 +71,11 @@ pub(super) fn template(
                 IriPart::Column(column) => {
                     let lexical = if path_comparison::column_text(column, actuals).is_some() {
                         path_comparison::rdf_column(column, dialect, catalog, actuals)
-                    } else if integer_column(column, actuals) {
-                        let raw = colref(column, dialect, actuals);
-                        if dialect == Dialect::Postgres {
-                            format!("CAST({raw} AS TEXT)")
-                        } else {
-                            // YEAR zero and ZEROFILL display strings differ
-                            // from the integer wire decoder. Decimal(20,0)
-                            // normalizes both without narrowing unsigned u64.
-                            format!("CAST(CAST({raw} AS DECIMAL(20, 0)) AS CHAR)")
-                        }
+                    } else if let Some(key) = scalar_column(column, actuals) {
+                        scalar_lexical(key, &colref(column, dialect, actuals), dialect)?
                     } else {
                         return Err(Error::Unsupported(
-                            "static template identity requires a live native text or integer decoder".into(),
+                            "static template identity requires a proven live native decoder".into(),
                         ));
                     };
                     percent_encode_col(&lexical, dialect)?
@@ -109,28 +101,54 @@ pub(super) fn template(
     )
 }
 
-pub(super) fn integer_column(column: &ColRef, actuals: &ActualColumns) -> bool {
-    actuals.get(&column.alias).is_some_and(|source| {
-        source
-            .integer_columns
-            .contains(resolve_col(&column.column, Some(&source.columns)))
+fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
+    Ok(match (dialect, key) {
+        (Dialect::Postgres, NativeScalarKey::Integer) => format!("CAST({raw} AS TEXT)"),
+        // YEAR zero and ZEROFILL displays differ from integer wire decoding.
+        // Decimal(20,0) normalizes both without narrowing unsigned u64.
+        (Dialect::MySql, NativeScalarKey::Integer) => {
+            format!("CAST(CAST({raw} AS DECIMAL(20, 0)) AS CHAR)")
+        }
+        (Dialect::Postgres, NativeScalarKey::PostgresBoolean) => {
+            format!("(CASE WHEN {raw} IS NULL THEN NULL WHEN {raw} THEN 'true' ELSE 'false' END)")
+        }
+        (Dialect::Postgres, NativeScalarKey::PostgresBytea) => {
+            format!("pg_catalog.translate(pg_catalog.encode({raw}, 'hex'), 'abcdef', 'ABCDEF')")
+        }
+        (Dialect::MySql, NativeScalarKey::MysqlBinaryBytes) => format!("HEX({raw})"),
+        (Dialect::MySql, NativeScalarKey::MysqlDecimal) => {
+            // Keep the wire formatter's scale/ZEROFILL. Use CONVERT for the
+            // charset: sqlparser does not admit CAST's CHARACTER SET suffix.
+            format!("CONVERT(CAST({raw} AS CHAR) USING utf8mb4)")
+        }
+        _ => {
+            return Err(Error::Unsupported(
+                "native decoder recipe belongs to another backend".into(),
+            ))
+        }
     })
 }
 
-pub(super) fn projected_integers(
+pub(super) fn scalar_column(column: &ColRef, actuals: &ActualColumns) -> Option<NativeScalarKey> {
+    actuals.get(&column.alias).and_then(|source| {
+        source
+            .scalar_columns
+            .get(resolve_col(&column.column, Some(&source.columns)))
+            .copied()
+    })
+}
+
+pub(super) fn projected_scalars(
     columns: &[(Box<str>, TermMap)],
     inner: &AliasActuals,
-) -> HashSet<String> {
+) -> HashMap<String, NativeScalarKey> {
     columns
         .iter()
         .filter_map(|(name, term)| match term {
-            TermMap::Column(raw, _)
-                if inner
-                    .integer_columns
-                    .contains(resolve_col(raw, Some(&inner.columns))) =>
-            {
-                Some(name.to_string())
-            }
+            TermMap::Column(raw, _) => inner
+                .scalar_columns
+                .get(resolve_col(raw, Some(&inner.columns)))
+                .map(|key| (name.to_string(), *key)),
             _ => None,
         })
         .collect()

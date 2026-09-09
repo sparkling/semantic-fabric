@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sf_core::ir::{LogicalSource, Segment, TermMap};
-use sf_sql::backend::{SqliteDecode, TextKey};
+use sf_sql::backend::{NativeScalarKey, SqliteDecode, TextKey};
 use sf_sql::Dialect;
 
 use crate::iq::{
@@ -65,7 +65,7 @@ pub struct ColumnCatalog {
     by_source: std::sync::Arc<HashMap<String, Vec<String>>>,
     text_by_source: std::sync::Arc<HashMap<String, HashMap<String, TextKey>>>,
     sqlite_by_source: std::sync::Arc<HashMap<String, HashMap<String, SqliteDecode>>>,
-    integers_by_source: std::sync::Arc<HashMap<String, HashSet<String>>>,
+    scalars_by_source: std::sync::Arc<HashMap<String, HashMap<String, NativeScalarKey>>>,
     suppress_path_collation: bool,
     character_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lexical_keys: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -76,7 +76,7 @@ impl ColumnCatalog {
     pub fn insert(&mut self, source: &LogicalSource, columns: Vec<String>) {
         std::sync::Arc::make_mut(&mut self.text_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).remove(&source_key(source));
-        std::sync::Arc::make_mut(&mut self.integers_by_source).remove(&source_key(source));
+        std::sync::Arc::make_mut(&mut self.scalars_by_source).remove(&source_key(source));
         std::sync::Arc::make_mut(&mut self.by_source).insert(source_key(source), columns);
     }
 
@@ -85,10 +85,9 @@ impl ColumnCatalog {
         source: &LogicalSource,
         columns: Vec<sf_sql::backend::ResultColumn>,
     ) -> Result<()> {
-        let integers = columns
+        let scalars = columns
             .iter()
-            .filter(|column| column.integer_lexical)
-            .map(|column| column.name.clone())
+            .filter_map(|column| column.native_scalar.map(|key| (column.name.clone(), key)))
             .collect();
         let sqlite = columns
             .iter()
@@ -104,7 +103,7 @@ impl ColumnCatalog {
         )?;
         std::sync::Arc::make_mut(&mut self.text_by_source).insert(source_key(source), text);
         std::sync::Arc::make_mut(&mut self.sqlite_by_source).insert(source_key(source), sqlite);
-        std::sync::Arc::make_mut(&mut self.integers_by_source).insert(source_key(source), integers);
+        std::sync::Arc::make_mut(&mut self.scalars_by_source).insert(source_key(source), scalars);
         Ok(())
     }
 
@@ -626,7 +625,7 @@ enum AliasSourceKind {
 
 #[derive(Clone, Debug)]
 struct AliasActuals {
-    integer_columns: HashSet<String>,
+    scalar_columns: HashMap<String, NativeScalarKey>,
     source_kind: AliasSourceKind,
     columns: Vec<String>,
     path: bool,
@@ -639,8 +638,8 @@ type ActualColumns = HashMap<usize, AliasActuals>;
 
 fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
     AliasActuals {
-        integer_columns: catalog
-            .integers_by_source
+        scalar_columns: catalog
+            .scalars_by_source
             .get(&source_key(source))
             .cloned()
             .unwrap_or_default(),

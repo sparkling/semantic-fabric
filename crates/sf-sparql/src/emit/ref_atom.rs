@@ -10,11 +10,12 @@ pub(super) fn actuals(
 ) -> AliasActuals {
     let sources = branch_actuals(input, dialect, catalog);
     AliasActuals {
-        integer_columns: columns
+        scalar_columns: columns
             .iter()
             .enumerate()
-            .filter(|(_, column)| iri_cmp::integer_column(column, &sources))
-            .map(|(i, _)| format!("c{i}"))
+            .filter_map(|(i, column)| {
+                iri_cmp::scalar_column(column, &sources).map(|key| (format!("c{i}"), key))
+            })
             .collect(),
         sqlite_columns: columns
             .iter()

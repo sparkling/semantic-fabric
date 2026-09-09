@@ -75,7 +75,7 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         text_columns.insert("sf_o".into(), TextKey::Verbatim);
     }
     AliasActuals {
-        integer_columns: HashSet::new(),
+        scalar_columns: HashMap::new(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
@@ -190,7 +190,7 @@ pub(super) fn subplan_actuals(
     METADATA_VISITS.with(|visits| visits.set(visits.get() + 1));
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
-    let mut common_integers: Option<HashSet<usize>> = None;
+    let mut common_scalars: Option<HashMap<usize, NativeScalarKey>> = None;
     for branch in &plan.branches {
         let effective_distinct = if plan.branches.len() == 1 {
             plan.distinct
@@ -200,19 +200,22 @@ pub(super) fn subplan_actuals(
         let projection = source_projection(branch, effective_distinct, dialect);
         width = width.max(projection.len());
         let actuals = branch_actuals(branch, dialect, catalog);
-        let integers: HashSet<_> = projection
+        let scalars: HashMap<_, _> = projection
             .iter()
             .enumerate()
             .filter_map(|(index, column)| {
                 column
                     .as_ref()
-                    .filter(|column| iri_cmp::integer_column(column, &actuals))
-                    .map(|_| index)
+                    .and_then(|column| iri_cmp::scalar_column(column, &actuals))
+                    // UNION can widen decimal scale/display metadata. Do not
+                    // inherit a pre-coercion lexical proof through that boundary.
+                    .filter(|key| plan.branches.len() == 1 || *key != NativeScalarKey::MysqlDecimal)
+                    .map(|key| (index, key))
             })
             .collect();
-        match common_integers.as_mut() {
-            None => common_integers = Some(integers),
-            Some(common) => common.retain(|index| integers.contains(index)),
+        match common_scalars.as_mut() {
+            None => common_scalars = Some(scalars),
+            Some(common) => common.retain(|index, key| scalars.get(index) == Some(key)),
         }
         let text: HashMap<_, _> = projection
             .iter()
@@ -252,10 +255,10 @@ pub(super) fn subplan_actuals(
         .map(|(i, key)| (format!("c{i}"), key))
         .collect();
     AliasActuals {
-        integer_columns: common_integers
+        scalar_columns: common_scalars
             .unwrap_or_default()
             .into_iter()
-            .map(|i| format!("c{i}"))
+            .map(|(i, key)| (format!("c{i}"), key))
             .collect(),
         sqlite_columns: HashMap::new(),
         lexical_columns: HashMap::new(),

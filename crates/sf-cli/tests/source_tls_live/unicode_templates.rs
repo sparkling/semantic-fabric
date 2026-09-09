@@ -168,6 +168,7 @@ pub(super) fn assert_static_constants(fixture: &Fixture, database: &Database, po
         "http://example.test/id/1"
     );
     drop(server);
+    assert_scalar_constants(fixture, database, postgres);
 }
 
 #[test]
@@ -179,4 +180,109 @@ fn native_static_template_constants_are_exact() {
         sql(&database, "ALTER TABLE items ADD COLUMN id INTEGER PRIMARY KEY DEFAULT 0; ALTER TABLE items ADD COLUMN src VARCHAR(64)");
         assert_static_constants(&fixture, &database, postgres);
     }
+}
+
+fn assert_scalar_constants(fixture: &Fixture, database: &Database, postgres: bool) {
+    let cases = if postgres {
+        vec![
+            ("BYTEA", "decode('00ff61622f', 'hex')", "00FF61622F"),
+            ("BYTEA", "decode('', 'hex')", ""),
+            ("BYTEA", "decode('0000', 'hex')", "0000"),
+            ("BOOLEAN", "TRUE", "true"),
+            ("BOOLEAN", "FALSE", "false"),
+        ]
+    } else {
+        vec![
+            ("VARBINARY(8)", "X'00FF61622F'", "00FF61622F"),
+            ("VARBINARY(8)", "X''", ""),
+            ("BLOB", "X'00'", "00"),
+            ("BINARY(8)", "X'00FF61622F'", "00FF61622F000000"),
+            ("DECIMAL(30,6)", "-12.34", "-12.340000"),
+            ("DECIMAL(30,6)", "0", "0.000000"),
+            ("DECIMAL(30,6)", "-0.000000", "0.000000"),
+            (
+                "DECIMAL(30,6)",
+                "123456789012345678901234.123456",
+                "123456789012345678901234.123456",
+            ),
+            ("DECIMAL(12,4) ZEROFILL", "12.34", "00000012.3400"),
+        ]
+    };
+    for (kind, value, lexical) in cases {
+        sql(
+            database,
+            "DELETE FROM items; ALTER TABLE items DROP COLUMN src",
+        );
+        sql(
+            database,
+            &format!("ALTER TABLE items ADD COLUMN src {kind}"),
+        );
+        sql(
+            database,
+            &format!(
+                "INSERT INTO items(id,src,value) VALUES (1,{value},'match'),(2,NULL,'absent')"
+            ),
+        );
+        let (server, address) = start(fixture, database);
+        let iri = format!("http://example.test/n/{lexical}");
+        let result = rows(
+            address,
+            fixture,
+            &format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+        );
+        assert_eq!(result.len(), 1, "{kind}: NULL is not a term");
+        assert_eq!(result[0]["o"]["value"], iri, "{kind}: decoder premise");
+        for pattern in [
+            format!("?s <{EDGE}> <{iri}>"),
+            format!("?s <{EDGE}> ?o FILTER(?o = <{iri}>)"),
+            format!("?s <{EDGE}> ?o FILTER(sameTerm(<{iri}>, ?o))"),
+        ] {
+            let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+            let result = rows(address, fixture, &query);
+            assert_eq!(result.len(), 1, "{kind}: {query}");
+            assert_eq!(result[0]["s"]["value"], "http://example.test/id/1");
+        }
+        let query = format!("SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EDGE}> <{iri}> }}");
+        assert_eq!(rows(address, fixture, &query)[0]["n"]["value"], "1");
+        let query = format!("SELECT ?s WHERE {{ ?s <{EDGE}> ?o FILTER(?o != <{iri}>) }}");
+        assert!(
+            rows(address, fixture, &query).is_empty(),
+            "NULL is not false: {query}"
+        );
+        let mut wrongs = vec![format!("{lexical}x"), format!("{lexical}%20")];
+        let query = format!("SELECT ?s ?o WHERE {{ ?s <http://example.test/value> ?v OPTIONAL {{ ?s <{EDGE}> ?o FILTER(sameTerm(?o, <{iri}>)) }} }}");
+        let optional = rows(address, fixture, &query);
+        assert_eq!(optional.len(), 2, "{kind}: OPTIONAL preserves absent term");
+        let present = optional
+            .iter()
+            .find(|row| row["s"]["value"] == "http://example.test/id/1")
+            .unwrap();
+        let absent = optional
+            .iter()
+            .find(|row| row["s"]["value"] == "http://example.test/id/2")
+            .unwrap();
+        assert_eq!(present["o"]["value"], iri);
+        assert!(absent.get("o").is_none());
+        if lexical.to_lowercase() != lexical {
+            wrongs.push(lexical.to_lowercase());
+        }
+        if kind == "BOOLEAN" {
+            wrongs.extend([lexical.to_uppercase(), "1".into(), "t".into()]);
+        }
+        if kind.starts_with("DECIMAL") {
+            wrongs.push(format!("{lexical}0"));
+            let trimmed = lexical.trim_end_matches('0');
+            if trimmed != lexical {
+                wrongs.push(trimmed.into());
+            }
+        }
+        for wrong in wrongs {
+            let query =
+                format!("SELECT ?s WHERE {{ ?s <{EDGE}> <http://example.test/n/{wrong}> }}");
+            assert!(rows(address, fixture, &query).is_empty(), "{kind}: {query}");
+        }
+        database.assert_encrypted_sessions();
+        drop(server);
+    }
+    sql(database, "DELETE FROM items; ALTER TABLE items DROP COLUMN src; ALTER TABLE items ADD COLUMN src VARCHAR(64)");
 }

@@ -177,7 +177,7 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
         stmt.columns()
             .iter()
             .map(|column| {
-                let varying_text = matches!(
+                let bytes = matches!(
                     column.column_type(),
                     ColumnType::MYSQL_TYPE_VARCHAR
                         | ColumnType::MYSQL_TYPE_STRING
@@ -186,18 +186,25 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
                         | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
                         | ColumnType::MYSQL_TYPE_LONG_BLOB
                         | ColumnType::MYSQL_TYPE_BLOB
-                ) && mysql_xsd_code(column, self.type_profile)?
-                    == Some(XsdTypeCode::String);
+                );
+                let code = mysql_xsd_code(column, self.type_profile)?;
+                let varying_text = bytes && code == Some(XsdTypeCode::String);
                 Ok(crate::backend::ResultColumn {
-                    integer_lexical: matches!(
-                        column.column_type(),
+                    native_scalar: match column.column_type() {
                         ColumnType::MYSQL_TYPE_TINY
-                            | ColumnType::MYSQL_TYPE_SHORT
-                            | ColumnType::MYSQL_TYPE_LONG
-                            | ColumnType::MYSQL_TYPE_LONGLONG
-                            | ColumnType::MYSQL_TYPE_INT24
-                            | ColumnType::MYSQL_TYPE_YEAR
-                    ),
+                        | ColumnType::MYSQL_TYPE_SHORT
+                        | ColumnType::MYSQL_TYPE_LONG
+                        | ColumnType::MYSQL_TYPE_LONGLONG
+                        | ColumnType::MYSQL_TYPE_INT24
+                        | ColumnType::MYSQL_TYPE_YEAR => Some(super::NativeScalarKey::Integer),
+                        ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                            Some(super::NativeScalarKey::MysqlDecimal)
+                        }
+                        _ if bytes && code == Some(XsdTypeCode::HexBinary) => {
+                            Some(super::NativeScalarKey::MysqlBinaryBytes)
+                        }
+                        _ => None,
+                    },
                     sqlite_decode: None,
                     name: column.name_str().into_owned(),
                     text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),

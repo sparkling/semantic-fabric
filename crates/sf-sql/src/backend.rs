@@ -48,6 +48,17 @@ pub enum TextKey {
     PostgresCharacter,
 }
 
+/// Live wire-decoder equivalence for static template identity, not SQL value
+/// equality or source-key authority. Unknown families must remain unproven.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeScalarKey {
+    Integer,
+    PostgresBoolean,
+    PostgresBytea,
+    MysqlBinaryBytes,
+    MysqlDecimal,
+}
+
 /// Exact SQLite row decoder learned from a live prepare. `declared: None`
 /// means authoritative per-cell storage-class fallback, not missing evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,9 +71,8 @@ pub struct SqliteDecode {
 #[derive(Clone, Debug)]
 pub struct ResultColumn {
     pub name: String,
-    /// Live native integer wire decoding is canonical decimal text. This does
-    /// not confer text-column or general numeric equality authority.
-    pub integer_lexical: bool,
+    /// Exact lexical recipe, authorized only by native result metadata.
+    pub native_scalar: Option<NativeScalarKey>,
     /// How to expose the decoder's exact text value to relational comparisons.
     /// Unknown and non-text families are never guessed or blanket-cast.
     pub text_key: Option<TextKey>,
@@ -110,7 +120,7 @@ pub trait SqlBackend {
             .into_iter()
             .map(|name| ResultColumn {
                 name,
-                integer_lexical: false,
+                native_scalar: None,
                 text_key: None,
                 sqlite_decode: None,
             })

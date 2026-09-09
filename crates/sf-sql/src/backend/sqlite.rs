@@ -262,7 +262,7 @@ fn result_columns(conn: &Connection, sql: &str) -> Result<Vec<crate::backend::Re
                 }
             });
             ResultColumn {
-                integer_lexical: false,
+                native_scalar: None,
                 name: column.name().to_owned(),
                 text_key,
                 sqlite_decode: Some(crate::backend::SqliteDecode {
