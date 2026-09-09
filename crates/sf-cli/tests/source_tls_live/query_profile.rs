@@ -15,7 +15,6 @@ const MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
 rr:subjectMap [ rr:template "http://example.test/n/{src}" ] ;
 rr:predicateObjectMap [ rr:predicate <http://example.test/edge> ;
 rr:objectMap [ rr:template "http://example.test/n/{dst}" ; rr:termType rr:IRI ] ] ."#;
-
 fn iri(node: u32) -> String {
     format!("http://example.test/n/{node}")
 }
@@ -485,6 +484,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         if postgres {
             pg_numeric::assert_all(&fixture, &database);
         } else {
+            pg_numeric::assert_mysql_range(&fixture, &database);
             natural_temporal::assert_responses(&fixture, &database);
         }
         eprintln!(

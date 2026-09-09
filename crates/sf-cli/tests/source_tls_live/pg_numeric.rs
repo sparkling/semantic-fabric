@@ -1,5 +1,7 @@
 //! PostgreSQL NUMERIC uses its native arbitrary-precision lexical decoder.
 use super::*;
+#[path = "pg_numeric_range.rs"]
+mod range;
 
 const NUMERIC_MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
 <#numeric> rr:logicalTable [rr:tableName "items"];
@@ -11,9 +13,14 @@ const NUMERIC_MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
 
 pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_large_decoder(fixture, database);
+    range::assert_range(fixture, database);
     assert_identity(fixture, database);
     assert_references(fixture, database);
     assert_invalid(fixture, database);
+}
+
+pub(super) fn assert_mysql_range(fixture: &Fixture, database: &Database) {
+    range::assert_mysql(fixture, database);
 }
 
 #[test]

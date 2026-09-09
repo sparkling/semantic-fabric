@@ -22,7 +22,7 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 
 * **Trust the driver's default string rendering of non-string values** — rejected: frequently non-canonical or wrong for RDF (PostgreSQL booleans `t`/`f`, `bytea` `\x`+lowercase, hour-only tz offsets, space-separator timestamps; `xsd:double` needs `E`-notation everywhere; decimals return scale-padded), and SQLite has no reliable per-column type at all.
 * **Push canonicalization into SQL** — rejected: scientific notation, decimal trimming, and hex casing are fragile across dialects, and the cross-source read goes through other renderers anyway. SQL does set-work; Rust does lexical form.
-* **Catalog-driven type determination + one Rust canonicalization chokepoint (chosen)** — determine the target XSD datatype from catalog metadata (per-dialect `DbTypeMap`), then produce the XSD canonical lexical form in Rust via `oxsdatatypes`, with a per-value SQLite storage-class branch for dynamic typing.
+* **Catalog-driven type determination + one Rust canonicalization chokepoint (chosen)** — determine the target XSD datatype from catalog metadata (per-dialect `DbTypeMap`), then produce the XSD canonical lexical form in Rust via `oxsdatatypes` and the decimal/scientific/hex refinements below, with a per-value SQLite storage-class branch for dynamic typing.
 * **Strict SQL:2008 delimited-vs-regular identifier rejection** — rejected for identifier resolution: provenance is unrecoverable by a virtualiser and strict rejection is a net conformance loss against the predominantly-lenient W3C suite. Chosen instead: resolve every mapping column identifier against the live introspected schema (exact match, then unique ASCII-case-insensitive match).
 
 ## Decision Outcome
@@ -30,7 +30,7 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 **Never trust the driver's rendering for a non-string value. Determine the target XSD datatype from catalog metadata, then produce the XSD canonical lexical form in Rust.** Two layers:
 
 1. **Type determination — a per-dialect `DbTypeMap`** (the Ontop `DBTypeFactory` analogue): native source type → internal `XsdTypeCode`, read from the catalog (`information_schema`/`pg_catalog` for PostgreSQL; `PRAGMA table_info` for SQLite; MySQL catalog plus wire metadata). MySQL deliberately cannot recover whether an authored `BOOL` or `TINYINT(1)` produced the same server type identity.
-2. **Value canonicalization — one Rust chokepoint** in `sf-core` term generation. Fetch each value in the most type-faithful driver form (binary/typed over text), parse into `oxsdatatypes`, and emit via its `Display`, which **is** the XSD canonical mapping — so literals round-trip through `oxttl`/`oxrdf` byte-identically using the same code path Oxigraph itself uses. `oxsdatatypes` does not cover `xsd:hexBinary`; a small uppercase-hex encoder handles it. Canonicalization is keyed on the value's **target XSD type**, never on the dialect's text. **Do not push canonicalization into SQL** (scientific notation, decimal trimming, hex casing are fragile across dialects and the cross-source read goes through other renderers anyway): SQL does set-work, Rust does lexical form.
+2. **Value canonicalization — one Rust chokepoint** in `sf-core` term generation. Fetch each value in the most type-faithful driver form (binary/typed over text), then use `oxsdatatypes` parsing and canonical `Display` where its representation covers the source values. Full-range decimal construction validates and normalizes lexical slices; scientific formatting and uppercase hex have the dedicated refinements below. Canonicalization is keyed on the value's **target XSD type**, never on the dialect's text. **Do not push RDF construction into SQL**: SQL does separately qualified set-work; Rust emits the final lexical form.
 
 > **Reconciliation note (2026-06-28, impl-verified).** "emit via its `Display`" is exact for every XSD type the engine canonicalizes **except `xsd:double` / `xsd:float`**: in `oxsdatatypes` 0.2.2 their `Display` delegates to Rust `f64`/`f32` formatting, which is **not** XSD-canonical (e.g. `1.0` → `1`, no mandatory `E`-notation — contradicting the "`E`-notation everywhere" requirement above). For those two types the single `sf-core` chokepoint still **parses/validates through `oxsdatatypes`** but emits the XSD-canonical scientific form itself (mantissa with ≥ 1 fractional digit, uppercase `E`, no leading-zero exponent; `INF`/`-INF`/`NaN`); all other types use `oxsdatatypes` `Display` directly as stated. This is a documentation correction only — the implemented output is XSD-canonical per §10 (verified by the `sf-core` canonical-double tests). Companion note in ADR-0006 §Term generation.
 
@@ -72,7 +72,7 @@ retains truncated-array checks, and still rejects NaN/infinities as unsupported.
 The required owned PostgreSQL TLS query-profile aggregate includes authenticated
 IRI reconstruction of a 131,072-digit NUMERIC with `.00` display scale. A synthetic
 wire regression also covers the unsigned boundary and truncation. This repairs
-the raw decoder, not natural-decimal range. The identity refinement below closes
+the raw decoder; the range refinement below covers natural literals. The identity refinement closes
 the separate qualified static-template comparison and deduplication slice.
 
 ### PostgreSQL NUMERIC identity refinement (2026-09-09)
@@ -92,8 +92,29 @@ native reference joins and authored SQL result expressions. Authored SQL literal
 still require explicit datatype for semantic admission. Hidden NaN/infinity
 terms fail terminally, including COUNT/ASK and unprojected OPTIONAL; portable
 policy excludes denied invalid rows and cap-one requests recover. SQL validation
-errors need not have the raw decoder's Unsupported classification. Natural-decimal
-range, other native families and general pooled identity remain unclosed.
+errors need not have the raw decoder's Unsupported classification. Natural-term
+identity, other native families and general pooled identity remain unclosed.
+
+### Natural decimal range refinement (2026-09-09)
+
+The Rust chokepoint now validates the complete ASCII decimal lexical grammar and
+normalizes sign/zero/digit slices without fixed-width arithmetic or intermediate
+allocation. This supersedes direct `oxsdatatypes::Decimal` parsing for construction,
+not arithmetic. Integral decimals retain `1`, not `1.0`, as required by the chosen
+[XSD 1.1 canonical spelling](https://www.w3.org/TR/xmlschema11-2/#decimal); the
+[R2RML consistency law](https://www.w3.org/TR/r2rml/#natural-mapping) is unchanged.
+Core tests preserve prior representable spellings, reject malformed text, and
+cover magnitude/scale extrema and idempotence. Owned PostgreSQL TLS CLI tests
+reconstruct 131,072 integral digits and 16,383 fractional digits through SELECT,
+DISTINCT and hidden COUNT/ASK; mixed raw-IRI/natural columns retain scale identity,
+and an output-byte failure releases cap-one admission. Owned MySQL TLS SELECT and
+DISTINCT also preserve the full `DECIMAL(65,30)` value. Raw driver data and IRI
+construction are unchanged; normalization is linear, with output at most input
+bytes plus one. Fixed-range numeric comparison/AVG and native natural `sameTerm`
+remain separate work. Existing explicit-datatype lexical behavior is unchanged:
+the [same-natural-datatype case in R2RML §11.2](https://www.w3.org/TR/r2rml/#generated-rdf-term)
+requires separate correction, not a claim that every explicit datatype overrides
+natural construction.
 
 ### Natural temporal identity refinement (2026-09-09)
 

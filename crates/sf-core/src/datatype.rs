@@ -5,7 +5,7 @@
 //! [`natural_xsd`] is the §10 lookup (SQL type name → [`XsdTypeCode`]).
 //! [`canonical_lexical`] is the single Rust chokepoint that turns a raw value
 //! into its XSD-canonical lexical form, written through a reusable buffer. It
-//! formats via `oxsdatatypes` (parse → canonical `Display`), **never** `ryu` /
+//! normally formats via `oxsdatatypes` (parse → canonical `Display`), **never** `ryu` /
 //! shortest-round-trip — which is not XSD-canonical and would be a conformance
 //! bug (ADR-0015).
 //!
@@ -13,15 +13,18 @@
 //! *not* canonical (it delegates to `f64`, e.g. `1` not `1.0E0`). R2RML §10
 //! requires `E`-notation everywhere, so this module parses/validates via
 //! `oxsdatatypes::Double` and then emits the canonical scientific form itself
-//! (still not `ryu`). Every other type's `oxsdatatypes` `Display` *is* canonical.
+//! (still not `ryu`). Decimal normalization validates and trims lexical slices:
+//! it preserves the same canonical spelling without a fixed arithmetic range.
 
 use std::borrow::Cow;
 use std::fmt::Write;
 
 use oxrdf::{vocab::xsd, NamedNodeRef};
-use oxsdatatypes::{Boolean, Date, DateTime, Decimal, Double, Integer, Time};
+use oxsdatatypes::{Boolean, Date, DateTime, Double, Integer, Time};
 
 use crate::{Error, Result};
+
+mod decimal;
 
 /// The XSD datatype a SQL value maps to under the R2RML §10 natural mapping.
 /// `String` is the plain (`xsd:string`) literal case (character SQL types).
@@ -109,7 +112,7 @@ pub fn canonical_lexical(value: &str, code: XsdTypeCode, out: &mut String) -> Re
         XsdTypeCode::String => out.push_str(value),
         XsdTypeCode::Boolean => cast_display::<Boolean>(value, "xsd:boolean", out)?,
         XsdTypeCode::Integer => cast_display::<Integer>(value, "xsd:integer", out)?,
-        XsdTypeCode::Decimal => cast_display::<Decimal>(value, "xsd:decimal", out)?,
+        XsdTypeCode::Decimal => decimal::write_canonical(value, out)?,
         XsdTypeCode::Date => cast_display::<Date>(value, "xsd:date", out)?,
         XsdTypeCode::Time => cast_display::<Time>(value, "xsd:time", out)?,
         XsdTypeCode::DateTime => {
