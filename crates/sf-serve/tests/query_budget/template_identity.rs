@@ -67,6 +67,39 @@ fn configured(setup: &str, mapping: &str) -> ServeConfig {
 }
 
 #[tokio::test]
+async fn unicode_template_escaping_matches_rdf_identity_and_count() {
+    let mapping = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#items> rr:logicalTable [rr:tableName "items"];
+ rr:subjectMap [rr:template "http://ex/{a}-{b}"];
+ rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:object "same"].
+"#;
+    let setup = "CREATE TABLE items(a TEXT,b TEXT); INSERT INTO items VALUES(char(57344),'x'),(char(57344),'x'),('%EE%80%80','x'),('你好','x');";
+    let json = answer(
+        configured(setup, mapping),
+        "SELECT ?s WHERE { ?s <http://ex/p> ?o }",
+    )
+    .await;
+    let mut values: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["s"]["value"].as_str().unwrap())
+        .collect();
+    values.sort();
+    assert_eq!(
+        values,
+        [
+            "http://ex/%25EE%2580%2580-x",
+            "http://ex/%EE%80%80-x",
+            "http://ex/你好-x"
+        ]
+    );
+    let json = answer(configured(setup, mapping), "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o FILTER(?s = <http://ex/%EE%80%80-x>) }").await;
+    assert_eq!(json["results"]["bindings"][0]["n"]["value"], "1");
+}
+
+#[tokio::test]
 async fn hidden_object_and_graph_keys_preserve_projected_bags() {
     let mapping = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .

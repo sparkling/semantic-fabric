@@ -3,6 +3,8 @@ use super::*;
 use std::collections::BTreeSet;
 #[path = "ordinary_identity.rs"]
 mod ordinary_identity;
+#[path = "unicode_templates.rs"]
+mod unicode_templates;
 
 const EDGE: &str = "http://example.test/edge";
 const MAPPING: &str = r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -470,6 +472,8 @@ fn native_describe_and_recursive_paths_are_exact() {
         drop(assert_collated_paths(&fixture, &database, postgres));
         ordinary_identity::assert_references(&fixture, &database, postgres);
         ordinary_identity::assert_policies(&fixture, &database, postgres);
+        fixture.write("first.ttl", MAPPING);
+        unicode_templates::assert_native_encoding(&fixture, &database, postgres);
         fixture.write("first.ttl", MAPPING);
         let _server = assert_character_paths(&fixture, &database, postgres);
         database.assert_encrypted_sessions();

@@ -40,6 +40,10 @@ use crate::{Error, Result};
 mod scan;
 use scan::{scan_actuals, scan_ref};
 mod aggregate_projection;
+#[cfg(test)]
+#[path = "emit/encoding_tests.rs"]
+mod encoding_tests;
+mod encoding_ucschar;
 mod iri_cmp;
 mod projection_layout;
 pub(crate) use projection_layout::projection_layout;
@@ -1916,11 +1920,10 @@ fn sql_string_literal(text: &str) -> String {
 }
 
 /// Percent-encode `col_sql`'s runtime value EXACTLY the way `sf_core::ir::
-/// Template::expand`'s `encode_iri` arm does (`percent_encode_iri`, same
-/// file): RFC 3987 *iunreserved* = `ALPHA / DIGIT / "-" / "." / "_" / "~"`
-/// passes through; every OTHER byte (the FULL 0x00-0x7F complement, all 62
-/// bytes, including every ASCII control byte) becomes `%XX` (uppercase
-/// hex); non-ASCII passes through unchanged.
+/// Template::expand`'s `encode_iri` arm does: RFC3987 *iunreserved* consists
+/// of `ALPHA / DIGIT / "-" / "." / "_" / "~" / ucschar`. Other valid scalars
+/// become uppercase percent-encoded UTF-8 bytes, never hexadecimal code points.
+/// The shared core range table excludes private-use, C1 and noncharacters.
 ///
 /// **History: why this is not a flat `REPLACE` chain.** An earlier version
 /// nested one `REPLACE` call per encodable byte — `REPLACE` being ANSI-
@@ -1962,10 +1965,10 @@ fn sql_string_literal(text: &str) -> String {
 /// `CAST(... AS BLOB)` (SQLite) / `CAST(... AS BINARY)` (MySQL) so every
 /// function in the chain is consistently byte-oriented; a non-ASCII
 /// multi-byte character is then walked and reassembled ONE RAW BYTE AT A
-/// TIME (every continuation/lead byte is ≥ 0x80, so "byte ≥ 0x80 passes
-/// through unchanged" correctly reconstructs it without ever needing to
-/// understand UTF-8 structure) — confirmed an ISOLATED intermediate byte
-/// cast is not independently valid UTF-8, but the FINAL reassembled result
+/// TIME. A byte passes through only when its complete UTF-8 scalar is in
+/// RFC3987 ucschar; other valid scalars are percent-encoded byte by byte.
+/// Invalid UTF-8 errors rather than becoming a valid escaped IRI. An isolated
+/// intermediate byte cast is not independently valid UTF-8, but the final result
 /// is. PostgreSQL's `text` is different on both counts: it cannot contain a
 /// NUL byte at all (the server rejects it outright — confirmed live,
 /// `ERROR: invalid byte sequence for encoding "UTF8": 0x00` — so there is
@@ -2026,6 +2029,8 @@ fn percent_encode_col(col_sql: &str, dialect: Dialect) -> Result<String> {
 /// n)` needs SQLite ≥ 3.44 (this project's bundled `libsqlite3-sys` ships
 /// 3.46.0, confirmed live).
 fn percent_encode_col_sqlite(col: &str) -> String {
+    let ucschar = encoding_ucschar::byte_member(col, Dialect::Sqlite);
+    let valid_utf8 = encoding_ucschar::valid_non_ascii_byte(col, Dialect::Sqlite);
     format!(
         "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
 WITH RECURSIVE seq(n) AS (\
@@ -2039,8 +2044,10 @@ WHEN hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '30' AND '39' \
 OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '41' AND '5A' \
 OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '61' AND '7A' \
 OR hex(substr(CAST({col} AS BLOB), n, 1)) IN ('2D', '2E', '5F', '7E') \
-OR hex(substr(CAST({col} AS BLOB), n, 1)) >= '80' \
+OR {ucschar} \
 THEN CAST(substr(CAST({col} AS BLOB), n, 1) AS TEXT) \
+WHEN hex(substr(CAST({col} AS BLOB), n, 1)) >= '80' AND NOT {valid_utf8} \
+THEN json_extract('semantic-fabric-invalid-utf8', '$') \
 ELSE '%' || hex(substr(CAST({col} AS BLOB), n, 1)) \
 END, '' ORDER BY n\
 ) FROM seq\
@@ -2079,6 +2086,8 @@ const MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES: usize = MYSQL_GROUP_CONCAT_MAX_LEN /
 const MYSQL_PACKET_RESERVE_BYTES: usize = 4_096;
 
 fn percent_encode_col_mysql(col: &str) -> String {
+    let ucschar = encoding_ucschar::byte_member(col, Dialect::MySql);
+    let valid_utf8 = encoding_ucschar::valid_non_ascii_byte(col, Dialect::MySql);
     format!(
         "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
 SELECT /*+ SET_VAR(group_concat_max_len = {group_limit}) */ \
@@ -2088,8 +2097,10 @@ WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
 OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '41' AND '5A' \
 OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '61' AND '7A' \
 OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) IN ('2D', '2E', '5F', '7E') \
-OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) >= '80' \
+OR {ucschar} \
 THEN SUBSTRING(CAST({col} AS BINARY), n, 1) \
+WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) >= '80' AND NOT {valid_utf8} \
+THEN JSON_EXTRACT('semantic-fabric-invalid-utf8', '$') \
 ELSE CAST(CONCAT('%', HEX(SUBSTRING(CAST({col} AS BINARY), n, 1))) AS BINARY) \
 END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
@@ -2119,6 +2130,7 @@ ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
 /// `chr(128)` would be). `unnest(...) WITH ORDINALITY` supplies the
 /// position `string_agg(... ORDER BY ord)` reassembles by.
 fn percent_encode_col_postgres(col: &str) -> String {
+    let ucschar = encoding_ucschar::codepoint_member("ascii(ch)");
     format!(
         "(SELECT CASE WHEN {col}::text IS NULL THEN NULL ELSE COALESCE((\
 SELECT string_agg(\
@@ -2126,10 +2138,11 @@ CASE \
 WHEN ascii(ch) BETWEEN 48 AND 57 \
 OR ascii(ch) BETWEEN 65 AND 90 \
 OR ascii(ch) BETWEEN 97 AND 122 \
-OR ch IN ('-', '.', '_', '~') \
-OR ascii(ch) >= 128 \
+OR ascii(ch) IN (45, 46, 95, 126) \
+OR {ucschar} \
 THEN ch \
-ELSE '%' || UPPER(LPAD(TO_HEX(ascii(ch)), 2, '0')) \
+ELSE (SELECT string_agg('%' || UPPER(LPAD(TO_HEX(get_byte(convert_to(ch, 'UTF8'), n)), 2, '0')), '' ORDER BY n) \
+FROM generate_series(0, octet_length(ch) - 1) AS bytes(n)) \
 END, '' ORDER BY ord\
 ) FROM unnest(string_to_array({col}::text, NULL)) WITH ORDINALITY AS t(ch, ord)\
 ), '') END)"
@@ -2376,24 +2389,14 @@ mod tests {
         assert_eq!(e.params, vec!["^a.*".to_owned()]);
     }
 
-    /// Rust-side reimplementation of `sf_core::ir`'s private `percent_encode_iri`,
-    /// for comparison ONLY (that function isn't `pub`) — verified byte-identical
-    /// to it via `sf-core`'s own `expand_writes_through_and_percent_encodes_iris`
-    /// test's fixtures, reproduced inline below.
-    fn reference_encode(value: &str) -> String {
+    /// Compare SQL with the actual shared term recipe, not a second encoder.
+    pub(super) fn reference_encode(value: &str) -> String {
         let mut out = String::new();
-        for ch in value.chars() {
-            if ch.is_ascii() {
-                let byte = ch as u8;
-                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                    out.push(ch);
-                } else {
-                    out.push_str(&format!("%{byte:02X}"));
-                }
-            } else {
-                out.push(ch);
-            }
-        }
+        sf_core::ir::Template::parse("{v}").unwrap().expand(
+            &[("v", Some(value))][..],
+            true,
+            &mut out,
+        );
         out
     }
 

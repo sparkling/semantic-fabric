@@ -167,6 +167,18 @@ mixed rendered-column/static-template joins, multi-arm noninjective pooling,
 general same-shape template unification and late processor-base generation remain
 open; this is not universal template identity.
 
+**Unicode template correction (2026-09-09):** reconstruction and SQL identity
+now share the RFC3987 `ucschar` alphabet (ADR-0015), excluding C1 controls,
+private-use and noncharacters rather than passing every non-ASCII byte through.
+Required SQLite HTTP SELECT/COUNT distinguishes escaped private-use characters
+from literal percent text and deduplicates repeated generated terms. The owned
+native CLI profile checks actual PostgreSQL/MySQL results with and without
+different-shape `=`/`sameTerm` filters and with a negated-filter COUNT. Malformed
+SQLite UTF-8 remains an error, including after NUL; allowed Unicode remains raw.
+Existing limits and release flags are unchanged. Late processor-base selection,
+same-shape/mixed template comparisons and the other open identities above are
+not closed by this alphabet repair.
+
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 
 All 9 red-phase cells green against the spareval oracle: 34→4, 4→3, 66→3, 34→3,

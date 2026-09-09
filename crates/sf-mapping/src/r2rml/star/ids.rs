@@ -127,27 +127,11 @@ fn kind_tag(spec: &TermSpec) -> String {
 /// module bakes into an id (`rr:constant` renderings, kind/datatype/language
 /// tags) — every *row*-derived column value is already percent-encoded by
 /// [`Template::expand`] itself (`encode_iri=true`, since the id template it
-/// fills in is always IRI-typed). Mirrors `sf-core`'s own private
-/// `percent_encode_iri` (`sf-core/src/ir.rs`) byte-for-byte; duplicated
-/// rather than exposed across the crate boundary, since this fix's scope is
-/// `sf-mapping` only.
+/// fills in is always IRI-typed). Delegates to the same shared core encoder;
+/// fixed components must not drift from row-derived Unicode handling.
 fn percent_encode(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_ascii() {
-            let byte = ch as u8;
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                out.push(ch);
-            } else {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0x0f) as usize] as char);
-            }
-        } else {
-            out.push(ch);
-        }
-    }
+    sf_core::ir::encoding::percent_encode_iri(value, &mut out);
     out
 }
 
@@ -182,4 +166,26 @@ fn slug(iri: &str) -> String {
         }
     }
     out.trim_matches('_').to_owned()
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn fixed_and_row_derived_id_components_share_unicode_encoding() {
+        let value = "\u{80}\u{e000}你好|%";
+        let mut row_encoded = String::new();
+        Template::parse("{v}")
+            .unwrap()
+            .expand(&[("v", Some(value))][..], true, &mut row_encoded);
+        assert_eq!(percent_encode(value), "%C2%80%EE%80%80你好%7C%25");
+        assert_eq!(percent_encode(value), row_encoded);
+        let constant = TermMap::Constant(sf_core::Literal::new_simple_literal(value).into());
+        let template = proposition_template("http://ex/p", &constant, &constant).unwrap();
+        let mut output = String::new();
+        assert!(template.expand(&[] as &[(&str, Option<&str>)], true, &mut output));
+        assert!(output.contains("%C2%80%EE%80%80你好%7C%25"));
+        assert!(!output.contains('\u{e000}'));
+    }
 }

@@ -13,6 +13,8 @@
 use oxrdf::{NamedNode, Term};
 
 use crate::{Error, Result, Row};
+pub mod encoding;
+use encoding::percent_encode_iri;
 
 /// One R2RML `rr:TriplesMap` (§6): one logical table, one subject, N
 /// predicate-object maps. Every row of the logical table is processed once.
@@ -331,30 +333,8 @@ fn read_column(chars: &mut std::str::Chars<'_>) -> Result<String> {
     Err(Error::Mapping("unterminated '{' in rr:template".to_owned()))
 }
 
-/// Percent-encode `value` into `out` as the IRI-safe form (R2RML §7.3): every
-/// character outside the RFC 3987 *iunreserved* set is `%XX`-encoded as UTF-8.
-/// iunreserved = `ALPHA / DIGIT / "-" / "." / "_" / "~" / ucschar`, so ASCII
-/// specials (space, `/`, `=`, …) are escaped but non-ASCII Unicode (ucschar —
-/// e.g. CJK) passes through unescaped, yielding an IRI rather than a URI.
-fn percent_encode_iri(value: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for ch in value.chars() {
-        if ch.is_ascii() {
-            let byte = ch as u8;
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                out.push(ch);
-            } else {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0x0f) as usize] as char);
-            }
-        } else {
-            // Non-ASCII Unicode is iunreserved (ucschar) — emit it verbatim.
-            out.push(ch);
-        }
-    }
-}
-
+#[cfg(test)]
+mod encoding_tests;
 #[cfg(test)]
 mod injectivity_tests;
 #[cfg(test)]
