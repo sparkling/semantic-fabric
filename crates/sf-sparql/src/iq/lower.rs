@@ -2109,6 +2109,9 @@ pub(crate) fn pool_rendered(
             match term_map {
                 TermMap::Column(..) => {}
                 TermMap::Template(..) => {
+                    if crate::iq::iri_cmp::is_late_template(term_map) {
+                        return Ok(None); // Requires resolved cross-arm identity, never raw pooling.
+                    }
                     if !matches!(
                         dialect,
                         sf_sql::Dialect::Postgres

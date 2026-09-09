@@ -33,6 +33,26 @@ pub(super) fn render(
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
 ) -> Result<String> {
+    if spec.term_type == TermType::Iri && spec.base.is_some() {
+        let crate::iq::iri_cmp::IriOperand::Template { parts, base } =
+            crate::iq::iri_cmp::IriOperand::from_map(
+                &TermMap::Template(recipe.clone(), spec.clone()),
+                alias,
+            )
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        // Both recipe and base are mapping-owned text, never query parameters.
+        let expression = iri_cmp::template_lexical(&parts, dialect, catalog, actuals)?;
+        catalog
+            .lexical_keys
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        return Ok(format!(
+            "__sf_iri_key_v1({expression}, {})",
+            sql_string_literal(base.as_deref().unwrap())
+        ));
+    }
     let iri = spec.term_type == TermType::Iri;
     let mut decoded = HashMap::new();
     if dialect == Dialect::Sqlite && iri {
@@ -59,6 +79,9 @@ pub(super) fn render(
         })
     })?;
     if distinct && iri && dialect == Dialect::Sqlite && spec.base.is_none() {
+        catalog
+            .lexical_keys
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         // Final key validation is required even when COUNT hides the generated term.
         Ok(format!("__sf_iri_key_v1({expression}, NULL)"))
     } else {
@@ -75,5 +98,5 @@ pub(super) fn distinct_key(term: &TermMap, expression: &str, dialect: Dialect) -
 }
 
 pub(super) fn supports_distinct(term: &TermMap) -> bool {
-    matches!(term, TermMap::Template(_, spec) if spec.term_type == TermType::Iri && spec.base.is_none())
+    matches!(term, TermMap::Template(_, spec) if spec.term_type == TermType::Iri)
 }

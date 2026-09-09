@@ -93,6 +93,14 @@ impl ScanSource {
     /// Rendered IRI atom proof permits authorization on its original table only.
     /// It deliberately confers no raw-column/table-restore authority.
     pub fn is_rendered_iri_atom(&self) -> bool {
+        matches!(self, Self::Projection { input, .. }
+            if matches!(input.source, Self::Logical(LogicalSource::Table(_))))
+            && self.is_rendered_iri_relation()
+    }
+
+    /// D1 is already sealed over complete rendered keys. An authored query is
+    /// eligible too, but that does not establish base-table policy authority.
+    pub(crate) fn is_rendered_iri_relation(&self) -> bool {
         let Self::Projection {
             input,
             columns,
@@ -104,11 +112,16 @@ impl ScanSource {
         else {
             return false;
         };
-        matches!(input.source, Self::Logical(LogicalSource::Table(_)))
-            && !columns.is_empty() && native_keys.is_empty() && lexical_keys.is_empty()
-            && columns.iter().all(|(_, term)| matches!(term, TermMap::Template(_, spec)
-                if spec.term_type == sf_core::ir::TermType::Iri && spec.base.is_none()))
-            && guards.iter().all(|guard| matches!(guard, SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == input.alias))
+        matches!(input.source, Self::Logical(_))
+            && native_keys.is_empty()
+            && lexical_keys.is_empty()
+            && columns.iter().all(|(_, term)| {
+                matches!(term, TermMap::Template(_, spec)
+                if spec.term_type == sf_core::ir::TermType::Iri)
+            })
+            && guards
+                .iter()
+                .all(|guard| crate::iq::iri_cmp::atom_guard(guard, input.alias))
     }
 
     /// The sealed same-named raw-column D1 shape, not arbitrary projections.

@@ -160,7 +160,12 @@ fn combine_unify(left: Unify, right: Unify) -> Unify {
 /// Unify a constant against a column/template term map: the raw column(s) must
 /// equal the constant's lexical form.
 fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
-    if let (Term::NamedNode(value), Some(column)) = (c, iri_cmp::operand(tm, alias)) {
+    if let (Term::NamedNode(value), Some(column)) = (
+        c,
+        crate::iq::iri_cmp::needs_resolution(tm)
+            .then(|| iri_cmp::operand(tm, alias))
+            .flatten(),
+    ) {
         return Unify::Sat(vec![iri_cmp::identity(
             column,
             crate::iq::iri_cmp::IriOperand::Constant(value.clone()),
@@ -226,8 +231,10 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
 /// Unify two column/template term maps → raw-column equalities, or a disjointness
 /// proof, or unsupported.
 fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
-    if let (Some(left), Some(right)) = (iri_cmp::operand(t1, a1), iri_cmp::operand(t2, a2)) {
-        return Unify::Sat(vec![iri_cmp::identity(left, right)]);
+    if crate::iq::iri_cmp::needs_resolution(t1) || crate::iq::iri_cmp::needs_resolution(t2) {
+        if let (Some(left), Some(right)) = (iri_cmp::operand(t1, a1), iri_cmp::operand(t2, a2)) {
+            return Unify::Sat(vec![iri_cmp::identity(left, right)]);
+        }
     }
     if let (Some(left), Some(right)) = (literal_cmp::operand(t1, a1), literal_cmp::operand(t2, a2))
     {
@@ -284,6 +291,15 @@ fn align_templates(
     spec2: &TermSpec,
     a2: usize,
 ) -> Unify {
+    if spec1.term_type == TermType::Iri
+        && spec2.term_type == TermType::Iri
+        && (spec1.base.is_some() || spec2.base.is_some())
+    {
+        return Unify::Sat(vec![iri_cmp::identity(
+            iri_cmp::operand(&TermMap::Template(x.clone(), spec1.clone()), a1).unwrap(),
+            iri_cmp::operand(&TermMap::Template(y.clone(), spec2.clone()), a2).unwrap(),
+        )]);
+    }
     let (sx, sy) = (x.segments(), y.segments());
     // ADR-0032 D6 lift: a conflict in the two templates' LEADING LITERAL text
     // (the fixed characters before either's first column reference) proves
@@ -467,13 +483,13 @@ pub(crate) fn templates_provably_disjoint(a: &TermDef, b: &TermDef) -> bool {
 fn term_def_template(def: &TermDef) -> Option<&sf_core::ir::Template> {
     match def {
         TermDef::Derived {
-            term_map: TermMap::Template(template, _),
+            term_map: TermMap::Template(template, spec),
             ..
         }
         | TermDef::R2rmlBlank {
-            term_map: TermMap::Template(template, _),
+            term_map: TermMap::Template(template, spec),
             ..
-        } => Some(template),
+        } if spec.base.is_none() => Some(template),
         _ => None,
     }
 }

@@ -45,29 +45,6 @@ pub(super) fn normalize_template_idents(template: Template) -> Template {
     Template::from_segments(segments).unwrap_or(template)
 }
 
-/// Resolve a relative-IRI `rr:template` against `base` by prepending it as a
-/// fixed segment. A template that already begins with a URI scheme (e.g.
-/// `http://…/{id}`) is absolute and returned unchanged — so the common case adds
-/// no work and the value-segment percent-encoding (term-gen) is unaffected.
-pub(super) fn resolve_iri_template(template: Template, base: &str) -> Template {
-    if template_is_absolute(&template) {
-        return template;
-    }
-    let mut segments = Vec::with_capacity(template.segments().len() + 1);
-    segments.push(Segment::Literal(base.into()));
-    segments.extend(template.segments().iter().cloned());
-    Template::from_segments(segments).unwrap_or(template)
-}
-
-/// Does the template begin with an absolute-IRI prefix (a URI scheme before any
-/// `/` in the first fixed segment)?
-fn template_is_absolute(template: &Template) -> bool {
-    match template.segments().first() {
-        Some(Segment::Literal(text)) => has_uri_scheme(text),
-        _ => false, // begins with a `{column}` ⇒ relative
-    }
-}
-
 /// A pragmatic BCP47 [RFC 5646] well-formedness check for `rr:language` (R2RML
 /// §7.4). The primary language subtag must be a 2–3-letter ISO 639 code (the 4-
 /// and 5–8-letter `langtag` productions are reserved with no current assignments,
@@ -85,17 +62,6 @@ pub(super) fn is_well_formed_language_tag(tag: &str) -> bool {
         return false;
     }
     subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()))
-}
-
-fn has_uri_scheme(text: &str) -> bool {
-    let before_slash = text.split('/').next().unwrap_or(text);
-    let Some(colon) = before_slash.find(':') else {
-        return false;
-    };
-    let scheme = &before_slash[..colon];
-    let mut chars = scheme.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 #[cfg(test)]
@@ -118,9 +84,17 @@ mod tests {
     #[test]
     fn relative_template_gets_base_absolute_does_not() {
         let base = "http://example.com/base/";
-        let rel = resolve_iri_template(Template::parse("{Name}").unwrap(), base);
+        let (rel, late) = super::super::iri_template::resolve_iri_template(
+            Template::parse("{Name}").unwrap(),
+            base,
+        );
+        assert!(!late);
         assert_eq!(rel.segments()[0], Segment::Literal(base.into()));
-        let abs = resolve_iri_template(Template::parse("http://e/{id}").unwrap(), base);
+        let (abs, late) = super::super::iri_template::resolve_iri_template(
+            Template::parse("http://e/{id}").unwrap(),
+            base,
+        );
+        assert!(!late);
         assert_eq!(abs.segments()[0], Segment::Literal("http://e/".into()));
     }
 

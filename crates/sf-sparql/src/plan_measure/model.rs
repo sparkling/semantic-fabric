@@ -273,6 +273,22 @@ pub(super) fn visit_sql_cond<'a>(
                     crate::iq::iri_cmp::IriOperand::Constant(value) => {
                         walker.payload(value.as_str().len())?;
                     }
+                    crate::iq::iri_cmp::IriOperand::Template { parts, base } => {
+                        walker.collection(parts.len())?;
+                        for part in parts {
+                            match part {
+                                crate::iq::iri_cmp::IriPart::Column(column) => {
+                                    walker.push(depth, Work::ColRef(column))?
+                                }
+                                crate::iq::iri_cmp::IriPart::Literal(text) => {
+                                    walker.payload(text.len())?
+                                }
+                            }
+                        }
+                        if let Some(base) = base {
+                            walker.payload(base.len())?;
+                        }
+                    }
                 }
             }
         }

@@ -279,6 +279,9 @@ fn projection_sql(
             SqlCond::NativeCmp(c, CmpOp::Eq, _) if c.alias == input.alias => {
                 render_cond(guard, dialect, catalog, &actuals, params, pidx)
             }
+            _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
+                render_cond(guard, dialect, catalog, &actuals, params, pidx)
+            }
             _ => Err(Error::Unsupported("projection guard shape".into())),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -345,6 +348,15 @@ pub(super) fn validate_projection(
                 if c.alias == input.alias =>
             {
                 validate_input_column(input, &c.column, dialect, catalog)?
+            }
+            _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
+                let mut result = Ok(());
+                crate::iq::collect_cond_cols(guard, &mut |column| {
+                    if result.is_ok() {
+                        result = validate_input_column(input, &column.column, dialect, catalog);
+                    }
+                });
+                result?;
             }
             _ => return Err(Error::Unsupported("projection guard shape".into())),
         }

@@ -821,6 +821,9 @@ impl<'a> Unfolder<'a> {
         // keys exist, not the parent's subject-template columns. Guard the base
         // definitions before inverse swapping or later OPTIONAL/Coalesce binding.
         // These atom-local conditions remain inside OPTIONAL ON / anti-joins.
+        for def in [&subj_def, &pred_def, &obj_def] {
+            crate::iq::iri_cmp::validate_term(def, &mut branch.where_conds);
+        }
         for col in subj_def
             .columns()
             .into_iter()
@@ -847,6 +850,17 @@ impl<'a> Unfolder<'a> {
             if !bind(&mut branch, pv.as_str(), pred_def)? {
                 return Ok(None);
             }
+        } else if let NamedNodePattern::NamedNode(predicate) = &tp.predicate {
+            if matches!(&pred_def, TermDef::Derived { term_map, .. }
+                if crate::iq::iri_cmp::is_late_template(term_map))
+                && !self.constrain(
+                    &mut branch,
+                    TermDef::Const(Term::NamedNode(predicate.clone())),
+                    pred_def,
+                )?
+            {
+                return Ok(None);
+            }
         }
         if !self.bind_position(&mut branch, &tp.subject, q_subj)? {
             return Ok(None);
@@ -854,6 +868,7 @@ impl<'a> Unfolder<'a> {
         if !self.bind_position(&mut branch, &tp.object, q_obj)? {
             return Ok(None);
         }
+        crate::cascade::rendered_distinct::seal_late(&mut branch, self.dialect)?;
         if matches!(om, ObjectMap::Ref(_)) {
             branch = crate::iq::scan::ref_atom::seal(branch)?;
         }
@@ -905,6 +920,7 @@ impl<'a> Unfolder<'a> {
                 })
                 .unwrap_or_else(|| fixed_graph_scope(self.current_graph.as_ref()));
             let subj_def = mapping_term_def(&tm.subject.term, alias, term_graph);
+            crate::iq::iri_cmp::validate_term(&subj_def, &mut branch.where_conds);
             // A class shortcut still requires a generated subject. Guard only
             // this selected term/graph, never every member of the graph union.
             branch
@@ -930,6 +946,7 @@ impl<'a> Unfolder<'a> {
                 }
             }
             if self.bind_position(&mut branch, &tp.subject, subj_def)? {
+                crate::cascade::rendered_distinct::seal_late(&mut branch, self.dialect)?;
                 out.push(branch);
             }
         }
@@ -969,6 +986,12 @@ impl<'a> Unfolder<'a> {
                     }
                     // A column/template predicate map could produce p — constrain it.
                     TermMap::Column(..) | TermMap::Template(..) => {
+                        if crate::iq::iri_cmp::is_late_template(pm)
+                            && (direct.iter().any(|candidate| candidate != p)
+                                || !inverse.is_empty())
+                        {
+                            return Err(Error::Unsupported("late predicate entailment requires explicit finalized direct/inverse alternatives".into()));
+                        }
                         Ok((PredMatch::Yes(def_of(pm, alias)), false))
                     }
                     TermMap::Constant(_) => Ok((PredMatch::No, false)),

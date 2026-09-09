@@ -105,9 +105,9 @@ pub struct TermSpec {
     pub datatype: Option<NamedNode>,
     pub language: Option<Box<str>>,
     /// The processor's output base, distinct from Turtle's document base, kept
-    /// for `rr:column` IRIs. Relative values receive this verbatim prefix (R2RML
-    /// §11.2). Static `rr:template` IRIs bake the base in at parse time, so
-    /// this is `None` for them and for non-IRI term maps.
+    /// for column and dynamically resolved template IRIs. After expansion, a
+    /// non-absolute value receives this verbatim prefix (R2RML §11.2). Proven
+    /// static templates bake the base in; non-IRI term maps leave this `None`.
     pub base: Option<Box<str>>,
 }
 
@@ -162,7 +162,7 @@ impl TermSpec {
         }
     }
 
-    /// Attach the processor output base (for an `rr:column` IRI term map).
+    /// Attach the processor output base for per-row IRI finalization.
     pub fn with_base(mut self, base: impl Into<Box<str>>) -> Self {
         self.base = Some(base.into());
         self

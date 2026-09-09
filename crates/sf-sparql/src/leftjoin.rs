@@ -55,6 +55,13 @@ pub fn left_join_branches(
     // OPTIONALs in `opts` and diverge from the tree lowerer's decomposition.
     if right.len() == 1
         && right[0].core.len() == 1
+        // A newly introduced mapping constant still becomes UNBOUND when the
+        // optional row is absent. Const has no nullable source witness: use the
+        // existing match/no-match decomposition rather than invent a value.
+        && !right[0].bindings.iter().any(|(var, def)| {
+            matches!(def, TermDef::Const(_))
+                && left.iter().any(|branch| !matches!(branch.bindings.get(var), Some(TermDef::Const(_))))
+        })
         && !matches!(
             right[0].core[0].source,
             crate::iq::ScanSource::RefAtom { .. }

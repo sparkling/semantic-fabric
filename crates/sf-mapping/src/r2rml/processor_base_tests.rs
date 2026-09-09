@@ -74,3 +74,50 @@ fn invalid_or_oversized_bases_fail_before_turtle_without_echoing_input() {
         validate_r2rml_base(base).unwrap();
     }
 }
+
+#[test]
+fn template_base_is_selected_after_expansion_not_from_its_first_literal() {
+    for (recipe, value, expected) in [
+        ("{v}://host/x", "http", "http://host/x"),
+        ("{v}://host/x", "1", "http://data.example/1://host/x"),
+        ("ur{v}:x", "n", "urn:x"),
+        ("http://host:{v}/x", "80", "http://host:80/x"),
+        (
+            "http://host:{v}/x",
+            "abc",
+            "http://data.example/http://host:abc/x",
+        ),
+        ("{v}", "../x", "http://data.example/..%2Fx"),
+        ("{v}", "", "http://data.example/"),
+        ("http://host/%{v}", "20", "http://host/%20"),
+        ("http://host/{v}", "%20", "http://host/%2520"),
+    ] {
+        let mapping = format!(
+            r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@base <http://document.example/> .
+<#m> rr:logicalTable [rr:tableName "items"]; rr:subjectMap [rr:template "{recipe}"];
+rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:object "value"]."#
+        );
+        let maps = parse_r2rml_with_options(
+            &mapping,
+            R2rmlOptions {
+                processor_base_iri: "http://data.example/",
+                ..R2rmlOptions::default()
+            },
+        )
+        .unwrap();
+        let term = &maps[0].subject.term;
+        let row = [("v", Some(value))];
+        assert_eq!(
+            sf_core::term::generate(term, &row[..])
+                .unwrap()
+                .unwrap()
+                .to_string(),
+            format!("<{expected}>"),
+            "{recipe}/{value:?}"
+        );
+        assert!(sf_core::term::generate(term, &[("v", None)][..])
+            .unwrap()
+            .is_none());
+    }
+}

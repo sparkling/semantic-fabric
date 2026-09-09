@@ -2,15 +2,7 @@ use super::*;
 use crate::iq::iri_cmp::{IriComparison, IriOperand};
 
 pub(super) fn operand(map: &TermMap, alias: usize) -> Option<IriOperand> {
-    match map {
-        TermMap::Column(column, spec) if spec.term_type == TermType::Iri => {
-            Some(IriOperand::Column {
-                column: ColRef::new(alias, column.clone()),
-                base: spec.base.clone(),
-            })
-        }
-        _ => None,
-    }
+    IriOperand::from_map(map, alias)
 }
 
 pub(super) fn identity(left: IriOperand, right: IriOperand) -> SqlCond {
@@ -41,6 +33,17 @@ pub(super) fn filter(
         _ => None,
     };
     let (left, right) = (from_expr(a)?, from_expr(b)?);
+    if [&left, &right].iter().all(|operand| {
+        matches!(
+            operand,
+            IriOperand::Template { base: None, .. } | IriOperand::Constant(_)
+        )
+    }) && [&left, &right]
+        .iter()
+        .any(|op| matches!(op, IriOperand::Template { .. }))
+    {
+        return None; // Preserve the qualified static/native lowering.
+    }
     Some(match op {
         CmpOp::Eq => identity(left, right),
         CmpOp::Ne => SqlCond::Not(Box::new(identity(left, right))),

@@ -18,10 +18,10 @@ use sf_core::ir::{
 };
 use sf_core::{Error, NamedNode, NamedOrBlankNode, Result, Term, Triple};
 
+mod iri_template;
 mod sql;
-use sql::{
-    normalize_template_idents, resolve_iri_template, sql_identifier, strip_trailing_semicolon,
-};
+use iri_template::resolve_iri_template;
+use sql::{normalize_template_idents, sql_identifier, strip_trailing_semicolon};
 
 mod star;
 use star::StarAssertion;
@@ -523,18 +523,19 @@ fn parse_term_map(g: &Graph, node: &NamedOrBlankNode, position: Position) -> Res
     }
     let column = g.object(node, RR_COLUMN);
     let template = g.object(node, RR_TEMPLATE);
-    let spec = build_term_spec(g, node, position, column.is_some())?;
+    let mut spec = build_term_spec(g, node, position, column.is_some())?;
     match (column, template) {
         (Some(col), _) => Ok(TermMap::Column(sql_identifier(lexical(col)?).into(), spec)),
         (None, Some(tmpl)) => {
             // A template placeholder column may be a delimited identifier
             // (`{"job"}`, R2RML §7.3); normalise it the same way as `rr:column`.
             let template = normalize_template_idents(Template::parse(lexical(tmpl)?)?);
-            // Statically relative templates receive the processor prefix (§11.2).
-            // Templates already beginning with a scheme are left untouched.
-            // Dynamic schemes still require per-row qualification (ADR-0015).
             let template = if spec.term_type == TermType::Iri {
-                resolve_iri_template(template, &g.processor_base)
+                let (template, late) = resolve_iri_template(template, &g.processor_base);
+                if late {
+                    spec.base = Some(g.processor_base.clone());
+                }
+                template
             } else {
                 template
             };

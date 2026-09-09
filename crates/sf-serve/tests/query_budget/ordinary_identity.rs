@@ -1,5 +1,7 @@
 //! Ordinary public queries use RDF identity, not source SQL collation.
 use super::*;
+#[path = "late_template_identity.rs"]
+mod late_template_identity;
 #[path = "mixed_identity.rs"]
 mod mixed_identity;
 #[path = "policy_identity.rs"]

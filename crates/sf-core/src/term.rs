@@ -65,12 +65,34 @@ pub fn generate_into<'a, R: Row + ?Sized>(
         },
         TermMap::Template(template, spec) => {
             if template.expand(row, spec.term_type == TermType::Iri, buf) {
+                if spec.term_type == TermType::Iri {
+                    if let Some(base) = spec.base.as_deref() {
+                        finalize_template_iri(buf, base)?;
+                    }
+                }
                 Ok(Some(from_value(buf.as_str(), spec)))
             } else {
                 Ok(None)
             }
         }
     }
+}
+
+/// Finish an expanded template in place: absolute first, otherwise a verbatim
+/// processor prefix. Substitutions have already been encoded exactly once.
+fn finalize_template_iri(buf: &mut String, base: &str) -> Result<()> {
+    if oxiri::Iri::parse(buf.as_str()).is_ok() {
+        return Ok(());
+    }
+    if oxiri::Iri::parse(base).is_ok() {
+        buf.insert_str(0, base);
+        if oxiri::Iri::parse(buf.as_str()).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(Error::Term(
+        "rr:template expansion is invalid both directly and with the processor base prefix".into(),
+    ))
 }
 
 /// Generate an IRI term from an `rr:column` value (R2RML §11.2): a valid absolute
@@ -125,8 +147,8 @@ fn constant(term: &Term) -> Result<GenTerm<'_>> {
 /// Build a term from a derived string value (`value` borrows the row or `buf`),
 /// applying the term type and — for literals — the explicit datatype/language.
 ///
-/// IRIs use `new_unchecked`: an `rr:column`/`rr:template` IRI's form is fixed by
-/// the mapping, so per-row RFC-3987 re-validation is waste (ADR-0006).
+/// Column and late-template IRIs have already been validated; static template
+/// recipes carry the parser's grammar proof (ADR-0006).
 fn from_value<'a>(value: &'a str, spec: &'a TermSpec) -> GenTerm<'a> {
     match spec.term_type {
         TermType::Iri => GenTerm::NamedNode(NamedNodeRef::new_unchecked(value)),
@@ -150,6 +172,29 @@ mod tests {
     use crate::ir::{Template, TermSpec};
     use oxrdf::vocab::xsd;
     use oxrdf::{BlankNode, Literal, NamedNode};
+
+    #[test]
+    fn late_template_iri_finalizes_once_after_expansion() {
+        let tm = TermMap::Template(
+            Template::parse("{v}://host/{id}").unwrap(),
+            TermSpec::iri().with_base("http://base/"),
+        );
+        for (scheme, expected) in [
+            ("http", "http://host/a%2Fb"),
+            ("1", "http://base/1://host/a%2Fb"),
+        ] {
+            let row = [("v", Some(scheme)), ("id", Some("a/b"))];
+            assert_eq!(
+                generate(&tm, &row[..]).unwrap().unwrap().to_string(),
+                format!("<{expected}>")
+            );
+        }
+        let tm = TermMap::Template(
+            Template::parse("bad value/{v}").unwrap(),
+            TermSpec::iri().with_base("http://base/"),
+        );
+        assert!(generate(&tm, &[("v", Some("x"))][..]).is_err());
+    }
 
     fn owned(term_map: &TermMap, row: &[(&str, Option<&str>)]) -> Option<Term> {
         generate(term_map, row).unwrap()

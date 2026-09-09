@@ -95,8 +95,8 @@ identity. Missing decoder authority and native IRI-resolution operations reject;
 Independent processor/document bases now flow through `R2rmlOptions`; serving exposes
 per-source fixed `--mapping-base` / `--mapping-base-2`, with bounded validation,
 layered precedence, compiler identity and reload retention. Turtle `@base` changes
-mapping syntax only. PostgreSQL/MySQL resolved-key support and dynamic-scheme
-template generation remain required follow-up, not completed capabilities (ADR-0034).
+mapping syntax only. PostgreSQL/MySQL resolved-key support remains required
+follow-up; the late-template slice below qualifies only its stated paths (ADR-0034).
 
 **IRI substitution alphabet correction (2026-09-09).** R2RML §7.3 permits
 RFC3987 `iunreserved`, not arbitrary Unicode. One shared `ucschar` range table
@@ -111,8 +111,31 @@ comparisons establish membership. PostgreSQL classifies code points numerically
 and escapes their UTF-8 bytes. Existing MySQL packet/aggregate limits remain.
 Core boundary cases, SQLite SQL/HTTP identity and COUNT, and authenticated owned
 PostgreSQL16.15/MySQL8.4.11 different-shape template equality checks pass. This
-removes an unsafe assumption before late-base classification; dynamic scheme,
-authority/port expansion and general template identity remain open.
+removes an unsafe assumption before late-base classification; general template
+identity remains open outside the following qualified slice.
+
+**Late-template refinement (2026-09-09).** Template substitutions are encoded
+once, then the expanded string is used if it is a valid absolute IRI; otherwise
+the processor base is prepended verbatim and the result validated. Dynamic
+schemes, partial schemes, authority/port slots and split fixed percent escapes
+retain `TermSpec.base` through reconstruction and typed SQL identity. A static
+fast path requires a grammar proof: a fixed scheme, committed path/query/fragment,
+valid empty-slot skeleton and complete fixed percent escapes. Statically relative
+recipes may bake the base only when every expansion is non-absolute and the
+prefixed recipe passes that proof. Full-literal recipes fold at parse time.
+Required core/parser tests cover both base branches, empty/NULL substitutions,
+escaping and the pinned parser's Unicode/host boundaries.
+
+Authenticated SQLite queries now compare and deduplicate finalized template IRIs
+using live per-part decoders and the existing work-charged Rust IRI callback.
+Invalid values remain data errors under COUNT; no column is required to register
+the callback. Original template guards survive constant binding and hidden terms.
+The qualified atom has one original table/query and IRI-template/constant keys;
+mixed natural/literal-column keys, native resolved-template SQL, reference atoms,
+recursive endpoints, late RDF-star proposition components and wider pooling
+remain explicitly unsupported pending their own exact lowering. Serving still
+rejects dynamic predicates; raw direct matching is constrained, with nontrivial
+entailment alternatives rejected. No backend/admission flag changes.
 
 R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) identifiers are case-insensitive; delimited identifiers are case-sensitive; an all-upper-case delimited identifier equals the undelimited form (`DEPTNO` = `"DEPTNO"`) but a mixed-case delimited one does not (`"Name"` ≠ regular `Name`). A strict processor therefore **rejects** a mapping that references a mixed-case delimited column with a regular identifier.
 

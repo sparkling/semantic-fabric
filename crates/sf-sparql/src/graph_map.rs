@@ -96,6 +96,7 @@ pub(crate) fn bind_variable(
     alias: usize,
 ) -> Result<bool> {
     let definition = term_def(graph, alias);
+    crate::iq::iri_cmp::validate_term(&definition, &mut branch.where_conds);
     let default = TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RR_DEFAULT_GRAPH)));
     match unify(&default, &definition) {
         Unify::Sat(conds) if conds.is_empty() => return Ok(false),

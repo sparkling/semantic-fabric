@@ -57,6 +57,14 @@ pub(super) fn proposition_template(
     subject: &TermMap,
     object: &TermMap,
 ) -> Result<Template> {
+    if [subject, object].iter().any(|term| {
+        matches!(term,
+        TermMap::Template(_, spec) if spec.term_type == TermType::Iri && spec.base.is_some())
+    }) {
+        return Err(sf_core::Error::Mapping(
+            "late-resolved template proposition components require finalized term identity".into(),
+        ));
+    }
     let mut segments = vec![Segment::Literal(
         format!("urn:sf-star:pf:{}|", slug(predicate_iri)).into(),
     )];

@@ -138,8 +138,8 @@ serving. Compiler projection-layout inspection no longer emits speculative SQL
 without live decoder authority. Public regression coverage includes SELECT/COUNT,
 constant/BGP/FILTER matching, unique keys, unbound errors and native Ref witnesses;
 W3C compatibility expectations remain unchanged. Native resolved-key execution,
-general mixed/natural identities, broader DISTINCT/GROUP/SubPlan qualification
-and dynamic-scheme template qualification remain open. Processor-base configuration
+general mixed/natural identities and broader DISTINCT/GROUP/SubPlan qualification
+remain open. The late-template update below narrows its earlier gap. Processor-base configuration
 now flows independently of Turtle document bases through the public parser and
 both serving sources, with exact compiler identity and reload retention. The shared
 column generator follows R2RML §11.2 verbatim prefixing, not RFC3986 normalization;
@@ -163,8 +163,7 @@ policy-only columns are not RDF keys. Required authenticated tests cover collisi
 SELECT/DISTINCT/COUNT, hidden graph/object bags, rendered-to-rendered BGP/FILTER,
 CHAR padding, signed zero, NULL/empty values and policy-before-dedup. No source-sized
 Rust set or release-admission promotion is introduced. Native rendered atoms,
-mixed rendered-column/static-template joins, multi-arm noninjective pooling,
-general same-shape template unification and late processor-base generation remain
+multi-arm noninjective pooling and general same-shape template unification remain
 open; this is not universal template identity.
 
 **Unicode template correction (2026-09-09):** reconstruction and SQL identity
@@ -178,6 +177,31 @@ SQLite UTF-8 remains an error, including after NUL; allowed Unicode remains raw.
 Existing limits and release flags are unchanged. Late processor-base selection,
 same-shape/mixed template comparisons and the other open identities above are
 not closed by this alphabet repair.
+
+**Late-template atom correction (2026-09-09):** the parser/core now implement
+post-expansion processor-base selection (ADR-0015). Typed IRI operands retain
+literal parts, individual source-column aliases and the base. Live SQLite
+decoding, encoding and finalization precede equality; visitors, alias rewrites
+and plan accounting retain each part. Static/static native lowering is unchanged.
+Single-source IRI-template/constant atoms seal finalized keys before projection,
+including constant-bound subjects whose original recipe now lives only in a
+condition. Source-local IRI conditions remain inside the typed projection; NULL,
+data errors and hidden object/graph bags survive SELECT/COUNT and correlation.
+Already sealed atoms are not wrapped again or given source-constraint authority.
+Portable row policies filter original rows before dedup, including fully bound
+queries. Mixed rendered/static BGP and FILTER comparisons now use whole IRIs.
+Newly introduced OPTIONAL constants use the existing matched/unmatched
+decomposition so an absent match stays unbound, including under negation.
+
+Required commands: `cargo test --locked -p sf-sparql --test late_templates`
+and `cargo test --locked -p sf-serve --test query_budget late_template_identity`.
+They cover differing processor bases, fixed matching, bags, policy, invalid
+expansions, zero-slot callback ownership and qualified rejection boundaries;
+unit tests separately cover per-part alias rewrites and callback registration.
+Native resolved-template execution, mixed natural/literal-column atoms, reference
+atoms, recursive hop identity, late proposition components and wider pooling are
+not qualified. They reject instead of borrowing raw tuple identity. The same-shape
+static-template and broader identity backlog remains open; no release flag changes.
 
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 

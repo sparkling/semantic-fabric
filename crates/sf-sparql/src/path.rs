@@ -391,6 +391,11 @@ fn reject_nested_nps(expr: &HopExpr) -> Result<()> {
 /// raw-key joins; see the module docs). A constant term map has no key column and
 /// cannot be a path endpoint → 501.
 fn node_shape(tm: &TermMap) -> Result<NodeShape> {
+    if crate::iq::iri_cmp::is_late_template(tm) {
+        return Err(Error::Unsupported(
+            "late-resolved template property paths require finalized hop identity".into(),
+        ));
+    }
     let s = match tm {
         TermMap::Column(_, spec) => format!("col\u{1}{}", spec_tag(spec)),
         TermMap::Template(t, spec) => {

@@ -15,7 +15,9 @@ pub(super) fn column(def: &TermDef) -> Option<ColRef> {
         {
             Some(ColRef::new(*alias, column.clone()))
         }
-        TermMap::Template(template, spec) if spec.term_type == TermType::Iri => {
+        TermMap::Template(template, spec)
+            if spec.term_type == TermType::Iri && spec.base.is_none() =>
+        {
             let columns: Vec<_> = template
                 .segments()
                 .iter()

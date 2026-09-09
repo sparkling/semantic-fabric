@@ -1,6 +1,21 @@
-//! Seal static IRI-template atom identity in SQL before outer joins/projection.
+//! Seal rendered IRI-template atom identity before joins, constants or projection
+//! can hide the construction that determines cardinality.
 use super::*;
 use crate::iq::ScanSource;
+
+pub(crate) fn seal_late(branch: &mut Branch, dialect: sf_sql::Dialect) -> crate::Result<()> {
+    if branch
+        .where_conds
+        .iter()
+        .any(crate::iq::iri_cmp::contains_late_template)
+        && !wrap(branch, dialect)
+    {
+        return Err(crate::Error::Unsupported(
+            "late template atom requires qualified SQLite rendered IRI/constant keys".into(),
+        ));
+    }
+    Ok(())
+}
 
 pub(super) fn wrap(branch: &mut Branch, dialect: sf_sql::Dialect) -> bool {
     if dialect != sf_sql::Dialect::Sqlite
@@ -11,24 +26,31 @@ pub(super) fn wrap(branch: &mut Branch, dialect: sf_sql::Dialect) -> bool {
         || branch.agg.is_some()
         || !branch.order.is_empty()
         || !matches!(branch.core[0].source, ScanSource::Logical(_))
-        || !branch
+        || !(branch
             .bindings
             .values()
             .any(|def| !binding_is_injective(def))
+            || branch
+                .where_conds
+                .iter()
+                .any(crate::iq::iri_cmp::contains_late_template))
     {
         return false;
     }
     let alias = branch.core[0].alias;
-    if !branch.where_conds.iter().all(|condition| {
-        matches!(condition, SqlCond::IsNull(c) | SqlCond::IsNotNull(c) if c.alias == alias)
-    }) || !branch.bindings.values().all(|def| match def {
-        TermDef::Const(_) => true,
-        TermDef::Derived {
-            term_map: TermMap::Template(_, spec),
-            alias: owner,
-        } => *owner == alias && spec.term_type == TermType::Iri && spec.base.is_none(),
-        _ => false,
-    }) {
+    if !branch
+        .where_conds
+        .iter()
+        .all(|condition| crate::iq::iri_cmp::atom_guard(condition, alias))
+        || !branch.bindings.values().all(|def| match def {
+            TermDef::Const(_) => true,
+            TermDef::Derived {
+                term_map: TermMap::Template(_, spec),
+                alias: owner,
+            } => *owner == alias && spec.term_type == TermType::Iri,
+            _ => false,
+        })
+    {
         return false;
     }
     let input = branch.core.pop().expect("one validated logical scan");
@@ -41,7 +63,9 @@ pub(super) fn wrap(branch: &mut Branch, dialect: sf_sql::Dialect) -> bool {
             unreachable!("validated static IRI template")
         };
         let name: Box<str> = format!("rv{}", columns.len()).into();
-        let output = TermMap::Column(name.clone(), spec.clone());
+        let mut resolved = spec.clone();
+        resolved.base = None;
+        let output = TermMap::Column(name.clone(), resolved);
         columns.push((name, std::mem::replace(term_map, output)));
     }
     branch.core.push(Scan {

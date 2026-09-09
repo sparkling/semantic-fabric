@@ -72,7 +72,7 @@ pub(crate) mod distinct_scan;
 mod fd;
 mod joinelim;
 mod optional_prune;
-mod rendered_distinct;
+pub(crate) mod rendered_distinct;
 use optional_prune::distinct_prune_unused_opts;
 #[cfg(test)]
 mod pool_source_authority_tests;
@@ -1183,7 +1183,7 @@ fn term_map_is_injective(term_map: &TermMap) -> bool {
         return true; // Column / Constant / Coalesce / Concat / Agg — not gated
     };
     if spec.term_type == TermType::Iri {
-        t.is_injective()
+        spec.base.is_none() && t.is_injective()
     } else {
         // Literal/BlankNode: no percent-encoding, so only a single-column
         // template is unambiguously injective.
@@ -1401,7 +1401,9 @@ fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect
         .core
         .iter()
         .chain(b.opts.iter().map(|o| &o.scan))
-        .filter(|scan| !scan_key_covered(scan, schema, &b.bindings))
+        .filter(|scan| {
+            !scan.source.is_rendered_iri_relation() && !scan_key_covered(scan, schema, &b.bindings)
+        })
         .map(|scan| scan.alias)
         .collect();
     if !uncovered.is_empty() && rendered_distinct::wrap(b, dialect) {

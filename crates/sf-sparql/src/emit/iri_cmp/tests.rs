@@ -80,3 +80,30 @@ fn missing_or_native_decoder_never_authorizes_raw_iri_equality() {
         ));
     }
 }
+
+#[test]
+fn zero_slot_template_registers_its_finalizer_without_a_column_decoder() {
+    let catalog = ColumnCatalog::default();
+    let comparison = IriComparison {
+        left: IriOperand::Template {
+            parts: vec![IriPart::Literal("1:x".into())],
+            base: Some("http://ex/".into()),
+        },
+        right: IriOperand::Constant(sf_core::NamedNode::new_unchecked("http://ex/1:x")),
+    };
+    let mut params = vec![];
+    let sql = render(
+        &comparison,
+        Dialect::Sqlite,
+        &catalog,
+        &ActualColumns::default(),
+        &mut params,
+        &mut 0,
+    )
+    .unwrap();
+    assert!(sql.contains("__sf_iri_key_v1"));
+    assert!(catalog
+        .lexical_keys
+        .load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(params, ["http://ex/", "http://ex/1:x"]);
+}

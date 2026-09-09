@@ -100,6 +100,18 @@ pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
                             modes,
                         );
                     }
+                    if let crate::iq::iri_cmp::IriOperand::Template { .. } = operand {
+                        for column in operand.columns().filter(|c| c.alias == alias) {
+                            modes
+                                .entry(column.column.clone())
+                                .and_modify(|value| {
+                                    if let Some(modes) = value {
+                                        modes.insert(LexicalMode::Decoded);
+                                    }
+                                })
+                                .or_insert_with(|| Some(BTreeSet::from([LexicalMode::Decoded])));
+                        }
+                    }
                 }
             }
             SqlCond::LiteralCmp(cmp) => {
