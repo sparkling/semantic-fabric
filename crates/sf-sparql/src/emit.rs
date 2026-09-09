@@ -51,6 +51,7 @@ mod lexical_key;
 mod literal_cmp;
 mod literal_datatype;
 mod literal_roles;
+mod mysql_decimal_value;
 mod native_literal_key;
 mod natural_decimal;
 mod natural_literal;

@@ -23,6 +23,11 @@ pub(super) fn render(
         if let Some(sql) = pg_decimal_value::comparison(cmp, dialect, actuals, params, pidx)? {
             return Ok(sql);
         }
+        if let Some(sql) =
+            mysql_decimal_value::comparison(cmp, dialect, catalog, actuals, params, pidx)?
+        {
+            return Ok(sql);
+        }
     }
     if let (LiteralOperand::Constant(left), LiteralOperand::Constant(right)) =
         (&cmp.left, &cmp.right)

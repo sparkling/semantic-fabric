@@ -2,7 +2,7 @@
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 
-fn datatype<'a>(value: &'a LiteralOperand, actuals: &ActualColumns) -> Option<&'a str> {
+pub(super) fn datatype<'a>(value: &'a LiteralOperand, actuals: &ActualColumns) -> Option<&'a str> {
     match value {
         LiteralOperand::Constant(literal) => Some(literal.datatype().as_str()),
         LiteralOperand::Column { column, spec } => {
@@ -18,7 +18,7 @@ fn datatype<'a>(value: &'a LiteralOperand, actuals: &ActualColumns) -> Option<&'
     }
 }
 
-fn exact(datatype: &str) -> bool {
+pub(super) fn exact(datatype: &str) -> bool {
     datatype == "http://www.w3.org/2001/XMLSchema#decimal"
         || sf_core::numeric_compare::is_integer_datatype(datatype)
 }

@@ -48,20 +48,17 @@ pub(super) fn authorized_conjunction(
 ) -> Result<Option<String>> {
     fn validates(cond: &SqlCond, actuals: &ActualColumns) -> bool {
         match cond {
-            SqlCond::LiteralCmp(cmp) => {
-                cmp.value_op.is_none()
-                    && [&cmp.left, &cmp.right].iter().any(|v| {
-                        matches!(
-                            natural(v, actuals),
-                            Some(
-                                XsdTypeCode::Date
-                                    | XsdTypeCode::DateTime
-                                    | XsdTypeCode::Integer
-                                    | XsdTypeCode::Boolean
-                            )
-                        )
-                    })
-            }
+            SqlCond::LiteralCmp(cmp) => [&cmp.left, &cmp.right].iter().any(|v| {
+                matches!(
+                    natural(v, actuals),
+                    Some(
+                        XsdTypeCode::Date
+                            | XsdTypeCode::DateTime
+                            | XsdTypeCode::Integer
+                            | XsdTypeCode::Boolean
+                    )
+                )
+            }),
             SqlCond::Not(c) => validates(c, actuals),
             SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(|c| validates(c, actuals)),
             _ => false,

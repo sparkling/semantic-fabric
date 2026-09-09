@@ -1,6 +1,8 @@
 //! Actual public query results against only owned, pinned, TLS-enabled providers.
 use super::*;
 use std::collections::BTreeSet;
+#[path = "mysql_numeric.rs"]
+mod mysql_numeric;
 #[path = "natural_temporal.rs"]
 mod natural_temporal;
 #[path = "ordinary_identity.rs"]
@@ -489,6 +491,7 @@ fn native_describe_and_recursive_paths_are_exact() {
         } else {
             pg_numeric::assert_mysql_range(&fixture, &database);
             natural_temporal::assert_responses(&fixture, &database);
+            mysql_numeric::assert_all(&fixture, &database);
         }
         eprintln!(
             "exact native DESCRIBE/path profile: {}",

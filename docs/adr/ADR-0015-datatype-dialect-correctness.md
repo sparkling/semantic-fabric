@@ -147,6 +147,34 @@ Rust output and identity keys are unchanged. The exact non-floating refinement
 below is separate; other native typed overrides, wider arithmetic, other backends
 and exact-release qualification remain required follow-up, not removed capabilities.
 
+### MySQL exact integer/decimal comparisons (2026-09-09)
+
+Qualified MySQL TEXT/VARCHAR/CHAR, native Integer and NEWDECIMAL operands now
+have a separate full-digit comparison lane for decimal/all 13 integer-family
+types. ASCII grammar, exact four-byte XSD whitespace handling and subtype facets
+precede sign/integral-length/digit/fraction ordering; final digit comparisons are
+binary and independent of source collation. No fixed-size decimal cast or floating
+prefix supplies value authority. UTF8 regex inputs retain an explicit ASCII
+alphabet check because ICU's `$` also accepts a final line terminator.
+
+Native Integer lexicals reuse DECIMAL(20,0) display normalization without narrowing
+u64, including YEAR zero and ZEROFILL. Matching/natural Integer retains the Rust
+i64 construction guard; a different unsignedLong/decimal override uses raw lexical
+values. NEWDECIMAL retains scale before integer-override grammar checks. Missing,
+foreign or revoked decoder/type facts reject; Integer also requires matching
+natural-profile provenance. W3C Boolean validation remains profile-specific.
+One-row nonmergeable operand stages preserve fallible source validation even when
+the opposite operand is invalid or runtime-NULL. Policy CASE precedes validation
+inside direct EXISTS. Constants bind once, in SQL order. Float/Double promotion
+is explicitly outside this lane, not reinterpreted as a nonnumeric NULL.
+
+Required `cmd-native-query-profile-live` coverage includes all operators/NOT,
+full 1500-digit tails, facets, collation/Unicode/whitespace boundaries, native
+scale/YEAR/ZEROFILL, u64 overrides versus terminal natural errors, cap-one recovery,
+runtime-null counterparts and ordinary/EXISTS/OPTIONAL denied-row isolation.
+Rust RDF output and identity are unchanged. Other native floating overrides,
+wider arithmetic, lifecycle/control and exact-release gates remain open.
+
 ### PostgreSQL exact integer/decimal comparisons (2026-09-09)
 
 All six value operators have a separate full-digit lane for TEXT/CHAR and retained
