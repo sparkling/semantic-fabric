@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-07
+updated: 2026-09-09
 tags: [production, packaging, release, cargo, reproducibility, sbom, provenance, supply-chain]
 supersedes: []
 depends-on:
@@ -32,6 +32,78 @@ commands remain available under `development-tools`; root-only graph and public
 CLI checks cover the serving profile. Exact-artifact release qualification is
 still open under ADR-0055, and historical observations below are not relabelled
 as evidence for the new build.
+
+### Implemented ADR-0055 reference package (2026-09-09)
+
+The workspace now uses explicit development version `0.1.0-dev.1`; this is not
+a stable-release or admission declaration. The digest-pinned
+[`Containerfile`](../../scripts/release/Containerfile) builds only the locked,
+no-defaults `sf-cli` in Rust 1.96.0/Debian 13 and copies the binary, root-specific
+dependency graph, compiler identity, lockfile and project licences into Debian
+13 slim. Node, Cargo, Rust compiler and developer commands are absent at runtime.
+The initial qualified image platform is **Linux x86_64 GNU**. The OS loader and
+libraries remain part of its deployment closure; they are not Rust crates.
+
+[`build-serving-image.sh`](../../scripts/release/build-serving-image.sh) rejects
+dirty source and existing output directories, builds an allowlisted Git archive
+of one commit, and exports that immutable image ID as `image.tar`, with source
+revision, development version, lock and archive digests and `SHA256SUMS`. It
+never pushes, signs, tags Git or declares admission. Example local commands:
+
+```bash
+bash scripts/release/build-serving-image.sh /absolute/new-package-directory
+cd /absolute/new-package-directory
+sha256sum --check SHA256SUMS
+docker image load --input image.tar
+```
+
+From the repository, set `SF_SERVING_IMAGE_ID` to the exact `image.id` value and
+run the existing Cargo harness's opt-in image smoke (no external database URLs):
+
+```bash
+cargo test --locked -p sf-cli --no-default-features --test source_tls_live \
+  serving_image::minimal_image_serves_all_backends_read_only_and_non_root \
+  -- --ignored --exact --nocapture
+```
+
+This exercises packaged SQLite, owned TLS PostgreSQL 16.15/MySQL 8.4.11 and
+mixed-source UNION: exact authenticated bags, wrong-token and wrong-CA rejection,
+health/metrics, bounded malformed-query rejection/recovery, and clean SIGTERM.
+The server is UID/GID 65532, PID 1, read-only, capability-free, with normal Docker
+seccomp and no-new-privileges. A real startup failure exposed the worker's invalid
+PPID > 1 assumption; accepting a stable PID-1 supervisor preserves exact pre-exec
+parent checking, inherited SIGKILL parent-death signal, pidfds and both filters.
+
+For a local reference deployment, provide `serve.toml`, mapping and ontology in
+one directory, plus readable source files in another. Configure their container
+paths under `/config` and `/data`; use `source_env = "SF_SOURCE"` and
+`auth_token_env = "SF_QUERY_TOKEN"` in the existing TOML sections, with secrets
+supplied by the operator's environment, never baked into the image. Then:
+
+```bash
+docker run --name semantic-fabric --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true --pids-limit 128 --memory 512m \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777 \
+  --publish 127.0.0.1:7878:7878 --stop-timeout 35 \
+  --mount type=bind,src=/absolute/config-directory,dst=/config,readonly \
+  --mount type=bind,src=/absolute/data-directory,dst=/data,readonly \
+  --env SF_SOURCE --env SF_QUERY_TOKEN "$SF_SERVING_IMAGE_ID" \
+  serve --config /config/serve.toml --bind 0.0.0.0:7878 --shutdown-timeout-secs 30
+```
+
+Directory mounts allow atomic mapping/ontology replacement for configured reload.
+Use a closed/checkpointed SQLite file for this read-only-file reference; do not
+set `immutable=1` on a live changing database to evade WAL/locking requirements.
+For private native CA roots, forward a separately named environment variable
+containing PEM certificates and select it with `source_tls_roots_env`; this is
+not a certificate filename. `/livez` and `/readyz` are local health routes;
+metrics are opt-in and unauthenticated. Put authenticated queries behind a TLS
+edge before remote exposure. This recipe performs no remote deployment.
+
+This is a packaged public-path proof, not the full release matrix. Exact-release
+backend admission, complete operator upgrade/rollback qualification, dependency
+advisory disposition, SBOM, signature and final provenance remain open under
+ADR-0055. The historical proposed split/diagnostics below do not become v1 gates.
 
 The clean-checkout repeatability run at `ad94cdb` and the current directional
 artifact comparator are useful diagnostics, but they do not satisfy the two-

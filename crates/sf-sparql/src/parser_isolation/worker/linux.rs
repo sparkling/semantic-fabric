@@ -152,7 +152,10 @@ fn repair_and_verify_kernel_envelope() -> Result<libc::pid_t, WorkerFailure> {
         return Err(WorkerFailure);
     }
     let parent = unsafe { libc::getppid() };
-    if parent <= 1 {
+    // The product is legitimately PID 1 in an exec-form serving container.
+    // Orphan prevention is the pre-exec exact-parent check plus the inherited
+    // SIGKILL PDEATHSIG verified below, not a numeric PPID > 1 heuristic.
+    if parent <= 0 {
         return Err(WorkerFailure);
     }
 

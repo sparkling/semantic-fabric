@@ -1,0 +1,30 @@
+# Local-only reference serving image (ADR-0055). Both stages are digest-pinned.
+# Qualified platform: linux/amd64. No source credentials or host Cargo cache.
+FROM rust:1.96.0@sha256:58fe97504a0e4cbba5d85599619a589923d3e779472a6fb0840d58d1c4ba99d7 AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+COPY scripts/check-serving-profile.sh scripts/check-serving-profile.sh
+RUN cargo build --locked --release -p sf-cli --no-default-features \
+    && bash scripts/check-serving-profile.sh \
+    && cargo tree --locked -p sf-cli --no-default-features --edges normal,build \
+       --prefix none --format '{p}|{f}' > serving-dependencies.txt \
+    && rustc -Vv > rustc.txt
+
+FROM debian:trixie-slim@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
+ARG SOURCE_REVISION=uncommitted
+ARG PACKAGE_VERSION=development
+LABEL org.opencontainers.image.title="Semantic Fabric" \
+      org.opencontainers.image.source="https://github.com/sparkling/semantic-fabric" \
+      org.opencontainers.image.revision=$SOURCE_REVISION \
+      org.opencontainers.image.version=$PACKAGE_VERSION \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+COPY --from=build /build/target/release/semantic-fabric /usr/local/bin/semantic-fabric
+COPY --from=build /build/serving-dependencies.txt /build/rustc.txt /usr/share/semantic-fabric/
+COPY Cargo.lock LICENSE-MIT LICENSE-APACHE /usr/share/semantic-fabric/
+USER 65532:65532
+WORKDIR /data
+EXPOSE 7878
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/semantic-fabric"]
+CMD ["--help"]

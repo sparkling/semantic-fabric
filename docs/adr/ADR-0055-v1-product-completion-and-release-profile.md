@@ -266,8 +266,8 @@ backends. The default `development-tools` feature preserves the existing
 `bash scripts/check-serving-profile.sh` checks the root-specific normal/build
 graph; `cargo test --locked -p sf-cli --no-default-features` retains public serving
 regressions and requires developer-command rejection. Required-live source TLS
-also runs with defaults disabled. Dependency graphs and local tests are not an
-SBOM, clean-machine smoke, signed release, or backend admission.
+also runs with defaults disabled. The 2026-09-09 `0.1.0-dev.1` image/reference package is described in [ADR-0039](ADR-0039-minimal-production-serving-artifact.md#implemented-adr-0055-reference-package-2026-09-09): pinned controlled build, exact-image non-root/read-only SQLite/PostgreSQL/MySQL/UNION smoke and a corrected PID-1 parser-parent check. The version is explicitly developmental, not a stable release.
+Dependency graphs and this smoke are not an SBOM, signed release, full exact-artifact matrix or backend admission; remaining minimum-release gates stay required.
 
 ### 3. Minimum release evidence
 

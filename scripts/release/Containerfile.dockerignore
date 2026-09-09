@@ -1,0 +1,18 @@
+# Deny by default, including local databases, credentials and build outputs.
+**
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!LICENSE-MIT
+!LICENSE-APACHE
+!crates
+!crates/**
+!scripts
+!scripts/check-serving-profile.sh
+!scripts/release
+!scripts/release/Containerfile
+!scripts/release/Containerfile.dockerignore
+**/target
+**/.env*
+**/*.db
+**/*.sqlite*

@@ -18,6 +18,8 @@ mod multiple_lineage;
 mod query_profile;
 #[path = "source_tls_live/reload.rs"]
 mod reload;
+#[path = "source_tls_live/serving_image.rs"]
+mod serving_image;
 #[path = "source_tls_live/stop_matrix.rs"]
 mod stop_matrix;
 #[path = "source_tls_live/support.rs"]

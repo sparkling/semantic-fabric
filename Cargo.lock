@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "sf-bench"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "criterion",
  "libc",
@@ -5098,7 +5098,7 @@ dependencies = [
 
 [[package]]
 name = "sf-capture-supervisor"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5113,7 +5113,7 @@ dependencies = [
 
 [[package]]
 name = "sf-cli"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -5143,7 +5143,7 @@ dependencies = [
 
 [[package]]
 name = "sf-conformance"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "axum",
  "cargo-platform",
@@ -5175,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "sf-core"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "oxiri 0.2.11",
  "oxrdf",
@@ -5187,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "sf-mapping"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "oxrdf",
  "oxttl",
@@ -5197,7 +5197,7 @@ dependencies = [
 
 [[package]]
 name = "sf-serve"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "axum",
  "deadpool-postgres",
@@ -5240,7 +5240,7 @@ dependencies = [
 
 [[package]]
 name = "sf-sparql"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "bigdecimal",
  "bytes",
@@ -5272,7 +5272,7 @@ dependencies = [
 
 [[package]]
 name = "sf-sql"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -5297,7 +5297,7 @@ dependencies = [
 
 [[package]]
 name = "sf-validation"
-version = "0.0.0"
+version = "0.1.0-dev.1"
 dependencies = [
  "oxrdf",
  "oxttl",

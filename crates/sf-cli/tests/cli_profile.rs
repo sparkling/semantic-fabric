@@ -11,6 +11,18 @@ fn invoke(args: &[&str]) -> Output {
 }
 
 #[test]
+fn binary_version_matches_the_nonzero_workspace_version() {
+    let version = env!("CARGO_PKG_VERSION");
+    assert_ne!(version.split('-').next().unwrap(), "0.0.0");
+    let output = invoke(&["--version"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("semantic-fabric {version}")
+    );
+}
+
+#[test]
 fn serving_help_retains_required_database_and_security_options() {
     let output = invoke(&["serve", "--help"]);
     assert!(output.status.success());
