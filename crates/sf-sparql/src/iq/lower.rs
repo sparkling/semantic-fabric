@@ -79,6 +79,7 @@ fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
     match cond {
         SqlCond::ExpressionError => 0,
         SqlCond::LiteralCmp(cmp) => cmp.columns().map(|c| c.alias).max().unwrap_or(0),
+        SqlCond::IriCmp(cmp) => cmp.columns().map(|c| c.alias).max().unwrap_or(0),
         SqlCond::ColEq(left, right)
         | SqlCond::NativeColEq(left, right)
         | SqlCond::NullSafeEq(left, right) => left.alias.max(right.alias),
@@ -1607,7 +1608,7 @@ fn lower_as_subplan(
     // to the wrong positional column.
     let emit_projections = |arms: &[Branch]| -> Result<Vec<Vec<ColRef>>> {
         arms.iter()
-            .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+            .map(|b| crate::emit::projection_layout(b, dialect))
             .collect::<std::result::Result<_, _>>()
             .map_err(|e| match e {
                 // ADR-0034: a sound, intentional 501 from the inner `emit_branch` (e.g. its

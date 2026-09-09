@@ -12,6 +12,7 @@ use sf_core::ir::{Segment, TermMap, TermSpec, TermType};
 use sf_core::Term;
 
 use sf_sql::Dialect;
+mod iri_cmp;
 mod literal_cmp;
 use crate::iq::literal_cmp::LiteralOperand;
 
@@ -159,6 +160,12 @@ fn combine_unify(left: Unify, right: Unify) -> Unify {
 /// Unify a constant against a column/template term map: the raw column(s) must
 /// equal the constant's lexical form.
 fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
+    if let (Term::NamedNode(value), Some(column)) = (c, iri_cmp::operand(tm, alias)) {
+        return Unify::Sat(vec![iri_cmp::identity(
+            column,
+            crate::iq::iri_cmp::IriOperand::Constant(value.clone()),
+        )]);
+    }
     if let (Term::Literal(value), Some(column)) = (c, literal_cmp::operand(tm, alias)) {
         return Unify::Sat(vec![literal_cmp::identity(
             column,
@@ -219,6 +226,9 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
 /// Unify two column/template term maps → raw-column equalities, or a disjointness
 /// proof, or unsupported.
 fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
+    if let (Some(left), Some(right)) = (iri_cmp::operand(t1, a1), iri_cmp::operand(t2, a2)) {
+        return Unify::Sat(vec![iri_cmp::identity(left, right)]);
+    }
     if let (Some(left), Some(right)) = (literal_cmp::operand(t1, a1), literal_cmp::operand(t2, a2))
     {
         // Natural derived/derived matching needs live per-backend datatype
@@ -857,6 +867,9 @@ fn cmp(
         return Ok(comparison);
     }
     if let Some(comparison) = literal_cmp::filter(a, b, Some(op), bindings) {
+        return Ok(comparison);
+    }
+    if let Some(comparison) = iri_cmp::filter(a, b, op, bindings) {
         return Ok(comparison);
     }
     match (a, b) {

@@ -306,7 +306,9 @@ fn should_keep_the_dynamic_graph_variable_in_flat_tree_and_fallback_keys() {
         ] {
             assert_eq!(
                 crate::exec::select(&plan, &connection).unwrap().rows.len(),
-                expected
+                expected,
+                "{query}: shared scopes={:?}",
+                plan.dedup_scopes
             );
         }
     }

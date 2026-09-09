@@ -13,7 +13,7 @@ const SQL: &str =
 fn absent(conn: &Connection) {
     let count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM pragma_function_list WHERE name=? COLLATE NOCASE OR name='__sf_numeric_cmp_v1' COLLATE NOCASE",
+            "SELECT count(*) FROM pragma_function_list WHERE name=? COLLATE NOCASE OR name='__sf_numeric_cmp_v1' COLLATE NOCASE OR name='__sf_iri_key_v1' COLLATE NOCASE",
             [NAME],
             |r| r.get(0),
         )
@@ -125,6 +125,9 @@ fn lexical_callback_does_not_replace_application_callbacks() {
         ("__SF_NUMERIC_CMP_V1", -1),
         ("__SF_NUMERIC_CMP_V1", 1),
         ("__SF_NUMERIC_CMP_V1", 5),
+        ("__SF_IRI_KEY_V1", -1),
+        ("__SF_IRI_KEY_V1", 1),
+        ("__SF_IRI_KEY_V1", 2),
     ] {
         let conn = Connection::open_in_memory().unwrap();
         conn.create_scalar_function(
@@ -258,4 +261,79 @@ fn numeric_callback_is_query_owned_charged_and_null_preserving() {
     }
     guard.finish().unwrap();
     absent(&conn);
+}
+
+#[test]
+fn iri_callback_resolves_without_normalizing_absolute_iris_and_releases_state() {
+    let conn = Connection::open_in_memory().unwrap();
+    let sql = "SELECT __sf_iri_key_v1(?1, ?2)";
+    assert!(conn.prepare(sql).is_err());
+    let mut guard = CharacterKeyGuard::install_lexical(&conn, true, None).unwrap();
+    for (value, base, expected) in [
+        (Some("AB"), Some("http://ex/"), Some("http://ex/AB")),
+        (Some("../AB"), Some("http://ex/dir/"), Some("http://ex/AB")),
+        (
+            Some("//other/AB"),
+            Some("http://ex/"),
+            Some("http://other/AB"),
+        ),
+        (Some("#x"), Some("http://ex/AB"), Some("http://ex/AB#x")),
+        (Some("http://ex/a/../AB"), None, Some("http://ex/a/../AB")),
+        (Some("http://ex/%ab"), None, Some("http://ex/%ab")),
+        (None, Some("http://ex/"), None),
+    ] {
+        assert_eq!(
+            conn.query_row(sql, [value, base], |r| r.get::<_, Option<String>>(0))
+                .unwrap()
+                .as_deref(),
+            expected
+        );
+    }
+    for (value, base) in [
+        ("AB", None),
+        ("bad value", Some("http://ex/")),
+        ("x\0y", Some("http://ex/")),
+    ] {
+        let error = conn
+            .query_row(sql, [Some(value), base], |r| r.get::<_, String>(0))
+            .unwrap_err();
+        assert!(matches!(guard.map_error(error.into()), Error::Marshal(_)));
+    }
+    guard.finish().unwrap();
+    absent(&conn);
+}
+
+#[test]
+fn iri_callback_charges_value_and_base_before_resolving() {
+    let conn = Connection::open_in_memory().unwrap();
+    let base = "http://ex/";
+    let charge = 128 + 2 + base.len() as u64;
+    for limit in [charge - 1, charge] {
+        let budget = Arc::new(QueryBudget::new(QueryLimits::new(
+            u64::MAX,
+            limit,
+            u64::MAX,
+            u64::MAX,
+        )));
+        let weak = Arc::downgrade(&budget);
+        let mut guard =
+            CharacterKeyGuard::install_lexical(&conn, true, Some(budget.clone())).unwrap();
+        let result = conn.query_row("SELECT __sf_iri_key_v1('AB', ?)", [base], |r| {
+            r.get::<_, String>(0)
+        });
+        if limit < charge {
+            assert!(matches!(
+                guard.map_error(result.unwrap_err().into()),
+                Error::QueryControl(QueryControlError::SourceWorkExceeded)
+            ));
+            assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
+        } else {
+            assert_eq!(result.unwrap(), "http://ex/AB");
+            assert_eq!(budget.consumed(QueryCharge::SourceWork), charge);
+        }
+        guard.finish().unwrap();
+        drop(budget);
+        assert!(weak.upgrade().is_none());
+        absent(&conn);
+    }
 }

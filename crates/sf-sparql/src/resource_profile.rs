@@ -150,6 +150,7 @@ fn condition_reads_source(condition: &crate::iq::SqlCond) -> bool {
         }
         SqlCond::ExpressionError
         | SqlCond::LiteralCmp(..)
+        | SqlCond::IriCmp(..)
         | SqlCond::ColEq(..)
         | SqlCond::NativeColEq(..)
         | SqlCond::NullSafeEq(..)

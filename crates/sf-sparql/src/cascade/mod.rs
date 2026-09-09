@@ -68,7 +68,7 @@ fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema
         .map(|pos| map[pos].1)
 }
 
-mod distinct_scan;
+pub(crate) mod distinct_scan;
 mod fd;
 mod joinelim;
 mod optional_prune;
@@ -812,6 +812,7 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
     match cond {
         SqlCond::ExpressionError => {}
         SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(fix),
+        SqlCond::IriCmp(cmp) => cmp.rewrite_columns(fix),
         SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             fix(a);
             fix(b);
@@ -1142,7 +1143,8 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 /// source-column tuples always produce distinct output terms — so that a key
 /// column in the binding implies no two solution rows share the same term.
 ///
-/// `TermMap::Column` is trivially injective (column value → term, bijection).
+/// Column IRIs are not injective: relative and absolute spellings may resolve
+/// to the same RDF term even when the raw source column is a unique key.
 /// `TermMap::Template` with adjacent column slots is **not** injective (see
 /// [`Template::is_injective`]); for non-IRI templates only a single column
 /// slot is safe because the lack of percent-encoding means a separator
@@ -1172,6 +1174,10 @@ pub(crate) fn binding_is_injective(def: &TermDef) -> bool {
 }
 
 fn term_map_is_injective(term_map: &TermMap) -> bool {
+    if matches!(term_map, TermMap::Column(_, spec) if spec.term_type == TermType::Iri && spec.base.is_some())
+    {
+        return false;
+    }
     let TermMap::Template(t, spec) = term_map else {
         return true; // Column / Constant / Coalesce / Concat / Agg — not gated
     };
@@ -1505,7 +1511,8 @@ fn binding_is_term_dedup_safe(def: &TermDef) -> bool {
         TermDef::Derived { term_map, .. } | TermDef::R2rmlBlank { term_map, .. } => term_map,
         _ => return false,
     };
-    crate::iq::term_map_type(term_map) != Some(TermType::Iri)
+    matches!(term_map, TermMap::Column(_, spec) if spec.term_type == TermType::Iri)
+        || crate::iq::term_map_type(term_map) != Some(TermType::Iri)
 }
 
 /// Run 4 Wave C0d's GROUP extension — [`eligible_for_term_dedup`]'s own sound
@@ -1569,6 +1576,23 @@ pub(crate) fn group_can_fallback_to_shared_term_dedup(
         })
 }
 
+/// Base-resolved IRI groups need the complete pattern key after reconstruction,
+/// not raw UNION identity followed by a narrowed final-result DISTINCT.
+pub(crate) fn group_needs_resolved_iri_dedup(
+    branches: &[Branch],
+    keep: &std::collections::HashSet<String>,
+) -> bool {
+    group_eligible_for_term_dedup(branches, keep)
+        && branches.iter().any(|branch| {
+            branch.bindings.iter().any(|(name, def)| {
+                keep.contains(name)
+                    && matches!(def,
+            TermDef::Derived { term_map: TermMap::Column(_, spec), .. }
+                if spec.term_type == TermType::Iri && spec.base.is_some())
+            })
+        })
+}
+
 /// Run 5 C0e restoration — prepare a [`group_eligible_for_term_dedup`] group's
 /// members for [`crate::exec_core::run_branches`]'s cross-branch SHARED seen-set
 /// path instead of [`crate::unfold::pool_group`]'s SQL `UNION` pooling: narrow
@@ -1590,6 +1614,29 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
     for b in members {
         b.bindings.retain(|k, _| keep.contains(k.as_str()));
         b.distinct = true;
+        for scan in &mut b.core {
+            if let crate::iq::ScanSource::Projection {
+                columns,
+                distinct,
+                native_keys,
+                lexical_keys,
+                ..
+            } = &mut scan.source
+            {
+                if native_keys.is_empty()
+                    && lexical_keys
+                        .iter()
+                        .any(|key| matches!(key.mode, crate::iq::scan::LexicalMode::Iri { .. }))
+                    && columns
+                        .iter()
+                        .all(|(name, term)| matches!(term, TermMap::Column(raw, _) if raw == name))
+                {
+                    // The admitted standalone shared set now owns RDF dedup.
+                    // Preserve raw columns and every policy/NULL guard in place.
+                    *distinct = false;
+                }
+            }
+        }
     }
 }
 
@@ -1924,8 +1971,34 @@ fn alias_used_columns(b: &Branch, alias: usize) -> Vec<Box<str>> {
 /// — the per-scan wrap's soundness precondition (see [`apply_dup_safety`]'s
 /// doc comment for why a non-injective binding disqualifies the wrap).
 fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
-    b.bindings.values().all(|def| {
-        !def.columns().iter().any(|column| column.alias == alias) || binding_is_injective(def)
+    let keys = distinct_scan::lexical_keys(b, alias);
+    let term_safe = |map: &TermMap, owner: usize| {
+        owner != alias
+            || term_map_is_injective(map)
+            || matches!(map, TermMap::Column(column, spec) if spec.term_type == TermType::Iri
+                && keys.iter().any(|key| key.column == *column && matches!(&key.mode,
+                    crate::iq::scan::LexicalMode::Iri { base } if base == &spec.base)))
+    };
+    b.bindings.values().all(|def| match def {
+        TermDef::Derived {
+            term_map,
+            alias: owner,
+        } => term_safe(term_map, *owner),
+        TermDef::R2rmlBlank {
+            term_map,
+            alias: owner,
+            graph,
+        } => {
+            term_safe(term_map, *owner)
+                && match graph {
+                    R2rmlGraphScope::Default => true,
+                    R2rmlGraphScope::Mapped {
+                        term_map,
+                        alias: owner,
+                    } => term_safe(term_map, *owner),
+                }
+        }
+        _ => !def.columns().iter().any(|column| column.alias == alias) || binding_is_injective(def),
     })
 }
 

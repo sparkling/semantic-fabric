@@ -69,24 +69,29 @@ impl<'c> CharacterKeyGuard<'c> {
                 "SQLite decoder key function name is already registered".into(),
             ));
         }
-        if lexical && connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = '__sf_numeric_cmp_v1' COLLATE NOCASE)", [], |row| row.get::<_,bool>(0))? {
-            return Err(Error::Emit("SQLite numeric comparison function name is already registered".into()));
+        if lexical {
+            for name in ["__sf_numeric_cmp_v1", "__sf_iri_key_v1"] {
+                if connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = ? COLLATE NOCASE)", [name], |row| row.get::<_,bool>(0))? {
+                    return Err(Error::Emit("SQLite term comparison function name is already registered".into()));
+                }
+            }
         }
         let context = Arc::new(Mutex::new(Context {
             active: true,
             control,
             failure: None,
         }));
-        let registrations: &[(&str, i32, bool)] = if lexical {
+        let registrations: &[(&str, i32, u8)] = if lexical {
             &[
-                ("__sf_lexical_key_v1", 3, false),
-                ("__sf_numeric_cmp_v1", 5, true),
+                ("__sf_lexical_key_v1", 3, 0),
+                ("__sf_numeric_cmp_v1", 5, 1),
+                ("__sf_iri_key_v1", 2, 2),
             ]
         } else {
-            &[(NAME, 2, false)]
+            &[(NAME, 2, 0)]
         };
         guard.context = Some(context.clone());
-        for &(name, arity, numeric) in registrations {
+        for &(name, arity, kind) in registrations {
             let callback = Arc::clone(&context);
             connection.create_scalar_function(
                 name,
@@ -98,8 +103,11 @@ impl<'c> CharacterKeyGuard<'c> {
                         if !state.active {
                             return Err(Error::Emit("inactive SQLite decoder key function".into()));
                         }
-                        if numeric {
+                        if kind == 1 {
                             return super::numeric_cmp::evaluate(args, state.control.as_deref());
+                        }
+                        if kind == 2 {
+                            return super::iri_key::evaluate(args, state.control.as_deref());
                         }
                         if lexical {
                             return super::lexical_key::evaluate(args, state.control.as_deref());
@@ -167,8 +175,14 @@ impl<'c> CharacterKeyGuard<'c> {
             } else {
                 Ok(())
             };
+            let iri_result = if self.lexical {
+                self.connection.remove_function("__sf_iri_key_v1", 2)
+            } else {
+                Ok(())
+            };
             lexical_result?;
             numeric_result?;
+            iri_result?;
         }
         Ok(())
     }

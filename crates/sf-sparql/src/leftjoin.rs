@@ -444,6 +444,11 @@ pub(crate) fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
         return c;
     }
     match c {
+        SqlCond::IriCmp(cmp) => {
+            let mut parts: Vec<_> = cmp.columns().cloned().map(SqlCond::IsNull).collect();
+            parts.insert(0, SqlCond::IriCmp(cmp));
+            SqlCond::Or(parts)
+        }
         SqlCond::LiteralCmp(cmp) if cmp.value_op.is_none() => {
             let mut parts: Vec<_> = cmp.columns().cloned().map(SqlCond::IsNull).collect();
             parts.insert(0, SqlCond::LiteralCmp(cmp));

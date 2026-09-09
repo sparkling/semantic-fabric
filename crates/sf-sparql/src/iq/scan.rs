@@ -7,10 +7,16 @@ use super::{Branch, ColRef, PathClosure, SqlCond};
 pub(crate) mod ref_atom;
 
 #[derive(Debug, Clone)]
-/// Every original consumer preserves raw decoded lexical identity (IRI template
-/// or explicit column literal); numeric predicates own separate typed operands.
+/// Original RDF construction roles captured before narrowing raw projections.
 pub struct LexicalKey {
     pub column: Box<str>,
+    pub mode: LexicalMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LexicalMode {
+    Decoded,
+    Iri { base: Option<Box<str>> },
 }
 
 #[derive(Debug, Clone)]
@@ -35,9 +41,8 @@ pub enum ScanSource {
         distinct: bool,
         /// Native comparison keys; bool also requires RDF-key equivalence.
         native_keys: Vec<(Box<str>, bool)>,
-        /// Original RDF consumers are IRI templates or explicit column literals,
-        /// not natural literals, blank nodes or base-resolved IRIs. Captured
-        /// before projection narrowing; synthetic `columns` specs are no proof.
+        /// Original decoded/resolved RDF key recipes. Multiple consumers of one
+        /// column retain every required mode; synthetic specs confer no proof.
         lexical_keys: Vec<LexicalKey>,
     },
 }

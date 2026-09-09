@@ -165,6 +165,9 @@ pub(super) fn visit_scan<'a>(
             walker.collection(lexical_keys.len())?;
             for key in lexical_keys {
                 walker.payload(key.column.len())?;
+                if let crate::iq::scan::LexicalMode::Iri { base: Some(base) } = &key.mode {
+                    walker.payload(base.len())?;
+                }
             }
             push_conditions(walker, guards, depth)
         }
@@ -258,6 +261,21 @@ pub(super) fn visit_sql_cond<'a>(
 ) -> Result<(), PlanMeasureError> {
     match cond {
         SqlCond::ExpressionError => {}
+        SqlCond::IriCmp(cmp) => {
+            for operand in [&cmp.left, &cmp.right] {
+                match operand {
+                    crate::iq::iri_cmp::IriOperand::Column { column, base } => {
+                        walker.push(depth, Work::ColRef(column))?;
+                        if let Some(base) = base {
+                            walker.payload(base.len())?;
+                        }
+                    }
+                    crate::iq::iri_cmp::IriOperand::Constant(value) => {
+                        walker.payload(value.as_str().len())?;
+                    }
+                }
+            }
+        }
         SqlCond::LiteralCmp(cmp) => {
             for operand in [&cmp.left, &cmp.right] {
                 match operand {

@@ -1,5 +1,6 @@
 //! Native Ref witnesses are joined/authorized before decoded RDF tuple dedup.
 use super::*;
+use crate::iq::scan::LexicalMode;
 
 pub(super) fn actuals(
     input: &Branch,
@@ -9,7 +10,13 @@ pub(super) fn actuals(
 ) -> AliasActuals {
     let sources = branch_actuals(input, dialect, catalog);
     AliasActuals {
-        sqlite_columns: HashMap::new(),
+        sqlite_columns: columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, column)| {
+                lexical_key::column_decode(column, &sources).map(|decode| (format!("c{i}"), decode))
+            })
+            .collect(),
         lexical_columns: HashMap::new(),
         source_kind: AliasSourceKind::Derived,
         columns: (0..columns.len()).map(|i| format!("c{i}")).collect(),
@@ -42,13 +49,40 @@ pub(super) fn sql(
 ) -> Result<String> {
     crate::iq::scan::ref_atom::validate_shape(input, columns)?;
     let actuals = branch_actuals(input, dialect, catalog);
+    let modes: HashMap<_, _> = input
+        .core
+        .iter()
+        .map(|scan| {
+            (
+                scan.alias,
+                crate::cascade::distinct_scan::lexical_keys(input, scan.alias),
+            )
+        })
+        .collect();
+    fn column_modes<'a>(
+        column: &'a ColRef,
+        modes: &'a HashMap<usize, Vec<crate::iq::LexicalKey>>,
+    ) -> impl Iterator<Item = &'a crate::iq::LexicalKey> {
+        modes
+            .get(&column.alias)
+            .into_iter()
+            .flatten()
+            .filter(move |key| key.column == column.column)
+    }
     // SQL numeric equality is not decoded RDF identity (notably +0/-0).
     // Only the live-proven text families authorize this new atom-level key.
     // Unknown families retain the previous per-source D1/native-join behavior;
     // neither a raw atom DISTINCT nor an undecuplicated join is that fallback.
-    let window = columns
-        .iter()
-        .all(|c| path_comparison::column_text(c, &actuals).is_some());
+    let window = columns.iter().all(|c| {
+        if column_modes(c, &modes).any(|key| matches!(key.mode, LexicalMode::Iri { .. })) {
+            dialect == Dialect::Sqlite && lexical_key::column_decode(c, &actuals).is_some()
+        } else {
+            path_comparison::column_text(c, &actuals).is_some()
+                || (dialect == Dialect::Sqlite
+                    && column_modes(c, &modes).any(|key| key.mode == LexicalMode::Decoded)
+                    && lexical_key::column_decode(c, &actuals).is_some())
+        }
+    });
     let legacy = if window {
         None
     } else {
@@ -66,6 +100,43 @@ pub(super) fn sql(
     } else {
         actuals
     };
+    // PARTITION BY is in SELECT before FROM/WHERE; bind its bases first.
+    let mut keys = Vec::new();
+    if window {
+        for column in columns {
+            let mut resolved = false;
+            for key in column_modes(column, &modes) {
+                if let LexicalMode::Iri { base } = &key.mode {
+                    keys.push(iri_cmp::column(
+                        column,
+                        base.as_deref(),
+                        dialect,
+                        catalog,
+                        &actuals,
+                        params,
+                        pidx,
+                    )?);
+                    resolved = true;
+                }
+            }
+            if !resolved || column_modes(column, &modes).any(|key| key.mode == LexicalMode::Decoded)
+            {
+                keys.push(
+                    if let Some(decode) =
+                        lexical_key::column_decode(column, &actuals).filter(|_| {
+                            dialect == Dialect::Sqlite
+                                && column_modes(column, &modes)
+                                    .any(|key| key.mode == LexicalMode::Decoded)
+                        })
+                    {
+                        lexical_key::expression(colref(column, dialect, &actuals), decode, catalog)
+                    } else {
+                        path_comparison::rdf_column(column, dialect, catalog, &actuals)
+                    },
+                );
+            }
+        }
+    }
     let from = render_from(input, dialect, catalog, &actuals, params, pidx)?;
     let filter = render_where(&input.where_conds, dialect, catalog, &actuals, params, pidx)?
         .map(|sql| format!(" WHERE {sql}"))
@@ -78,10 +149,6 @@ pub(super) fn sql(
     if !window {
         return Ok(format!("SELECT {} FROM {from}{filter}", items.join(", ")));
     }
-    let keys = columns
-        .iter()
-        .map(|c| path_comparison::rdf_column(c, dialect, catalog, &actuals))
-        .collect::<Vec<_>>();
     let keys = if keys.is_empty() {
         "1".to_owned()
     } else {

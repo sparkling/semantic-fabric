@@ -40,6 +40,9 @@ use crate::{Error, Result};
 mod scan;
 use scan::{scan_actuals, scan_ref};
 mod aggregate_projection;
+mod iri_cmp;
+mod projection_layout;
+pub(crate) use projection_layout::projection_layout;
 mod lexical_key;
 mod literal_cmp;
 mod path_comparison;
@@ -365,6 +368,12 @@ pub(crate) fn validate_live_columns(
     ) -> Result<()> {
         match condition {
             SqlCond::ExpressionError => Ok(()),
+            SqlCond::IriCmp(cmp) => {
+                for column in cmp.columns() {
+                    validate_ref(column, aliases, dialect, catalog)?;
+                }
+                Ok(())
+            }
             SqlCond::LiteralCmp(cmp) => {
                 for column in cmp.columns() {
                     validate_ref(column, aliases, dialect, catalog)?;
@@ -753,19 +762,7 @@ fn emit_branch_keys(
     // leaving the raw, duplicate-bearing rows for `exec_core::run_branches` to dedup AFTER
     // reconstruction, on the actual term values. Injective templates need neither path —
     // SQL DISTINCT already implements SPARQL DISTINCT for them.
-    let term_dedup = crate::cascade::eligible_for_term_dedup(b);
-    if b.distinct && !term_dedup {
-        for def in b.bindings.values() {
-            if !crate::cascade::binding_is_injective(def) {
-                return Err(Error::Unsupported(
-                    "SELECT DISTINCT over a non-injective term (a multi-column template that \
-                     maps distinct raw tuples to the same RDF term) cannot be pushed to SQL \
-                     DISTINCT soundly → 501 (ADR-0025 C.3)"
-                        .to_owned(),
-                ));
-            }
-        }
-    }
+    let term_dedup = projection_layout::validate_distinct(b)?;
     let projection = b.projection();
     let mut params = Vec::new();
     let mut pidx = 0usize;
@@ -1603,6 +1600,7 @@ fn render_cond(
 ) -> Result<String> {
     Ok(match cond {
         SqlCond::ExpressionError => "(NULL = 1)".to_owned(),
+        SqlCond::IriCmp(cmp) => iri_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?,
         SqlCond::LiteralCmp(cmp) => {
             literal_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?
         }

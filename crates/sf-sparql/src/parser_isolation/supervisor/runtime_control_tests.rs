@@ -49,6 +49,49 @@ impl QueryControl for Timed {
 }
 
 #[test]
+fn runtime_build_identity_is_bounded_independently_of_debug_image_size() {
+    use super::executable::{TempDirectory, MAX_EXECUTABLE_BYTES};
+    use std::fs::{File, OpenOptions};
+
+    let directory = TempDirectory::new();
+    let path = directory.path().join("large-elf");
+    std::fs::copy("/bin/cat", &path).unwrap();
+    let file = OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(MAX_EXECUTABLE_BYTES + 1).unwrap();
+    drop(file);
+    let runtime = PreparedParserExecutable::from_file_for_runtime(File::open(&path).unwrap())
+        .expect("bounded build-ID reads do not scan trailing debug bytes");
+    assert!(runtime.identity().fingerprint().is_none());
+    assert_eq!(runtime.identity().byte_len(), MAX_EXECUTABLE_BYTES + 1);
+    assert_eq!(
+        runtime.identity().build_identity(),
+        PreparedParserExecutable::from_file_for_runtime(File::open("/bin/cat").unwrap())
+            .unwrap()
+            .identity()
+            .build_identity()
+    );
+    runtime.duplicate_for_launch(64).unwrap();
+    assert!(matches!(
+        PreparedParserExecutable::from_file_for_evidence(File::open(&path).unwrap()),
+        Err(SupervisorError::InvalidExecutable(
+            "descriptor exceeds the fixed fingerprint byte ceiling"
+        ))
+    ));
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(MAX_EXECUTABLE_BYTES + 2)
+        .unwrap();
+    assert!(matches!(
+        runtime.duplicate_for_launch(64),
+        Err(SupervisorError::InvalidExecutable(
+            "launch descriptor identity drifted"
+        ))
+    ));
+}
+
+#[test]
 fn request_cancel_and_deadline_interrupt_pipe_wait_and_reap_before_return() {
     for reason in [
         QueryControlError::Cancelled,

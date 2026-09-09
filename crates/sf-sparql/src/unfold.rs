@@ -1659,6 +1659,10 @@ fn pool_pattern_relation(
         let member_refs: Vec<&Branch> = members.iter().collect();
         if crate::cascade::group_pool_type_safety(&member_refs, schema, dialect, column_type_use)
             == crate::cascade::PoolTypeSafety::Unproven
+            || crate::cascade::group_needs_resolved_iri_dedup(
+                &members,
+                &vars.iter().cloned().collect(),
+            )
         {
             let keep: std::collections::HashSet<String> = vars.iter().cloned().collect();
             if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep) {
@@ -1759,7 +1763,7 @@ fn pool_group(
     let sp_alias = *next_alias;
     let mut arm_projections: Vec<Vec<ColRef>> = narrowed
         .iter()
-        .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+        .map(|b| crate::emit::projection_layout(b, dialect))
         .collect::<Result<_>>()?;
     if arm_projections
         .iter()
@@ -1778,7 +1782,7 @@ fn pool_group(
                 narrowed = rewritten;
                 arm_projections = narrowed
                     .iter()
-                    .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+                    .map(|b| crate::emit::projection_layout(b, dialect))
                     .collect::<Result<_>>()?;
                 if arm_projections
                     .iter()

@@ -78,7 +78,11 @@ pub fn generate_into<'a, R: Row + ?Sized>(
 /// mapping base IRI; if neither yields a valid IRI it is a **data error** (the
 /// W3C suite's "conforming mapping with data error" cases). The resolved form is
 /// written through `buf` so the absolute-IRI fast path stays allocation-free.
-fn column_iri<'a>(value: &'a str, base: Option<&str>, buf: &'a mut String) -> Result<GenTerm<'a>> {
+pub fn column_iri<'a>(
+    value: &'a str,
+    base: Option<&str>,
+    buf: &'a mut String,
+) -> Result<GenTerm<'a>> {
     if oxiri::Iri::parse(value).is_ok() {
         return Ok(GenTerm::NamedNode(NamedNodeRef::new_unchecked(value)));
     }

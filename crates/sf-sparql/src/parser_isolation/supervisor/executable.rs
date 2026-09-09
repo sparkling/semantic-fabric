@@ -173,7 +173,9 @@ impl PreparedParserExecutable {
                 "descriptor is not a non-empty regular file",
             ));
         }
-        if before.byte_len > MAX_EXECUTABLE_BYTES {
+        // Only whole-file diagnostics scan image-sized bytes. Runtime observes
+        // bounded ELF notes, including when debug sections exceed this ceiling.
+        if record_sha && before.byte_len > MAX_EXECUTABLE_BYTES {
             return Err(SupervisorError::InvalidExecutable(
                 "descriptor exceeds the fixed fingerprint byte ceiling",
             ));

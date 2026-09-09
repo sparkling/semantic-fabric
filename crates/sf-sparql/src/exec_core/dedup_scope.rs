@@ -187,7 +187,7 @@ fn lift_branch_scope(
                 .to_owned(),
         ));
     }
-    let projection = crate::emit::emit_branch(prepared_branch, nested.dialect)?.projection;
+    let projection = crate::emit::projection_layout(prepared_branch, nested.dialect)?;
     let key_bindings = nested_scope
         .key_bindings
         .iter()

@@ -363,6 +363,8 @@ pub enum SqlCond {
     ExpressionError,
     /// Typed literal identity or numeric value comparison, never raw-key authority.
     LiteralCmp(Box<literal_cmp::LiteralComparison>),
+    /// RDF IRI identity after each column's mapping-base resolution.
+    IriCmp(Box<iri_cmp::IriComparison>),
     /// `l = r` — an inner-join key equality (raw columns).
     ColEq(ColRef, ColRef),
     /// Authored rr:joinCondition: native database equality, not RDF identity.
@@ -523,6 +525,7 @@ impl CmpOp {
 
 pub(crate) mod scan;
 pub use scan::{LexicalKey, Scan, ScanSource};
+pub mod iri_cmp;
 pub mod literal_cmp;
 
 /// A single OPTIONAL right side rendered as a SQL `LEFT JOIN` (ADR-0007 R1–R5).
@@ -848,6 +851,7 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
     match cond {
         SqlCond::ExpressionError => {}
         SqlCond::LiteralCmp(cmp) => cmp.columns().for_each(f),
+        SqlCond::IriCmp(cmp) => cmp.columns().for_each(f),
         SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             f(a);
             f(b);

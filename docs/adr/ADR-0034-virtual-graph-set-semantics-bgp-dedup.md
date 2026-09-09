@@ -122,6 +122,25 @@ not invented xsd:string. General natural derived-pair identity, native numeric
 identity/value semantics and descriptor propagation remain required follow-up;
 the retained paths are compatibility boundaries, not completion evidence.
 
+**Resolved column-IRI correction (2026-09-09):** `IriCmp` preserves each operand's
+base for constant matching, BGP identity, `=` and `sameTerm`. Live SQLite keys
+decode and resolve through shared Rust functions; ordered IRI comparisons remain
+expression errors. Source UNIQUE keys cannot elide base-resolved RDF dedup.
+D1 retains separate resolved/decoded keys for multiple consumers and keeps raw
+outputs. Ref atoms join/filter first, then dedup resolved subjects and decoded
+blank labels; original SQLite descriptors survive outer predicates. Unknown
+consumer keys cannot silently fall through to raw DISTINCT.
+The existing standalone reconstructed-term fallback admits column IRIs, not
+noninjective IRI templates. Cross-map groups retain complete pattern keys,
+including hidden graph variables; source-sized fallback remains rejected by
+serving. Compiler projection-layout inspection no longer emits speculative SQL
+without live decoder authority. Public regression coverage includes SELECT/COUNT,
+constant/BGP/FILTER matching, unique keys, unbound errors and native Ref witnesses;
+W3C compatibility expectations remain unchanged. Native resolved-key execution,
+general mixed/natural identities, broader DISTINCT/GROUP/SubPlan qualification
+and effective document-base propagation remain open. No release/admission flag
+is promoted by this slice.
+
 ## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 
 All 9 red-phase cells green against the spareval oracle: 34→4, 4→3, 66→3, 34→3,

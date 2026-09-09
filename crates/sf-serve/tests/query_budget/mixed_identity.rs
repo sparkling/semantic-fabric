@@ -58,6 +58,134 @@ fn literal_mapping() -> String {
     )
 }
 
+fn column_iri_mapping() -> String {
+    // parse_r2rml currently assigns its document fallback base to column maps.
+    MAP.replace(
+        "rr:template \"http://ex/n/{o}\"; rr:termType rr:IRI",
+        "rr:column \"o\"; rr:termType rr:IRI",
+    )
+}
+
+#[tokio::test]
+async fn column_iri_base_resolution_precedes_triple_dedup_and_count() {
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','AB'),('a','http://example.com/base/AB');";
+    for query in [
+        "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o }",
+    ] {
+        let json = answer(configured_mixed(setup, &column_iri_mapping()), query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{query}: {json}");
+        if query.contains("COUNT") {
+            assert_eq!(rows[0]["n"]["value"], "1", "{json}");
+        } else {
+            assert_eq!(
+                rows[0]["o"]["value"], "http://example.com/base/AB",
+                "{json}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn column_iri_base_resolution_precedes_constant_and_filter_matching() {
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','AB');";
+    for pattern in [
+        "?s <http://ex/p> <http://example.com/base/AB>",
+        "?s <http://ex/p> ?o FILTER(?o = <http://example.com/base/AB>)",
+        "?s <http://ex/p> ?o FILTER(sameTerm(?o, <http://example.com/base/AB>))",
+    ] {
+        let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+        let json = answer(configured_mixed(setup, &column_iri_mapping()), &query).await;
+        assert_eq!(
+            json["results"]["bindings"].as_array().unwrap().len(),
+            1,
+            "{query}: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn column_iri_base_resolution_precedes_bgp_and_variable_filter_matching() {
+    let mapping = format!(
+        r#"{}
+<#right> rr:logicalTable [rr:tableName "right_values"]; rr:subject <http://ex/right>;
+ rr:predicateObjectMap [rr:predicate <http://ex/q>; rr:objectMap [rr:column "o"; rr:termType rr:IRI]]."#,
+        column_iri_mapping()
+    );
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); CREATE TABLE right_values(o TEXT); INSERT INTO edges VALUES('a','AB'); INSERT INTO right_values VALUES('http://example.com/base/AB');";
+    for pattern in [
+        "?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?o",
+        "?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?other FILTER(?o = ?other)",
+        "?s <http://ex/p> ?o . <http://ex/right> <http://ex/q> ?other FILTER(sameTerm(?o, ?other))",
+    ] {
+        let query = format!("SELECT ?s WHERE {{ {pattern} }}");
+        let json = answer(configured_mixed(setup, &mapping), &query).await;
+        assert_eq!(
+            json["results"]["bindings"].as_array().unwrap().len(),
+            1,
+            "{query}: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn column_iri_unique_keys_cannot_prove_rdf_uniqueness() {
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT PRIMARY KEY NOT NULL); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','AB'),('a','http://example.com/base/AB');";
+    let json = answer(
+        configured_mixed(setup, &column_iri_mapping()),
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/p> ?o }",
+    )
+    .await;
+    assert_eq!(json["results"]["bindings"][0]["n"]["value"], "1", "{json}");
+}
+
+#[tokio::test]
+async fn column_iri_reference_atom_resolves_after_native_join_and_keeps_blank_decoding() {
+    let mapping = REF_WITNESS
+        .replace(
+            "rr:template \"http://ex/{s}\"",
+            "rr:column \"s\"; rr:termType rr:IRI",
+        )
+        .replace(
+            "rr:template \"http://ex/{label}\"",
+            "rr:column \"label\"; rr:termType rr:BlankNode",
+        );
+    let setup = "CREATE TABLE child(s TEXT,fk TEXT COLLATE NOCASE); CREATE TABLE parent(k TEXT,label); INSERT INTO child VALUES('row','a'),('http://example.com/base/row','A'); INSERT INTO parent VALUES('a','AB'),('A',X'AB');";
+    for query in [
+        "SELECT ?s ?o WHERE { ?s <http://ex/ref> ?o }",
+        "SELECT ?o WHERE { <http://example.com/base/row> <http://ex/ref> ?o }",
+        "SELECT ?s ?o WHERE { ?s <http://ex/ref> ?o FILTER(?s = <http://example.com/base/row>) }",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <http://ex/ref> ?o }",
+    ] {
+        let json = answer(configured_mixed(setup, &mapping), query).await;
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{query}: {json}");
+        if query.contains("COUNT") {
+            assert_eq!(rows[0]["n"]["value"], "1", "{json}");
+        } else {
+            assert_eq!(rows[0]["o"]["type"], "bnode", "{json}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn column_iri_filters_keep_unbound_and_ordering_errors_under_negation() {
+    let setup = "CREATE TABLE edges(s TEXT,o TEXT); CREATE TABLE outer_nodes(s TEXT); INSERT INTO edges VALUES('a','AB');";
+    for expression in [
+        "?o < <http://ex/z>",
+        "!(?o < <http://ex/z>)",
+        "!sameTerm(?missing, <http://ex/z>)",
+    ] {
+        let query = format!("SELECT ?s WHERE {{ ?s <http://ex/p> ?o OPTIONAL {{ ?s <http://ex/p> ?missing FILTER(?missing = <http://ex/absent>) }} FILTER({expression}) }}");
+        let json = answer(configured_mixed(setup, &column_iri_mapping()), &query).await;
+        assert!(
+            json["results"]["bindings"].as_array().unwrap().is_empty(),
+            "{query}: {json}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn literal_natural_constant_uses_declared_datatype() {
     let mapping = MAP.replace(

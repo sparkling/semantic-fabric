@@ -20,11 +20,7 @@ pub(crate) fn seal(input: Branch) -> Result<Branch> {
     }
     // Retain the existing non-injective-term admission path. Raw tuple keys do
     // not prove equivalence for non-injective constructions.
-    if !input
-        .bindings
-        .values()
-        .all(crate::cascade::binding_is_injective)
-    {
+    if !input.bindings.values().all(binding_key_supported) {
         return Ok(input);
     }
     let alias = input.core[0].alias;
@@ -72,10 +68,7 @@ pub(crate) fn validate_shape(input: &Branch, columns: &[ColRef]) -> Result<()> {
         || input.offset != 0
         || !input.order.is_empty()
         || input.nps
-        || !input
-            .bindings
-            .values()
-            .all(crate::cascade::binding_is_injective)
+        || !input.bindings.values().all(binding_key_supported)
     {
         return Err(Error::Unsupported("invalid reference atom relation".into()));
     }
@@ -103,4 +96,11 @@ fn has_native_join(input: &Branch) -> bool {
                 && ((a.alias == left.alias && b.alias == right.alias)
                     || (a.alias == right.alias && b.alias == left.alias)))
     })
+}
+
+fn binding_key_supported(def: &crate::iq::TermDef) -> bool {
+    crate::cascade::binding_is_injective(def)
+        || matches!(def, crate::iq::TermDef::Derived {
+            term_map: TermMap::Column(_, spec), ..
+        } if spec.term_type == sf_core::ir::TermType::Iri)
 }

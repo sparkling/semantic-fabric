@@ -1,34 +1,45 @@
 //! Preserve source-native comparison requirements across RDF-key deduplication.
 use super::*;
+use crate::iq::scan::LexicalMode;
 use std::collections::BTreeSet;
+type Modes = std::collections::BTreeMap<Box<str>, Option<BTreeSet<LexicalMode>>>;
 
 /// Capture original consumer semantics before D1 replaces them with synthetic
 /// raw Column recipes. IRI templates and explicit column literals preserve the
 /// decoded lexical value. Literal conditions own identity/value roles separately;
 /// natural literals and base-resolved IRIs cannot borrow this raw lexical proof.
-pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
-    fn term(
-        map: &TermMap,
-        owner: usize,
-        alias: usize,
-        modes: &mut std::collections::BTreeMap<Box<str>, bool>,
-    ) {
+pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
+    fn term(map: &TermMap, owner: usize, alias: usize, modes: &mut Modes) {
         if owner != alias {
             return;
         }
-        let lexical = match map {
-            TermMap::Template(_, spec) => spec.term_type == sf_core::ir::TermType::Iri,
-            TermMap::Column(_, spec) => {
-                spec.term_type == sf_core::ir::TermType::Literal
-                    && (spec.datatype.is_some() || spec.language.is_some())
+        let mode = match map {
+            TermMap::Template(_, spec) => {
+                (spec.term_type == sf_core::ir::TermType::Iri).then_some(LexicalMode::Decoded)
             }
+            TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::Iri => {
+                Some(LexicalMode::Iri {
+                    base: spec.base.clone(),
+                })
+            }
+            TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::BlankNode => {
+                Some(LexicalMode::Decoded)
+            }
+            TermMap::Column(_, spec) => (spec.term_type == sf_core::ir::TermType::Literal
+                && (spec.datatype.is_some() || spec.language.is_some()))
+            .then_some(LexicalMode::Decoded),
             TermMap::Constant(_) => return,
         };
         let mut record = |column: &str| {
             modes
                 .entry(column.into())
-                .and_modify(|value| *value &= lexical)
-                .or_insert(lexical);
+                .and_modify(|value| match (value.as_mut(), mode.as_ref()) {
+                    (Some(modes), Some(mode)) => {
+                        modes.insert(mode.clone());
+                    }
+                    _ => *value = None,
+                })
+                .or_insert_with(|| mode.clone().map(|mode| BTreeSet::from([mode])));
         };
         match map {
             TermMap::Column(column, _) => record(column),
@@ -70,17 +81,27 @@ pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
                     .into_iter()
                     .filter(|column| column.alias == alias)
                 {
-                    modes.insert(column.column, false);
+                    modes.insert(column.column, None);
                 }
             }
         }
     }
-    fn condition(
-        cond: &SqlCond,
-        alias: usize,
-        modes: &mut std::collections::BTreeMap<Box<str>, bool>,
-    ) {
+    fn condition(cond: &SqlCond, alias: usize, modes: &mut Modes) {
         match cond {
+            SqlCond::IriCmp(cmp) => {
+                for operand in [&cmp.left, &cmp.right] {
+                    if let crate::iq::iri_cmp::IriOperand::Column { column, base } = operand {
+                        let mut spec = sf_core::ir::TermSpec::iri();
+                        spec.base = base.clone();
+                        term(
+                            &TermMap::Column(column.column.clone(), spec),
+                            column.alias,
+                            alias,
+                            modes,
+                        );
+                    }
+                }
+            }
             SqlCond::LiteralCmp(cmp) => {
                 for operand in [&cmp.left, &cmp.right] {
                     if let crate::iq::literal_cmp::LiteralOperand::Column { column, spec } = operand
@@ -116,7 +137,15 @@ pub(super) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
     }
     modes
         .into_iter()
-        .filter_map(|(column, lexical)| lexical.then_some(crate::iq::LexicalKey { column }))
+        .flat_map(|(column, modes)| {
+            modes
+                .into_iter()
+                .flatten()
+                .map(move |mode| crate::iq::LexicalKey {
+                    column: column.clone(),
+                    mode,
+                })
+        })
         .collect()
 }
 
@@ -234,9 +263,10 @@ mod tests {
                 alias: 3,
             },
         );
-        assert!(
-            lexical_keys(&branch, 3).is_empty(),
-            "base resolution is not raw lexical identity"
+        assert_eq!(
+            lexical_keys(&branch, 3).len(),
+            2,
+            "base resolution and template decoding retain separate identity keys"
         );
     }
 

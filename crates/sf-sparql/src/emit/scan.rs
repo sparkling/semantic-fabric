@@ -1,5 +1,6 @@
 //! Rendering of typed scan relations. No generated SQL is a live source authority.
 use super::*;
+use crate::iq::scan::LexicalMode;
 use crate::iq::{CmpOp, Scan, ScanSource};
 
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
@@ -32,9 +33,9 @@ pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalo
             let lexical_columns = sqlite_columns
                 .iter()
                 .filter(|(name, _)| {
-                    lexical_keys
-                        .iter()
-                        .any(|key| key.column.as_ref() == name.as_str())
+                    lexical_keys.iter().any(|key| {
+                        key.column.as_ref() == name.as_str() && key.mode == LexicalMode::Decoded
+                    })
                 })
                 .map(|(name, decode)| (name.clone(), *decode))
                 .collect();
@@ -143,18 +144,39 @@ fn projection_sql(
     // Original lexical consumer proof plus a live decoder makes mixed SQLite
     // keys exact. Natural/base-IRI consumers cannot borrow that authority.
     let lexical = |raw: &str| {
-        (dialect == Dialect::Sqlite && lexical_keys.iter().any(|key| key.column.as_ref() == raw))
-            .then(|| lexical_key::column_decode(&ColRef::new(input.alias, raw), &actuals))
-            .flatten()
+        (dialect == Dialect::Sqlite
+            && lexical_keys
+                .iter()
+                .any(|key| key.column.as_ref() == raw && key.mode == LexicalMode::Decoded))
+        .then(|| lexical_key::column_decode(&ColRef::new(input.alias, raw), &actuals))
+        .flatten()
+    };
+    let has_iris = lexical_keys
+        .iter()
+        .any(|key| matches!(key.mode, LexicalMode::Iri { .. }));
+    if distinct && has_iris && (dialect != Dialect::Sqlite || !native_keys.is_empty()) {
+        return Err(Error::Unsupported(
+            "resolved column-IRI dedup requires SQLite RDF-only scan keys".into(),
+        ));
+    }
+    let iri_column = |raw: &str| {
+        lexical_keys
+            .iter()
+            .any(|key| key.column.as_ref() == raw && matches!(key.mode, LexicalMode::Iri { .. }))
     };
     let window = distinct
         && native_keys.is_empty()
         && !columns.is_empty()
         && (columns.iter().all(|(_, term)| {
-            matches!(term, TermMap::Column(raw, _) if lexical(raw).is_some() || path_comparison::column_text(
+            matches!(term, TermMap::Column(raw, _) if iri_column(raw) || lexical(raw).is_some() || path_comparison::column_text(
                 &ColRef::new(input.alias, raw.clone()), &actuals).is_some())
         }) || (!guards.iter().any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
             && !actuals[&input.alias].text_columns.is_empty()));
+    if distinct && has_iris && !window {
+        return Err(Error::Unsupported(
+            "resolved column-IRI dedup requires exact keys for every scan consumer".into(),
+        ));
+    }
     let mut rank = "__sf_rank".to_owned();
     while columns
         .iter()
@@ -180,6 +202,27 @@ fn projection_sql(
                 return Err(Error::Unsupported("distinct computed scan recipe".into()));
             };
             let native = native_keys.iter().find(|(key, _)| key == name);
+            if iri_column(raw) {
+                for key in lexical_keys
+                    .iter()
+                    .filter(|key| key.column.as_ref() == raw.as_ref())
+                {
+                    if let LexicalMode::Iri { base } = &key.mode {
+                        keys.push(iri_cmp::column(
+                            &ColRef::new(input.alias, raw.clone()),
+                            base.as_deref(),
+                            dialect,
+                            catalog,
+                            &actuals,
+                            params,
+                            pidx,
+                        )?);
+                    }
+                }
+                if lexical(raw).is_none() {
+                    continue;
+                }
+            }
             if native.is_none_or(|(_, both)| *both) {
                 keys.push(
                     if let Some(decode) = lexical(raw).filter(|_| {

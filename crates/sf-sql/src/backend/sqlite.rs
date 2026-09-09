@@ -33,6 +33,7 @@ use crate::error::{Error, Result};
 use crate::stream::sqlite_column_decltypes;
 
 mod cancellation;
+mod iri_key;
 mod lexical_key;
 #[cfg(test)]
 mod metadata_twin_tests;

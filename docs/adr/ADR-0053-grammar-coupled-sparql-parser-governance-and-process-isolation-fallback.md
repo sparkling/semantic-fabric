@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-04
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [sparql, parser, resource-governance, isolation, rust, dos]
 supersedes: []
 depends-on: [ADR-0004, ADR-0010, ADR-0012, ADR-0038, ADR-0048, ADR-0052]
@@ -12,7 +12,7 @@ implements: [ADR-0010, ADR-0052]
 
 ## Status boundary
 
-**2026-09-08 correction:** ADR-0055 requires repair of a reproduced authenticated parser abort. Public serving now reuses a prepared Rust worker, request-control-aware waits, exact reap and bounded QueryV1 decode without parent source reparse; missing embedding runtime fails closed. Required local ordinary/lineage input, cap-one exact recovery, cancellation and scope tests cover this slice. This ADR remains proposed: GovernedV1, complete syscall/dependency/ELF attestation and its broader corpus are not promoted. The following evidence history describes the earlier private-only state.
+**2026-09-08 correction (refined 2026-09-09):** ADR-0055 requires repair of a reproduced authenticated parser abort. Public serving now reuses a prepared Rust worker, request-control-aware waits, exact reap and bounded QueryV1 decode without parent source reparse; missing embedding runtime fails closed. Runtime omits only diagnostic full-file SHA and its 512 MiB scan ceiling: bounded ELF/build-ID reads, held identity and pre-launch metadata checks remain. A sparse oversized ELF regression retains evidence-mode rejection and runtime drift rejection; debug sections cannot independently disable serving. Required local ordinary/lineage input, cap-one exact recovery, cancellation and scope tests cover this slice. This ADR remains proposed: GovernedV1, complete syscall/dependency/ELF attestation and its broader corpus are not promoted. The following evidence history describes the earlier private-only state.
 
 This **proposed** ADR selects bounded Linux Rust process isolation for V1 after a source audit; complete in-process hooks require a broad maintained fork. A private supervisor validates and holds one ELF before source preparation, records a bounded full-file SHA-256 diagnostic, descriptor-launches it under a stage-one `x86_64-unknown-linux-gnu` policy, owns pidfd/process-group termination and exact reap, and caps nonblocking pipes under one immutable deadline. First-statement `sf-cli::main` dispatch recognizes only exact raw-empty-environment private tuples: the normal control-only parser peer, a selector-free parser-free synthetic peer, and separately feature-gated parser-free mutant and real-parser `QueryV1` peers.
 

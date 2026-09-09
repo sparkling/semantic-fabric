@@ -96,7 +96,7 @@ pub(super) fn validate_runtime_scope(branch: &Branch, scope: &DedupScope) -> Res
                 .ok_or_else(impure_scope)
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let projection = crate::emit::emit_branch(nested_branch, nested.dialect)?.projection;
+    let projection = crate::emit::projection_layout(nested_branch, nested.dialect)?;
     for (variable, definition) in &nested_keys {
         let remapped = crate::iq::lower::remap_termdef(definition, &projection, wrapper.alias)?;
         if scope

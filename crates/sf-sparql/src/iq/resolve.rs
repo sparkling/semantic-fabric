@@ -292,6 +292,10 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                         cx.unfolder.dialect,
                         cx.unfolder.column_type_use,
                     ) == crate::cascade::PoolTypeSafety::Unproven
+                        || crate::cascade::group_needs_resolved_iri_dedup(
+                            &members,
+                            &vars.iter().map(|v| v.to_string()).collect(),
+                        )
                     {
                         // Type-independent correctness fallback (mirrors
                         // `unfold::pool_pattern_relation`): when every member is

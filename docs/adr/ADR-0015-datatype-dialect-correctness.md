@@ -83,6 +83,18 @@ The public signed-zero, datatype/language, large-integer/decimal and OPTIONAL
 checks cover this SQLite slice. Native/natural/mixed-descriptor generalization
 remains open under ADR-0034; missing metadata is never proof of xsd:string.
 
+**Column-IRI refinement (2026-09-09).** SQLite identity predicates retain each
+operand's mapping base and resolve decoded values through the same
+`sf-core::term::column_iri` function as RDF reconstruction. Absolute spellings
+remain verbatim; relative resolution is not concatenation or URI normalization.
+The query-owned callback charges value/base bytes before UTF-8 validation and
+resolution, preserves NULL/data errors and releases request state. D1 and native
+reference atoms retain raw values/descriptors while partitioning on every
+required decoded/resolved RDF key. Column blank labels retain separate graph
+identity. Missing decoder authority and native IRI-resolution operations reject;
+PostgreSQL/MySQL resolved-key support and effective document-base propagation
+remain required follow-up, not completed capabilities (ADR-0034).
+
 R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) identifiers are case-insensitive; delimited identifiers are case-sensitive; an all-upper-case delimited identifier equals the undelimited form (`DEPTNO` = `"DEPTNO"`) but a mixed-case delimited one does not (`"Name"` ≠ regular `Name`). A strict processor therefore **rejects** a mapping that references a mixed-case delimited column with a regular identifier.
 
 **Decision: resolve every mapping column identifier against the *live introspected schema* — exact match first (preserves a genuinely delimited/case-exact column), then a unique ASCII-case-insensitive match — rather than implement strict SQL:2008 delimited-vs-regular rejection.** Rationale:

@@ -313,6 +313,7 @@ fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
     match cond {
         SqlCond::ExpressionError => {}
         SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref_multi(c, e)),
+        SqlCond::IriCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref_multi(c, e)),
         SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             rewrite_parent_colref_multi(a, e);
             rewrite_parent_colref_multi(b, e);
@@ -539,6 +540,7 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
     match cond {
         SqlCond::ExpressionError => {}
         SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref(c, e)),
+        SqlCond::IriCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref(c, e)),
         SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
             rewrite_parent_colref(a, e);
             rewrite_parent_colref(b, e);
