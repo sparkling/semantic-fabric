@@ -4,7 +4,7 @@
 //!
 //! The scope binds one source ID, mapping, T-Box, compiler-safe schema, dialect,
 //! and cache. The scope carries deterministic content digests and an explicit
-//! epoch. No live reload path exists; later DDL does not advance a binding.
+//! epoch. Reload publishes a new immutable binding; later DDL never mutates one.
 //!
 //! **Sharp keying rule (ADR-0007):** parameterise *data* constants but key on
 //! *schema-selecting* constants (predicate IRIs and IRI-template constants — the
@@ -47,9 +47,8 @@ pub(crate) enum CompileProfileId {
 
 /// A compile-binding generation marker.
 ///
-/// The current server constructs one immutable generation and has no live
-/// reload/drift detector. A future reload path must build a new binding or bump
-/// this marker after observing a coherent replacement snapshot.
+/// Reload builds a new immutable binding after observing a coherent replacement
+/// snapshot. This marker never grants authority to mutate a leased generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Epoch(pub u64);
 
@@ -431,7 +430,7 @@ pub(crate) fn plan_key_for_profile(
 pub(crate) mod bounded_key;
 
 /// A bounded plan cache. Generic over the cached plan type `P` so the cache does
-/// not couple to the (large) plan struct. Bounded by `⟨T, M⟩` size via `capacity`
+/// not couple to the (large) plan struct. Entry capacity is not a total heap bound
 /// — backed by `quick_cache` (ADR-0007's named production drop-in): an
 /// approximately-LRU sharded cache that evicts individual cold entries under
 /// pressure, never the whole map at once (the prior `HashMap` + clear-on-overflow
@@ -452,11 +451,21 @@ impl<P: Clone> PlanCache<P> {
         self.inner.get(key)
     }
 
+    /// Request paths never wait on cache locks: contention is an optimization miss.
+    /// This does not govern hashing, comparisons or work after acquiring the lock.
+    fn get_if_uncontended(&self, key: &PlanKey) -> Option<P> {
+        self.inner.try_get(key).ok().flatten()
+    }
+
     /// Insert a compiled plan. Eviction (approximately-LRU, `quick_cache`) drops
-    /// individual cold entries as capacity is reached — the cache is
-    /// `⟨T, M⟩`-bounded, so eviction rarely fires in practice.
+    /// individual cold entries as entry capacity is reached.
     pub fn put(&self, key: PlanKey, plan: P) {
         self.inner.insert(key, plan);
+    }
+
+    /// Best-effort publication; the caller still owns its completed plan.
+    fn put_if_uncontended(&self, key: PlanKey, plan: P) {
+        drop(self.inner.try_insert(key, plan));
     }
 
     pub fn len(&self) -> usize {
@@ -471,3 +480,7 @@ impl<P: Clone> PlanCache<P> {
 #[cfg(test)]
 #[path = "cache_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cache_contention_tests.rs"]
+mod contention_tests;

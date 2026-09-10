@@ -377,8 +377,15 @@ root reentry, overflow and sticky cancellation/deadline causes. Later-phase HTTP
 tests calibrate prerequisite key work through a raw-populated identical warm hit.
 The upstream projection Vec remains infallible; physical allocator overgrant and
 cancellation inside its prepaid recursive scans are not governed by this change.
-Cache collision equality, insertion/eviction/destruction and remaining compiler
-phases stay open. `GovernedV1` is not activated; `l-query-budget` remains blocking.
+**Cache-lock update (2026-09-10):** controlled ordinary/security compilation now
+attempts each lookup/insertion lock once without waiting. Contention is an
+optimization miss/skipped write: authoritative compilation retains the same
+request control, exact key/security scope and separately owned result. Required
+real-shard-lock tests complete before release, preserve the old resident `Arc`,
+recover shared hits and retain budget/cancellation/deadline and policy-first errors.
+Raw APIs remain blocking and interoperable. Hashing/probing/collision equality,
+work inside an acquired lock, insertion allocation/eviction/destruction and other
+compiler phases remain open. `GovernedV1` stays dormant; `l-query-budget` blocks.
 
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,

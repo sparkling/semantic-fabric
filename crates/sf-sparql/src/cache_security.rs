@@ -173,6 +173,22 @@ impl SecurityPlanCache {
         self.inner.insert(key, plan);
     }
 
+    // Contention affects reuse only; keys and security identity remain exact.
+    fn get_if_uncontended(&self, key: &SecurityPlanKey) -> Option<SecurityCachedPlan> {
+        #[cfg(test)]
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.try_get(key).ok().flatten()
+    }
+
+    fn put_if_uncontended(&self, key: SecurityPlanKey, plan: SecurityCachedPlan) {
+        #[cfg(test)]
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Dropping a rejected cache clone cannot drop the caller's completed Arc.
+        drop(self.inner.try_insert(key, plan));
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.len()
@@ -279,7 +295,12 @@ impl SecurityScopedCompiler<'_> {
             ),
         };
         control.checkpoint().map_err(crate::Error::from)?;
-        if let Some(cached) = self.cache.get(&key) {
+        let cached = match work_control {
+            Some(_) => self.cache.get_if_uncontended(&key),
+            None => self.cache.get(&key),
+        };
+        control.checkpoint().map_err(crate::Error::from)?;
+        if let Some(cached) = cached {
             if cached.scope != self.binding.scope() {
                 return Err(SecurityCompileError::CacheScopeMismatch);
             }
@@ -300,15 +321,16 @@ impl SecurityScopedCompiler<'_> {
             None => self.binding.compile_parsed_uncached_shared(&query)?,
         };
         control.checkpoint().map_err(crate::Error::from)?;
-        self.cache.put(
-            key,
-            SecurityCachedPlan::from_shared(
-                self.binding.scope(),
-                profile,
-                security_identity,
-                Arc::clone(&plan),
-            ),
+        let cached = SecurityCachedPlan::from_shared(
+            self.binding.scope(),
+            profile,
+            security_identity,
+            Arc::clone(&plan),
         );
+        match work_control {
+            Some(_) => self.cache.put_if_uncontended(key, cached),
+            None => self.cache.put(key, cached),
+        }
         control.checkpoint().map_err(crate::Error::from)?;
         Ok(plan)
     }
@@ -322,3 +344,7 @@ impl SecurityScopedCompiler<'_> {
 #[cfg(test)]
 #[path = "cache_security_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cache_security_contention_tests.rs"]
+mod contention_tests;

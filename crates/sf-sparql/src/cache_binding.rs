@@ -17,8 +17,10 @@ use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 impl CompilerBinding {
     /// Carry request control into the already-metered normalization, lowering
     /// and nested-cascade operations on a cache miss, plus canonical key
-    /// output/growth/hash work on hits and misses. Parsing, formatter internals,
-    /// build/resolve and cache destruction are not fully governed by this seam.
+    /// output/growth/hash work on hits and misses. Cache locks are attempted once:
+    /// contention is a miss/skipped insertion, never a wait or a query error.
+    /// Parsing, formatter internals, build/resolve and cache lifecycle work are
+    /// not fully governed by this seam.
     /// Cache identity and semantics are unchanged: this does not activate
     /// `GovernedV1`. A shared hit performs no recursive plan clone to charge.
     /// Measurement limits protect each performed clone, not whole-plan admission.
@@ -54,7 +56,9 @@ impl CompilerBinding {
         let key =
             super::bounded_key::plan_key_with_work_control(query, self.scope(), profile, control)?;
         control.checkpoint()?;
-        if let Some(cached) = self.cache().get(&key) {
+        let cached = self.cache().get_if_uncontended(&key);
+        control.checkpoint()?;
+        if let Some(cached) = cached {
             if cached.scope() != self.scope() || cached.profile() != profile {
                 return Err(Error::Mapping(
                     "compiled-plan cache identity mismatch".into(),
@@ -65,7 +69,7 @@ impl CompilerBinding {
         }
         let plan = self.compile_parsed_uncached_shared_with_work_control(query, control)?;
         control.checkpoint()?;
-        self.cache().put(
+        self.cache().put_if_uncontended(
             key,
             CachedPlan::from_shared(self.scope(), profile, Arc::clone(&plan)),
         );
