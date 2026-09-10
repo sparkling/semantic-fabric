@@ -27,23 +27,23 @@ const lockfile = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'ut
 const manifest = JSON.parse(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8')) as Record<string, unknown>;
 
 const expectedRuntime = {
-  '@metaharness/harness': '0.2.0',
-  '@metaharness/host-claude-code': '0.1.2',
-  '@metaharness/host-codex': '0.1.2',
-  '@metaharness/router': '0.4.0',
+  '@metaharness/harness': 'latest',
+  '@metaharness/host-claude-code': 'latest',
+  '@metaharness/host-codex': 'latest',
+  '@metaharness/router': 'latest',
 };
 
 const expectedReadinessPackages = {
   'node_modules/metaharness': {
-    version: '0.3.0',
-    resolved: 'https://registry.npmjs.org/metaharness/-/metaharness-0.3.0.tgz',
-    integrity: 'sha512-GgBCEGZe9D+aKrO4fibZNtpsrsuWqG6206CG1Ro0kH5gTn4oqpwQVaE0ig21/fSrx0Y1WE1gHMzwmNq6nV04Ow==',
+    version: '0.4.16',
+    resolved: 'https://registry.npmjs.org/metaharness/-/metaharness-0.4.16.tgz',
+    integrity: 'sha512-dfpuU2pqZow4mi7WYQLRs4z914v8fpA7lWh5iw2lNl6yinu+iKsFFbQheVKZULDAmvE8/LxiLg9Rx48iFsEeaQ==',
     dev: true,
   },
   'node_modules/@metaharness/darwin': {
-    version: '0.2.8',
-    resolved: 'https://registry.npmjs.org/@metaharness/darwin/-/darwin-0.2.8.tgz',
-    integrity: 'sha512-B8tF7IrrSxwKS6fEPEL6N2Juth9WWn+hppLUtUYPTJ2vcHzzZPIg2cS5T9qTyNNuANlTSWnQHnvzlfvYdGNfeQ==',
+    version: '0.10.2',
+    resolved: 'https://registry.npmjs.org/@metaharness/darwin/-/darwin-0.10.2.tgz',
+    integrity: 'sha512-Glczy9YJDLf5x4HlfVuQVbZuPuue45K+8ohfLixZPJ18oc0Q8RR+BcsopHUQsL4hBkvs3YPXUyZ16piDJQp4gw==',
     dev: true,
   },
 };
@@ -58,16 +58,16 @@ describe('private package boundary', () => {
     expect(packageJson.scripts).toMatchObject({ prepublishOnly: 'node scripts/deny-publish.mjs' });
   });
 
-  it('pins the verified runtime packages exactly', () => {
+  it('tracks the verified runtime packages through latest tags', () => {
     expect(packageJson.dependencies).toEqual(expectedRuntime);
     expect(packageJson.dependencies).not.toHaveProperty('@metaharness/kernel');
     expect(packageJson.devDependencies).not.toHaveProperty('@metaharness/darwin');
-    expect(packageJson.devDependencies).toMatchObject({ vite: '6.4.3', vitest: '3.2.7' });
+    expect(packageJson.devDependencies).toMatchObject({ vite: 'latest', vitest: 'latest' });
     for (const version of Object.values({
       ...(packageJson.dependencies as object),
       ...(packageJson.devDependencies as object),
     })) {
-      expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(version).toBe('latest');
     }
   });
 
@@ -117,13 +117,13 @@ describe('lockfile supply chain', () => {
   });
 
   it('binds the readiness CLI and Darwin engine to reviewed registry artifacts', () => {
-    expect(packageJson.devDependencies).toHaveProperty('metaharness', '0.3.0');
-    expect(lockfile.packages['']?.devDependencies).toHaveProperty('metaharness', '0.3.0');
+    expect(packageJson.devDependencies).toHaveProperty('metaharness', 'latest');
+    expect(lockfile.packages['']?.devDependencies).toHaveProperty('metaharness', 'latest');
     for (const [path, expected] of Object.entries(expectedReadinessPackages)) {
       expect(lockfile.packages[path], path).toMatchObject(expected);
     }
     expect(lockfile.packages['node_modules/metaharness']?.dependencies)
-      .toHaveProperty('@metaharness/darwin', '^0.2.2');
+      .toHaveProperty('@metaharness/darwin', '^0.10.0');
   });
 });
 

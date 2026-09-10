@@ -13,17 +13,17 @@
     "prepublishOnly": "node scripts/deny-publish.mjs"
   },
   "dependencies": {
-    "@metaharness/harness": "0.2.0",
-    "@metaharness/host-claude-code": "0.1.2",
-    "@metaharness/host-codex": "0.1.2",
-    "@metaharness/router": "0.4.0"
+    "@metaharness/harness": "latest",
+    "@metaharness/host-claude-code": "latest",
+    "@metaharness/host-codex": "latest",
+    "@metaharness/router": "latest"
   },
   "devDependencies": {
-    "@types/node": "20.19.43",
-    "metaharness": "0.3.0",
-    "typescript": "5.9.3",
-    "vite": "6.4.3",
-    "vitest": "3.2.7"
+    "@types/node": "latest",
+    "metaharness": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
   },
   "engines": {
     "node": ">=20.0.0"
