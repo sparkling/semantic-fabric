@@ -2,14 +2,17 @@
 import { closeSync, existsSync, openSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { hash, VerifierRegistry, type Verdict } from '@metaharness/harness';
-import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier,
+import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, executorIdentity,
   type DeliveryTask, type DeliveryRoute, type NativeHandoff } from './delivery-contracts.js';
 import { atomicJson, evidenceDirectory, git, mainRoot, outsideDigest, readJson,
   sourceSnapshot, withOperationLock, recoverOperation } from './delivery-workspace.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { buildCheckEnvironment, logDigest, runCommand } from './delivery-process.js';
+import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow } from './delivery-workflow-contracts.js';
+import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } from './delivery-workflow.js';
+import { verifyNativeStage } from './delivery-stage.js';
 
-interface CheckResult {
+export interface CheckResult {
   id: string; attempt: number; argv: string[]; cwd: string; startedAt: string; durationMs: number;
   sourceBefore: string; sourceAfter: string; exitCode: number | null; signal: string | null;
   stdout: string; stderr: string; stdoutDigest: string; stderrDigest: string; error?: string;
@@ -24,6 +27,7 @@ export interface DeliveryRun {
   events: { at: string; kind: string; reason: string }[];
   adoptedSource: Record<string, string | null>;
   commit?: string; verdict?: Verdict; digest?: string;
+  workflow?: DeliveryWorkflow;
 }
 
 /** Main-only development harness. The native host still owns editing and spawning.
@@ -94,6 +98,7 @@ export class DeliveryHarness {
       const run: DeliveryRun = { schemaVersion: 1, task, route: selectDeliveryRoute(task),
         baseCommit: git(this.root, 'rev-parse', 'HEAD'), outsideDigest: outsideDigest(snapshot, task.scope),
         startedAt: now, updatedAt: now, status: 'awaiting-native', handoffs: [], checks: [], events: [],
+        workflow: { requests: [], results: [], invalidated: [] },
         adoptedSource: Object.fromEntries([...dirty].map(p => [p, snapshot.files[p] ?? null])) };
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
       this.save(run); this.claim(task.id); return run;
@@ -107,7 +112,7 @@ export class DeliveryHarness {
       if (hash(selected) !== hash(run.route) || handoff.authentication !== 'native-subscription') {
         throw new Error('DELIVERY_NATIVE_ROUTE_MISMATCH');
       }
-      nonempty(handoff.executorId, 'executorId'); nonempty(handoff.observation, 'native observation');
+      executorIdentity(handoff.executorId); nonempty(handoff.observation, 'native observation');
       run.handoffs.push({ ...selected, executorId: handoff.executorId, authentication: handoff.authentication,
         observation: handoff.observation, at: new Date().toISOString() });
       run.status = 'active';
@@ -146,20 +151,99 @@ export class DeliveryHarness {
       return this.save(run);
     });
   }
+  private async validChecks(run: DeliveryRun, digest: string): Promise<Set<string>> {
+    const valid = new Set<string>();
+    for (const check of run.task.checks) {
+      const latest = run.checks.filter(c => c.id === check.id).at(-1);
+      const start = run.events.filter(e => e.kind === 'check-start' && e.reason.startsWith(`${check.id}:`)).at(-1);
+      if (!latest?.passed || start?.reason !== `${check.id}:${latest.attempt}`
+        || latest.sourceBefore !== digest || latest.sourceAfter !== digest
+        || latest.environmentDigest !== hash(buildCheckEnvironment())) continue;
+      let intact = true;
+      for (const [path, expected] of [[latest.stdout, latest.stdoutDigest], [latest.stderr, latest.stderrDigest]]) {
+        if (!existsSync(path) || await logDigest(path) !== expected) intact = false;
+      }
+      if (intact) valid.add(check.id);
+    }
+    return valid;
+  }
   private async verdict(run: DeliveryRun, digest: string): Promise<Verdict> {
+    const valid = await this.validChecks(run, digest);
     const registry = new VerifierRegistry();
     for (const check of run.task.checks) registry.register({ id: check.id, kind: 'delivery', check: async () => {
       const failed = { pass: false, score: 0, reasons: [`${check.id}: missing, failed, stale, or changed evidence`] };
-      const latest = run.checks.filter(c => c.id === check.id).at(-1);
-      if (!latest?.passed || latest.sourceBefore !== digest || latest.sourceAfter !== digest
-        || latest.environmentDigest !== hash(buildCheckEnvironment())) return failed;
-      for (const [path, expected] of [[latest.stdout, latest.stdoutDigest], [latest.stderr, latest.stderrDigest]]) {
-        if (!existsSync(path) || await logDigest(path) !== expected) return failed;
-      }
-      return { pass: true, score: 1, reasons: [] };
+      return valid.has(check.id) ? { pass: true, score: 1, reasons: [] } : failed;
     } });
+    // Historical records remain readable; new begins always require the workflow.
+    if (run.workflow) registry.register({ id: 'native-workflow', kind: 'delivery', check: async () => ({
+      pass: workflowReady(run, digest), score: workflowReady(run, digest) ? 1 : 0,
+      reasons: workflowReady(run, digest) ? [] : ['missing or stale implementation/independent review'],
+    }) });
     if (!registry.forKinds().length) throw new Error('DELIVERY_EMPTY_VERIFIER_SET');
     return registry.run(run, undefined, ['delivery']);
+  }
+  async next(id: string, owner: string): Promise<DeliveryAction> {
+    return withOperationLock(this.directory, async () => {
+      const run = this.read(id);
+      if (run.task.owner !== owner) throw new Error('DELIVERY_WRITER_MISMATCH');
+      if (run.status === 'paused') return { kind: 'paused', reason: run.events.at(-1)?.reason ?? 'paused' };
+      this.own(run, owner);
+      const source = this.source(run);
+      const action = nextWorkflowAction(run, source, await this.validChecks(run, source));
+      this.save(run); return action;
+    });
+  }
+  async advance(id: string, owner: string, signal?: AbortSignal): Promise<DeliveryAction> {
+    for (;;) {
+      const action = await this.next(id, owner);
+      if (action.kind !== 'check') return action;
+      const run = await this.check(id, owner, action.checkId, signal);
+      if (signal?.aborted || run.checks.at(-1)?.error === 'cancelled') {
+        await this.pause(id, owner, 'deterministic check cancelled; explicit resume required');
+        return { kind: 'paused', reason: 'deterministic check cancelled' };
+      }
+    }
+  }
+  async submit(id: string, owner: string, input: unknown): Promise<DeliveryRun> {
+    return withOperationLock(this.directory, async () => {
+      const run = this.read(id); this.own(run, owner);
+      const source = this.source(run), response = parseStageResponse(input);
+      const workflow = run.workflow;
+      const request = workflow?.requests.find(r => r.id === response.requestId);
+      if (!workflow || !request || workflow.invalidated.includes(request.id)
+        || workflow.results.some(r => r.request.id === request.id)) throw new Error('DELIVERY_PENDING_REQUEST_REQUIRED');
+      if (request.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_STALE_PREREQUISITES');
+      if (response.sourceDigest !== source) throw new Error('DELIVERY_RESPONSE_SOURCE_MISMATCH');
+      const native = response.native;
+      if (hash(route({ host: native.host, model: native.model, effort: native.effort })) !== hash(request.route)) {
+        throw new Error('DELIVERY_NATIVE_ROUTE_MISMATCH');
+      }
+      if (request.stage === 'implementation' && (native.executorId !== request.executorId
+        || native.executorId !== run.handoffs.at(-1)?.executorId)) throw new Error('DELIVERY_IMPLEMENTATION_EXECUTOR_MISMATCH');
+      if (request.stage === 'review') {
+        if (run.handoffs.some(h => h.executorId === native.executorId)) throw new Error('DELIVERY_INDEPENDENT_REVIEW_REQUIRED');
+        const impl = workflow.results.filter(r => r.request.stage === 'implementation'
+          && r.response.outcome !== 'unavailable' && r.response.outcome !== 'cancelled').at(-1);
+        if (!impl?.accepted || impl.response.sourceDigest !== source || request.sourceDigest !== source
+          || (await this.validChecks(run, source)).size !== run.task.checks.length
+          || hash(request.prerequisiteDigests) !== hash([hash(impl), ...checkDigests(run)])) {
+          throw new Error('DELIVERY_STALE_REVIEW');
+        }
+      }
+      const noProgress = request.stage === 'implementation' && request.repair
+        && request.sourceDigest === source && response.outcome !== 'unavailable' && response.outcome !== 'cancelled';
+      const reasons = noProgress ? ['DELIVERY_REPAIR_NO_PROGRESS: change the scoped source before resubmitting a repair'] : [];
+      if (request.stage === 'implementation' && response.outcome === 'changes-requested') reasons.push('implementation did not complete');
+      workflow.results.push(await verifyNativeStage(request, response, reasons));
+      delete run.verdict;
+      if (noProgress || response.outcome === 'unavailable' || response.outcome === 'cancelled') {
+        run.status = 'paused';
+        run.events.push({ at: new Date().toISOString(), kind: 'pause', reason:
+          `${native.host} ${native.model}: ${reasons.join('; ') || response.summary}` });
+        this.save(run); unlinkSync(this.activeFile); return run;
+      }
+      return this.save(run);
+    });
   }
   async verify(id: string, owner: string): Promise<DeliveryRun> {
     return withOperationLock(this.directory, async () => {
@@ -200,6 +284,7 @@ export class DeliveryHarness {
       this.source(run);
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
       run.status = 'awaiting-native';
+      this.invalidatePending(run);
       run.events.push({ at: new Date().toISOString(), kind: 'resume', reason: 'new native handoff required' });
       this.save(run); this.claim(id); return run;
     });
@@ -219,9 +304,14 @@ export class DeliveryHarness {
         this.source(run);
         if (!active) this.claim(id);
         run.status = 'awaiting-native';
+        this.invalidatePending(run);
       }
       run.events.push({ at: new Date().toISOString(), kind: 'reconcile', reason: `${nonce}: ${reason}` });
       return this.save(run);
     });
+  }
+  private invalidatePending(run: DeliveryRun): void {
+    for (const request of run.workflow?.requests ?? []) if (!run.workflow!.results.some(r => r.request.id === request.id)
+      && !run.workflow!.invalidated.includes(request.id)) run.workflow!.invalidated.push(request.id);
   }
 }

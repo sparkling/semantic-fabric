@@ -13,7 +13,7 @@ implements: []
 
 # Dual-host Ruflo engineering MetaHarness
 
-> **V1 execution amendment (2026-09-10):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) and the user's explicit correction require the main-only delivery harness for every building task, with native Codex/Claude executors, explicit model/effort handoffs, actual command results and commit-bound verification. See [delivery usage](../../coding-harness/README.md#mandatory-delivery-path). The closed candidate transaction and rubric below remain an optional historical experiment; they are not the daily path. Worktree-creating launchers remain prohibited; evolution stays post-1.0.
+> **V1 execution amendment (2026-09-10):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) requires the main-only delivery harness for every build. `DeliveryHarness` durably sequences source-bound native requests, actual checks, feedback-directed repair and independent review; `HarnessKernel` verifies each ready stage. The existing native host executes requests; no second host, new MCP server or autonomous publication is implied. Upstream's sequential kernel neither supplies failed-verifier feedback on retry nor provides durable resume; prerequisite admission and recovery remain explicit outer-controller responsibilities. See [delivery usage](../../coding-harness/README.md#mandatory-delivery-path). The closed transaction below remains optional/historical, worktree launchers prohibited and evolution post-1.0.
 
 ## Context and problem statement
 
@@ -44,7 +44,7 @@ product-runtime, commit, merge, push, publish, deploy, or promotion authority.
 
 ### 1. Runtime and orchestration
 
-The closed experiment uses the pinned `@metaharness/harness` runtime, including:
+The closed experiment uses the lockfile-resolved `@metaharness/harness` runtime, including:
 
 - `HarnessKernel`, `AlgorithmRouter`, a persistent run-scoped `AgentPool`,
   `PolicyGate`, and `VerifierRegistry`;
@@ -56,8 +56,8 @@ The closed experiment uses the pinned `@metaharness/harness` runtime, including:
 The authoring baseline verified the public packages
 `@metaharness/harness@0.2.0`, `@metaharness/router@0.4.0`,
 `@metaharness/host-claude-code@0.1.2`, and
-`@metaharness/host-codex@0.1.2`. The implementation pins exact versions after
-export and compatibility verification; it does not retain the obsolete direct
+`@metaharness/host-codex@0.1.2`. Per user direction on 2026-09-10, manifests use
+`latest`; lockfiles retain exact tested resolutions after compatibility checks, not exact manifest pins. The development CLI now resolves to `metaharness@0.4.16`. We do not retain the obsolete direct
 `@metaharness/kernel` dependency merely because the old scaffold used it.
 
 Use the real `@metaharness/router` for quality-first routing. At cold start,

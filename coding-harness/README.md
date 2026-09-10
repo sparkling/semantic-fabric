@@ -17,10 +17,11 @@ publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 ## Mandatory delivery path
 
 Use one task per coherent requirement closure. The existing native conversation
-is the executor; this package supplies its persistent delivery lifecycle and the
-installed `@metaharness/harness` `VerifierRegistry`. This is a project-specific
-adapter, not a claim that upstream generates our native conversation or that the
-historical `HarnessKernel`/learned router drives it.
+is the executor; `DeliveryHarness` supplies durable sequencing and the installed
+`@metaharness/harness` kernel verifies each ready native stage. The outer controller
+owns prerequisites, repair feedback and recovery. Upstream kernel steps are sequential,
+its internal retries do not supply failed-verifier feedback, and its receipt chain
+alone is not crash-resume. We therefore reuse it per stage, not as another build daemon.
 
 1. Use Ruflo MCP to recall relevant context and create an assigned task. Define
    exact file scope, requirement, owner/thread and acceptance/build commands.
@@ -31,7 +32,11 @@ historical `HarnessKernel`/learned router drives it.
 3. The native host starts the selected subscription agent (or retains the selected
    main model), then `bind` records its actual model, effort, native executor ID
    and observation. A mismatched handoff is rejected; no silent substitution.
-4. That sole writer edits only its scope. All build/test commands run via `check`.
+4. `advance` returns a durable `native` implementation request. The existing host
+   executes it with normal tools; `submit` binds the result to that request, actual
+   route, executor and resulting source digest. The sole writer edits only its scope.
+   Subsequent `advance` calls run eligible declared checks automatically, stopping at
+   the next native request or a hold. Individual checks remain available via `check`.
    Checks execute sequentially, without shell expansion, and retain each actual
    result, duration, source/environment hashes and private output logs—including
    failures. Each check defaults to 30 minutes and 10 MB of combined output;
@@ -39,9 +44,16 @@ historical `HarnessKernel`/learned router drives it.
    controls up to 24 hours/100 MB, never subscription budgets. Cancellation,
    timeout or overflow stops the process group and records failure. An unconfirmed
    surviving group retains the operation record for recovery. Log hashing is streamed.
-5. `verify` requires every declared acceptance/build check to pass on unchanged
-   source with unchanged logs. A missing, failed or stale check returns nonzero.
-6. The integration owner reviews and commits only the verified scope on `main`.
+5. Failed checks return an implementation repair request containing the failure and
+   hash-bound diagnostic log paths. Failed review returns the reviewer's actual issues.
+   Dependent stages are not dispatched until their prerequisites pass. A repair with
+   no source progress pauses for explicit intervention. After passing checks, the host
+   assigns the returned review request to an independent native executor: Sol medium
+   or Sonnet by default, or the task's explicit `reviewer: {host, model, effort}`.
+   Review is read-only, must use a different executor ID from every implementation
+   handoff, and is bound to the source and exact prerequisite results. `verify`
+   requires both stages and every check; missing, failed or stale evidence fails.
+6. The integration owner commits only the verified scope on `main`.
    `finish` requires that exact next commit, matching source and passing evidence.
    Mirror the resulting commit, check results and measured durations to the Ruflo
    task and memory through MCP; read back the stored result. Memory outages are
@@ -52,8 +64,11 @@ Run commands from `coding-harness/` after its normal local build:
 ```bash
 npm run delivery -- /absolute/repo begin /absolute/task.json
 npm run delivery -- /absolute/repo bind task-id owner /absolute/native.json
-npm run delivery -- /absolute/repo check task-id owner build
-npm run delivery -- /absolute/repo check task-id owner public
+npm run delivery -- /absolute/repo advance task-id owner
+# Existing native host performs the returned request, then writes its response.
+npm run delivery -- /absolute/repo submit task-id owner /absolute/response.json
+# Repeat advance/submit for any repair and the independent review.
+npm run delivery -- /absolute/repo advance task-id owner
 npm run delivery -- /absolute/repo verify task-id owner
 # Integration owner commits the scoped changes using normal Git tools.
 npm run delivery -- /absolute/repo finish task-id owner FULL_COMMIT_SHA
@@ -79,6 +94,34 @@ Example task (paths/checks must match the actual change, not this example):
 }
 ```
 
+Every `native` action returns a request with its ID, task/thread/base commit, stage,
+attempt, requested route, starting source digest, exact scope, prerequisite digests
+and failure feedback. `next` inspects/persists the next action without running checks;
+repeating it or restarting the CLI returns the same still-valid pending request.
+There is no polling process or second conversation resume. Submit this strict shape
+(replace placeholders with the returned ID, actual source digest and native metadata):
+
+```json
+{
+  "schemaVersion": 1,
+  "requestId": "64-character-request-digest",
+  "sourceDigest": "64-character-resulting-source-digest",
+  "native": {"host": "codex", "model": "gpt-5.6-sol", "effort": "medium", "executorId": "observed-native-executor", "authentication": "native-subscription", "observation": "actual native host metadata"},
+  "outcome": "completed",
+  "summary": "Changes made or independent review conclusion",
+  "issues": []
+}
+```
+
+Obtain the current digest with the exported `sourceSnapshot(repo).digest` from
+`dist/delivery-workspace.js` (not a Git tree hash). `changes-requested` requires
+nonempty `issues`; `completed` requires none. `unavailable` and `cancelled` persist
+the exact native error in `summary` and pause; neither triggers a fallback.
+Rejected/duplicate/stale submissions do not advance the task. Source drift invalidates
+downstream results; a newer incomplete check cannot reuse an older pass. Completed
+pre-workflow records remain historical, not retroactive claims of kernel execution;
+`next` explicitly enrolls a still-active legacy run into the workflow.
+
 Native binding fields are `host`, `model`, `effort`, `executorId`,
 `authentication: "native-subscription"`, and `observation` (the actual host
 metadata/error, never credentials). Default Codex routes are Luna low for
@@ -95,6 +138,9 @@ provider keys, OpenRouter fallback, inferred savings, or automatic escalation.
 `pause <id> <owner> <exact reason>` releases the claim without discarding work;
 `resume <id> <owner>` requires unchanged base/outside scope and a new native
 handoff. On native unavailability, pause and report exact client/model/error.
+Resume invalidates pending native requests and requires a fresh bound executor;
+it preserves prior failures and only reuses unchanged evidence. A review transport
+failure resumes at review, not as a request to edit already-passing source.
 On an explicit user review hold, stop: neither a scheduler nor an active goal
 releases that hold. A stale operation lock after a hard crash requires checking
 the recorded process and any child before explicit recovery; it is never
@@ -111,7 +157,9 @@ they are scoped development evidence, not a clean release-candidate attestation.
 Linux `flock` and `/proc` provide operation exclusion and process identity;
 the OS lease also covers reconciliation and releases on owner exit.
 The native identity observation is trusted host/operator input, not a provider
-signature. This cooperative harness does not sandbox arbitrary trusted build
+signature. Request hashes and receipts establish local consistency, not proof that
+a model actually performed a review. Host dispatch and the commit decision remain
+the accountable integrator's responsibility. This cooperative harness does not sandbox arbitrary trusted build
 scripts or prevent a human/tool from bypassing it: canonical agent instructions
 require using it. Acceptance-command selection remains the owner's correctness
 responsibility; a zero exit code alone cannot prove a meaningful test selection.
@@ -123,6 +171,15 @@ handoff observations, or logs. Model transport is owned by the native host.
 The real closed-candidate isolation and replay checks below are not weakened.
 
 ## Local verification
+
+Package manifests deliberately use `latest` (user direction, 2026-09-10).
+The committed lockfile records the exact dependency resolution used by `npm ci`,
+builds and receipts; do not replace those manifest selectors with exact version pins.
+Dependency updates need a fresh lockfile and compatibility checks, not automatic
+installation during a task. Current resolution: harness 0.2.0, router 0.4.0,
+both native-host adapters 0.1.2, and the development CLI `metaharness` 0.4.16.
+The updated scanner exposed a broad `.claude` script allowance; that grant and the
+obsolete Ruflo CLI allowance are removed. Live Ruflo access remains MCP-only.
 
 ```bash
 umask 0022
@@ -185,6 +242,12 @@ native subscription/model unavailability pauses with the exact client error.
 
 ## Main modules
 
+- `delivery-runtime.ts`, `delivery-workflow.ts`, and `delivery-cli.ts` own the daily
+  durable task/check/handoff loop; `delivery-stage.ts` composes the actual one-stage
+  kernel/pool/policy/verifiers. Internal replay of an unchanged response is disabled;
+  this is not a ceiling on subscription requests. The host uses live structured
+  Ruflo MCP for outcome synchronization; this CLI is not an MCP server and does not
+  open managed memory or pretend local receipts prove remote synchronization.
 - `kernel.ts` composes the real `HarnessKernel`, `AlgorithmRouter`,
   `VerifierRegistry`, `PolicyGate`, persistent routed pool, critique, consensus,
   and memory hooks.

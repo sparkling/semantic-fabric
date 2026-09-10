@@ -26,6 +26,7 @@ export interface DeliveryTask {
   explicitUltra?: boolean;
   rufloTaskId?: string;
   adoptExistingChanges?: string[];
+  reviewer?: DeliveryRoute;
 }
 export interface NativeHandoff extends DeliveryRoute {
   executorId: string;
@@ -42,6 +43,11 @@ export function nonempty(value: unknown, label: string): string {
 export function identifier(value: unknown): string {
   const id = nonempty(value, 'id');
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(id)) throw new Error('DELIVERY_INVALID_ID');
+  return id;
+}
+export function executorIdentity(value: unknown): string {
+  const id = nonempty(value, 'executorId');
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9:/._-]{0,255}$/.test(id)) throw new Error('DELIVERY_INVALID_EXECUTOR_ID');
   return id;
 }
 export function route(value: unknown): DeliveryRoute {
@@ -86,7 +92,7 @@ export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
 export function parseDeliveryTask(value: unknown): DeliveryTask {
   const t = asRecord(value, 'delivery task');
   const required = ['schemaVersion', 'id', 'requirement', 'owner', 'thread', 'taskClass', 'host', 'scope', 'checks'];
-  const optional = ['requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges'];
+  const optional = ['requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges', 'reviewer'];
   for (const key of required) if (!(key in t)) throw new Error(`DELIVERY_MISSING:${key}`);
   for (const key of Object.keys(t)) if (![...required, ...optional].includes(key)) {
     throw new Error(`DELIVERY_UNKNOWN_FIELD:${key}`);
@@ -153,6 +159,10 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
   if (t.rufloTaskId !== undefined) task.rufloTaskId = nonempty(t.rufloTaskId, 'rufloTaskId');
   if (t.preserveMainModel !== undefined) task.preserveMainModel = t.preserveMainModel as boolean;
   if (t.explicitUltra !== undefined) task.explicitUltra = t.explicitUltra as boolean;
+  if (t.reviewer !== undefined) {
+    task.reviewer = route(t.reviewer);
+    if (task.reviewer.effort === 'ultra' && !task.explicitUltra) throw new Error('DELIVERY_ULTRA_REQUIRES_EXPLICIT_REQUEST');
+  }
   selectDeliveryRoute(task);
   return task;
 }

@@ -5,8 +5,6 @@
   },
   "permissions": {
     "allow": [
-      "Bash(npx @claude-flow*)",
-      "Bash(node .claude/*)",
       "mcp__claude-flow__:*"
     ],
     "deny": [

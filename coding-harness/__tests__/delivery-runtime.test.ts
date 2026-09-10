@@ -9,6 +9,7 @@ import { parseDeliveryTask, selectDeliveryRoute, type DeliveryTask } from '../sr
 import { git, withOperationLock } from '../src/delivery-workspace.js';
 import { deliveryCli } from '../src/delivery-cli.js';
 import { buildCheckEnvironment } from '../src/delivery-process.js';
+import { responseFor } from './delivery-workflow-fixtures.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -36,7 +37,15 @@ async function started() {
   const f = fixture(); await f.harness.begin(f.task); await f.harness.bind(f.task.id, 'root', binding); return f;
 }
 async function checks(harness: DeliveryHarness) {
+  const before = await harness.next('task-1', 'root');
+  if (before.kind === 'native' && before.request.stage === 'implementation') {
+    await harness.submit('task-1', 'root', responseFor(harness, before.request));
+  }
   await harness.check('task-1', 'root', 'build'); await harness.check('task-1', 'root', 'public');
+  const after = await harness.next('task-1', 'root');
+  if (after.kind === 'native' && after.request.stage === 'review') {
+    await harness.submit('task-1', 'root', responseFor(harness, after.request));
+  }
 }
 
 describe('mandatory main-only delivery harness', () => {

@@ -17,6 +17,8 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/delivery-runtime.ts', 'coding-harness/src/delivery-workspace.ts',
   'coding-harness/src/delivery-process.ts',
   'coding-harness/__tests__/delivery-runtime.test.ts',
+  'coding-harness/__tests__/delivery-workflow.test.ts', 'coding-harness/__tests__/delivery-workflow-fixtures.ts',
+  'coding-harness/src/delivery-stage.ts', 'coding-harness/src/delivery-workflow.ts', 'coding-harness/src/delivery-workflow-contracts.ts',
   ...PROGRAMME_CAPTURE_RUST_SUPERVISOR_PROTECTED_PATHS_V1,
   'docs/adr/ADR-0055-v1-product-completion-and-release-profile.md',
   'tests/sparql/protocol/supported-surface-v1.tsv',
