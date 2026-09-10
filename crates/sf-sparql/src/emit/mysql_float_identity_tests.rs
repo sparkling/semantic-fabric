@@ -459,8 +459,17 @@ fn float_template_fallback_and_rendered_pool_cannot_bypass_authority() {
         }
         assert!(validate_union(&[branch.clone()], Dialect::MySql, &catalog).is_ok());
         assert!(
-            validate_union(&[branch.clone(), branch], Dialect::MySql, &catalog).is_err(),
-            "rendered text cannot conceal native floating lineage in a pool"
+            validate_union(&[branch.clone(), branch.clone()], Dialect::MySql, &catalog).is_ok(),
+            "decoder-qualified static IRIs are text before native pooling"
+        );
+        let mut unqualified = branch.clone();
+        let ScanSource::Projection { columns, .. } = &mut unqualified.core[0].source else {
+            unreachable!()
+        };
+        columns[0].1 = TermMap::Template(template.clone(), TermSpec::plain_literal());
+        assert!(
+            validate_union(&[branch, unqualified], Dialect::MySql, &catalog).is_err(),
+            "unqualified rendering still cannot conceal floating lineage"
         );
     }
 }

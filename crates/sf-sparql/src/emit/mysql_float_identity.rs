@@ -86,7 +86,9 @@ pub(in crate::emit) fn template_comparison(
         return Ok(None);
     };
     if dialect != Dialect::MySql
-        || !(template_has_float(left, *a, actuals) || template_has_float(right, *b, actuals))
+        || !(template_has_float(left, *a, actuals) || template_has_float(right, *b, actuals)
+            || [(left, a), (right, b)].into_iter().any(|(parts, alias)| parts.iter().any(|part|
+                matches!(part, sf_core::ir::Segment::Column(name) if iri_cmp::unreserved_column(&ColRef::new(*alias, name.clone()), actuals)))))
     {
         return Ok(None);
     }
@@ -191,8 +193,14 @@ fn has_rendered_float(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
             let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
             columns.iter().any(|(_, term)| {
                 matches!(term,
-                TermMap::Template(template, _)
-                    if template_has_float(template.segments(), input.alias, &actuals))
+                TermMap::Template(template, spec)
+                    if template_has_float(template.segments(), input.alias, &actuals)
+                        && !iri_cmp::qualified_static_template(
+                            template,
+                            spec,
+                            dialect,
+                            &actuals[&input.alias],
+                        ))
             }) || has_rendered_float(input, dialect, catalog)
         }
         ScanSource::RefAtom { input, .. } => input

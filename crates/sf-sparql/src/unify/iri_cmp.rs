@@ -44,6 +44,7 @@ pub(super) fn filter(
     b: &Expression,
     op: CmpOp,
     bindings: &BTreeMap<String, TermDef>,
+    dialect: Dialect,
 ) -> Option<SqlCond> {
     let from_def = |def: &TermDef| match def {
         TermDef::Derived { term_map, alias } => operand(term_map, *alias),
@@ -56,9 +57,20 @@ pub(super) fn filter(
         _ => None,
     };
     let (left, right) = (from_expr(a)?, from_expr(b)?);
-    let single_slot_constant = |template: &IriOperand, constant: &IriOperand| {
-        matches!((template, constant), (IriOperand::Template { parts, base: None }, IriOperand::Constant(_))
-            if parts.iter().filter(|part| matches!(part, crate::iq::iri_cmp::IriPart::Column(_))).count() == 1)
+    let template_constant = |template: &IriOperand, constant: &IriOperand| {
+        // Forward identity encodes every slot; unlike inverse template matching,
+        // it need not recover a unique source value from the constant. An outer
+        // MySQL filter pushed into a rendered UNION may encounter multiple slots.
+        // Other dialects retain the existing single-slot admission boundary.
+        matches!(
+            (template, constant),
+            (
+                IriOperand::Template { parts, base: None },
+                IriOperand::Constant(_)
+            )
+            if dialect == Dialect::MySql
+                || parts.iter().filter(|part| matches!(part, crate::iq::iri_cmp::IriPart::Column(_))).count() == 1
+        )
     };
     if [&left, &right].iter().all(|operand| {
         matches!(
@@ -68,8 +80,8 @@ pub(super) fn filter(
     }) && [&left, &right]
         .iter()
         .any(|op| matches!(op, IriOperand::Template { .. }))
-        && !single_slot_constant(&left, &right)
-        && !single_slot_constant(&right, &left)
+        && !template_constant(&left, &right)
+        && !template_constant(&right, &left)
     {
         return None; // Preserve the qualified static/native lowering.
     }
@@ -129,6 +141,68 @@ mod tests {
             })
             .collect();
         let variable = |name| Expression::Variable(Variable::new(name).unwrap());
-        assert!(filter(&variable("a"), &variable("b"), CmpOp::Eq, &bindings).is_none());
+        for dialect in [Dialect::Sqlite, Dialect::MySql, Dialect::Postgres] {
+            assert!(filter(
+                &variable("a"),
+                &variable("b"),
+                CmpOp::Eq,
+                &bindings,
+                dialect
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn multi_slot_constant_filter_uses_forward_identity_in_both_directions() {
+        let bindings = BTreeMap::from([(
+            "o".into(),
+            TermDef::Derived {
+                term_map: map("http://ex/{a}/{b}", TermSpec::iri()),
+                alias: 3,
+            },
+        )]);
+        let variable = Expression::Variable(Variable::new("o").unwrap());
+        let constant = Expression::NamedNode(sf_core::NamedNode::new("http://ex/a%2Fb/").unwrap());
+        for (a, b) in [(&variable, &constant), (&constant, &variable)] {
+            assert!(matches!(
+                filter(a, b, CmpOp::Eq, &bindings, Dialect::MySql),
+                Some(SqlCond::IriCmp(_))
+            ));
+            assert!(matches!(
+                filter(a, b, CmpOp::Ne, &bindings, Dialect::MySql),
+                Some(SqlCond::Not(_))
+            ));
+            assert!(matches!(
+                filter(a, b, CmpOp::Lt, &bindings, Dialect::MySql),
+                Some(SqlCond::ExpressionError)
+            ));
+            for dialect in [Dialect::Sqlite, Dialect::Postgres] {
+                for op in [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt] {
+                    assert!(filter(a, b, op, &bindings, dialect).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_slot_constant_filter_remains_available_across_dialects() {
+        let bindings = BTreeMap::from([(
+            "o".into(),
+            TermDef::Derived {
+                term_map: map("http://ex/{a}", TermSpec::iri()),
+                alias: 3,
+            },
+        )]);
+        let variable = Expression::Variable(Variable::new("o").unwrap());
+        let constant = Expression::NamedNode(sf_core::NamedNode::new("http://ex/a").unwrap());
+        for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::MySql] {
+            for (a, b) in [(&variable, &constant), (&constant, &variable)] {
+                assert!(matches!(
+                    filter(a, b, CmpOp::Eq, &bindings, dialect),
+                    Some(SqlCond::IriCmp(_))
+                ));
+            }
+        }
     }
 }

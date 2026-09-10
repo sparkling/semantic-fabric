@@ -85,6 +85,8 @@ pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> Alias
         columns: vec!["sf_s".into(), "sf_o".into()],
         path: true,
         text_columns,
+        static_iri_columns: HashSet::new(),
+        iri_unreserved_columns: HashSet::new(),
     }
 }
 
@@ -193,6 +195,7 @@ pub(super) fn subplan_actuals(
     METADATA_VISITS.with(|visits| visits.set(visits.get() + 1));
     let mut width = 0;
     let mut common: Option<HashMap<usize, TextKey>> = None;
+    let mut common_static_iris: Option<HashSet<usize>> = None;
     let mut common_scalars: Option<HashMap<usize, NativeScalarKey>> = None;
     let mut common_datatypes = None;
     let mut common_temporals: Option<HashMap<usize, Option<sf_core::datatype::XsdTypeCode>>> = None;
@@ -322,6 +325,19 @@ pub(super) fn subplan_actuals(
             None => common = Some(text),
             Some(common) => common.retain(|index, key| text.get(index) == Some(key)),
         }
+        let static_iris = projection
+            .iter()
+            .enumerate()
+            .filter_map(|(index, column)| {
+                column.as_ref().and_then(|column| {
+                    iri_cmp::static_iri_column(column, &actuals).then_some(index)
+                })
+            })
+            .collect::<HashSet<_>>();
+        match common_static_iris.as_mut() {
+            None => common_static_iris = Some(static_iris),
+            Some(common) => common.retain(|index| static_iris.contains(index)),
+        }
     }
     // Equal XSD double types do not prove equal native float decoders. A
     // FLOAT4/FLOAT8 UNION widens the former and changes Rust's raw spelling.
@@ -366,6 +382,13 @@ pub(super) fn subplan_actuals(
         columns,
         path: plan.branches.iter().any(branch_has_path),
         text_columns,
+        static_iri_columns: common_static_iris
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| format!("c{i}"))
+            .collect(),
+        // Conservatively discard this optimization across pooled outputs.
+        iri_unreserved_columns: HashSet::new(),
     }
 }
 

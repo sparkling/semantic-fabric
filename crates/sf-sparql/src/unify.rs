@@ -676,18 +676,18 @@ pub fn filter_cond(
         ])),
         Expression::Not(a) => Ok(SqlCond::Not(Box::new(filter_cond(a, bindings, dialect)?))),
         Expression::Bound(v) => var_col(v, bindings).map(SqlCond::IsNotNull),
-        Expression::Equal(a, b) => cmp(a, b, CmpOp::Eq, bindings),
+        Expression::Equal(a, b) => cmp(a, b, CmpOp::Eq, bindings, dialect),
         // Literal operands retain identity separately from numeric FILTER value
         // comparisons. IRI/constructed operands retain their existing lowering;
         // natural derived pairs still need live decoder authority on all drivers.
         Expression::SameTerm(a, b) => literal_cmp::filter(a, b, None, bindings)
             .map(Ok)
             .or_else(|| literal_cmp::template_identity(a, b, bindings))
-            .unwrap_or_else(|| cmp(a, b, CmpOp::Eq, bindings)),
-        Expression::Greater(a, b) => cmp(a, b, CmpOp::Gt, bindings),
-        Expression::GreaterOrEqual(a, b) => cmp(a, b, CmpOp::Ge, bindings),
-        Expression::Less(a, b) => cmp(a, b, CmpOp::Lt, bindings),
-        Expression::LessOrEqual(a, b) => cmp(a, b, CmpOp::Le, bindings),
+            .unwrap_or_else(|| cmp(a, b, CmpOp::Eq, bindings, dialect)),
+        Expression::Greater(a, b) => cmp(a, b, CmpOp::Gt, bindings, dialect),
+        Expression::GreaterOrEqual(a, b) => cmp(a, b, CmpOp::Ge, bindings, dialect),
+        Expression::Less(a, b) => cmp(a, b, CmpOp::Lt, bindings, dialect),
+        Expression::LessOrEqual(a, b) => cmp(a, b, CmpOp::Le, bindings, dialect),
         // ADR-0032 D3 items 3-4: a constant `xsd:boolean` literal — the
         // representation `star::rewrite_expr` uses for `isTRIPLE`'s result
         // and an `=`/`sameTerm` "exactly one side composed" comparison.
@@ -895,6 +895,7 @@ fn cmp(
     b: &Expression,
     op: CmpOp,
     bindings: &BTreeMap<String, TermDef>,
+    dialect: Dialect,
 ) -> Result<SqlCond, String> {
     if [a, b]
         .iter()
@@ -908,7 +909,7 @@ fn cmp(
     if let Some(comparison) = literal_cmp::filter(a, b, Some(op), bindings) {
         return Ok(comparison);
     }
-    if let Some(comparison) = iri_cmp::filter(a, b, op, bindings) {
+    if let Some(comparison) = iri_cmp::filter(a, b, op, bindings, dialect) {
         return Ok(comparison);
     }
     if literal_cmp::template_value_needs_construction(a, b, bindings) {

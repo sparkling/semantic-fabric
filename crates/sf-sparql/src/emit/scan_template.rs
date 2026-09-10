@@ -18,7 +18,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
             let inner = scan_actuals(input, dialect, catalog);
             let original_lexical_keys = lexical_keys;
             let lexical_keys = literal_roles::resolved(lexical_keys, dialect, &inner);
-            let temporals = mysql_temporals(&scan.source, dialect, &inner);
+            let lexicalized = mysql_lexical_columns(&scan.source, dialect, &inner);
             let sqlite_columns: HashMap<_, _> = columns
                 .iter()
                 .filter_map(|(name, term)| {
@@ -54,7 +54,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                         let TermMap::Column(raw, _) = term else {
                             return None;
                         };
-                        let code = if temporals.contains_key(name.as_ref()) {
+                        let code = if lexicalized.contains_key(name.as_ref()) {
                             Some(Some(sf_core::datatype::XsdTypeCode::String))
                         } else {
                             inner
@@ -71,7 +71,7 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                         let TermMap::Column(raw, _) = term else {
                             return None;
                         };
-                        (!temporals.contains_key(name.as_ref()))
+                        (!lexicalized.contains_key(name.as_ref()))
                             .then(|| {
                                 inner
                                     .natural_columns
@@ -81,18 +81,56 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                             .map(|code| (name.to_string(), *code))
                     })
                     .collect(),
-                scalar_columns: iri_cmp::projected_scalars(columns, &inner),
+                scalar_columns: iri_cmp::projected_scalars(columns, &inner)
+                    .into_iter()
+                    .filter(|(name, _)| !lexicalized.contains_key(name))
+                    .collect(),
                 sqlite_columns,
                 lexical_columns,
                 lexical_comparison_columns,
                 source_kind: AliasSourceKind::Derived,
                 columns: columns.iter().map(|(name, _)| name.to_string()).collect(),
                 path: false,
+                iri_unreserved_columns: columns
+                    .iter()
+                    .filter_map(|(name, term)| {
+                        let TermMap::Column(raw, _) = term else {
+                            return None;
+                        };
+                        (lexicalized
+                            .get(name.as_ref())
+                            .is_some_and(|key| mysql_float_value::identity::is_float(*key))
+                            || inner
+                                .iri_unreserved_columns
+                                .contains(resolve_col(raw, Some(&inner.columns))))
+                        .then(|| name.to_string())
+                    })
+                    .collect(),
+                static_iri_columns: columns
+                    .iter()
+                    .filter_map(|(name, term)| match term {
+                        TermMap::Column(raw, spec)
+                            if spec.term_type == TermType::Iri
+                                && spec.base.is_none()
+                                && iri_cmp::static_iri_name(raw, &inner) =>
+                        {
+                            Some(name.to_string())
+                        }
+                        TermMap::Template(template, spec)
+                            if iri_cmp::qualified_static_template(
+                                template, spec, dialect, &inner,
+                            ) =>
+                        {
+                            Some(name.to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
                 text_columns: columns
                     .iter()
                     .filter_map(|(name, term)| {
                         let key = match term {
-                            TermMap::Column(_, _) if temporals.contains_key(name.as_ref()) => {
+                            TermMap::Column(_, _) if lexicalized.contains_key(name.as_ref()) => {
                                 Some(TextKey::Verbatim)
                             }
                             TermMap::Column(column, _) => inner
@@ -122,9 +160,10 @@ pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
     }
 }
 
-/// Preserve lexical-only DATE/DATETIME consumers before lossy MySQL temp copies.
+/// Preserve lexical-only DATE/DATETIME and signed float spellings before lossy
+/// MySQL temp copies. Outputs become text, never native scalar authorities.
 /// A natural literal or native comparison consumer withholds this authority.
-pub(super) fn mysql_temporals(
+pub(super) fn mysql_lexical_columns(
     source: &ScanSource,
     dialect: Dialect,
     inner: &AliasActuals,
@@ -148,10 +187,16 @@ pub(super) fn mysql_temporals(
             let resolved = resolve_col(raw, Some(&inner.columns));
             // Consumer vetoes were captured by authored spelling. Resolving a
             // different positive spelling must not revive a discarded veto.
-            let mode = lexical_keys
+            let mut modes = lexical_keys
                 .iter()
+                .filter(|key| resolve_col(&key.column, Some(&inner.columns)) == resolved);
+            let decoded = modes
+                .clone()
                 .any(|key| key.column == *raw && key.mode == LexicalMode::Decoded);
-            if dialect != Dialect::MySql || !mode || native_keys.iter().any(|(key, _)| key == name)
+            if dialect != Dialect::MySql
+                || !decoded
+                || !modes.all(|key| key.mode == LexicalMode::Decoded)
+                || native_keys.iter().any(|(key, _)| key == name)
             {
                 return None;
             }
@@ -161,7 +206,10 @@ pub(super) fn mysql_temporals(
                 .filter(|key| {
                     matches!(
                         key,
-                        NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
+                        NativeScalarKey::MysqlDate
+                            | NativeScalarKey::MysqlDateTime
+                            | NativeScalarKey::MysqlFloat4
+                            | NativeScalarKey::MysqlFloat8
                     )
                 })
                 .map(|key| (name.to_string(), *key))
@@ -221,6 +269,41 @@ pub(super) fn render(
         ));
     }
     let iri = spec.term_type == TermType::Iri;
+    if actuals
+        .get(&alias)
+        .is_some_and(|source| iri_cmp::qualified_static_template(recipe, spec, dialect, source))
+    {
+        // Encode each decoder-owned scalar alphabet once. Feeding its large
+        // shortest-decimal expression through the arbitrary UTF-8 byte encoder
+        // needlessly repeats that expression for every byte of every row.
+        let parts = recipe
+            .segments()
+            .iter()
+            .map(|segment| match segment {
+                Segment::Literal(text) => Ok(sql_string_literal(text)),
+                Segment::Column(name) => {
+                    let column = ColRef::new(alias, name.clone());
+                    if path_comparison::column_text(&column, actuals).is_some() {
+                        iri_cmp::encode_text_column(&column, dialect, catalog, actuals)
+                    } else {
+                        let key = iri_cmp::scalar_column(&column, actuals)
+                            .expect("qualified template has a live decoder for every slot");
+                        iri_cmp::scalar_template_key(
+                            key,
+                            &colref(&column, dialect, actuals),
+                            dialect,
+                        )
+                    }
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expression = if parts.is_empty() {
+            "''".into()
+        } else {
+            format!("CONCAT({})", parts.join(", "))
+        };
+        return Ok(path_comparison::exact_text(expression, dialect));
+    }
     let mut decoded = HashMap::new();
     if dialect == Dialect::MySql {
         for segment in recipe.segments() {

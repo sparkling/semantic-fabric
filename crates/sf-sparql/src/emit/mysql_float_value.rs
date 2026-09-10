@@ -6,6 +6,9 @@ use pg_decimal_value::datatype;
 mod double_lexical;
 #[path = "mysql_float_identity.rs"]
 pub(super) mod identity;
+#[cfg(test)]
+#[path = "mysql_float_pool_tests.rs"]
+mod pool_tests;
 #[path = "mysql_float_round.rs"]
 mod round;
 #[path = "mysql_float_shortest.rs"]

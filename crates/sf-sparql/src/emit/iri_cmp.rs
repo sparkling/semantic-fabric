@@ -4,6 +4,77 @@ use crate::iq::iri_cmp::{IriComparison, IriOperand, IriPart};
 #[cfg(test)]
 mod tests;
 
+/// Copy only total integer IRI constraints below an already authorized D1 copy.
+/// VALUES/OPTIONAL otherwise materializes every permitted float for each branch.
+/// Keep the original ON predicate and policy barrier; fallible decoders stay out.
+pub(super) fn restrict_optional<'a>(
+    opt: &'a crate::iq::OptJoin,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> std::borrow::Cow<'a, crate::iq::Scan> {
+    use crate::iq::ScanSource;
+    let unchanged = std::borrow::Cow::Borrowed(&opt.scan);
+    let ScanSource::Projection {
+        input,
+        columns,
+        guards,
+        distinct: true,
+        ..
+    } = &opt.scan.source
+    else {
+        return unchanged;
+    };
+    if dialect != Dialect::MySql
+        || input.alias != opt.scan.alias
+        || input.source.logical().is_none()
+        || !guards
+            .iter()
+            .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+        || !columns
+            .iter()
+            .all(|(name, term)| matches!(term, TermMap::Column(raw, _) if raw == name))
+    {
+        return unchanged;
+    }
+    let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
+    let additional: Vec<_> = opt
+        .on
+        .iter()
+        .chain(&opt.extra)
+        .filter(|guard| {
+            let SqlCond::IriCmp(cmp) = guard else {
+                return false;
+            };
+            let parts = match (&cmp.left, &cmp.right) {
+                (IriOperand::Template { parts, base: None }, IriOperand::Constant(_))
+                | (IriOperand::Constant(_), IriOperand::Template { parts, base: None }) => parts,
+                _ => return false,
+            };
+            parts.iter().any(|part| matches!(part, IriPart::Column(_)))
+                && parts.iter().all(|part| match part {
+                    IriPart::Literal(_) => true,
+                    IriPart::Column(c) => {
+                        c.alias == input.alias
+                            && columns.iter().any(|(name, _)| name == &c.column)
+                            && scalar_column(c, &actuals) == Some(NativeScalarKey::Integer)
+                            && literal_datatype::fact(c, &actuals)
+                                == Some(Some(sf_core::datatype::XsdTypeCode::Integer))
+                    }
+                })
+        })
+        .cloned()
+        .collect();
+    if additional.is_empty() {
+        return unchanged;
+    }
+    let mut scan = opt.scan.clone();
+    let ScanSource::Projection { guards, .. } = &mut scan.source else {
+        unreachable!()
+    };
+    guards.extend(additional);
+    std::borrow::Cow::Owned(scan)
+}
+
 pub(super) fn column(
     column: &ColRef,
     base: Option<&str>,
@@ -13,6 +84,12 @@ pub(super) fn column(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
+    if dialect == Dialect::MySql && base.is_none() && static_iri_column(column, actuals) {
+        return Ok(path_comparison::exact_text(
+            colref(column, dialect, actuals),
+            dialect,
+        ));
+    }
     let decode = (dialect == Dialect::Sqlite)
         .then(|| lexical_key::column_decode(column, actuals))
         .flatten()
@@ -21,6 +98,30 @@ pub(super) fn column(
         })?;
     let lexical = lexical_key::expression(colref(column, dialect, actuals), decode, catalog);
     finalize(lexical, base, dialect, catalog, params, pidx)
+}
+
+pub(super) fn unreserved_column(column: &ColRef, actuals: &ActualColumns) -> bool {
+    actuals.get(&column.alias).is_some_and(|a| {
+        let name = resolve_col(&column.column, Some(&a.columns));
+        a.iri_unreserved_columns.contains(name)
+            && a.text_columns.get(name) == Some(&TextKey::Verbatim)
+            && !a.scalar_columns.contains_key(name)
+            && a.datatype_columns.get(name) == Some(&Some(sf_core::datatype::XsdTypeCode::String))
+    })
+}
+
+pub(super) fn encode_text_column(
+    column: &ColRef,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+) -> Result<String> {
+    let text = path_comparison::rdf_column(column, dialect, catalog, actuals);
+    if dialect == Dialect::MySql && unreserved_column(column, actuals) {
+        Ok(text)
+    } else {
+        percent_encode_col(&text, dialect)
+    }
 }
 
 fn finalize(
@@ -70,10 +171,7 @@ pub(super) fn template(
                 }
                 IriPart::Column(column) => {
                     if path_comparison::column_text(column, actuals).is_some() {
-                        percent_encode_col(
-                            &path_comparison::rdf_column(column, dialect, catalog, actuals),
-                            dialect,
-                        )?
+                        encode_text_column(column, dialect, catalog, actuals)?
                     } else if let Some(key) = scalar_column(column, actuals) {
                         scalar_template_key(key, &colref(column, dialect, actuals), dialect)?
                     } else {
@@ -172,7 +270,11 @@ pub(super) fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) 
     })
 }
 
-fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
+pub(super) fn scalar_template_key(
+    key: NativeScalarKey,
+    raw: &str,
+    dialect: Dialect,
+) -> Result<String> {
     let lexical = scalar_lexical(key, raw, dialect)?;
     // These live wire recipes emit restricted ASCII, not arbitrary text. Avoid
     // the generic per-byte SQL encoder only with this exhaustive alphabet proof.
@@ -195,6 +297,61 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
         | NativeScalarKey::MysqlDate
         | NativeScalarKey::MysqlDecimal => lexical,
     })
+}
+
+pub(super) fn static_iri_name(column: &str, actuals: &AliasActuals) -> bool {
+    actuals
+        .static_iri_columns
+        .contains(resolve_col(column, Some(&actuals.columns)))
+}
+
+pub(super) fn static_iri_column(column: &ColRef, actuals: &ActualColumns) -> bool {
+    actuals
+        .get(&column.alias)
+        .is_some_and(|source| static_iri_name(&column.column, source))
+}
+
+/// Mapping normalization has already proved IRI grammar when `base` is absent.
+/// This adds decoder proof; arbitrary source text cannot originate this marker.
+pub(super) fn qualified_static_template(
+    template: &sf_core::ir::Template,
+    spec: &sf_core::ir::TermSpec,
+    dialect: Dialect,
+    actuals: &AliasActuals,
+) -> bool {
+    dialect == Dialect::MySql
+        && spec.term_type == sf_core::ir::TermType::Iri
+        && spec.base.is_none()
+        && template.segments().iter().all(|segment| match segment {
+            sf_core::ir::Segment::Literal(_) => true,
+            sf_core::ir::Segment::Column(name) => {
+                let resolved = resolve_col(name, Some(&actuals.columns));
+                actuals.text_columns.contains_key(resolved)
+                    || actuals
+                        .scalar_columns
+                        .get(resolved)
+                        .is_some_and(|key| supports_scalar_template_key(*key, dialect))
+            }
+        })
+}
+
+fn supports_scalar_template_key(key: NativeScalarKey, dialect: Dialect) -> bool {
+    matches!(
+        (dialect, key),
+        (
+            Dialect::MySql,
+            NativeScalarKey::Integer
+                | NativeScalarKey::MysqlFloat4
+                | NativeScalarKey::MysqlFloat8
+                | NativeScalarKey::MysqlBinaryBytes
+                | NativeScalarKey::MysqlBit
+                | NativeScalarKey::MysqlDate
+                | NativeScalarKey::MysqlDecimal
+                | NativeScalarKey::MysqlTimestamp
+                | NativeScalarKey::MysqlDateTime
+                | NativeScalarKey::MysqlTime
+        )
+    )
 }
 
 pub(super) fn scalar_column(column: &ColRef, actuals: &ActualColumns) -> Option<NativeScalarKey> {

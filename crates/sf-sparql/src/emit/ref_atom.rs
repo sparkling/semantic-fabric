@@ -50,6 +50,18 @@ pub(super) fn actuals(
         source_kind: AliasSourceKind::Derived,
         columns: (0..columns.len()).map(|i| format!("c{i}")).collect(),
         path: false,
+        iri_unreserved_columns: columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| iri_cmp::unreserved_column(c, &sources).then(|| format!("c{i}")))
+            .collect(),
+        static_iri_columns: columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, column)| {
+                iri_cmp::static_iri_column(column, &sources).then(|| format!("c{i}"))
+            })
+            .collect(),
         text_columns: columns
             .iter()
             .enumerate()

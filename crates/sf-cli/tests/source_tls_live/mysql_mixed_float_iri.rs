@@ -13,7 +13,7 @@ fn mysql_mixed_float_template_iris_are_exact() {
 
 pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
     let floats = native_float_values();
-    let pairs = floats[..15]
+    let mut pairs = floats[..15]
         .iter()
         .flat_map(|v| {
             [
@@ -22,20 +22,28 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
             ]
         })
         .collect::<Vec<_>>();
+    pairs.extend([
+        (2.0, f64::MAX),
+        (2.0, -f64::MAX),
+        (2.0, f64::from_bits(1)),
+        (2.0, -f64::from_bits(1)),
+        (2.0, f64::MIN_POSITIVE),
+        (2.0, -f64::MIN_POSITIVE),
+    ]);
     // Deliberate opposite witnesses: SQL numeric equality gets both wrong.
     assert_ne!(pairs[0].0.to_string(), pairs[0].1.to_string());
     assert_eq!(pairs[1].0.to_string(), pairs[1].1.to_string());
     assert_ne!(f64::from(pairs[1].0), pairs[1].1);
     sql(
         database,
-        "CREATE TABLE sf_numeric_items(id BIGINT PRIMARY KEY,v FLOAT,w DOUBLE,visible VARCHAR(32))",
+        "CREATE TABLE sf_numeric_items(id BIGINT PRIMARY KEY,v FLOAT,w DOUBLE,visible VARCHAR(32),blank VARCHAR(1))",
     );
     let inserts = pairs
         .iter()
         .enumerate()
         .map(|(i, (v, w))| {
             format!(
-                "({i},CAST('{:e}' AS DOUBLE),CAST('{w:e}' AS DOUBLE),'same')",
+                "({i},CAST('{:e}' AS DOUBLE),CAST('{w:e}' AS DOUBLE),'same','')",
                 f64::from(*v)
             )
         })
@@ -43,7 +51,7 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
         .join(",");
     sql(
         database,
-        &format!("INSERT INTO sf_numeric_items VALUES {inserts},(9999,NULL,NULL,'same')"),
+        &format!("INSERT INTO sf_numeric_items VALUES {inserts},(9999,NULL,NULL,'same','')"),
     );
     fixture.write(
         "first.ttl",
@@ -54,6 +62,10 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
         rr:objectMap [rr:template "http://example.test/float/{v}"]];
       rr:predicateObjectMap [rr:predicate <http://example.test/edge8>;
         rr:objectMap [rr:template "http://example.test/float/{w}"]];
+      rr:predicateObjectMap [rr:predicate <http://example.test/pool4>;
+        rr:objectMap [rr:template "http://example.test/float/{v}/"]];
+      rr:predicateObjectMap [rr:predicate <http://example.test/pool8>;
+        rr:objectMap [rr:template "http://example.test/float/{w}/{blank}"]];
       rr:predicateObjectMap [rr:predicate <http://example.test/literal4>;
         rr:objectMap [rr:template "{v}"; rr:datatype <http://www.w3.org/2001/XMLSchema#float>]];
       rr:predicateObjectMap [rr:predicate <http://example.test/literal8>;
@@ -61,7 +73,7 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
     );
     fixture.write(
         "ontology.ttl",
-        &["edge4", "edge8", "literal4", "literal8"]
+        &["edge4", "edge8", "pool4", "pool8", "literal4", "literal8"]
             .map(|p| {
                 let kind = if p.starts_with("literal") {
                     "DatatypeProperty"
@@ -82,6 +94,37 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
     );
     let (server, address) = policy_server(fixture, database);
     check(address, fixture, &pairs, true);
+    // Exercise numeric spellings and general escaping after the
+    // lexical-only D1 copy; the statement bounds and policy stay unchanged.
+    for (slot, encoded) in [
+        ("", ""),
+        (".", "."),
+        ("7", "7"),
+        ("%", "%25"),
+        ("/", "%2F"),
+        ("+", "%2B"),
+        ("é", "é"),
+    ] {
+        let hex = slot
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        sql(
+            database,
+            &format!(
+                "UPDATE sf_numeric_items SET blank=CONVERT(X'{hex}' USING utf8mb4) WHERE id=0"
+            ),
+        );
+        let query = format!("SELECT ?s WHERE {{ VALUES ?s {{ <http://example.test/numeric/0> }} ?s <http://example.test/pool8> ?o FILTER(?o = <http://example.test/float/{}/{encoded}>) }}", pairs[0].1);
+        let result = rows(address, fixture, &query);
+        assert_eq!(
+            result.len(),
+            1,
+            "safe-alphabet or escaping fallback: {slot}"
+        );
+        assert_eq!(id(&result[0], "s"), 0);
+    }
     database.assert_encrypted_sessions();
     drop(server);
     sql(database, "DROP TABLE sf_numeric_items");
@@ -89,6 +132,7 @@ pub(in super::super) fn assert_all(fixture: &Fixture, database: &Database) {
 
 fn check(address: SocketAddr, fixture: &Fixture, pairs: &[(f32, f64)], policy: bool) {
     let visible = |i: usize| !policy || i.is_multiple_of(2);
+    check_rendered_pool(address, fixture, pairs, policy);
     let expected: BTreeSet<_> = pairs
         .iter()
         .enumerate()
@@ -193,6 +237,118 @@ fn check(address: SocketAddr, fixture: &Fixture, pairs: &[(f32, f64)], policy: b
             );
         }
     }
+}
+
+fn check_rendered_pool(address: SocketAddr, fixture: &Fixture, pairs: &[(f32, f64)], policy: bool) {
+    let mut expected = pairs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !policy || i.is_multiple_of(2))
+        .flat_map(|(i, (v, w))| {
+            [
+                (i, format!("http://example.test/float/{v}/")),
+                (i, format!("http://example.test/float/{w}/")),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let body = "{ ?s <http://example.test/pool4> ?o } UNION { ?s <http://example.test/pool8> ?o }";
+    // OFFSET 0 changes no result but forces a consumed SubPlan instead of
+    // distributing outer consumers over independently decoded UNION arms.
+    for pooled in [
+        format!("{{ SELECT ?s ?o WHERE {{ {body} }} }}"),
+        format!("{{ SELECT ?s ?o WHERE {{ {body} }} OFFSET 0 }}"),
+    ] {
+        let query = format!("SELECT ?s ?o WHERE {{ {pooled} }}");
+        let result = rows(address, fixture, &query);
+        let mut actual = result
+            .iter()
+            .map(|row| (id(row, "s"), row["o"]["value"].as_str().unwrap().to_owned()))
+            .collect::<Vec<_>>();
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected, "rendered UNION exact bag: {query}");
+
+        let fixed = pairs[0].0.to_string();
+        let fixed_iri = format!("http://example.test/float/{fixed}/");
+        let mut expected_fixed = expected
+            .iter()
+            .filter_map(|(i, iri)| (iri == &fixed_iri).then_some(*i))
+            .collect::<Vec<_>>();
+        expected_fixed.sort();
+        for filter in [
+            format!("?o = <{fixed_iri}>"),
+            format!("<{fixed_iri}> = ?o"),
+            format!("sameTerm(?o, <{fixed_iri}>)"),
+            format!("sameTerm(<{fixed_iri}>, ?o)"),
+        ] {
+            let result = rows(
+                address,
+                fixture,
+                &format!("SELECT ?s WHERE {{ {pooled} FILTER({filter}) }}"),
+            );
+            let mut actual = result.iter().map(|row| id(row, "s")).collect::<Vec<_>>();
+            actual.sort();
+            assert_eq!(
+                actual, expected_fixed,
+                "pooled fixed IRI identity: {filter}"
+            );
+        }
+        let expected_other: Vec<_> = expected
+            .iter()
+            .filter_map(|(i, iri)| (iri != &fixed_iri).then_some(*i))
+            .collect();
+        for filter in [
+            format!("?o != <{fixed_iri}>"),
+            format!("!sameTerm(?o, <{fixed_iri}>)"),
+        ] {
+            let result = rows(
+                address,
+                fixture,
+                &format!("SELECT ?s WHERE {{ {pooled} FILTER({filter}) }}"),
+            );
+            let mut actual = result.iter().map(|row| id(row, "s")).collect::<Vec<_>>();
+            actual.sort();
+            assert_eq!(
+                actual, expected_other,
+                "pooled non-match/NULL identity: {filter}"
+            );
+        }
+
+        let mut expected_join = expected
+            .iter()
+            .flat_map(|(i, iri)| {
+                pairs.iter().enumerate().filter_map(move |(j, (v, _))| {
+                    ((!policy || j.is_multiple_of(2))
+                        && iri == &format!("http://example.test/float/{v}/"))
+                        .then_some((*i, j))
+                })
+            })
+            .collect::<Vec<_>>();
+        expected_join.sort();
+        let result = rows(
+            address,
+            fixture,
+            &format!("SELECT ?s ?t WHERE {{ {pooled} ?t <http://example.test/pool4> ?o }}"),
+        );
+        let mut actual_join = result
+            .iter()
+            .map(|row| (id(row, "s"), id(row, "t")))
+            .collect::<Vec<_>>();
+        actual_join.sort();
+        assert_eq!(
+            actual_join, expected_join,
+            "pooled outer join exact bag: policy={policy}; inner={pooled}"
+        );
+    }
+
+    // This separate, modifier-free multi-arm DISTINCT is the existing
+    // source-sized projected-set profile (ADR-0055), not admitted by this slice.
+    let query = format!("SELECT DISTINCT ?o WHERE {{ {{ SELECT ?s ?o WHERE {{ {body} }} }} }}");
+    let response = stop_matrix::wire(cancellation::begin(address, &query, &fixture.token));
+    assert!(
+        response.starts_with(b"HTTP/1.1 501 "),
+        "source-sized DISTINCT must retain its admission gate"
+    );
 }
 
 fn id(row: &serde_json::Value, key: &str) -> usize {

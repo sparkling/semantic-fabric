@@ -31,7 +31,7 @@ fn projection_sql(
     let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
     let resolved_keys = literal_roles::resolved(lexical_keys, dialect, &actuals[&input.alias]);
     let lexical_keys = resolved_keys.as_slice();
-    let temporals = template::mysql_temporals(source, dialect, &actuals[&input.alias]);
+    let lexicalized = template::mysql_lexical_columns(source, dialect, &actuals[&input.alias]);
     let column = |name: &str| {
         // Raw/offline APIs retain their existing authored-AS fallback. Live
         // execution always probes the original source and takes the typed path.
@@ -55,8 +55,11 @@ fn projection_sql(
     let mut expressions = Vec::with_capacity(columns.len());
     for (name, term) in columns {
         let expression = match term {
-            TermMap::Column(raw, _) => match temporals.get(name.as_ref()) {
-                Some(key) => iri_cmp::scalar_lexical(*key, &column(raw), dialect)?,
+            TermMap::Column(raw, _) => match lexicalized.get(name.as_ref()) {
+                Some(key) => path_comparison::exact_text(
+                    iri_cmp::scalar_lexical(*key, &column(raw), dialect)?,
+                    dialect,
+                ),
                 None => column(raw),
             },
             TermMap::Template(recipe, spec) => template::render(
@@ -165,7 +168,7 @@ fn projection_sql(
                 continue;
             };
             let native = native_keys.iter().find(|(key, _)| key == name);
-            if temporals.contains_key(name.as_ref()) {
+            if lexicalized.contains_key(name.as_ref()) {
                 keys.push(path_comparison::exact_text(expression.clone(), dialect));
                 continue;
             }

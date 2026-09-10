@@ -661,6 +661,12 @@ struct AliasActuals {
     columns: Vec<String>,
     path: bool,
     text_columns: HashMap<String, TextKey>,
+    // Compiler-generated, already absolute static-template IRIs. This is not
+    // inherited from arbitrary source text and is intersected at SubPlan joins.
+    static_iri_columns: HashSet<String>,
+    // Bounded compiler-rendered float text uses only IRI-unreserved bytes.
+    // This permits encoding elision, not native scalar or absolute-IRI authority.
+    iri_unreserved_columns: HashSet<String>,
     sqlite_columns: HashMap<String, SqliteDecode>,
     lexical_columns: HashMap<String, SqliteDecode>,
     // A retained decoded consumer can license an aligned RDF comparison while
@@ -703,6 +709,8 @@ fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActua
             .get(&source_key(source))
             .cloned()
             .unwrap_or_default(),
+        static_iri_columns: HashSet::new(),
+        iri_unreserved_columns: HashSet::new(),
     };
     for (name, code) in &actuals.datatype_columns {
         if let Some(code) = code.filter(|code| {
@@ -1498,7 +1506,8 @@ fn render_from(
         let mut from = "(SELECT 1) t_empty".to_owned();
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan, dialect, catalog, params, pidx)?);
+            let scan = iri_cmp::restrict_optional(opt, dialect, catalog);
+            from.push_str(&scan_ref(&scan, dialect, catalog, params, pidx)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -1533,7 +1542,8 @@ fn render_from(
         }
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan, dialect, catalog, params, pidx)?);
+            let scan = iri_cmp::restrict_optional(opt, dialect, catalog);
+            from.push_str(&scan_ref(&scan, dialect, catalog, params, pidx)?);
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
             from.push_str(&render_conjunction(
@@ -2035,7 +2045,7 @@ pub(crate) fn render_immediate_source_column(
 /// A SQL single-quoted string literal for mapping-trusted text `text` — ANSI
 /// `''`-doubling, the one escaping rule SQLite/PostgreSQL/MySQL all share for a
 /// single-quoted string (unlike percent-encoding, no per-dialect split applies
-/// here). [`render_template_inline`]'s only caller.
+/// here). Used only for mapping-owned literals in template projections.
 fn sql_string_literal(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
