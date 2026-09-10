@@ -350,7 +350,7 @@ Exact/N-1 tests cover bindings, scans, conditions, OPTIONAL and subplan payloads
 authenticated right-heavy VALUES tests prove pre-source rejection, permit recovery,
 exact successful bags and completed-cache reuse. This covers direct copies only:
 unifier-produced conditions, nullable-alias sets and extra left-internal copies
-remain open, as do formatter internals, build/resolve, other products/copies
+remain open, as do upstream temporary allocation, build/resolve, other products/copies
 and destruction. `l-query-budget` stays open; direct multi-origin unfolding
 retains its separate eligibility/recipe charges.
 
@@ -359,14 +359,26 @@ cache paths now pay for every UTF-8 output fragment, each requested geometric
 capacity target plus existing-payload relocation, and the one canonical hash
 before that work. Logical growth is independent of allocator overgrant; finite
 cumulative request work bounds requested capacity, not exact physical heap usage.
-The existing AST envelope is checked before recursive formatting. Security keys
+The existing AST envelope is checked before recursive formatting. Its iterative
+walk now prepays nodes, collection slots/payload and logical stack target/relocation
+before use, with checkpoints and fallible stack allocation. The measured AST
+also conservatively prepays upstream projection/Extend dependency searches,
+including nested EXISTS and repeated variable comparisons, plus logical projection
+payload before Display. Checked work uses actual Extend/project/variable counts;
+large unrelated strings do not create a fictitious quadratic variable-scan charge.
+Security keys
 reuse the canonical string/hash without a second render/hash; exact identity,
 policy-first errors, raw APIs and shared `Arc` reuse in both directions remain intact.
 Exact/N-1, expanded UTF-8, allocation/cancellation and held-source tests prove
 failure precedes cache/source access and compiler permits recover. Warm hits pay
-key work but not avoided compilation. Formatter-internal traversal/temporaries,
-envelope measurement, cache collision equality, insertion/eviction/destruction
-and remaining compiler phases stay open. `GovernedV1` is not activated.
+key work but not avoided compilation. Independent walker/preparation tests cover
+exact/N-1, no unpaid stack allocation, unbound VALUES cells, duplicate projections,
+root reentry, overflow and sticky cancellation/deadline causes. Later-phase HTTP
+tests calibrate prerequisite key work through a raw-populated identical warm hit.
+The upstream projection Vec remains infallible; physical allocator overgrant and
+cancellation inside its prepaid recursive scans are not governed by this change.
+Cache collision equality, insertion/eviction/destruction and remaining compiler
+phases stay open. `GovernedV1` is not activated; `l-query-budget` remains blocking.
 
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,

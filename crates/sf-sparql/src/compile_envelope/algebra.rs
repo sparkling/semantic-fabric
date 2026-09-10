@@ -18,7 +18,9 @@ use spargebra::Query;
 
 use super::{enforce, CompileEnvelopeError, CompileEnvelopeLimit};
 
+mod control;
 mod visit;
+use control::{charge, WalkError};
 
 // UNCALIBRATED: replace only from checked-in corpus and adversarial evidence.
 pub(crate) const MAX_ALGEBRA_NODES_V1: usize = 32 * 1024;
@@ -32,6 +34,9 @@ pub(crate) struct AlgebraEnvelopeV1 {
     pub(crate) max_depth: usize,
     pub(crate) collection_slots: usize,
     pub(crate) retained_payload_bytes: usize,
+    extend_nodes: usize,
+    project_slots: usize,
+    max_variable_bytes: usize,
 }
 
 impl AlgebraEnvelopeV1 {
@@ -44,7 +49,12 @@ impl AlgebraEnvelopeV1 {
     /// conservative sum of visible retained strings; repeated occurrences and
     /// literal datatype IRIs are deliberately charged again.
     pub(crate) fn validate(query: &Query) -> Result<Self, CompileEnvelopeError> {
-        Validator::run(query)
+        Validator::run(query, None).map_err(|error| match error {
+            WalkError::Envelope(error) => error,
+            WalkError::Control(_) => {
+                unreachable!("uncontrolled validator has no control callbacks")
+            }
+        })
     }
 }
 
@@ -74,26 +84,36 @@ enum Work<'query> {
     Literal(&'query Literal),
 }
 
-struct Validator<'query> {
+struct Validator<'query, 'control> {
     stack: Vec<Frame<'query>>,
+    requested_capacity: usize,
     envelope: AlgebraEnvelopeV1,
+    control: Option<&'control dyn sf_core::query_control::QueryControl>,
 }
 
-impl<'query> Validator<'query> {
-    fn run(query: &'query Query) -> Result<AlgebraEnvelopeV1, CompileEnvelopeError> {
+impl<'query, 'control> Validator<'query, 'control> {
+    fn run(
+        query: &'query Query,
+        control: Option<&'control dyn sf_core::query_control::QueryControl>,
+    ) -> Result<AlgebraEnvelopeV1, WalkError> {
         let mut validator = Self {
             stack: Vec::new(),
+            requested_capacity: 0,
             envelope: AlgebraEnvelopeV1::default(),
+            control,
         };
         validator.push(1, Work::Query(query))?;
-        while let Some(frame) = validator.stack.pop() {
+        while !validator.stack.is_empty() {
+            charge(control, 0)?;
+            let frame = validator.stack.pop().expect("nonempty work stack");
             validator.record_node(frame.depth)?;
             validator.visit(frame)?;
         }
+        charge(control, 0)?;
         Ok(validator.envelope)
     }
 
-    fn push(&mut self, depth: usize, work: Work<'query>) -> Result<(), CompileEnvelopeError> {
+    fn push(&mut self, depth: usize, work: Work<'query>) -> Result<(), WalkError> {
         enforce(
             CompileEnvelopeLimit::AlgebraDepth,
             depth,
@@ -110,15 +130,31 @@ impl<'query> Validator<'query> {
             observed,
             MAX_ALGEBRA_NODES_V1,
         )?;
-        if self.stack.len() == self.stack.capacity() {
-            self.stack.try_reserve(1)?;
+        charge(self.control, 1)?;
+        if self.stack.len() == self.requested_capacity {
+            let target = self
+                .requested_capacity
+                .checked_mul(2)
+                .ok_or(CompileEnvelopeError::AccountingOverflow)?
+                .max(1);
+            let bytes = checked_sum(target, self.stack.len())?
+                .checked_mul(std::mem::size_of::<Frame<'query>>())
+                .ok_or(CompileEnvelopeError::AccountingOverflow)?;
+            // Pay the full logical target (including slack) and relocation
+            // before allocation. Allocator over-grants never alter the schedule.
+            charge(self.control, bytes)?;
+            self.stack
+                .try_reserve_exact(target - self.stack.len())
+                .map_err(CompileEnvelopeError::from)?;
+            charge(self.control, 0)?;
+            self.requested_capacity = target;
         }
         self.stack.push(Frame { depth, work });
         self.envelope.max_depth = self.envelope.max_depth.max(depth);
         Ok(())
     }
 
-    fn record_node(&mut self, depth: usize) -> Result<(), CompileEnvelopeError> {
+    fn record_node(&mut self, depth: usize) -> Result<(), WalkError> {
         let observed = checked_sum(self.envelope.algebra_nodes, 1)?;
         enforce(
             CompileEnvelopeLimit::AlgebraNodes,
@@ -130,24 +166,26 @@ impl<'query> Validator<'query> {
         Ok(())
     }
 
-    fn collection(&mut self, slots: usize) -> Result<(), CompileEnvelopeError> {
+    fn collection(&mut self, slots: usize) -> Result<(), WalkError> {
         let observed = checked_sum(self.envelope.collection_slots, slots)?;
         enforce(
             CompileEnvelopeLimit::CollectionSlots,
             observed,
             MAX_COLLECTION_SLOTS_V1,
         )?;
+        charge(self.control, slots)?;
         self.envelope.collection_slots = observed;
         Ok(())
     }
 
-    fn payload(&mut self, bytes: usize) -> Result<(), CompileEnvelopeError> {
+    fn payload(&mut self, bytes: usize) -> Result<(), WalkError> {
         let observed = checked_sum(self.envelope.retained_payload_bytes, bytes)?;
         enforce(
             CompileEnvelopeLimit::RetainedPayloadBytes,
             observed,
             MAX_RETAINED_PAYLOAD_BYTES_V1,
         )?;
+        charge(self.control, bytes)?;
         self.envelope.retained_payload_bytes = observed;
         Ok(())
     }

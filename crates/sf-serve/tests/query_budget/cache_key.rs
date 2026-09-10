@@ -1,34 +1,43 @@
 use super::*;
 
-/// Independent logical schedule: invocation, fragment bytes, geometric growth
-/// target and old payload, then the one final full-content hash.
-pub(super) fn key_work(source: &str) -> u64 {
-    use std::fmt::{self, Write};
-    struct Counter {
-        length: usize,
-        capacity: usize,
-        work: u64,
-    }
-    impl Write for Counter {
-        fn write_str(&mut self, fragment: &str) -> fmt::Result {
-            self.work += fragment.len() as u64;
-            let next = self.length + fragment.len();
-            if next > self.capacity {
-                self.capacity = next.max(64).max(2 * self.capacity);
-                self.work += (self.capacity + self.length) as u64;
+#[path = "../support/compiler_key.rs"]
+mod compiler_key;
+pub(super) use compiler_key::key_work;
+
+async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
+    // Terminal failure wakes the response before the blocking compiler closure
+    // necessarily drops its configuration. Preserve the same runtime/cache and
+    // require bounded cleanup, not scheduler-dependent immediate Arc uniqueness.
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(cfg) = Arc::get_mut(cfg) {
+                cfg.query_limits = QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX);
+                return;
             }
-            self.length = next;
-            Ok(())
+            tokio::task::yield_now().await;
         }
-    }
-    let query = spargebra::SparqlParser::new().parse_query(source).unwrap();
-    let mut counter = Counter {
-        length: 0,
-        capacity: 0,
-        work: 1,
-    };
-    write!(&mut counter, "{query}").unwrap();
-    counter.work + counter.length as u64
+    })
+    .await
+    .expect("request workers must release configuration within the cleanup bound");
+}
+
+#[tokio::test]
+async fn changing_budget_waits_for_the_existing_configuration_owner() {
+    use std::{future::Future, task::Poll};
+    let mut cfg = Arc::new(protected(10_000));
+    let identity = Arc::as_ptr(&cfg);
+    let worker = cfg.clone();
+    let mut change = Box::pin(set_work_after_cleanup(&mut cfg, 123));
+    std::future::poll_fn(|cx| {
+        assert!(change.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    assert_eq!(worker.query_limits.max_compiler_work(), 10_000);
+    drop(worker);
+    change.await;
+    assert_eq!(Arc::as_ptr(&cfg), identity);
+    assert_eq!(cfg.query_limits.max_compiler_work(), 123);
 }
 
 #[tokio::test]
@@ -37,12 +46,7 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
     // The same immutable runtime/cache survives all requests and limit changes.
     for warm in [false, true] {
         if warm {
-            Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
-                SELECT.len() as u64 + key_work(SELECT),
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            );
+            set_work_after_cleanup(&mut cfg, SELECT.len() as u64 + key_work(SELECT)).await;
         }
         assert_values(
             router(cfg.clone())
@@ -52,9 +56,7 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
         )
         .await;
     }
-    Arc::get_mut(&mut cfg)
-        .expect("response released configuration")
-        .query_limits = QueryLimits::new(0, u64::MAX, u64::MAX, u64::MAX);
+    set_work_after_cleanup(&mut cfg, 0).await;
     assert_budget_problem(router(cfg).oneshot(authenticated(SELECT)).await.unwrap()).await;
     assert_budget_problem(
         router(Arc::new(protected(0)))
@@ -119,8 +121,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
         });
         for warm in [false, true] {
             let exact = query.len() as u64 + key_work(&query);
-            Arc::get_mut(&mut cfg).unwrap().query_limits =
-                QueryLimits::new(exact - 1, u64::MAX, u64::MAX, u64::MAX);
+            set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(
                 router(cfg.clone())
                     .oneshot(authenticated(&query))
@@ -128,8 +129,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                     .unwrap(),
             )
             .await;
-            Arc::get_mut(&mut cfg).unwrap().query_limits =
-                QueryLimits::new(exact, u64::MAX, u64::MAX, u64::MAX);
+            set_work_after_cleanup(&mut cfg, exact).await;
             let response = router(cfg.clone())
                 .oneshot(authenticated(&query))
                 .await

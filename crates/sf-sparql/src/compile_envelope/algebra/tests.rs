@@ -6,6 +6,7 @@ use super::*;
 use crate::compile_envelope::CompileEnvelopeLimit;
 
 mod bounds;
+mod control;
 mod repository;
 mod variants;
 

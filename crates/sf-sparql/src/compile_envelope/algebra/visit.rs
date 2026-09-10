@@ -2,10 +2,10 @@ use spargebra::algebra::{AggregateFunction, Expression, Function, GraphPattern};
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern};
 use spargebra::Query;
 
-use super::{CompileEnvelopeError, Frame, Validator, Work};
+use super::{checked_sum, Frame, Validator, WalkError, Work};
 
-impl<'query> Validator<'query> {
-    pub(super) fn visit(&mut self, frame: Frame<'query>) -> Result<(), CompileEnvelopeError> {
+impl<'query> Validator<'query, '_> {
+    pub(super) fn visit(&mut self, frame: Frame<'query>) -> Result<(), WalkError> {
         let child_depth = frame.depth + 1;
         match frame.work {
             Work::Query(query) => self.query(query, child_depth),
@@ -62,7 +62,14 @@ impl<'query> Validator<'query> {
                 self.push(child_depth, Work::NamedNode(&triple.subject))
             }
             Work::NamedNode(node) => self.payload(node.as_str().len()),
-            Work::Variable(variable) => self.payload(variable.as_str().len()),
+            Work::Variable(variable) => {
+                self.payload(variable.as_str().len())?;
+                self.envelope.max_variable_bytes = self
+                    .envelope
+                    .max_variable_bytes
+                    .max(variable.as_str().len());
+                Ok(())
+            }
             Work::BlankNode(node) => self.payload(node.as_str().len()),
             Work::Literal(literal) => {
                 self.payload(literal.value().len())?;
@@ -79,7 +86,7 @@ impl<'query> Validator<'query> {
         }
     }
 
-    fn query(&mut self, query: &'query Query, depth: usize) -> Result<(), CompileEnvelopeError> {
+    fn query(&mut self, query: &'query Query, depth: usize) -> Result<(), WalkError> {
         let (dataset, pattern, base_iri) = match query {
             Query::Select {
                 dataset,
@@ -119,11 +126,7 @@ impl<'query> Validator<'query> {
         Ok(())
     }
 
-    fn graph(
-        &mut self,
-        pattern: &'query GraphPattern,
-        depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    fn graph(&mut self, pattern: &'query GraphPattern, depth: usize) -> Result<(), WalkError> {
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 self.collection(patterns.len())?;
@@ -171,6 +174,7 @@ impl<'query> Validator<'query> {
                 variable,
                 expression,
             } => {
+                self.envelope.extend_nodes = checked_sum(self.envelope.extend_nodes, 1)?;
                 self.push(depth, Work::Expression(expression))?;
                 self.push(depth, Work::Variable(variable))?;
                 self.push(depth, Work::Graph(inner))?;
@@ -200,6 +204,8 @@ impl<'query> Validator<'query> {
             }
             GraphPattern::Project { inner, variables } => {
                 self.collection(variables.len())?;
+                self.envelope.project_slots =
+                    checked_sum(self.envelope.project_slots, variables.len())?;
                 for variable in variables.iter().rev() {
                     self.push(depth, Work::Variable(variable))?;
                 }
@@ -236,7 +242,7 @@ impl<'query> Validator<'query> {
         &mut self,
         expression: &'query Expression,
         depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    ) -> Result<(), WalkError> {
         match expression {
             Expression::NamedNode(node) => self.push(depth, Work::NamedNode(node))?,
             Expression::Literal(literal) => self.push(depth, Work::Literal(literal))?,
@@ -295,7 +301,7 @@ impl<'query> Validator<'query> {
         &mut self,
         path: &'query spargebra::algebra::PropertyPathExpression,
         depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    ) -> Result<(), WalkError> {
         use spargebra::algebra::PropertyPathExpression as Path;
         match path {
             Path::NamedNode(node) => self.push(depth, Work::NamedNode(node))?,
@@ -321,7 +327,7 @@ impl<'query> Validator<'query> {
         &mut self,
         aggregate: &'query spargebra::algebra::AggregateExpression,
         depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    ) -> Result<(), WalkError> {
         match aggregate {
             spargebra::algebra::AggregateExpression::CountSolutions { .. } => Ok(()),
             spargebra::algebra::AggregateExpression::FunctionCall { name, expr, .. } => {
@@ -331,11 +337,7 @@ impl<'query> Validator<'query> {
         }
     }
 
-    fn function(
-        &mut self,
-        function: &'query Function,
-        depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    fn function(&mut self, function: &'query Function, depth: usize) -> Result<(), WalkError> {
         match function {
             Function::Str
             | Function::Lang
@@ -401,7 +403,7 @@ impl<'query> Validator<'query> {
         &mut self,
         function: &'query AggregateFunction,
         depth: usize,
-    ) -> Result<(), CompileEnvelopeError> {
+    ) -> Result<(), WalkError> {
         match function {
             AggregateFunction::Count
             | AggregateFunction::Sum

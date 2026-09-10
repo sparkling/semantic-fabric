@@ -25,8 +25,9 @@ pub(crate) enum BoundedCacheKeyError {
 }
 
 /// Pay for canonical output, each requested growth/relocation and the one hash.
-/// The existing AST envelope bounds recursive formatting; formatter-internal
-/// traversal/temporaries and cache lookup/eviction work remain separate gaps.
+/// The controlled AST walk bounds recursive formatting and prepays hidden
+/// projection/Extend analysis. Upstream infallible temporaries and cache
+/// lookup/eviction work remain separate gaps.
 /// No new guessed canonical-byte ceiling is imposed: finite request work bounds
 /// every requested allocation. An allocator may grant more than requested.
 pub(crate) fn plan_key_with_work_control(
@@ -35,21 +36,13 @@ pub(crate) fn plan_key_with_work_control(
     profile: CompileProfileId,
     control: &dyn QueryControl,
 ) -> crate::Result<PlanKey> {
-    use crate::compile_envelope::{algebra::AlgebraEnvelopeV1, CompileEnvelopeError};
+    use crate::compile_envelope::algebra::AlgebraEnvelopeV1;
 
     control.checkpoint()?;
     control.consume(QueryCharge::CompilerWork, 1)?;
     control.checkpoint()?;
-    AlgebraEnvelopeV1::validate(query).map_err(|error| {
-        let cause = match error {
-            CompileEnvelopeError::AccountingOverflow => QueryControlError::AccountingOverflow,
-            CompileEnvelopeError::AllocationFailed => QueryControlError::CompilerResourceExhausted,
-            CompileEnvelopeError::LimitExceeded { .. } => {
-                QueryControlError::CompilerEnvelopeExceeded
-            }
-        };
-        crate::Error::from(control.terminate(cause))
-    })?;
+    let envelope = AlgebraEnvelopeV1::validate_with_control(query, control)?;
+    envelope.charge_canonical_preparation(control)?;
     control.checkpoint()?;
     let mut writer = BoundedWriter::new(usize::MAX, |output: &mut String, additional| {
         output.try_reserve_exact(additional).map_err(|_| ())

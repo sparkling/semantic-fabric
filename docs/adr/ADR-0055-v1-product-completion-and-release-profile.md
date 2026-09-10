@@ -112,9 +112,9 @@ answers cannot bypass mapping work; required HTTP/preflight tests prove pre-sour
 rejection and permit recovery, with exact paid `+`, `*` and `?` results. Shape
 construction, TBox/unifier internals and other payload copies/phases remain
 unqualified; the total-work gate stays open.
-Ordinary/security cold and warm cache paths now prepay canonical UTF-8 output, logical geometric capacity growth/relocation and one hash. Finite cumulative work bounds requested capacity, not allocator overgrant; the AST envelope precedes recursive formatting.
-Exact/N-1, expanded UTF-8, raw/controlled shared reuse, hash cancellation and held-source HTTP tests protect identity, policy precedence and permit recovery. Warm hits still avoid compilation work.
-Formatter internals, envelope measurement, cache collision equality/insertion/eviction/destruction and other compiler phases remain open; this does not activate `GovernedV1` or close `l-query-budget`.
+Ordinary/security cold and warm cache paths now prepay canonical UTF-8 output, logical geometric capacity growth/relocation and one hash. The existing iterative AST walk also prepays visits/collections/payload and stack allocation/relocation; its actual Extend/project/variable counts conservatively prepay hidden formatter searches and logical projection payload before recursive Display (2026-09-10, ADR-0010).
+Exact/N-1, expanded UTF-8, raw/controlled shared reuse, preparation/hash cancellation and held-source HTTP tests protect identity, policy precedence and permit recovery. Independent preparation tests cover empty cells, duplicate projects, EXISTS/root reentry and overflow; later-phase tests pay prerequisite key work. Warm hits still avoid compilation work.
+Finite cumulative work bounds requested capacity, not allocator overgrant or upstream infallible projection allocation/cancellation inside prepaid scans. Cache collision equality/insertion/eviction/destruction and other compiler phases remain open; this does not activate `GovernedV1` or close `l-query-budget`.
 
 **Parser-lifetime correction (2026-09-08):** an authenticated, sub-ingress-limit
 query reproduced a server-process abort. Public compilation now uses a prepared

@@ -159,5 +159,66 @@ fn structural_envelope_rejects_before_recursive_display() {
             QueryControlError::CompilerEnvelopeExceeded
         ))
     ));
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), 1);
+    assert!(
+        control.consumed(QueryCharge::CompilerWork) > 1,
+        "the rejecting iterative walk is also metered"
+    );
+}
+
+#[test]
+fn preparation_is_prepaid_before_output_and_preserves_terminal_cause() {
+    use crate::compile_envelope::algebra::AlgebraEnvelopeV1;
+    let query = spargebra::SparqlParser::new()
+        .parse_query("SELECT (?x+1 AS ?y) WHERE { VALUES ?x { 1 } }")
+        .unwrap();
+    let walk = budget(u64::MAX);
+    let envelope = AlgebraEnvelopeV1::validate_with_control(&query, &walk).unwrap();
+    let preparation = budget(u64::MAX);
+    envelope.charge_canonical_preparation(&preparation).unwrap();
+    let walked = 1 + walk.consumed(QueryCharge::CompilerWork);
+    let prepared = walked + preparation.consumed(QueryCharge::CompilerWork);
+    let short = budget(prepared - 1);
+    assert!(matches!(
+        plan_key_with_work_control(&query, scope(), CompileProfileId::Uncontrolled, &short),
+        Err(crate::Error::QueryControl(
+            QueryControlError::CompilerWorkExceeded
+        ))
+    ));
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        walked,
+        "rejection precedes the atomic preparation charge, output and hash"
+    );
+
+    struct StopAfterPreparation(QueryBudget, u64, QueryControlError);
+    impl QueryControl for StopAfterPreparation {
+        fn checkpoint(&self) -> Result<(), QueryControlError> {
+            self.0.checkpoint()
+        }
+        fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError> {
+            self.0.consume(charge, amount)?;
+            if self.0.consumed(QueryCharge::CompilerWork) == self.1 {
+                self.0.terminate(self.2);
+            }
+            Ok(())
+        }
+        fn terminate(&self, cause: QueryControlError) -> QueryControlError {
+            self.0.terminate(cause)
+        }
+    }
+    for cause in [
+        QueryControlError::Cancelled,
+        QueryControlError::DeadlineExceeded,
+    ] {
+        let control = StopAfterPreparation(budget(u64::MAX), prepared, cause);
+        assert!(matches!(
+            plan_key_with_work_control(&query, scope(), CompileProfileId::Uncontrolled, &control),
+            Err(crate::Error::QueryControl(actual)) if actual == cause
+        ));
+        assert_eq!(
+            control.0.consumed(QueryCharge::CompilerWork),
+            prepared,
+            "the first output fragment and hash must not run after cancellation"
+        );
+    }
 }

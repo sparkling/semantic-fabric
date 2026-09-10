@@ -8,34 +8,9 @@ use tower::ServiceExt;
 
 const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
-fn key_work(source: &str) -> u64 {
-    use std::fmt::{self, Write};
-    struct Counter {
-        length: usize,
-        capacity: usize,
-        work: u64,
-    }
-    impl Write for Counter {
-        fn write_str(&mut self, fragment: &str) -> fmt::Result {
-            self.work += fragment.len() as u64;
-            let next = self.length + fragment.len();
-            if next > self.capacity {
-                self.capacity = next.max(64).max(2 * self.capacity);
-                self.work += (self.capacity + self.length) as u64;
-            }
-            self.length = next;
-            Ok(())
-        }
-    }
-    let query = spargebra::SparqlParser::new().parse_query(source).unwrap();
-    let mut counter = Counter {
-        length: 0,
-        capacity: 0,
-        work: 1,
-    };
-    write!(&mut counter, "{query}").unwrap();
-    counter.work + counter.length as u64
-}
+#[path = "../tests/support/compiler_key.rs"]
+mod compiler_key;
+use compiler_key::key_work;
 
 fn config(work: u64) -> (Arc<ServeConfig>, crate::SqlitePool) {
     config_with_mapping(work, vec![])
