@@ -1,6 +1,7 @@
-//! `rml:StarMap` expansion (ADR-0032 D1, superseding ADR-0029 §B): parser-side
-//! desugaring of an RDF-star quoted-triple subject/object into the existing
-//! R2RML IR — no new `sf-core` IR variant, no downstream/executor/SQL change.
+//! Triple-term-map expansion (ADR-0032 D1): parser-side lowering
+//! of canonical object-position `rml:TripleTermMap` mappings, plus the historic
+//! wrapped `rml:StarMap` compatibility syntax, into the existing R2RML IR — no
+//! new `sf-core` IR variant and no downstream executor or SQL change.
 //!
 //! D1's role split replaces v1's single synthetic id with two distinct
 //! deterministic id families, minted by [`ids::proposition_template`] /
@@ -14,13 +15,11 @@
 //!   maps quoting the same shape mint two distinct reifiers of the one
 //!   proposition (Concepts §1.5's reifier multiplicity).
 //!
-//! In **subject position** (`r2rml.rs::parse_subject_map`), the outer
-//! triples map's subject becomes the reifier id; one injected `rdf:reifies`
-//! predicate-object map points it at the proposition id; the author's own
-//! POMs stay on the outer map (annotations ride the reifier, the native
-//! shape). In **object position** (`r2rml.rs::parse_object_map`), the object
-//! is the proposition id directly — unchanged from v1's shape, no reifier
-//! (there is nothing there to reify).
+//! In the canonical form, an ordinary authored subject is the reifier and an
+//! ordinary `rdf:reifies` predicate-object map points it at the triple term.
+//! Subject-position expansion below exists only for legacy wrapped mappings.
+//! In object position the generated object is the proposition id directly —
+//! no reifier is minted because there is nothing there to reify.
 //!
 //! Either way, the 4 `rdf:PropositionForm` basic-encoding predicate-object
 //! maps (whose subject IS the proposition id, never the reifier) populate a
@@ -98,6 +97,7 @@ pub(super) fn expand_star_map_subject(
     graphs: &[TermMap],
 ) -> Result<SubjectExpansion> {
     let quoted_node = quoted_triples_map_node(g, star_node)?;
+    let asserted = is_asserted(g, star_node, &quoted_node)?;
     let shape = quote_shape(g, &quoted_node, graphs)?;
     let reifies_object = crossing_reference(g, star_node, &shape, outer_source)?;
     let reifier = reifier_term(g, star_node, outer_tm_id, &shape)?;
@@ -105,7 +105,7 @@ pub(super) fn expand_star_map_subject(
     let mut assertions = shape.nested_assertions;
     assertions.push(StarAssertion {
         quoted_id: shape.quoted_id,
-        asserted: is_asserted(g, star_node),
+        asserted,
     });
 
     let reifies_pom = PredicateObjectMap {
@@ -134,20 +134,21 @@ pub(super) fn expand_star_map_object(
     outer_source: &LogicalSource,
     graphs: &[TermMap],
 ) -> Result<ObjectExpansion> {
-    if g.object(star_node, RML_REIFIER_MAP).is_some() {
+    if object_any(g, star_node, &RML_REIFIER_MAP).is_some() {
         return Err(Error::Mapping(format!(
             "rml:reifierMap is not allowed on an object-position rml:starMap ({}): no reifier is minted for an object-position quote (RDF 1.2 Concepts §3.1 — there is nothing there to reify)",
             node_id(star_node)
         )));
     }
     let quoted_node = quoted_triples_map_node(g, star_node)?;
+    let asserted = is_asserted(g, star_node, &quoted_node)?;
     let shape = quote_shape(g, &quoted_node, graphs)?;
     let object = crossing_reference(g, star_node, &shape, outer_source)?;
 
     let mut assertions = shape.nested_assertions;
     assertions.push(StarAssertion {
         quoted_id: shape.quoted_id,
-        asserted: is_asserted(g, star_node),
+        asserted,
     });
 
     Ok(ObjectExpansion {
@@ -187,7 +188,25 @@ fn quote_shape(
     quoted_node: &NamedOrBlankNode,
     graphs: &[TermMap],
 ) -> Result<QuotedShape> {
+    quote_shape_inner(g, quoted_node, graphs, &mut Vec::new())
+}
+
+fn quote_shape_inner(
+    g: &Graph,
+    quoted_node: &NamedOrBlankNode,
+    graphs: &[TermMap],
+    active_quotes: &mut Vec<String>,
+) -> Result<QuotedShape> {
     let quoted_id = node_id(quoted_node);
+    if let Some(cycle_start) = active_quotes.iter().position(|id| id == &quoted_id) {
+        let mut cycle = active_quotes[cycle_start..].to_vec();
+        cycle.push(quoted_id.clone());
+        return Err(Error::Mapping(format!(
+            "nested rml:TripleTermMap references must be acyclic (cycle: {})",
+            cycle.join(" -> ")
+        )));
+    }
+    active_quotes.push(quoted_id.clone());
     let quoted_source = parse_logical_source(g, quoted_node)?;
 
     // D5 (subject side): the quoted triples map's own subject must not
@@ -199,9 +218,9 @@ fn quote_shape(
         .map(as_resource)
         .transpose()?;
     if let Some(n) = &quoted_subject_map_node {
-        if g.object(n, RML_STAR_MAP).is_some() {
+        if wrapped_star_map(g, n).is_some() || direct_triple_term_map(g, n) {
             return Err(Error::Mapping(format!(
-                "rml:starMap in subject position: quoted triples map {quoted_id}'s own subject is itself a StarMap — RDF 1.2 Concepts §3.1: triple terms are object-position-only, a triple-term subject is not RDF"
+                "rml:TripleTermMap in subject position: quoted triples map {quoted_id}'s own subject is a triple term map — RDF 1.2 Concepts §3.1: triple terms are object-position-only, a triple-term subject is not RDF"
             )));
         }
     }
@@ -281,16 +300,23 @@ fn quote_shape(
                     "quoted triples map {quoted_id}'s object is a referencing object map (rr:parentTriplesMap), not supported for RDF-star quoting"
                 )));
             }
-            if let Some(inner_star) = g.object(om_node, RML_STAR_MAP) {
-                let inner_star_node = as_resource(inner_star)?;
+            let inner_star_node = if let Some(inner_star) = wrapped_star_map(g, om_node) {
+                Some(as_resource(inner_star)?)
+            } else if direct_triple_term_map(g, om_node) {
+                Some(om_node.clone())
+            } else {
+                None
+            };
+            if let Some(inner_star_node) = inner_star_node {
                 let inner_quoted_node = quoted_triples_map_node(g, &inner_star_node)?;
-                let inner_shape = quote_shape(g, &inner_quoted_node, graphs)?;
+                let inner_asserted = is_asserted(g, &inner_star_node, &inner_quoted_node)?;
+                let inner_shape = quote_shape_inner(g, &inner_quoted_node, graphs, active_quotes)?;
                 let inner_pom_value =
                     crossing_reference(g, &inner_star_node, &inner_shape, &quoted_source)?;
                 let mut assertions = inner_shape.nested_assertions;
                 assertions.push(StarAssertion {
                     quoted_id: inner_shape.quoted_id.clone(),
-                    asserted: is_asserted(g, &inner_star_node),
+                    asserted: inner_asserted,
                 });
                 let inner_term = TermMap::Template(inner_shape.pfid.clone(), TermSpec::iri());
                 (
@@ -338,6 +364,7 @@ fn quote_shape(
         predicate_object_maps: description_poms,
     });
 
+    active_quotes.pop();
     Ok(QuotedShape {
         pfid,
         quoted_id,
@@ -390,7 +417,7 @@ fn reifier_term(
     outer_tm_id: &str,
     shape: &QuotedShape,
 ) -> Result<TermMap> {
-    if let Some(rm) = g.object(star_node, RML_REIFIER_MAP) {
+    if let Some(rm) = object_any(g, star_node, &RML_REIFIER_MAP) {
         let node = as_resource(rm)?;
         let term = parse_term_map(g, &node, Position::Subject)?;
         if let TermMap::Constant(Term::Literal(_)) = &term {
@@ -409,16 +436,40 @@ fn reifier_term(
 
 /// `star_node`'s `rml:quotedTriplesMap` object, as a resource.
 fn quoted_triples_map_node(g: &Graph, star_node: &NamedOrBlankNode) -> Result<NamedOrBlankNode> {
-    let quoted_ref = g
-        .object(star_node, RML_QUOTED_TRIPLES_MAP)
-        .ok_or_else(|| Error::Mapping("rml:starMap has no rml:quotedTriplesMap".to_owned()))?;
-    as_resource(quoted_ref)
+    let quoted_refs = objects_any(g, star_node, &RML_QUOTED_TRIPLES_MAP);
+    if quoted_refs.len() != 1 {
+        return Err(Error::Mapping(format!(
+            "rml:TripleTermMap {} must have exactly one rml:quotedTriplesMap (found {})",
+            node_id(star_node),
+            quoted_refs.len()
+        )));
+    }
+    as_resource(quoted_refs[0])
 }
 
-/// Whether `star_node` marks its quoted map asserted (no
-/// `rml:nonAssertedTriplesMap`) — the default.
-fn is_asserted(g: &Graph, star_node: &NamedOrBlankNode) -> bool {
-    g.object(star_node, RML_NON_ASSERTED_TRIPLES_MAP).is_none()
+/// The RDF 1.2-aligned form declares assertion on the referenced triples
+/// map's class. Historic wrapped mappings used a lower-camel property on the
+/// star-map node; retain that marker only as a fallback.
+fn is_asserted(
+    g: &Graph,
+    star_node: &NamedOrBlankNode,
+    quoted_node: &NamedOrBlankNode,
+) -> Result<bool> {
+    let asserted = has_type_any(g, quoted_node, &RML_ASSERTED_TRIPLES_MAP);
+    let non_asserted = has_type_any(g, quoted_node, &RML_NON_ASSERTED_TRIPLES_MAP);
+    if asserted && non_asserted {
+        return Err(Error::Mapping(format!(
+            "quoted triples map {} cannot be both rml:AssertedTriplesMap and rml:NonAssertedTriplesMap",
+            node_id(quoted_node)
+        )));
+    }
+    if non_asserted {
+        return Ok(false);
+    }
+    if asserted {
+        return Ok(true);
+    }
+    Ok(object_any(g, star_node, &RML_LEGACY_NON_ASSERTED_MARKER).is_none())
 }
 
 /// The standalone description map's id for a quoted map (ADR-0032 D1: keyed

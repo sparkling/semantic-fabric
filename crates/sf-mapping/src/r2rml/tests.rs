@@ -61,6 +61,20 @@ fn pom_with_predicate<'a>(map: &'a TriplesMap, predicate: &str) -> &'a Predicate
         .unwrap_or_else(|| panic!("no predicate-object map for {predicate}"))
 }
 
+fn object_template_segments(object: &ObjectMap) -> &[Segment] {
+    match object {
+        ObjectMap::Term(TermMap::Template(template, _)) => template.segments(),
+        other => panic!("expected object template, got {other:?}"),
+    }
+}
+
+fn subject_template_segments(map: &TriplesMap) -> &[Segment] {
+    match &map.subject.term {
+        TermMap::Template(template, _) => template.segments(),
+        other => panic!("expected subject template, got {other:?}"),
+    }
+}
+
 #[test]
 fn parses_r2rml_fixture_into_ir() {
     let maps = parse_r2rml(FIXTURE).expect("fixture parses");
@@ -154,6 +168,258 @@ fn triples_map_without_logical_table_is_rejected() {
 #[test]
 fn malformed_turtle_is_a_mapping_error() {
     assert!(parse_r2rml("this is not turtle @@@").is_err());
+}
+
+// --- RDF 1.2-aligned R2RML mapping extension --------------------------------
+
+const RDF12_REIFIER_FIXTURE: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://w3id.org/rml/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonName> a rml:NonAssertedTriplesMap ;
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://example.com/person/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:name ;
+        rr:objectMap [ rr:column "name" ]
+    ] .
+
+<#Claim> rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://example.com/claim/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate rdf:reifies ;
+        rr:objectMap [
+            a rml:TripleTermMap ;
+            rml:quotedTriplesMap <#PersonName>
+        ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:confidence ;
+        rr:objectMap [ rr:column "confidence" ]
+    ] .
+"#;
+
+#[test]
+fn rdf12_explicit_reifier_keeps_authored_subject_and_suppresses_component_triple() {
+    let maps = parse_r2rml(RDF12_REIFIER_FIXTURE).expect("RDF 1.2 mapping parses");
+    assert_eq!(maps.len(), 2, "claim + triple-term description map");
+    assert!(
+        !maps.iter().any(|map| {
+            map.id.ends_with("#PersonName") && !map.id.contains("urn:sf-star:desc:")
+        }),
+        "a non-asserted component triples map is not emitted independently"
+    );
+
+    let claim = map_by_suffix(&maps, "#Claim");
+    match &claim.subject.term {
+        TermMap::Template(template, spec) => {
+            assert_eq!(spec.term_type, TermType::Iri);
+            assert_eq!(
+                template.segments(),
+                Template::parse("http://example.com/claim/{id}")
+                    .unwrap()
+                    .segments(),
+                "the ordinary subject map is the reifier identity"
+            );
+        }
+        other => panic!("expected the authored reifier template, got {other:?}"),
+    }
+
+    let reifies = pom_with_predicate(claim, RDF_REIFIES);
+    let proposition = match &reifies.objects[0] {
+        ObjectMap::Term(TermMap::Template(template, spec)) => {
+            assert_eq!(spec.term_type, TermType::Iri);
+            template
+        }
+        other => panic!("expected rdf:reifies to target a proposition id, got {other:?}"),
+    };
+    let description = description_map_for(&maps, "#PersonName");
+    assert_eq!(description.predicate_object_maps.len(), 4);
+    match &description.subject.term {
+        TermMap::Template(template, _) => assert_eq!(template.segments(), proposition.segments()),
+        other => panic!("expected proposition description template, got {other:?}"),
+    }
+}
+
+#[test]
+fn rdf12_asserted_class_retains_the_component_triple() {
+    let asserted =
+        RDF12_REIFIER_FIXTURE.replace("rml:NonAssertedTriplesMap", "rml:AssertedTriplesMap");
+    let maps = parse_r2rml(&asserted).expect("asserted RDF 1.2 mapping parses");
+    assert_eq!(maps.len(), 3, "claim + asserted component + description");
+    assert!(maps
+        .iter()
+        .any(|map| { map.id.ends_with("#PersonName") && !map.id.contains("urn:sf-star:desc:") }));
+}
+
+#[test]
+fn rdf12_contradictory_assertion_classes_are_rejected() {
+    let contradictory = RDF12_REIFIER_FIXTURE.replace(
+        "a rml:NonAssertedTriplesMap",
+        "a rml:AssertedTriplesMap, rml:NonAssertedTriplesMap",
+    );
+    let error = parse_r2rml(&contradictory).expect_err("assertion classes are exclusive");
+    let Error::Mapping(message) = error else {
+        panic!("expected Error::Mapping, got {error:?}")
+    };
+    assert!(message.contains("both"), "unexpected message: {message}");
+}
+
+#[test]
+fn rdf12_direct_subject_triple_term_map_is_rejected() {
+    let mapping = RDF12_REIFIER_FIXTURE.replace(
+        "rr:subjectMap [ rr:template \"http://example.com/claim/{id}\" ]",
+        "rr:subjectMap [ a rml:TripleTermMap ; rml:quotedTriplesMap <#PersonName> ]",
+    );
+    let error = parse_r2rml(&mapping).expect_err("triple terms are object-only");
+    let Error::Mapping(message) = error else {
+        panic!("expected Error::Mapping, got {error:?}")
+    };
+    assert!(
+        message.contains("object-position-only") && message.contains("rdf:reifies"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn rdf12_multiple_reifiers_share_one_triple_term() {
+    let mapping = RDF12_REIFIER_FIXTURE.replace(
+        "<#Claim> rr:logicalTable",
+        r#"<#Review> rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://example.com/review/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate rdf:reifies ;
+        rr:objectMap [ a rml:TripleTermMap ; rml:quotedTriplesMap <#PersonName> ]
+    ] .
+
+<#Claim> rr:logicalTable"#,
+    );
+    let maps = parse_r2rml(&mapping).expect("two explicit reifiers parse");
+    assert_eq!(maps.len(), 3, "two reifiers + one shared description");
+    let claim = map_by_suffix(&maps, "#Claim");
+    let review = map_by_suffix(&maps, "#Review");
+    let claim_object = &pom_with_predicate(claim, RDF_REIFIES).objects[0];
+    let review_object = &pom_with_predicate(review, RDF_REIFIES).objects[0];
+    assert_eq!(
+        object_template_segments(claim_object),
+        object_template_segments(review_object),
+        "triple-term identity is shared"
+    );
+    assert_ne!(
+        subject_template_segments(claim),
+        subject_template_segments(review),
+        "reifier ids are independent"
+    );
+}
+
+#[test]
+fn rdf12_cross_source_join_accepts_rml_join_vocabulary() {
+    let mapping = RDF12_REIFIER_FIXTURE
+        .replacen("rr:tableName \"person\"", "rr:tableName \"fact\"", 1)
+        .replace(
+            "rml:quotedTriplesMap <#PersonName>",
+            "rml:quotedTriplesMap <#PersonName> ; rml:joinCondition [ rml:child \"id\" ; rml:parent \"id\" ]",
+        );
+    let maps = parse_r2rml(&mapping).expect("canonical RML join aliases parse");
+    let claim = map_by_suffix(&maps, "#Claim");
+    match &pom_with_predicate(claim, RDF_REIFIES).objects[0] {
+        ObjectMap::Ref(reference) => {
+            assert_eq!(reference.joins.len(), 1);
+            assert_eq!(reference.joins[0].child, "id");
+            assert_eq!(reference.joins[0].parent, "id");
+        }
+        other => panic!("expected cross-source RefObjectMap, got {other:?}"),
+    }
+}
+
+#[test]
+fn rdf12_nested_triple_terms_are_supported_in_object_position() {
+    let mapping = r#"
+        @prefix rr:  <http://www.w3.org/ns/r2rml#> .
+        @prefix rml: <http://w3id.org/rml/> .
+        @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+        @prefix ex:  <http://example.com/> .
+
+        <#Inner> a rml:NonAssertedTriplesMap ;
+            rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:inner ;
+            rr:predicateObjectMap [ rr:predicate ex:value ; rr:object "v" ] .
+        <#OuterFact> a rml:NonAssertedTriplesMap ;
+            rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:outer ;
+            rr:predicateObjectMap [ rr:predicate ex:contains ; rr:objectMap [
+                a rml:TripleTermMap ; rml:quotedTriplesMap <#Inner>
+            ] ] .
+        <#Claim> rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:claim ;
+            rr:predicateObjectMap [ rr:predicate rdf:reifies ; rr:objectMap [
+                a rml:TripleTermMap ; rml:quotedTriplesMap <#OuterFact>
+            ] ] .
+    "#;
+    let maps = parse_r2rml(mapping).expect("object-side nesting parses");
+    assert_eq!(maps.len(), 3, "claim + two proposition descriptions");
+    let outer_description = description_map_for(&maps, "#OuterFact");
+    let inner_description = description_map_for(&maps, "#Inner");
+    let nested_object =
+        &pom_with_predicate(outer_description, RDF_PROPOSITION_FORM_OBJECT).objects[0];
+    assert_eq!(
+        object_template_segments(nested_object),
+        subject_template_segments(inner_description),
+        "the outer triple term contains the inner triple term"
+    );
+}
+
+#[test]
+fn rdf12_triple_term_map_requires_exactly_one_quoted_map() {
+    let mapping = RDF12_REIFIER_FIXTURE.replace(
+        "rml:quotedTriplesMap <#PersonName>",
+        "rml:quotedTriplesMap <#PersonName>, <#Claim>",
+    );
+    let error = parse_r2rml(&mapping).expect_err("two quoted maps are ambiguous");
+    let Error::Mapping(message) = error else {
+        panic!("expected Error::Mapping, got {error:?}")
+    };
+    assert!(
+        message.contains("exactly one rml:quotedTriplesMap") && message.contains("found 2"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn rdf12_nested_triple_term_cycles_are_rejected() {
+    let mapping = r#"
+        @prefix rr:  <http://www.w3.org/ns/r2rml#> .
+        @prefix rml: <http://w3id.org/rml/> .
+        @prefix ex:  <http://example.com/> .
+
+        <#A> a rml:NonAssertedTriplesMap ;
+            rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:a ;
+            rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [
+                a rml:TripleTermMap ; rml:quotedTriplesMap <#B>
+            ] ] .
+        <#B> a rml:NonAssertedTriplesMap ;
+            rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:b ;
+            rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [
+                a rml:TripleTermMap ; rml:quotedTriplesMap <#A>
+            ] ] .
+        <#Outer> rr:logicalTable [ rr:tableName "facts" ] ;
+            rr:subject ex:outer ;
+            rr:predicateObjectMap [ rr:predicate ex:value ; rr:objectMap [
+                a rml:TripleTermMap ; rml:quotedTriplesMap <#A>
+            ] ] .
+    "#;
+    let error = parse_r2rml(mapping).expect_err("recursive triple terms are not RDF terms");
+    let Error::Mapping(message) = error else {
+        panic!("expected Error::Mapping, got {error:?}")
+    };
+    assert!(
+        message.contains("acyclic") && message.contains("#A") && message.contains("#B"),
+        "unexpected message: {message}"
+    );
 }
 
 // --- ADR-0032 D1: rml:StarMap role-split id expansion (supersedes ADR-0029 §B) -
