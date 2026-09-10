@@ -15,12 +15,13 @@ use crate::runtime_identity::{CompileDigests, SemanticIdentity};
 use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 
 impl CompilerBinding {
-    /// Carry request control into the already-metered normalization, lowering
+    /// Carry request control through structural BUILD and the metered normalization, lowering
     /// and nested-cascade operations on a cache miss, plus canonical key
     /// output/growth/hash work on hits and misses. Cache locks are attempted once:
     /// contention is a miss/skipped insertion, never a wait or a query error.
-    /// Parsing, formatter internals, build/resolve and cache lifecycle work are
-    /// not fully governed by this seam.
+    /// Parsing, formatter internals, other resolve work and cache lifecycle work
+    /// are not fully governed by this seam. BUILD controls visits, logical collection
+    /// growth, stable scope comparisons and actual owned copies, not physical heap/drop.
     /// Cache identity and semantics are unchanged: this does not activate
     /// `GovernedV1`. A shared hit performs no recursive plan clone to charge.
     /// Measurement limits protect each performed clone, not whole-plan admission.

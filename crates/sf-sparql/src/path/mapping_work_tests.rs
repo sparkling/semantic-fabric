@@ -253,11 +253,20 @@ fn failed_path_expansion_cannot_cache_and_paid_hits_share_the_plan() {
     )
     .unwrap();
     let key_work = key_control.consumed(QueryCharge::CompilerWork);
-    let short = budget(key_work);
+    let crate::Query::Select { pattern, .. } = crate::parse_query(query).unwrap() else {
+        panic!()
+    };
+    let build_control = budget(u64::MAX);
+    crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
+    let build_work = build_control.consumed(QueryCharge::CompilerWork);
+    let short = budget(key_work + build_work);
     assert!(binding
         .compile_shared_with_work_control(query, &short)
         .is_err());
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), key_work);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        key_work + build_work
+    );
     assert_eq!(binding.cache_len(), 0);
     let paid = budget(100_000);
     let first = binding

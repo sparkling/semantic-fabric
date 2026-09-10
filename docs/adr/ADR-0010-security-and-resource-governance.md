@@ -350,7 +350,7 @@ Exact/N-1 tests cover bindings, scans, conditions, OPTIONAL and subplan payloads
 authenticated right-heavy VALUES tests prove pre-source rejection, permit recovery,
 exact successful bags and completed-cache reuse. This covers direct copies only:
 unifier-produced conditions, nullable-alias sets and extra left-internal copies
-remain open, as do upstream temporary allocation, build/resolve, other products/copies
+remain open, as do upstream temporary allocation, other resolve work, products/copies
 and destruction. `l-query-budget` stays open; direct multi-origin unfolding
 retains its separate eligibility/recipe charges.
 
@@ -386,6 +386,22 @@ recover shared hits and retain budget/cancellation/deadline and policy-first err
 Raw APIs remain blocking and interoperable. Hashing/probing/collision equality,
 work inside an acquired lock, insertion allocation/eviction/destruction and other
 compiler phases remain open. `GovernedV1` stays dormant; `l-query-budget` blocks.
+
+**Structural BUILD update (2026-09-10):** the live AST-to-IQ stage carries the
+request control through all supported arms, including GRAPH and nested EXISTS.
+Visits, fixed collection slots, logical vector growth/relocation, stable scope
+comparisons and source-bound scalar/recursive copies are prepaid; a depth envelope
+also protects uncached entry; small recursive dispatcher/arm frames retain that
+boundary on ordinary test/worker stacks. Named paths avoid a redundant temporary copy.
+Required tests cover raw-tree equivalence, exact/N-1 work, every charge's sticky
+cancellation/deadline, UTF-8/duplicate scopes and allocator-independent growth.
+Public ordinary/security tests retain paid-key hits without rebuilding, reject
+unpaid BUILD before held-source admission and recover compiler capacity; later-phase
+tests separately pay BUILD rather than masking their original operation boundary.
+Fallible vector allocation is local: derived Clone/Box/string/map allocations,
+physical allocator overgrant, measurement traversal/preemption and destruction
+remain unqualified, alongside other compiler/source/release work. No governed
+profile or whole-application completion is claimed.
 
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,

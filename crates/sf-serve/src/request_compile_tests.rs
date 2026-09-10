@@ -10,7 +10,7 @@ const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
 #[path = "../tests/support/compiler_key.rs"]
 mod compiler_key;
-use compiler_key::key_work;
+use compiler_key::{build_work, key_work};
 
 fn config(work: u64) -> (Arc<ServeConfig>, crate::SqlitePool) {
     config_with_mapping(work, vec![])
@@ -40,15 +40,22 @@ fn config_with_mapping(
 
 #[tokio::test]
 async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
-    let exact = 2 * QUERY.len() as u64 + key_work(QUERY);
+    let build = build_work(QUERY);
+    let input = QUERY.len() as u64;
+    let key = key_work(QUERY);
+    let exact = 2 * input + key + 2 * build;
     let canonical = spargebra::SparqlParser::new()
         .parse_query(QUERY)
         .unwrap()
         .to_string()
         .len() as u64;
     for (work, succeeds, consumed) in [
-        (2 * QUERY.len() as u64 - 1, false, QUERY.len() as u64),
-        (exact - 1, false, exact - canonical),
+        (2 * input + build - 1, false, input + build),
+        (
+            2 * input + build + key - 1,
+            false,
+            2 * input + build + key - canonical,
+        ),
         (exact, true, exact),
     ] {
         let (cfg, _) = config(work);
@@ -57,10 +64,7 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
         let reservation = preflight(cfg.clone(), snapshot.clone(), QUERY.into(), budget.clone())
             .await
             .unwrap();
-        assert_eq!(
-            budget.consumed(QueryCharge::CompilerWork),
-            QUERY.len() as u64
-        );
+        assert_eq!(budget.consumed(QueryCharge::CompilerWork), input + build);
         let result = compile(
             cfg.clone(),
             snapshot,
@@ -182,7 +186,7 @@ async fn compiler_expansion_work_rejects_before_source_admission() {
         ),
         ("SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }", path_maps, 0),
     ] {
-        let preflight_work = query.len() as u64 + extra;
+        let preflight_work = query.len() as u64 + build_work(query) + extra;
         let (mut cfg, pool) = config_with_mapping(preflight_work + key_work(query), maps);
         Arc::get_mut(&mut cfg)
             .unwrap()
@@ -302,6 +306,100 @@ async fn canonical_key_failure_precedes_held_source_and_recovers_compiler_capaci
             assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             drop(response);
+            let recovered = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                cfg.compiler_permits().acquire_many_owned(4),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            drop(recovered);
+            drop(held);
+        }
+    }
+}
+
+#[tokio::test]
+async fn structural_build_failure_precedes_source_while_completed_hits_skip_build() {
+    use http_body_util::BodyExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for secured in [false, true] {
+        for (warm, extra) in [(false, 0), (false, build_work(QUERY) - 1), (true, 0)] {
+            let (mut cfg, pool) = config(100_000);
+            if secured {
+                Arc::get_mut(&mut cfg)
+                    .unwrap()
+                    .set_query_admission(crate::QueryAdmission::Bearer(
+                        crate::BearerQueryAdmission::for_service_principal(
+                            "test-only-build-work-credential-123456",
+                        )
+                        .unwrap(),
+                    ));
+            }
+            let request = || {
+                Request::post("/sparql")
+                    .header("content-type", "application/sparql-query")
+                    .header(
+                        "authorization",
+                        "Bearer test-only-build-work-credential-123456",
+                    )
+                    .body(Body::from(QUERY))
+                    .unwrap()
+            };
+            if warm {
+                let response = crate::router(cfg.clone()).oneshot(request()).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                response.into_body().collect().await.unwrap();
+            }
+            Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
+                QUERY.len() as u64 + key_work(QUERY) + extra,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+            );
+            let held = pool.pick_owned().acquire().await.unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            let queued = Arc::new(tokio::sync::Notify::new());
+            let notify = queued.clone();
+            pool.set_admission_pending_observer(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                notify.notify_one();
+            });
+            let mut response = Box::pin(crate::router(cfg.clone()).oneshot(request()));
+            let mut held = Some(held);
+            if warm {
+                // Paid shared-plan hits skip BUILD, not normal source admission.
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    tokio::select! {
+                        _ = queued.notified() => (),
+                        result = &mut response => panic!("warm hit bypassed held source: {result:?}"),
+                    }
+                }).await.expect("paid cache hit reaches source admission");
+                drop(held.take());
+            }
+            let response = tokio::time::timeout(std::time::Duration::from_secs(2), response)
+                .await
+                .expect("BUILD must not wait for source")
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if warm {
+                    StatusCode::OK
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
+            );
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            if warm {
+                let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(result["results"]["bindings"], serde_json::json!([]));
+            }
+            if warm {
+                assert!(calls.load(Ordering::SeqCst) > 0);
+            } else {
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+            }
             let recovered = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
                 cfg.compiler_permits().acquire_many_owned(4),

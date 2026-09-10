@@ -643,7 +643,7 @@ fn translate_tree_with_column_type_use(
     // (e.g. DESCRIBE's outgoing-triple join) keeps disjoint aliases across them.
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
         let built = compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Build, || {
-            build::build_tree(pattern, None)
+            build::build_tree_with_work_mode(pattern, None, work_mode)
         })?;
         let resolved =
             compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Resolve, || {

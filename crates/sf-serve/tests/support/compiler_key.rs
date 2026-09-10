@@ -41,3 +41,17 @@ pub(crate) fn key_work(source: &str) -> u64 {
     );
     control.consumed(QueryCharge::CompilerWork)
 }
+
+/// Isolate structural BUILD, so a later-stage test pays this new prerequisite
+/// without calibrating away the expansion/mapping work that it actually checks.
+/// Only ordinary SELECT fixtures: this does not model RDF-star/DESCRIBE rewrites.
+pub(crate) fn build_work(source: &str) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let parsed = spargebra::SparqlParser::new().parse_query(source).unwrap();
+    let spargebra::Query::Select { pattern, .. } = &parsed else {
+        panic!("BUILD calibration requires an ordinary SELECT fixture")
+    };
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    sf_sparql::build::build_tree_with_work_control(pattern, None, &control).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}

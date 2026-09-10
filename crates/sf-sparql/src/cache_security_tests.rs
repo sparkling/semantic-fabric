@@ -323,13 +323,19 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
     )
     .unwrap();
     let key_work = key_control.consumed(QueryCharge::CompilerWork);
+    let crate::Query::Select { pattern, .. } = crate::parse_query(query).unwrap() else {
+        panic!()
+    };
+    let build_control = control(u64::MAX);
+    crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
+    let build_work = build_control.consumed(QueryCharge::CompilerWork);
     assert!(compiler
-        .compile_shared_with_work_control(&alice, query, &control(key_work))
+        .compile_shared_with_work_control(&alice, query, &control(key_work + build_work))
         .is_err());
     assert_eq!(
         cache.access_counts(),
         (1, 0),
-        "failure follows paid key lookup"
+        "later clone failure follows paid key lookup and structural BUILD"
     );
     assert_eq!(cache.len(), 0);
     let paid = control(u64::MAX);

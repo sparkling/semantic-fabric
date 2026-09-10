@@ -327,12 +327,22 @@ mod tests {
         )
         .unwrap();
         let key_work = key_control.consumed(QueryCharge::CompilerWork);
-        let short = budget(key_work + 3);
+        let crate::Query::Select { pattern, .. } = crate::parse_query(query).unwrap() else {
+            panic!()
+        };
+        let build_control = budget(u64::MAX);
+        crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
+        let build_work = build_control.consumed(QueryCharge::CompilerWork);
+        // Reach the unpaid first 1×4 product after paying the independent BUILD.
+        let short = budget(key_work + build_work + 3);
         assert!(binding
             .compile_shared_with_work_control(query, &short)
             .is_err());
         assert_eq!(binding.cache_len(), 0);
-        assert_eq!(short.consumed(QueryCharge::CompilerWork), key_work);
+        assert_eq!(
+            short.consumed(QueryCharge::CompilerWork),
+            key_work + build_work
+        );
         let paid = budget(100_000);
         let first = binding
             .compile_shared_with_work_control(query, &paid)

@@ -296,7 +296,13 @@ fn translate_fixture(query: &Query, control: &QueryBudget) -> Result<Plan> {
 #[test]
 fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge() {
     let (query, work) = whole_pipeline_fixture();
-    let expected = work * 2;
+    let Query::Select { pattern, .. } = &query else {
+        panic!()
+    };
+    let build_control = budget(u64::MAX);
+    build::build_tree_with_work_control(pattern, None, &build_control).unwrap();
+    let build = build_control.consumed(QueryCharge::CompilerWork);
+    let expected = build + work * 2;
     let exact = budget(expected);
     let raw = translate_tree(&query, &[], &Tbox::default(), Dialect::Sqlite, &[]).unwrap();
 
@@ -312,7 +318,7 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
             .expect_err("whole-pipeline N-1 must reject before the second EXISTS clone"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), work);
+    assert_eq!(short.consumed(QueryCharge::CompilerWork), build + work);
     assert_eq!(
         short.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)

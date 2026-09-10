@@ -2,7 +2,7 @@ use super::*;
 
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
-pub(super) use compiler_key::key_work;
+pub(super) use compiler_key::{build_work, key_work};
 
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
     // Terminal failure wakes the response before the blocking compiler closure
@@ -69,7 +69,7 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    // A single VALUES leaf has no branch product: input plus exact key work.
+    // A single VALUES leaf has no branch product: input, key and BUILD work.
     let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
         .append_pair("query", query)
@@ -78,7 +78,14 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
             (query.len() as u64 + key_work(query) - 1, false),
-            (query.len() as u64 + key_work(query), true),
+            (
+                query.len() as u64 + key_work(query) + build_work(query) - 1,
+                false,
+            ),
+            (
+                query.len() as u64 + key_work(query) + build_work(query),
+                true,
+            ),
         ] {
             let req = Request::builder()
                 .method(method)
@@ -120,7 +127,8 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
             config(QueryLimits::new(100_000, u64::MAX, u64::MAX, u64::MAX))
         });
         for warm in [false, true] {
-            let exact = query.len() as u64 + key_work(&query);
+            let exact =
+                query.len() as u64 + key_work(&query) + if warm { 0 } else { build_work(&query) };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(
                 router(cfg.clone())

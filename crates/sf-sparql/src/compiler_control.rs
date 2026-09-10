@@ -252,6 +252,21 @@ impl<'control> CompileContext<'control> {
         Ok(variables.to_vec())
     }
 
+    /// Reserve an actual AST payload copy before BUILD performs it. The typed
+    /// BUILD adapter binds this root to its borrowed source and single clone.
+    pub(crate) fn reserve_ast_copy(&self, root: CompilerCloneRootV1<'_>) -> Result<()> {
+        self.checkpoint()?;
+        self.reserve_checked_sum(&[1])?;
+        let measure =
+            measure_compiler_clone_root_v1(root).map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        self.checkpoint()
+    }
+
+    pub(crate) fn reject_build_resource(&self, reason: QueryControlError) -> Error {
+        self.meter.control.terminate(reason).into()
+    }
+
     fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {
         let units = measure.deep_clone_work;
         self.meter.reserve_work(units)?;

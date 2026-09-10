@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 #[path = "query_budget/cache_key.rs"]
 mod cache_key;
-use cache_key::key_work;
+use cache_key::{build_work, key_work};
 
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
@@ -70,7 +70,7 @@ fn mapping_product_config(work: u64) -> ServeConfig {
 async fn mapping_products_charge_even_candidates_that_cannot_match() {
     let query = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
     let response = router(Arc::new(mapping_product_config(
-        query.len() as u64 + key_work(query) + 5,
+        query.len() as u64 + key_work(query) + build_work(query) + 5,
     )))
     .oneshot(authenticated(query))
     .await
@@ -157,10 +157,12 @@ fn path_config(work: u64) -> ServeConfig {
 #[tokio::test]
 async fn negated_path_mapping_searches_obey_compiler_allowance() {
     let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
-    let response = router(Arc::new(path_config(query.len() as u64 + key_work(query))))
-        .oneshot(authenticated(query))
-        .await
-        .unwrap();
+    let response = router(Arc::new(path_config(
+        query.len() as u64 + key_work(query) + build_work(query),
+    )))
+    .oneshot(authenticated(query))
+    .await
+    .unwrap();
     assert_budget_problem(response).await;
 }
 
@@ -292,17 +294,19 @@ async fn zero_compiler_work_is_a_pre_response_429() {
 #[tokio::test]
 async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
     let query = CLONING;
-    let response = router(Arc::new(protected(query.len() as u64 + key_work(query))))
-        .oneshot(authenticated(query))
-        .await
-        .unwrap();
+    let response = router(Arc::new(protected(
+        query.len() as u64 + key_work(query) + build_work(query),
+    )))
+    .oneshot(authenticated(query))
+    .await
+    .unwrap();
     assert_budget_problem(response).await;
 }
 
 #[tokio::test]
 async fn compiler_products_cannot_spend_only_their_input_allowance() {
     let response = router(Arc::new(protected(
-        PRODUCTS.len() as u64 + key_work(PRODUCTS),
+        PRODUCTS.len() as u64 + key_work(PRODUCTS) + build_work(PRODUCTS),
     )))
     .oneshot(authenticated(PRODUCTS))
     .await

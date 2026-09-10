@@ -56,6 +56,15 @@ fn clone_work() -> u64 {
         .deep_clone_work
 }
 
+fn build_work() -> u64 {
+    let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
+        panic!()
+    };
+    let control = budget(u64::MAX);
+    crate::build::build_tree_with_work_control(&pattern, None, &control).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 #[test]
 fn canonical_key_cold_and_warm_paths_require_work_before_cache_access() {
     let query = "SELECT ?x WHERE { VALUES ?x { \"café 東京\" } }";
@@ -91,18 +100,25 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let binding = binding();
     let work = clone_work();
     let key = key_work();
-    let short = budget(key + 2 * work - 1);
+    let build = build_work();
+    let short = budget(key + build + 2 * work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
         Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
     ));
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), key + work);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        key + build + work
+    );
     assert_eq!(binding.cache_len(), 0);
-    let exact = budget(key + 2 * work);
+    let exact = budget(key + build + 2 * work);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
         .unwrap();
-    assert_eq!(exact.consumed(QueryCharge::CompilerWork), key + 2 * work);
+    assert_eq!(
+        exact.consumed(QueryCharge::CompilerWork),
+        key + build + 2 * work
+    );
     assert_eq!(binding.cache_len(), 1);
     assert_eq!(
         format!("{plan:?}"),
@@ -130,16 +146,18 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
 fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let binding = binding();
     let work = clone_work();
-    for allowance in [4 * work - 1, 4 * work] {
+    let build = build_work();
+    let total = 2 * build + 4 * work;
+    for allowance in [total - 1, total] {
         let control = budget(allowance);
         binding
             .compile_uncached_shared_with_work_control(QUERY, &control)
             .unwrap();
         let second = binding.compile_uncached_shared_with_work_control(QUERY, &control);
-        assert_eq!(second.is_ok(), allowance == 4 * work);
+        assert_eq!(second.is_ok(), allowance == total);
         assert_eq!(
             control.consumed(QueryCharge::CompilerWork),
-            if second.is_ok() { 4 * work } else { 3 * work }
+            if second.is_ok() { total } else { total - work }
         );
         assert_eq!(binding.cache_len(), 0);
     }
@@ -169,7 +187,7 @@ impl QueryControl for CancelAfterClone {
 #[test]
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
-    let work = key_work() + clone_work();
+    let work = key_work() + build_work() + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &control),
