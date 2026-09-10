@@ -1,5 +1,7 @@
 //! Required live TLS qualification, always using test-owned disposable providers.
 #![cfg(unix)]
+#[path = "source_tls_live/authored_generation.rs"]
+mod authored_generation;
 #[path = "source_tls_live/cancellation.rs"]
 mod cancellation;
 #[path = "source_tls_live/direct.rs"]

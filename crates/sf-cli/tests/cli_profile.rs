@@ -37,6 +37,7 @@ fn serving_help_retains_required_database_and_security_options() {
         "--max-source-work",
         "--shutdown-timeout-secs",
         "--reload-interval-secs",
+        "--require-verified-generation",
     ] {
         assert!(help.contains(option), "missing serving option: {option}");
     }

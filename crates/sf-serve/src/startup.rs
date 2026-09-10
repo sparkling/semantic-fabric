@@ -22,7 +22,7 @@ pub(crate) async fn build_config(
 ) -> Result<(ServeConfig, crate::reload::Baseline), ServeError> {
     let inputs = crate::startup_inputs::SemanticInputs::capture(opts)?;
     let mut observations = Default::default();
-    let snapshot = build_snapshot(opts, &inputs, primary, additional, |id, source| {
+    let snapshot = build_snapshot(opts, &inputs, primary, additional, None, |id, source| {
         crate::reload::Baseline::record(&mut observations, id, source);
         Ok(())
     })
@@ -61,6 +61,7 @@ pub(crate) async fn build_snapshot(
     inputs: &crate::startup_inputs::SemanticInputs,
     primary: PreparedSource,
     additional: Option<PreparedSource>,
+    generation_budget: Option<&crate::budget::RequestBudget>,
     mut observe: impl FnMut(SourceId, &IntrospectedSource) -> Result<(), ServeError>,
 ) -> Result<RuntimeSnapshot, ServeError> {
     let ontology = SemanticOntology::from_turtle(&inputs.ontology)
@@ -89,6 +90,22 @@ pub(crate) async fn build_snapshot(
         additional_mapping.as_ref(),
         additional.as_ref(),
     )?;
+    if opts.require_verified_generation {
+        let PreparedMapping::Authored(mapping) = primary_mapping else {
+            return Err(configuration_error("verified authored mapping is required"));
+        };
+        let primary = crate::startup_authored::build_source(
+            opts,
+            primary,
+            mapping,
+            &ontology,
+            generation_budget,
+            &mut observe,
+        )
+        .await?;
+        return RuntimeSnapshot::single(sf_sparql::Epoch::default(), ontology, primary)
+            .map_err(snapshot_error);
+    }
     let primary = open_source(opts, primary).await?;
     observe(source_id(0), &primary)?;
     let primary = primary_mapping.finish(opts, primary, &ontology).await?;

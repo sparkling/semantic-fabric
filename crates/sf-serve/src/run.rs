@@ -4,7 +4,6 @@ use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
 use crate::source::PreparedSource;
 use crate::{Backend, IntrospectedSource, ServeError, SourceRef};
-
 pub struct ServeOptions {
     /// Explicit service-lifetime access policy; resolve credentials before source I/O.
     pub query_admission: crate::QueryAdmission,
@@ -42,16 +41,17 @@ pub struct ServeOptions {
     pub shutdown_timeout: Duration,
     /// Authored reload interval (zero disables); Direct observation (zero selects 5s).
     pub reload_interval: Duration,
+    /// Require the qualified, protected authored PostgreSQL source-generation profile.
+    /// Never falls back to observational serving when requested; requires authored reload.
+    pub require_verified_generation: bool,
     /// Optional Prometheus renderer. `None` keeps `/metrics` absent.
     pub metrics: Option<crate::MetricsEndpoint>,
 }
-
 /// The normal startup input for the bounded two-source UNION profile.
 pub struct AdditionalSourceOptions {
     pub source: SourceRef,
     pub mapping: MappingRef,
 }
-
 /// A source mapping selected for startup: authored R2RML on disk or Direct
 /// Mapping generated from the live observed schema.
 pub enum MappingRef {
@@ -59,18 +59,15 @@ pub enum MappingRef {
     R2rmlFileWithBase { path: String, base_iri: String },
     Direct { base_iri: String },
 }
-
 impl MappingRef {
     pub fn r2rml_file(path: impl Into<String>) -> Self {
         Self::R2rmlFile(path.into())
     }
-
     pub fn direct(base_iri: impl Into<String>) -> Self {
         Self::Direct {
             base_iri: base_iri.into(),
         }
     }
-
     /// Authored mapping with a fixed processor output base, independent of Turtle @base.
     pub fn r2rml_file_with_base(path: impl Into<String>, base_iri: impl Into<String>) -> Self {
         Self::R2rmlFileWithBase {
@@ -78,7 +75,6 @@ impl MappingRef {
             base_iri: base_iri.into(),
         }
     }
-
     fn validate_base(&self) -> Result<(), ServeError> {
         if let Self::R2rmlFileWithBase { base_iri, .. } = self {
             sf_mapping::validate_r2rml_base(base_iri).map_err(|_| {
@@ -90,9 +86,9 @@ impl MappingRef {
         Ok(())
     }
 }
-
 /// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
+    crate::startup_authored::validate_options(&opts)?;
     opts.mapping.validate_base()?;
     if let Some(additional) = &opts.additional_source {
         additional.mapping.validate_base()?;
@@ -118,6 +114,7 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
         .as_ref()
         .map(|source| source.source.resolve()?.prepare())
         .transpose()?;
+    crate::startup_authored::validate_source(&opts, &source)?;
     let parser = sf_sparql::ParserRuntime::current().map_err(|_| {
         ServeError::new(StartupCause::Configuration {
             error: "isolated parser runtime could not be prepared".into(),
@@ -141,7 +138,6 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     rt.shutdown_timeout(Duration::ZERO);
     result
 }
-
 /// Open the prepared backend and pair it with its observed base-table schema.
 /// PostgreSQL sizing follows ADR-0010 §C/ADR-0027; SQLite sizes its read-only pool.
 pub(crate) async fn open_backend(
@@ -168,7 +164,6 @@ pub(crate) async fn open_backend(
         })
     })?
 }
-
 async fn open_backend_inner(
     source: PreparedSource,
     pg_pool_size: usize,
@@ -255,7 +250,6 @@ async fn open_backend_inner(
         }
     }
 }
-
 /// Introspect every MySQL base table in the current database (name order) — the
 /// MySQL analogue of [`introspect_pg_all`].
 pub(crate) async fn introspect_mysql_all(
@@ -279,19 +273,15 @@ pub(crate) async fn introspect_mysql_all(
     }
     Ok(schemas)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn prepare_inline(spec: impl Into<String>) -> Result<PreparedSource, ServeError> {
         SourceRef::inline(spec).resolve()?.prepare()
     }
-
     fn prepare_injected(spec: String) -> Result<PreparedSource, ServeError> {
         crate::SourceInput::injected(spec)?.prepare()
     }
-
     #[test]
     fn should_reject_unrepresentable_request_timeout_before_startup_io() {
         let error =
@@ -302,7 +292,6 @@ mod tests {
             StartupCause::Configuration { .. }
         ));
     }
-
     /// A unique path under the OS temp dir — avoids clashing with other tests
     /// or a stale file from a previous run.
     fn temp_db_path(tag: &str) -> std::path::PathBuf {
@@ -315,7 +304,6 @@ mod tests {
             std::process::id()
         ))
     }
-
     /// Create a fresh SQLite file at `path` with one `widgets(id, name)` table
     /// and a single row, then close the connection so `open_backend` can reopen it.
     fn seed_sqlite_db(path: &std::path::Path) {
@@ -326,38 +314,31 @@ mod tests {
         )
         .expect("seed widgets table");
     }
-
     #[tokio::test]
     async fn should_open_backend_when_spec_is_a_valid_sqlite_path() {
         let path = temp_db_path("valid");
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
-
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
-
         let (backend, schema, _, _) = result.expect("valid sqlite spec should open").into_parts();
         assert!(matches!(backend, Backend::Sqlite(_)));
         assert!(
             !schema.is_empty(),
             "expected at least one introspected table"
         );
-
         let _ = std::fs::remove_file(&path);
     }
-
     #[tokio::test]
     async fn should_introspect_known_table_when_sqlite_db_has_a_table() {
         let path = temp_db_path("introspect");
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
-
         let source = prepare_inline(spec).expect("valid SQLite source");
         let (_backend, schema, _, _) = open_backend(source, 16, Duration::from_secs(5), 4)
             .await
             .expect("valid sqlite spec should open")
             .into_parts();
-
         let widgets = schema
             .iter()
             .find(|t| t.name == "widgets")
@@ -370,10 +351,8 @@ mod tests {
             widgets.columns.iter().any(|c| c.name == "name"),
             "widgets schema should include the name column"
         );
-
         let _ = std::fs::remove_file(&path);
     }
-
     #[test]
     fn should_reject_unadmitted_source_families_before_connector_construction() {
         let rejected = [
@@ -397,7 +376,6 @@ mod tests {
             ("generic HTTP", "http://api.invalid/query"),
             ("generic HTTPS", "https://api.invalid/query"),
         ];
-
         for (family, spec) in rejected {
             let err = match prepare_inline(spec) {
                 Err(err) => err,
@@ -412,7 +390,6 @@ mod tests {
             assert!(!format!("{err:?}").contains(spec));
         }
     }
-
     #[test]
     fn inline_pg_and_mysql_credentials_are_not_retained_by_errors() {
         const SENTINEL: &str = "sf_secret_NEVER_EXPOSE_internal_34aa";
@@ -420,7 +397,6 @@ mod tests {
             format!("pg:host=database.invalid password={SENTINEL}"),
             format!("mysql://user:{SENTINEL}@database.invalid/db"),
         ];
-
         for spec in specs {
             let error = match prepare_inline(&spec) {
                 Err(error) => error,
@@ -436,7 +412,6 @@ mod tests {
             assert!(!format!("{error:?}").contains(SENTINEL));
         }
     }
-
     #[tokio::test]
     async fn should_error_not_panic_when_sqlite_path_is_malformed() {
         // A path whose parent directory does not exist: rusqlite can neither
@@ -448,16 +423,13 @@ mod tests {
         let bogus_dir = std::env::temp_dir().join(format!("sf_serve_no_such_dir_{unique}"));
         let path = bogus_dir.join("db.sqlite");
         let spec = format!("sqlite:{}", path.display());
-
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
-
         assert!(
             result.is_err(),
             "opening a sqlite path under a nonexistent directory should error"
         );
     }
-
     /// F2b flag-plumbing receipt: `--pg-pool-size` must actually reach the pool
     /// `open_backend` builds, not just get parsed and dropped. Deterministic
     /// (no concurrency/timing) — asserts the built pool's own reported
@@ -484,14 +456,12 @@ mod tests {
         tokio::spawn(async move {
             let _ = connection.await;
         });
-
         let source = prepare_injected(format!("pg:{conn_str}"))
             .expect("environment-injected pg source should prepare");
         let (backend, _schema, _, _) = open_backend(source, 3, Duration::from_secs(2), 4)
             .await
             .expect("reachable pg spec should open")
             .into_parts();
-
         let Backend::Pg(pool) = backend else {
             panic!("pg: spec should open a Backend::Pg");
         };
@@ -511,7 +481,6 @@ mod tests {
             .await
             .expect("perturb recyclable session");
         drop(conn);
-
         let recycled = pool.get().await.expect("reacquire configured PG session");
         let setting: String = recycled
             .query_one("SELECT current_setting('search_path')", &[])

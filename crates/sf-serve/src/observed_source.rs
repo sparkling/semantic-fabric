@@ -5,7 +5,7 @@ use std::fmt;
 use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
-use crate::pg_generation::{PgGenerationError, PostgresDirectSourceCandidate, SourceGeneration};
+use crate::pg_generation::{PgGenerationError, PostgresSourceCandidate, SourceGeneration};
 use crate::schema_observation::SourceSchemaObservationV1;
 
 /// A backend paired with the schema observation made through that backend.
@@ -142,9 +142,9 @@ impl IntrospectedSource {
         }
     }
 
-    pub(crate) fn bind_postgres_direct(
+    pub(crate) fn bind_postgres_generation(
         mut self,
-        candidate: PostgresDirectSourceCandidate,
+        candidate: PostgresSourceCandidate,
     ) -> Result<Self, PgGenerationError> {
         if self.kind() != BackendKind::Postgres {
             return Err(PgGenerationError::Internal);
@@ -166,6 +166,13 @@ impl IntrospectedSource {
 
     pub(crate) fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    /// Non-authorizing equality input for the sole authored reload coordinator.
+    pub(crate) fn verified_identity(
+        &self,
+    ) -> Option<sf_core::schema_identity::ObservedSchemaIdentityV1> {
+        self.generation.verified_identity()
     }
 
     pub(crate) fn ensure_generation_mapping(

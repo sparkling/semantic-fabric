@@ -41,6 +41,7 @@ pub(super) const OPTIONS: &[&str] = &[
     "sqlite-pool-size",
     "shutdown-timeout-secs",
     "reload-interval-secs",
+    "require-verified-generation",
 ];
 
 pub(super) fn environment_name(name: &str) -> String {
@@ -94,7 +95,10 @@ pub(super) fn parse_cli(args: &[OsString]) -> Result<Option<Layer>, ConfigError>
         if name != "config" && !OPTIONS.contains(&name) {
             return Err(ConfigError::InvalidArguments);
         }
-        let is_bool = matches!(name, "metrics" | "allow-unauthenticated");
+        let is_bool = matches!(
+            name,
+            "metrics" | "allow-unauthenticated" | "require-verified-generation"
+        );
         let value = if let Some(value) = inline {
             OsString::from(value)
         } else if is_bool

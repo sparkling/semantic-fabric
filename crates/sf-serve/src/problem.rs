@@ -322,6 +322,7 @@ pub(crate) enum StartupCause {
     SourceSpec { spec: String, error: String },
     SourceConnect { spec: String, error: String },
     Schema { spec: String, error: String },
+    Generation { cause: crate::ReadinessCause },
     Bind { bind: String, error: String },
     Server { error: String },
 }
@@ -337,6 +338,10 @@ impl StartupCause {
             Self::SourceSpec { .. } | Self::SourceConnect { .. } | Self::Schema { .. } => {
                 StartupCode::Source
             }
+            Self::Generation {
+                cause: crate::ReadinessCause::CapabilityDrift,
+            } => StartupCode::Configuration,
+            Self::Generation { .. } => StartupCode::Source,
             Self::Runtime { .. } | Self::Bind { .. } | Self::Server { .. } => StartupCode::Runtime,
         }
     }
@@ -363,6 +368,9 @@ impl fmt::Display for StartupCause {
             }
             Self::Schema { spec, error } => {
                 write!(formatter, "source schema {spec:?}: {error}")
+            }
+            Self::Generation { cause } => {
+                write!(formatter, "protected source generation: {cause:?}")
             }
             Self::Bind { bind, error } => write!(formatter, "bind {bind:?}: {error}"),
             Self::Server { error } => write!(formatter, "server: {error}"),

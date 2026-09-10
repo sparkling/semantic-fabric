@@ -26,6 +26,7 @@ fn options(max_concurrent_requests: usize) -> ServeOptions {
         sqlite_pool_size: 1,
         shutdown_timeout: std::time::Duration::from_secs(30),
         reload_interval: Duration::ZERO,
+        require_verified_generation: false,
         metrics: None,
     }
 }
@@ -44,6 +45,61 @@ fn invalid_reload_interval_fails_before_source_file_runtime_or_network_io() {
     for interval in [Duration::from_nanos(1), Duration::from_secs(86_401)] {
         let mut opts = options(1);
         opts.reload_interval = interval;
+        assert_eq!(
+            serve_blocking(opts).unwrap_err().code(),
+            "startup-configuration"
+        );
+    }
+}
+
+#[test]
+fn required_generation_rejects_unsupported_modes_before_source_or_file_io() {
+    for mode in ["no-reload", "direct", "second-source", "row-policy"] {
+        let mut opts = options(1);
+        opts.require_verified_generation = true;
+        if mode != "no-reload" {
+            opts.reload_interval = Duration::from_secs(1);
+        }
+        match mode {
+            "direct" => opts.mapping = MappingRef::direct("http://example.test/"),
+            "second-source" => {
+                opts.additional_source = Some(AdditionalSourceOptions {
+                    source: SourceRef::environment("SF_GENERATION_MUST_NOT_BE_READ"),
+                    mapping: MappingRef::r2rml_file("/second/must/not/be/read.ttl"),
+                })
+            }
+            "row-policy" => {
+                opts.query_admission = sf_serve::QueryAdmission::Bearer(
+                    sf_serve::BearerQueryAdmission::for_service_principal(
+                        "fixture-only-generation-000000000000",
+                    )
+                    .unwrap()
+                    .with_postgres_rls(
+                        sf_serve::PostgresRlsClaims::new(std::collections::BTreeMap::from([(
+                            "app.subject".into(),
+                            "A".into(),
+                        )]))
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                );
+            }
+            _ => {}
+        }
+        assert_eq!(
+            serve_blocking(opts).unwrap_err().code(),
+            "startup-configuration",
+            "{mode}"
+        );
+    }
+    for source in [
+        "sqlite:/must/not/be/opened.db",
+        "mysql://test@database.invalid/db",
+    ] {
+        let mut opts = options(1);
+        opts.require_verified_generation = true;
+        opts.reload_interval = Duration::from_secs(1);
+        opts.source = SourceRef::inline(source);
         assert_eq!(
             serve_blocking(opts).unwrap_err().code(),
             "startup-configuration"

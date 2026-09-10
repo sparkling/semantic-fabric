@@ -360,6 +360,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
         sqlite_pool_size: 1,
         shutdown_timeout: Duration::from_secs(30),
         reload_interval: Duration::ZERO,
+        require_verified_generation: false,
         metrics: None,
     };
 

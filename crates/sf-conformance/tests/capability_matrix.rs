@@ -115,7 +115,6 @@ fn capture_supervisor_kernel_does_not_promote_operational_authority() {
         assert!(!evidence.required);
     }
 }
-
 #[test]
 fn describe_profile_is_exact_versioned_and_backend_scoped() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
@@ -194,7 +193,6 @@ fn describe_profile_is_exact_versioned_and_backend_scoped() {
         .text
         .contains("urn:semantic-fabric:service-description:describe-one-target-one-hop-query-v1"));
 }
-
 #[test]
 fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
     let loaded = capability_catalog::load(&root()).expect("load catalog");
@@ -214,7 +212,6 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
             "e-semantic-builder-gold-ontology"
         ]
     );
-
     let live_cell = loaded
         .catalog
         .cells
@@ -232,7 +229,6 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
             "e-product-mock-serve-support"
         ]
     );
-
     let external = loaded
         .catalog
         .evidence
@@ -248,7 +244,6 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
         .find(|command| command.id == "cmd-semantic-builder-gold-external")
         .expect("external KAT command");
     assert_eq!(command.mode, CommandMode::Diagnostic);
-
     let serve_command = loaded
         .catalog
         .commands
@@ -257,7 +252,6 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
         .expect("live Product Mock serve command");
     assert_eq!(serve_command.mode, CommandMode::Diagnostic);
 }
-
 #[test]
 fn receipt_commands_are_canonical_and_required() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
@@ -288,7 +282,6 @@ fn receipt_commands_are_canonical_and_required() {
         assert_eq!(command.mode, CommandMode::Required);
     }
 }
-
 #[test]
 fn generated_json_markdown_and_readme_are_exact() {
     let repository = root();
@@ -306,7 +299,6 @@ fn generated_json_markdown_and_readme_are_exact() {
     );
     assert_eq!(readme.as_bytes(), expected.readme.as_bytes());
 }
-
 #[test]
 fn production_check_path_is_read_only() {
     let repository = root();
@@ -335,7 +327,6 @@ fn production_check_path_is_read_only() {
         .collect();
     assert_eq!(before, after);
 }
-
 #[test]
 fn unknown_fields_and_missing_cross_product_cells_fail_closed() {
     let unknown = mutated(|value| {
@@ -352,7 +343,6 @@ fn unknown_fields_and_missing_cross_product_cells_fail_closed() {
     .unwrap_err();
     assert!(missing.contains("cross-product"), "{missing}");
 }
-
 #[test]
 fn evidence_drift_and_non_normalized_paths_fail_closed() {
     let digest = mutated(|value| {
@@ -367,7 +357,6 @@ fn evidence_drift_and_non_normalized_paths_fail_closed() {
     .unwrap_err();
     assert!(path.contains("not normalized"), "{path}");
 }
-
 #[test]
 fn mapping_evidence_cannot_promote_query_or_protocol_cells() {
     let error = mutated(|value| {
@@ -385,7 +374,6 @@ fn mapping_evidence_cannot_promote_query_or_protocol_cells() {
     .unwrap_err();
     assert!(postgres.contains("promotes mapping evidence"), "{postgres}");
 }
-
 #[test]
 fn postgresql_mapping_receipt_does_not_admit_the_backend() {
     let loaded = capability_catalog::load(&root()).expect("load catalog");
@@ -427,6 +415,12 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
             "e-postgresql-verified-generation-live",
             "e-postgresql-verified-generation-request-route",
             "e-postgresql-verified-generation-runtime-role",
+            "e-public-authored-generation-ci",
+            "e-public-authored-generation-cleanup",
+            "e-public-authored-generation-cli",
+            "e-public-authored-generation-core",
+            "e-public-authored-generation-startup",
+            "e-public-authored-generation-unit",
             "e-public-direct-control-ownership",
             "e-public-direct-lifecycle-ci",
             "e-public-direct-lifecycle-cli",
@@ -456,7 +450,6 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
     assert_eq!(admission.verification, Verification::SourceOnly);
     assert!(!admission.advertisable);
 }
-
 #[test]
 fn production_admission_and_public_claims_cannot_self_promote() {
     let admission = mutated(|value| {
@@ -476,7 +469,6 @@ fn production_admission_and_public_claims_cannot_self_promote() {
     .unwrap_err();
     assert!(claim.contains("non-advertisable"), "{claim}");
 }
-
 #[test]
 fn forbidden_unqualified_manual_readme_claim_fails_generation() {
     let loaded = capability_catalog::load(&root()).expect("load catalog");
@@ -487,7 +479,6 @@ fn forbidden_unqualified_manual_readme_claim_fails_generation() {
     let error = capability_render::render(&loaded, &poisoned).unwrap_err();
     assert!(error.contains("forbidden unqualified"), "{error}");
 }
-
 #[test]
 fn evidence_paths_resolve_inside_repository() {
     let loaded = capability_catalog::load(&root()).expect("load catalog");

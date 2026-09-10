@@ -72,6 +72,7 @@ struct ServeConfig {
     sqlite_pool_size: Option<usize>,
     shutdown_timeout_secs: Option<u64>,
     reload_interval_secs: Option<u64>,
+    require_verified_generation: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -131,7 +132,8 @@ impl FileConfig {
             pg_pool_wait_secs,
             sqlite_pool_size,
             shutdown_timeout_secs,
-            reload_interval_secs
+            reload_interval_secs,
+            require_verified_generation
         );
         section!(
             security,

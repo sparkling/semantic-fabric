@@ -4,17 +4,13 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
-
 permissions:
   contents: read
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
   changes:
     name: select CI gates from trusted PR base
@@ -79,7 +75,6 @@ jobs:
             exit 0
           fi
           cat "$selected" >> "$GITHUB_OUTPUT"
-
   coding-harness:
     name: coding harness · node ${{ matrix.node }} · build · test
     needs: changes
@@ -114,7 +109,6 @@ jobs:
         env:
           HARNESS_REQUIRE_NATIVE_INTEGRATION: ${{ matrix.native_required }}
         run: npm --prefix coding-harness test
-
   supervisor-service:
     name: supervisor evidence oracle · node ${{ matrix.node }} · sealed build · test
     needs: changes
@@ -139,7 +133,6 @@ jobs:
         run: npm --prefix coding-harness/supervisor-service run verify
       - name: verify committed supervisor-service attestation is current
         run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
-
   postgresql-public-acl-replay:
     name: PostgreSQL ACL additive V3 suite · node ${{ matrix.node }} · eight isolated runs
     needs: changes
@@ -168,7 +161,6 @@ jobs:
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs baseline-v2
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs branch
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs final-where
-
   postgresql-observation-qualification:
     name: PostgreSQL observation · ${{ matrix.postgres_patch }} · node ${{ matrix.node }}
     needs: changes
@@ -217,7 +209,6 @@ jobs:
         run: docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
       - name: replay exact PostgreSQL observation receipt
         run: npm --prefix coding-harness run postgres-observation-qualification -- replay --patch "${{ matrix.postgres_patch }}"
-
   build:
     name: fmt · clippy · build · test
     needs: changes
@@ -311,6 +302,13 @@ jobs:
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
           done
+      - name: qualify public protected authored PostgreSQL generations
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          test_name='authored_generation::public_authored_postgres_generation_is_protected'
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --test-threads=1 --nocapture
       # ADR-0040 comparison evidence only: default-off, no product admission.
       - name: clippy (sf-sparql secure-spill-prototype)
         run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings
@@ -422,7 +420,6 @@ jobs:
       # emits EARL with non-deterministic blank-node labels; that diff is not committed.
       - name: conformance (W3C RDB2RDF)
         run: cargo run --locked -p sf-cli -- conformance
-
   required:
     name: required
     needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, postgresql-observation-qualification, build]
@@ -464,7 +461,6 @@ jobs:
           check "$SELECT_SUPERVISOR" "$SUPERVISOR_RESULT"
           check "$SELECT_ACL_REPLAY" "$ACL_REPLAY_RESULT"
           check "$SELECT_PG_OBSERVATION" "$PG_OBSERVATION_RESULT"
-
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)
     runs-on: ubuntu-24.04

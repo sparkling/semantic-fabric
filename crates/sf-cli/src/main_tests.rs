@@ -326,6 +326,7 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
         sqlite_pool_size: 4,
         shutdown_timeout_secs: DEFAULT_SHUTDOWN_TIMEOUT.as_secs(),
         reload_interval_secs: 0,
+        require_verified_generation: false,
     };
     assert_eq!(serve(opts), ExitCode::FAILURE);
 }

@@ -191,6 +191,7 @@ mod tests {
             sqlite_pool_size: 1,
             shutdown_timeout: Duration::from_secs(1),
             reload_interval: Duration::ZERO,
+            require_verified_generation: false,
             metrics: None,
         };
         let postgres = opts.source.resolve().unwrap().prepare().unwrap();

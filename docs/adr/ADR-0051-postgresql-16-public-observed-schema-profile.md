@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-02
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -33,7 +33,7 @@ non-owner-role, immutable-image and byte-identical protocol.
 The public Rust diagnostic collects a complete legacy projection and publishes either the branded rich identity or one closed, identifier-free `Unavailable` reason only after the outer transaction commits.
 Clean pre-legacy mismatches remain pending unavailability; rich failures may downgrade only after successful savepoint recovery, while transaction, legacy or commit failures remain fatal.
 The evidence executor publishes an ordered receipt pair atomically only after both exact-patch replays and the cross-patch laws pass. Until that valid tracked pair exists it fails closed; a valid pair promotes only this observation profile.
-Existing legacy entry points are unchanged. For authored mappings, `sf-serve` carries the committed availability state bound to backend and `SourceId` only as a non-authorizing diagnostic.
+Existing legacy entry points are unchanged. Ordinary authored `sf-serve` carries committed availability bound to backend and `SourceId` only as a non-authorizing diagnostic. ADR-0050's explicit `--require-verified-generation` authored profile, added 2026-09-10, uses the same protected lease state machine as Direct Mapping; its compiler retains the legacy projection from that locked snapshot. Rich identity, table and session facts stay in the separate origin/source/mapping-bound expectation. The digest itself grants no authority.
 A distinct crate-private Direct-Mapping lease, now consumed by the public ADR-0050 startup path, consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
 It marks a pool member dirty before `BEGIN`, locks the exact public-table set before the first repeatable-read snapshot, and binds the identity, complete rich tables, database, role, session and policy context.
 A primary-key-backed candidate is generated under that protection, rechecked, rolled back and stored only as an inseparable generation expectation.
@@ -420,7 +420,7 @@ MySQL constructors can create only reason-free `Unavailable`.
 compatibility constructor accepts an identity, brand or availability argument. The sole production `into_parts`
 consumer destructures and moves its fourth state; there is no identity-dropping production compatibility tuple.
 Both states continue through `CompilerSchema::from_unverified_observation`.
-For ordinary authored mappings, identity does not enter `CompileScope`, cache keys, admission, readiness, reload or execution. The private Direct-Mapping generation expectation retains and rechecks it as one exact fact, but authority comes only from the owned lease type-state and connection.
+For ordinary authored mappings, identity does not enter `CompileScope`, cache keys, admission, readiness, reload or execution. Direct Mapping and the explicitly required protected authored profile retain/recheck it as one exact generation fact; protected authored reload also compares it to fence changed generations even when legacy compiler tables are equal. Authority still comes only from the sealed mapping admission, owned lease type-state, exact connection and coordinator CAS—not observation equality. Both profiles deliberately cover the complete qualified public schema, so unrelated unsupported public DDL can reject them. Other authored/backend/policy profiles remain unverified.
 That use neither upgrades `CompilerSchema` nor makes the digest a capability. Equal identities in separate runtime bindings do not merge process-local binding authority.
 Startup emits one bounded structural availability diagnostic through ADR-0011's product JSON subscriber and configured INFO ceiling; unavailable output contains only its closed reason and never a source error. Server-encoding mismatch remains non-authorizing unavailability; client encoding, identifier length and search path remain fatal because they can invalidate legacy decoding or name resolution.
 

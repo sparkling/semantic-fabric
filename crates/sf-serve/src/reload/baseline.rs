@@ -5,7 +5,13 @@ use std::sync::Mutex;
 use super::*;
 use sf_core::{SourceId, TableSchema};
 
-type Observations = BTreeMap<SourceId, Vec<TableSchema>>;
+#[derive(PartialEq)]
+pub(crate) struct Observation {
+    tables: Vec<TableSchema>,
+    verified: Option<sf_core::schema_identity::ObservedSchemaIdentityV1>,
+}
+
+type Observations = BTreeMap<SourceId, Observation>;
 
 pub(crate) struct Baseline {
     inputs: SemanticInputs,
@@ -35,7 +41,13 @@ impl Baseline {
             table.columns.sort_by(|a, b| a.name.cmp(&b.name));
         }
         schema.sort_by(|a, b| a.name.cmp(&b.name));
-        observations.insert(id, schema);
+        observations.insert(
+            id,
+            Observation {
+                tables: schema,
+                verified: source.verified_identity(),
+            },
+        );
     }
 }
 
@@ -102,4 +114,44 @@ fn transition_error() -> ServeError {
     ServeError::new(StartupCause::Runtime {
         error: "reload state changed".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sf_core::schema_identity::{
+        ObservedSchemaIdentityV1, ProfileIdV1, SchemaObservationInputV1, SchemaProfilesV1,
+    };
+
+    #[test]
+    fn equal_compiler_tables_do_not_hide_changed_verified_facts() {
+        let identity = |tag| {
+            ObservedSchemaIdentityV1::build(SchemaObservationInputV1 {
+                profiles: SchemaProfilesV1 {
+                    structural: ProfileIdV1::new(tag).unwrap(),
+                    types: ProfileIdV1::new("test-types-v1").unwrap(),
+                    constraints: ProfileIdV1::new("test-constraints-v1").unwrap(),
+                },
+                relations: vec![],
+                constraints: vec![],
+            })
+            .unwrap()
+        };
+        let first = Observation {
+            tables: vec![TableSchema::new("items")],
+            verified: Some(identity("test-one-v1")),
+        };
+        let mut next = Observation {
+            tables: first.tables.clone(),
+            verified: first.verified,
+        };
+        assert!(first == next);
+        next.verified = Some(identity("test-two-v1"));
+        assert!(first != next);
+        next.verified = None;
+        assert!(
+            first != next,
+            "an observation must not inherit verified authority"
+        );
+    }
 }

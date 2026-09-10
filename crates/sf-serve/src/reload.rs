@@ -68,6 +68,9 @@ pub(crate) async fn serve_async(
         })
     })??;
     config.set_parser_runtime(parser);
+    if opts.require_verified_generation {
+        config.control_work = Some(Arc::new(tokio::sync::Semaphore::new(1)));
+    }
     let config = Arc::new(config);
     let supervisor = (!opts.reload_interval.is_zero()).then(|| {
         Supervisor::start(
@@ -119,6 +122,14 @@ impl Supervisor {
                 if terminal(expected) {
                     break;
                 }
+                let generation_budget = if opts.require_verified_generation {
+                    match crate::startup_authored::control_budget(Some(&worker_config)) {
+                        Ok(budget) => Some(budget),
+                        Err(_) => break,
+                    }
+                } else {
+                    None
+                };
                 if let Some(next) = refresh(
                     Arc::clone(&runtime),
                     Arc::clone(&baseline),
@@ -126,6 +137,7 @@ impl Supervisor {
                     source.clone(),
                     additional.clone(),
                     expected,
+                    generation_budget,
                 )
                 .await
                 {
@@ -168,6 +180,7 @@ async fn refresh(
     source: PreparedSource,
     additional: Option<PreparedSource>,
     expected: RuntimeReadiness,
+    generation_budget: Option<crate::budget::RequestBudget>,
 ) -> Option<Arc<Baseline>> {
     let attempt = Arc::new(Attempt::new(Arc::clone(&runtime), baseline, expected));
     let build_attempt = Arc::clone(&attempt);
@@ -176,15 +189,28 @@ async fn refresh(
         handle.block_on(async move {
             let inputs = build_attempt.capture(&opts)?;
             let mut observations = Default::default();
-            let snapshot =
-                crate::startup::build_snapshot(&opts, &inputs, source, additional, |id, source| {
-                    build_attempt.observe(&mut observations, id, source)
-                })
-                .await?;
+            let snapshot = crate::startup::build_snapshot(
+                &opts,
+                &inputs,
+                source,
+                additional,
+                generation_budget.as_ref(),
+                |id, source| build_attempt.observe(&mut observations, id, source),
+            )
+            .await?;
             if SemanticInputs::capture(&opts)? != inputs {
                 return Err(ServeError::new(StartupCause::Configuration {
                     error: "semantic files changed during candidate construction".into(),
                 }));
+            }
+            if let Some(budget) = generation_budget.as_ref() {
+                use sf_core::query_control::QueryControl;
+                budget.checkpoint().map_err(|_| {
+                    ServeError::new(StartupCause::SourceConnect {
+                        spec: "PostgreSQL".into(),
+                        error: "authored candidate control deadline exceeded".into(),
+                    })
+                })?;
             }
             let candidate = AuthoredCandidate {
                 expected: build_attempt.expected()?,
@@ -224,12 +250,7 @@ async fn finish_attempt(
     };
     match result {
         Err(error) => {
-            let cause = if error.code() == "startup-source" {
-                ReadinessCause::SourceUnavailable
-            } else {
-                ReadinessCause::SchemaDrift
-            };
-            let _ = attempt.fence(cause);
+            let _ = attempt.fence(rejection_cause(&error));
             event("rejected");
         }
         Ok((candidate, baseline)) => {
@@ -245,6 +266,14 @@ async fn finish_attempt(
         }
     }
     None
+}
+
+pub(crate) fn rejection_cause(error: &ServeError) -> ReadinessCause {
+    match error.internal_cause() {
+        StartupCause::Generation { cause } => *cause,
+        _ if error.code() == "startup-source" => ReadinessCause::SourceUnavailable,
+        _ => ReadinessCause::SchemaDrift,
+    }
 }
 
 fn event(outcome: &'static str) {

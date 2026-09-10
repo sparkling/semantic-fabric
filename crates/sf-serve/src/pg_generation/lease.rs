@@ -16,9 +16,7 @@ use sf_sql::introspect::{
 use crate::backend::PgConn;
 use crate::budget::RequestBudget;
 
-use super::{
-    capture_session_context, PgGenerationError, PgSessionContext, PostgresDirectGeneration,
-};
+use super::{capture_session_context, PgGenerationError, PgSessionContext, PostgresGeneration};
 
 mod inventory;
 #[cfg(test)]
@@ -188,6 +186,10 @@ impl LockedGeneration {
 }
 
 impl ObservedGeneration {
+    pub(super) fn legacy_tables(&self) -> &[TableSchema] {
+        self.snapshot.legacy_tables()
+    }
+
     pub(super) fn tables(&self) -> &[TableSchema] {
         self.snapshot
             .direct_mapping_tables()
@@ -212,7 +214,7 @@ impl ObservedGeneration {
 
     pub(super) async fn promote_expected(
         self,
-        expected: Arc<PostgresDirectGeneration>,
+        expected: Arc<PostgresGeneration>,
     ) -> Result<VerifiedPostgresGenerationLease, PgGenerationError> {
         if let Some(error) = mismatch(&self.snapshot, &self.session, &expected) {
             return reject(self.owner, error).await;
@@ -227,7 +229,7 @@ impl ObservedGeneration {
 
     pub(super) async fn promote_candidate(
         self,
-        expected: Arc<PostgresDirectGeneration>,
+        expected: Arc<PostgresGeneration>,
     ) -> Result<
         (
             VerifiedPostgresGenerationLease,
@@ -258,7 +260,7 @@ impl ObservedGeneration {
 /// preceding type-state transition and exact expected-generation comparison.
 pub(crate) struct VerifiedPostgresGenerationLease {
     owner: DirtyGeneration,
-    expected: Arc<PostgresDirectGeneration>,
+    expected: Arc<PostgresGeneration>,
     #[cfg(test)]
     revalidation_delay: Option<Duration>,
 }
@@ -312,7 +314,7 @@ impl VerifiedPostgresGenerationLease {
     #[cfg(test)]
     pub(super) fn without_connection(
         source_id: SourceId,
-        expected: Arc<PostgresDirectGeneration>,
+        expected: Arc<PostgresGeneration>,
     ) -> Self {
         Self {
             owner: DirtyGeneration {
@@ -400,7 +402,7 @@ pub(super) async fn open_generation_before_lock_for_test(
 
 async fn revalidate(
     owner: &DirtyGeneration,
-    expected: &PostgresDirectGeneration,
+    expected: &PostgresGeneration,
 ) -> Result<(), PgGenerationError> {
     let before = capture_session_context(owner.client()).await?;
     let snapshot =
@@ -419,7 +421,7 @@ async fn revalidate(
 fn mismatch(
     snapshot: &Postgres16PublicObservedSnapshotV1,
     session: &PgSessionContext,
-    expected: &PostgresDirectGeneration,
+    expected: &PostgresGeneration,
 ) -> Option<PgGenerationError> {
     generation_facts_mismatch(
         snapshot.availability().identity(),
@@ -433,7 +435,7 @@ pub(super) fn generation_facts_mismatch(
     identity: Option<&ObservedSchemaIdentityV1>,
     tables: Option<&[TableSchema]>,
     session: &PgSessionContext,
-    expected: &PostgresDirectGeneration,
+    expected: &PostgresGeneration,
 ) -> Option<PgGenerationError> {
     if session != &expected.session || identity.is_none() || tables.is_none() {
         return Some(PgGenerationError::CapabilityDrift);

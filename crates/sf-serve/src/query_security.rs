@@ -155,9 +155,14 @@ fn configuration_error() -> ServeError {
 }
 
 impl QueryAdmission {
-    /// The initial leased Direct profile does not admit source row policies.
-    /// Every provisioned subject currently requires one of those policies.
+    /// Direct and authored generations share the same closed row-policy boundary.
     pub(crate) fn permits_direct_mapping(&self) -> bool {
+        self.permits_verified_generation()
+    }
+
+    /// The qualified PostgreSQL generation profiles do not admit source row policies.
+    /// Every provisioned subject currently requires one of those policies.
+    pub(crate) fn permits_verified_generation(&self) -> bool {
         match self {
             Self::Deny | Self::UnrestrictedDevelopment => true,
             Self::Bearer(principal) => principal.rls.is_none() && principal.portable_rows.is_none(),

@@ -5,6 +5,77 @@ use std::path::PathBuf;
 use crate::Cli;
 
 #[test]
+fn required_generation_is_an_explicit_scalar_with_layered_false_overrides() {
+    for (file, environment, cli, expected) in [
+        (false, None, None, false),
+        (true, None, None, true),
+        (true, Some("false"), None, false),
+        (false, Some("true"), None, true),
+        (false, Some("true"), Some("false"), false),
+        (true, Some("false"), Some("true"), true),
+    ] {
+        let path = temp_config(&format!("[serve]\nrequire_verified_generation = {file}\n"));
+        let mut argv: Vec<OsString> = [
+            "semantic-fabric",
+            "serve",
+            "--source",
+            "sqlite::memory:",
+            "--mapping",
+            "mapping.ttl",
+            "--ontology",
+            "ontology.ttl",
+            "--config",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        argv.push(path.clone().into_os_string());
+        if let Some(value) = cli {
+            argv.push(format!("--require-verified-generation={value}").into());
+        }
+        let expanded = expand_with_env(argv, |name| {
+            if name == "SEMANTIC_FABRIC_REQUIRE_VERIFIED_GENERATION" {
+                environment.map(Into::into)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+        let args = Cli::try_parse_from(expanded).unwrap().command.into_serve();
+        assert_eq!(args.require_verified_generation, expected);
+        std::fs::remove_file(path).unwrap();
+    }
+    let base = [
+        "semantic-fabric",
+        "serve",
+        "--source",
+        "sqlite::memory:",
+        "--mapping",
+        "mapping.ttl",
+        "--ontology",
+        "ontology.ttl",
+    ];
+    for (extra, expected) in [
+        (vec!["--require-verified-generation"], true),
+        (vec!["--require-verified-generation", "false"], false),
+        (
+            vec![
+                "--require-verified-generation",
+                "--require-verified-generation=false",
+            ],
+            false,
+        ),
+    ] {
+        let argv = base.into_iter().chain(extra).map(Into::into).collect();
+        let args = Cli::try_parse_from(expand_with_env(argv, |_| None).unwrap())
+            .unwrap()
+            .command
+            .into_serve();
+        assert_eq!(args.require_verified_generation, expected);
+    }
+}
+
+#[test]
 fn base_override_retains_authored_selector_but_direct_clears_stale_base() {
     for (mapping, base, source, direct) in [
         ("mapping", "mapping-base", "source", "direct-mapping-base"),

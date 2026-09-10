@@ -41,7 +41,7 @@ impl SourceSchemaObservationV1 {
     }
 
     /// Carry the exact opaque rich observation used to assemble a verified
-    /// Direct-Mapping source candidate. This remains non-authorizing.
+    /// mapping source candidate. This remains non-authorizing by itself.
     pub(crate) const fn postgres16_public(observation: Postgres16PublicObservedSchemaV1) -> Self {
         Self::Postgres16Public(observation)
     }

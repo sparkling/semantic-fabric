@@ -177,10 +177,9 @@ impl Fixture {
             sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
         )
         .expect("generate exact expected Direct Mapping");
-        let expected = Arc::new(PostgresDirectGeneration {
+        let expected = Arc::new(PostgresGeneration {
             source_id,
-            base_iri: Arc::from("http://example.test/base/"),
-            row_identity: sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
+            origin: MappingOrigin::Direct,
             mapping_digest: MappingDigest::from_mapping(&expected_mapping),
             identity: observed.identity(),
             session: observed.session().clone(),

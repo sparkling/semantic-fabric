@@ -58,6 +58,7 @@ impl Fixture {
             sqlite_pool_size: 1,
             shutdown_timeout: Duration::from_secs(1),
             reload_interval: Duration::from_secs(1),
+            require_verified_generation: false,
             metrics: None,
         });
         let source = opts.source.resolve().unwrap().prepare().unwrap();
@@ -92,6 +93,7 @@ impl Fixture {
             self.source.clone(),
             None,
             expected,
+            None,
         )
         .await
         {
@@ -108,6 +110,34 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         // This directory was created exclusively by this fixture, never user input.
         std::fs::remove_dir_all(&self.root).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_protected_candidate_fences_the_exact_generation_cause() {
+    use crate::pg_generation::{authored::generation_error, PgGenerationError};
+    for error in [
+        PgGenerationError::SchemaDrift,
+        PgGenerationError::CapabilityDrift,
+        PgGenerationError::SourceUnavailable,
+    ] {
+        let fixture = Fixture::new();
+        let config = fixture.config().await;
+        let runtime = config.lifecycle_runtime();
+        let expected = runtime.readiness().unwrap();
+        let baseline = fixture.baseline.lock().unwrap().clone().unwrap();
+        let attempt = Attempt::new(Arc::clone(&runtime), baseline, expected);
+        let error = generation_error(error);
+        let cause = rejection_cause(&error);
+        let worker = tokio::task::spawn_blocking(move || Err(error));
+        assert!(
+            finish_attempt(&runtime, &attempt, worker, Duration::from_secs(1))
+                .await
+                .is_none()
+        );
+        assert!(
+            matches!(runtime.readiness().unwrap(), RuntimeReadiness::NotReady { cause: actual, .. } if actual == cause)
+        );
     }
 }
 
@@ -273,6 +303,7 @@ async fn shutdown_cannot_be_healed_by_an_old_or_new_candidate() {
             &fixture.opts,
             &inputs,
             fixture.source.clone(),
+            None,
             None,
             |_, _| Ok(()),
         )

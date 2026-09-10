@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-10
 tags: [architecture, virtualizer, obda, mapping-ir, sparql-to-sql, oxigraph, pipeline]
 supersedes: []
 depends-on:
@@ -52,13 +52,16 @@ SPARQL 1.2 query
 
 A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` streamed through this same pipeline — a query, not a second mode.
 
-Current `sf-serve` loads an authored R2RML mapping before it opens the source; it
-does not generate Direct Mapping from the live catalogue. Direct Mapping remains
-an explicit conformance/development lifecycle over a frozen schema. Because PK
-and FK facts change the generated mapping itself—not merely its optimisation—any
-future live Direct-Mapping serving path must bind mapping generation and streamed
-execution to one verified schema generation. The serving optimiser's constraint
-quarantine alone cannot make a stale generated mapping sound.
+Authored `sf-serve` loads R2RML before opening its source. The public PostgreSQL
+16.9/16.15 Direct Mapping profile now derives PK-backed mappings through the
+protected lifecycle in [ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).
+Authored mappings can explicitly require that same request-generation protection
+with `--require-verified-generation` plus nonzero authored reload: one qualified
+PostgreSQL source, bounded public base-table mappings and no source row policies.
+Authored compilation keeps its existing legacy projection from the protected
+snapshot; rich facts bind the lease, not optimizer constraint authority. No PK
+is required for authored mappings. Whole-public profile/DDL coupling is explicit;
+other existing modes remain observational, never silently upgraded or removed.
 
 ### Consequences
 

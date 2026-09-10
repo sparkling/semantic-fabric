@@ -95,6 +95,10 @@ pub(super) struct ServeArgs {
     /// source endpoints, credentials, TLS trust and caller policies remain fixed.
     #[arg(long, default_value_t = 0)]
     pub(super) reload_interval_secs: u64,
+    /// Require a protected authored PostgreSQL generation; unsupported profiles fail startup.
+    /// Requires a nonzero reload interval and one source without source row policies.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
+    pub(super) require_verified_generation: bool,
 }
 
 /// Exactly one primary mapping input: authored R2RML or live Direct Mapping.

@@ -1,4 +1,4 @@
-//! PostgreSQL Direct-Mapping generation leases (ADR-0003 and ADR-0050).
+//! Protected PostgreSQL mapping-generation leases (ADR-0003 and ADR-0050).
 //!
 //! A lease owns one pool object from before `BEGIN` until a clean `ROLLBACK`.
 //! Any cancellation, error, or drop before that rollback permanently detaches
@@ -20,6 +20,7 @@ use crate::schema_observation::SourceSchemaObservationV1;
 use crate::semantic_admission::{MappingOrigin, SemanticAdmissionError, ValidatedMapping};
 use crate::telemetry::{self, Stage};
 
+pub(crate) mod authored;
 pub(crate) mod candidate_work;
 mod context;
 mod error;
@@ -42,11 +43,12 @@ pub(crate) const PG_DIRECT_CONTROL_SOURCE_WORK_V1: u64 = GENERATION_METADATA_PRO
 pub(crate) enum SourceGeneration {
     #[default]
     Unverified,
-    DirectPostgres(Arc<PostgresDirectGeneration>),
+    DirectPostgres(Arc<PostgresGeneration>),
+    AuthoredPostgres(Arc<PostgresGeneration>),
 }
 
 impl SourceGeneration {
-    fn direct_postgres(generation: Arc<PostgresDirectGeneration>) -> Self {
+    fn direct_postgres(generation: Arc<PostgresGeneration>) -> Self {
         Self::DirectPostgres(generation)
     }
 
@@ -57,7 +59,7 @@ impl SourceGeneration {
     ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
         match self {
             Self::Unverified => Ok(None),
-            Self::DirectPostgres(expected) => match backend {
+            Self::DirectPostgres(expected) | Self::AuthoredPostgres(expected) => match backend {
                 crate::Backend::Pg(pool) => Ok(Some(PgGenerationRequirement {
                     pool: pool.clone(),
                     expected: Arc::clone(expected),
@@ -71,32 +73,43 @@ impl SourceGeneration {
     }
 
     pub(crate) const fn is_verified(&self) -> bool {
-        matches!(self, Self::DirectPostgres(_))
+        matches!(self, Self::DirectPostgres(_) | Self::AuthoredPostgres(_))
+    }
+
+    pub(crate) fn verified_identity(&self) -> Option<ObservedSchemaIdentityV1> {
+        match self {
+            Self::Unverified => None,
+            Self::DirectPostgres(expected) | Self::AuthoredPostgres(expected) => {
+                Some(expected.identity)
+            }
+        }
     }
 
     pub(crate) fn ensure_mapping(
         &self,
         mapping: &ValidatedMapping,
     ) -> Result<(), SemanticAdmissionError> {
-        match self {
-            Self::Unverified => Ok(()),
-            Self::DirectPostgres(expected)
-                if mapping.origin() == MappingOrigin::Direct
-                    && mapping.source_id() == expected.source_id
-                    && mapping.mapping_digest() == expected.mapping_digest =>
-            {
-                Ok(())
-            }
-            Self::DirectPostgres(_) => Err(SemanticAdmissionError::ReceiptGenerationMismatch),
+        let (expected, origin) = match self {
+            Self::Unverified => return Ok(()),
+            Self::DirectPostgres(expected) => (expected, MappingOrigin::Direct),
+            Self::AuthoredPostgres(expected) => (expected, MappingOrigin::Authored),
+        };
+        if expected.origin == origin
+            && mapping.origin() == origin
+            && mapping.source_id() == expected.source_id
+            && mapping.mapping_digest() == expected.mapping_digest
+        {
+            Ok(())
+        } else {
+            Err(SemanticAdmissionError::ReceiptGenerationMismatch)
         }
     }
 }
 
 /// Immutable expectation produced by one successfully closed candidate lease.
-pub(crate) struct PostgresDirectGeneration {
+pub(crate) struct PostgresGeneration {
     source_id: SourceId,
-    base_iri: Arc<str>,
-    row_identity: sf_mapping::DirectMappingRowIdentity,
+    origin: MappingOrigin,
     mapping_digest: MappingDigest,
     identity: ObservedSchemaIdentityV1,
     session: PgSessionContext,
@@ -105,15 +118,14 @@ pub(crate) struct PostgresDirectGeneration {
 
 /// Opaque expectation retained by the one Direct-Mapping control coordinator.
 #[derive(Clone)]
-pub(crate) struct PostgresDirectExpectation(Arc<PostgresDirectGeneration>);
+pub(crate) struct PostgresDirectExpectation(Arc<PostgresGeneration>);
 
-impl std::fmt::Debug for PostgresDirectGeneration {
+impl std::fmt::Debug for PostgresGeneration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("PostgresDirectGeneration")
+            .debug_struct("PostgresGeneration")
             .field("source_id", &self.source_id)
-            .field("base_iri_bytes", &self.base_iri.len())
-            .field("row_identity", &self.row_identity)
+            .field("origin", &self.origin)
             .field("mapping_digest", &self.mapping_digest)
             .field("identity", &self.identity)
             .field("table_count", &self.tables.len())
@@ -123,7 +135,7 @@ impl std::fmt::Debug for PostgresDirectGeneration {
 
 pub(crate) struct PgGenerationRequirement {
     pool: crate::PostgresPool,
-    expected: Arc<PostgresDirectGeneration>,
+    expected: Arc<PostgresGeneration>,
     binding_identity: RuntimeBindingIdentity,
 }
 
@@ -208,13 +220,13 @@ impl VerifiedGenerationLeases {
 
 /// Source-side candidate whose schema, committed observation, and generation
 /// expectation can only be assembled together by this module.
-pub(crate) struct PostgresDirectSourceCandidate {
+pub(crate) struct PostgresSourceCandidate {
     tables: Vec<TableSchema>,
     observation: SourceSchemaObservationV1,
     generation: SourceGeneration,
 }
 
-impl PostgresDirectSourceCandidate {
+impl PostgresSourceCandidate {
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -230,11 +242,11 @@ impl PostgresDirectSourceCandidate {
 /// open, then returned only after its final exact recheck and clean rollback.
 pub(crate) struct PostgresDirectCandidate {
     mapping: SourceMapping,
-    source: PostgresDirectSourceCandidate,
+    source: PostgresSourceCandidate,
 }
 
 impl PostgresDirectCandidate {
-    pub(crate) fn into_parts(self) -> (SourceMapping, PostgresDirectSourceCandidate) {
+    pub(crate) fn into_parts(self) -> (SourceMapping, PostgresSourceCandidate) {
         (self.mapping, self.source)
     }
 }
@@ -282,7 +294,7 @@ pub(crate) async fn build_and_bind_direct_candidate_on_control(
         return Err(PgGenerationError::Internal);
     };
     let expectation = PostgresDirectExpectation(Arc::clone(expectation));
-    let source = source.bind_postgres_direct(source_candidate)?;
+    let source = source.bind_postgres_generation(source_candidate)?;
     Ok(BoundPostgresDirectCandidate {
         source,
         mapping,
@@ -359,10 +371,9 @@ async fn build_direct_candidate(
                 source_id,
                 row_identity,
             )?;
-            let generation = Arc::new(PostgresDirectGeneration {
+            let generation = Arc::new(PostgresGeneration {
                 source_id,
-                base_iri: Arc::from(base_iri_owned),
-                row_identity,
+                origin: MappingOrigin::Direct,
                 mapping_digest: MappingDigest::from_mapping(&mapping),
                 identity,
                 session,
@@ -381,7 +392,7 @@ async fn build_direct_candidate(
     lease.finish_bounded(budget).await?;
     Ok(PostgresDirectCandidate {
         mapping,
-        source: PostgresDirectSourceCandidate {
+        source: PostgresSourceCandidate {
             tables,
             observation: SourceSchemaObservationV1::postgres16_public(observation),
             generation: SourceGeneration::direct_postgres(generation),

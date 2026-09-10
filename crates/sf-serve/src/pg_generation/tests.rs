@@ -2,6 +2,9 @@ use super::context::{context_read, validate_runtime_role, PgRuntimeRoleFacts};
 use super::*;
 use crate::source::POSTGRES_GENERATION_SCOPE_SETTING;
 
+#[path = "authored_tests.rs"]
+mod authored_tests;
+
 fn valid_context() -> PgSessionContext {
     PgSessionContext {
         database_oid: 1,
@@ -65,11 +68,10 @@ fn observed_identity() -> ObservedSchemaIdentityV1 {
     .unwrap()
 }
 
-fn direct_generation(source_id: SourceId) -> Arc<PostgresDirectGeneration> {
-    Arc::new(PostgresDirectGeneration {
+fn direct_generation(source_id: SourceId) -> Arc<PostgresGeneration> {
+    Arc::new(PostgresGeneration {
         source_id,
-        base_iri: Arc::from("http://example.test/"),
-        row_identity: sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
+        origin: MappingOrigin::Direct,
         mapping_digest: MappingDigest::from_mapping(&SourceMapping::new(source_id, Vec::new())),
         identity: observed_identity(),
         session: valid_context(),
@@ -262,10 +264,9 @@ fn verification_compares_the_exact_rich_projection_and_session() {
         sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
     )
     .unwrap();
-    let expected = PostgresDirectGeneration {
+    let expected = PostgresGeneration {
         source_id,
-        base_iri: Arc::from("http://example.test/"),
-        row_identity: sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
+        origin: MappingOrigin::Direct,
         mapping_digest: MappingDigest::from_mapping(&mapping),
         identity: observed_identity(),
         session: valid_context(),
@@ -333,7 +334,7 @@ fn direct_mapping(base_iri: &str, source_id: SourceId) -> SourceMapping {
     .unwrap()
 }
 
-fn verified_source(expected: Arc<PostgresDirectGeneration>) -> crate::IntrospectedSource {
+fn verified_source(expected: Arc<PostgresGeneration>) -> crate::IntrospectedSource {
     let pg_config: tokio_postgres::Config = "host=127.0.0.1 port=1".parse().unwrap();
     let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(
         pg_config,
@@ -343,7 +344,7 @@ fn verified_source(expected: Arc<PostgresDirectGeneration>) -> crate::Introspect
     .build()
     .unwrap();
     crate::IntrospectedSource::observed(crate::Backend::Pg(pool.into()), expected.tables.to_vec())
-        .bind_postgres_direct(PostgresDirectSourceCandidate {
+        .bind_postgres_generation(PostgresSourceCandidate {
             tables: expected.tables.to_vec(),
             observation: SourceSchemaObservationV1::unavailable(),
             generation: SourceGeneration::direct_postgres(expected),
@@ -363,10 +364,9 @@ fn verified_generation_rejects_a_different_mapping_or_origin() {
     const EXPECTED_BASE: &str = "http://example.test/expected/";
     const OTHER_BASE: &str = "http://example.test/other/";
     let source_id = SourceId::new(0).unwrap();
-    let expected = Arc::new(PostgresDirectGeneration {
+    let expected = Arc::new(PostgresGeneration {
         source_id,
-        base_iri: Arc::from(EXPECTED_BASE),
-        row_identity: sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
+        origin: MappingOrigin::Direct,
         mapping_digest: MappingDigest::from_mapping(&direct_mapping(EXPECTED_BASE, source_id)),
         identity: observed_identity(),
         session: valid_context(),
