@@ -173,6 +173,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_double_override(fixture, database);
     assert_identity(fixture, database);
     iri::assert_all(fixture, database);
+    iri::assert_double(fixture, database);
 }
 
 #[test]

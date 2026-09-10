@@ -305,7 +305,22 @@ fn mysql_float4_template_key_is_only_a_retained_fixed_ascii_recipe() {
     for dialect in [Dialect::Postgres, Dialect::Sqlite] {
         assert!(scalar_lexical(NativeScalarKey::MysqlFloat4, "v", dialect).is_err());
     }
-    assert!(scalar_template_key(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
+    let double = scalar_template_key(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).unwrap();
+    assert!(double.contains("exact_midpoint"));
+    assert!(double.contains("MOD(n,five)=0"));
+    assert!(double.contains("9007199254740991"));
+    assert!(double.contains("THEN '-0' ELSE '0'"));
+    assert!(double.contains("WHEN v IS NULL THEN NULL"));
+    assert!(
+        double.len() < 7000,
+        "fixed-size candidate correction, not a full dyadic expansion"
+    );
+    Dialect::MySql
+        .emit_via_ast(&format!("SELECT {double} FROM items"))
+        .unwrap();
+    for dialect in [Dialect::Postgres, Dialect::Sqlite] {
+        assert!(scalar_lexical(NativeScalarKey::MysqlFloat8, "v", dialect).is_err());
+    }
     let parts = vec![
         IriPart::Literal("http://ex/".into()),
         IriPart::Column(ColRef::new(0, "v")),

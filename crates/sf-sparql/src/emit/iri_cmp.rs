@@ -106,11 +106,7 @@ pub(super) fn template(
 pub(super) fn scalar_lexical(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Result<String> {
     Ok(match (dialect, key) {
         (Dialect::MySql, NativeScalarKey::MysqlFloat4) => mysql_float_value::float_lexical(raw),
-        (_, NativeScalarKey::MysqlFloat8) => {
-            return Err(Error::Unsupported(
-                "MySQL DOUBLE value authority is not a lexical recipe".into(),
-            ))
-        }
+        (Dialect::MySql, NativeScalarKey::MysqlFloat8) => mysql_float_value::double_lexical(raw),
         (Dialect::Postgres, NativeScalarKey::Integer) => format!("CAST({raw} AS TEXT)"),
         (Dialect::Postgres, NativeScalarKey::PostgresFloat4 | NativeScalarKey::PostgresFloat8) => {
             pg_float::lexical(raw, key, false)
@@ -181,11 +177,6 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
     // These live wire recipes emit restricted ASCII, not arbitrary text. Avoid
     // the generic per-byte SQL encoder only with this exhaustive alphabet proof.
     Ok(match key {
-        NativeScalarKey::MysqlFloat8 => {
-            return Err(Error::Unsupported(
-                "MySQL DOUBLE value authority is not a template key".into(),
-            ))
-        }
         NativeScalarKey::MysqlTimestamp
         | NativeScalarKey::MysqlDateTime
         | NativeScalarKey::MysqlTime => {
@@ -198,6 +189,7 @@ fn scalar_template_key(key: NativeScalarKey, raw: &str, dialect: Dialect) -> Res
         | NativeScalarKey::PostgresFloat4
         | NativeScalarKey::PostgresFloat8
         | NativeScalarKey::MysqlFloat4
+        | NativeScalarKey::MysqlFloat8
         | NativeScalarKey::MysqlBinaryBytes
         | NativeScalarKey::MysqlBit
         | NativeScalarKey::MysqlDate

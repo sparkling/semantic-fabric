@@ -194,7 +194,7 @@ fn native_with(key: NativeScalarKey) -> (LiteralComparison, ColumnCatalog, Actua
 }
 
 #[test]
-fn mysql_native_double_is_value_only_authority() {
+fn mysql_native_double_value_and_lexical_authority_are_separate() {
     let (cmp, catalog, actuals) = native_double();
     for natural in [false, true] {
         let mut cmp = cmp.clone();
@@ -238,7 +238,7 @@ fn mysql_native_double_is_value_only_authority() {
         natural_literal::source_code(NativeScalarKey::MysqlFloat8),
         None
     );
-    assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
+    assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_ok());
     for kind in ["string", "decimal"] {
         let mut cmp = cmp.clone();
         let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
@@ -319,10 +319,7 @@ fn mysql_native_floating_widths_keep_value_and_lexical_authority_separate() {
             Some(key),
             None
         ));
-        assert_eq!(
-            iri_cmp::scalar_lexical(key, "v", Dialect::MySql).is_ok(),
-            key == NativeScalarKey::MysqlFloat4
-        );
+        assert!(iri_cmp::scalar_lexical(key, "v", Dialect::MySql).is_ok());
         let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
             unreachable!()
         };

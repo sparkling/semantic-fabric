@@ -2,6 +2,8 @@
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use pg_decimal_value::datatype;
+#[path = "mysql_double_lexical.rs"]
+mod double_lexical;
 #[path = "mysql_float_identity.rs"]
 pub(super) mod identity;
 #[path = "mysql_float_round.rs"]
@@ -13,6 +15,10 @@ mod text;
 
 pub(super) fn float_lexical(raw: &str) -> String {
     shortest::float_lexical(raw)
+}
+
+pub(super) fn double_lexical(raw: &str) -> String {
+    double_lexical::lexical(raw)
 }
 
 pub(super) fn comparison(

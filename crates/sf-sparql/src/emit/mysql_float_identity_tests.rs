@@ -197,7 +197,7 @@ fn identity_requires_retained_width_datatype_and_matching_constructor() {
         Some(NativeScalarKey::MysqlFloat8),
         None
     ));
-    assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
+    assert!(iri_cmp::scalar_lexical(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_ok());
     assert!(!catalog.datatypes_by_source.is_empty());
 }
 
@@ -420,10 +420,12 @@ fn float_template_fallback_and_rendered_pool_cannot_bypass_authority() {
             &mut 0,
         );
         for result in [comparison, rendered] {
-            assert_eq!(result.is_ok(), key == NativeScalarKey::MysqlFloat4);
-            if let Ok(sql) = result {
-                assert!(sql.contains("__sf_short_selected"));
-            }
+            let sql = result.unwrap();
+            assert!(sql.contains(if key == NativeScalarKey::MysqlFloat4 {
+                "__sf_short_selected"
+            } else {
+                "__sf_double_corrected"
+            }));
         }
         assert!(validate_union(&[branch.clone()], Dialect::MySql, &catalog).is_ok());
         assert!(
