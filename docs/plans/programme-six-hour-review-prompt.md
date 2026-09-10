@@ -5,6 +5,9 @@ and correctness guarantee intact. This six-hour review must change execution
 when delivery is stalling, then continue the next useful action. It is not a
 new planning, research, benchmarking, or harness-development programme.
 
+First honor any explicit user pause: a scheduled message does not release a
+review hold or authorize resuming the application build.
+
 Keep review/coordination to a target of ten minutes. Reuse the previous review
 and inspect the delta; do not reread the entire history or ADR corpus each time.
 This target never truncates necessary implementation or correctness checks.
@@ -59,11 +62,13 @@ This target never truncates necessary implementation or correctness checks.
 6. Choose one primary implementation outcome and at most two independent
    supporting outcomes. State owner, dependency, next action, observable
    acceptance test and what is intentionally outside that slice. Native Codex
-   and Claude subscription agents execute; Ruflo MCP coordinates and records.
+   and Claude subscription agents execute through the mandatory main-only
+   delivery harness (coding-harness/README.md); Ruflo MCP coordinates and records.
    Parallelize read-only investigation/review or compatible tests only when it
    shortens delivery without shared-write or resource contention. A closed
    candidate experiment is optional, never the default build loop or per-commit
-   gate. No Darwin/GEPA/AVO, retrieval tuning, new harness expansion or new
+   gate; mandatory delivery task/handoff/check/commit verification is separate.
+   No Darwin/GEPA/AVO, retrieval tuning, new harness expansion or new
    architecture unless a concrete required product defect makes it necessary
    and the current scope authorizes it.
 

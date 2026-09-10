@@ -39,7 +39,7 @@ import {
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  'fcc61b31649e8e9238b32499ae5fe791154c5ae0239c98420139c72037b3c8bc';
+  '49e2fa01803d577cfc819a1af27b15a1aa057727d32094b1edfd1aa9bafe0f0c';
 const HISTORICAL_POLICY_FINGERPRINT =
   '7888d16a81b048d2bd1a436047cac8ebd13d61050daeff670371140383526c3c';
 const HISTORICAL_MANIFEST_DIGEST =

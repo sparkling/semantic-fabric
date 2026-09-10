@@ -10,13 +10,17 @@ repository instructions come from `../AGENTS.md`.
   or proxy fallback.
 - Treat Ruflo as the coordination ledger and Agentic-QE as advisory evidence;
   neither replaces direct product evaluators.
-- Run candidate commands offline in an enforced process boundary. Dependency
+- Every building task uses the mandatory main-only delivery path in README.md;
+  bind the actual native model/effort and run checks through its CLI. Honor user
+  review holds. The remaining candidate-specific rules describe the optional experiment.
+- Run historical candidate commands offline in an enforced process boundary. Dependency
   resolution is a separate, registry-pinned `npm ci` stage.
 - Preserve the frozen evaluator, policy, lockfile, ADR, manifest, and `.mcp.json`
   digests. A repair must reset, re-admit, rebuild, and rerun every verifier.
 - Require independent Codex and Claude reviews and emit a chained
   `development-only-no-promotion` receipt.
-- Do not add a CLI, MCP server, publish/deploy path, or evolution command.
+- The delivery CLI manages native handoffs and checks, never a competing host,
+  commit/push, publication/deployment, an MCP server, or evolution.
 
 Local verification is `npm ci && npm run build && npm test`. Tests must use fake
 native executables and must not contact a model provider.

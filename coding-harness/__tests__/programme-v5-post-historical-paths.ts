@@ -6,6 +6,17 @@ import {
 } from '../src/programme-capture-protected-paths-v1.js';
 
 export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
+  'tests/rust-dependency-closure-current.tsv',
+  'crates/sf-serve/src/config/parser.rs',
+  'crates/sf-serve/src/pg_direct_lifecycle/coordinator/ownership_tests.rs',
+  'crates/sf-serve/src/pg_generation/candidate_work.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/rls_lineage.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/rls_subjects.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/rls.rs',
+  'coding-harness/src/delivery-cli.ts', 'coding-harness/src/delivery-contracts.ts',
+  'coding-harness/src/delivery-runtime.ts', 'coding-harness/src/delivery-workspace.ts',
+  'coding-harness/src/delivery-process.ts',
+  'coding-harness/__tests__/delivery-runtime.test.ts',
   ...PROGRAMME_CAPTURE_RUST_SUPERVISOR_PROTECTED_PATHS_V1,
   'docs/adr/ADR-0055-v1-product-completion-and-release-profile.md',
   'tests/sparql/protocol/supported-surface-v1.tsv',

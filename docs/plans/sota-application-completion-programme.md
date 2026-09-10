@@ -427,8 +427,7 @@ governs its v1 use:
 
 1. One integration owner writes and commits directly on `main`; no new branches
    or worktrees. Preserve unrelated changes and historical recovery refs.
-2. Native agents use normal edit/test loops; parallelize read-only investigation,
-   review or compatible tests, not shared writes. Closed experiments are optional.
+2. Every building task uses the [main-only delivery harness](../../coding-harness/README.md#mandatory-delivery-path): task → native model/effort handoff → checks → verification → scoped commit → exact-commit result. Native agents edit; parallelize read-only investigation/review, not shared writes. Closed experiments remain optional. Honor explicit user review holds before any continuation.
 3. Each commit runs affected tests/builds; shared contracts, dependencies,
    security, unknown impact or failed selection escalate to integrated gates.
 4. Meaningful public-feature integration boundaries run the full locked workspace

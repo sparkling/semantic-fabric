@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-09-07
+updated: 2026-09-10
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -13,7 +13,7 @@ implements: []
 
 # Dual-host Ruflo engineering MetaHarness
 
-> **V1 execution amendment (2026-09-07):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) makes native Codex/Claude edit/test loops the normal builder, with one writer on `main` and proportional validation. The closed candidate transaction and its rubric below describe an optional, historically qualified experiment, not a per-task delivery gate. Worktree-creating launchers must not run under the current main-only rule; evolution remains post-1.0.
+> **V1 execution amendment (2026-09-10):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) and the user's explicit correction require the main-only delivery harness for every building task, with native Codex/Claude executors, explicit model/effort handoffs, actual command results and commit-bound verification. See [delivery usage](../../coding-harness/README.md#mandatory-delivery-path). The closed candidate transaction and rubric below remain an optional historical experiment; they are not the daily path. Worktree-creating launchers remain prohibited; evolution stays post-1.0.
 
 ## Context and problem statement
 
@@ -38,8 +38,8 @@ differential, security, mutation, or live-source evidence.
 
 ## Decision
 
-Retain the implemented `coding-harness/` as an optional private, development-
-only experiment. It returns a patch and evidence; it has no
+Retain the closed-candidate portion of `coding-harness/` as an optional private, development-
+only experiment, separate from the mandatory delivery mode above. It returns a patch and evidence; it has no
 product-runtime, commit, merge, push, publish, deploy, or promotion authority.
 
 ### 1. Runtime and orchestration

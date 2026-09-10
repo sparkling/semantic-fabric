@@ -1,18 +1,126 @@
 # semantic-fabric coding harness
 
-Optional, private development-only closed-candidate experiment. Native
-Codex/ChatGPT and Claude Code agents normally use direct edit/test loops under
-[ADR-0055](../docs/adr/ADR-0055-v1-product-completion-and-release-profile.md);
-this harness is not the default builder or a per-commit delivery gate.
+Mandatory, private development-only delivery harness for every building task,
+with native Codex/ChatGPT and Claude Code executors under
+[ADR-0055](../docs/adr/ADR-0055-v1-product-completion-and-release-profile.md).
+The older closed-candidate experiment remains separate and optional.
 
 All Node/TypeScript here—including the historically named
 `supervisor-service/` package—is non-deployable evidence/oracle infrastructure.
 The product runtime is Rust; any future production supervisor is a separately
 packaged Rust service under ADR-0048.
 
-The package has no CLI, MCP server, publication path, commit/push authority, or
-evolution command. It returns evidence and a patch to an explicit integration
-owner.
+The delivery CLI runs declared checks and records task/handoff/evidence state;
+it never launches another model host, creates a worktree, commits, pushes,
+publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
+
+## Mandatory delivery path
+
+Use one task per coherent requirement closure. The existing native conversation
+is the executor; this package supplies its persistent delivery lifecycle and the
+installed `@metaharness/harness` `VerifierRegistry`. This is a project-specific
+adapter, not a claim that upstream generates our native conversation or that the
+historical `HarnessKernel`/learned router drives it.
+
+1. Use Ruflo MCP to recall relevant context and create an assigned task. Define
+   exact file scope, requirement, owner/thread and acceptance/build commands.
+2. `begin` claims the one writer on `main` and selects a model/effort. Existing
+   changes inside the scope require an exact `adoptExistingChanges` list; their
+   starting hashes are recorded, not treated as verified. Other dirty work stays
+   outside the slice and must remain unchanged.
+3. The native host starts the selected subscription agent (or retains the selected
+   main model), then `bind` records its actual model, effort, native executor ID
+   and observation. A mismatched handoff is rejected; no silent substitution.
+4. That sole writer edits only its scope. All build/test commands run via `check`.
+   Checks execute sequentially, without shell expansion, and retain each actual
+   result, duration, source/environment hashes and private output logs—including
+   failures. Each check defaults to 30 minutes and 10 MB of combined output;
+   positive `timeoutMs`/`maxOutputBytes` fields override these process-safety
+   controls up to 24 hours/100 MB, never subscription budgets. Cancellation,
+   timeout or overflow stops the process group and records failure. An unconfirmed
+   surviving group retains the operation record for recovery. Log hashing is streamed.
+5. `verify` requires every declared acceptance/build check to pass on unchanged
+   source with unchanged logs. A missing, failed or stale check returns nonzero.
+6. The integration owner reviews and commits only the verified scope on `main`.
+   `finish` requires that exact next commit, matching source and passing evidence.
+   Mirror the resulting commit, check results and measured durations to the Ruflo
+   task and memory through MCP; read back the stored result. Memory outages are
+   reported, but the local record remains available and delivery can continue.
+
+Run commands from `coding-harness/` after its normal local build:
+
+```bash
+npm run delivery -- /absolute/repo begin /absolute/task.json
+npm run delivery -- /absolute/repo bind task-id owner /absolute/native.json
+npm run delivery -- /absolute/repo check task-id owner build
+npm run delivery -- /absolute/repo check task-id owner public
+npm run delivery -- /absolute/repo verify task-id owner
+# Integration owner commits the scoped changes using normal Git tools.
+npm run delivery -- /absolute/repo finish task-id owner FULL_COMMIT_SHA
+npm run delivery -- /absolute/repo status task-id
+```
+
+Example task (paths/checks must match the actual change, not this example):
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "task-id",
+  "requirement": "Exact public query behavior for the named regression",
+  "owner": "native-owner",
+  "thread": "existing-conversation-id",
+  "taskClass": "implementation",
+  "host": "codex",
+  "scope": ["crates/sf-sparql/src/example.rs"],
+  "checks": [
+    {"id": "build", "kind": "build", "argv": ["cargo", "build", "--locked", "-p", "sf-sparql"], "cwd": "."},
+    {"id": "public", "kind": "acceptance", "argv": ["cargo", "test", "--locked", "-p", "sf-sparql", "specific_test"], "cwd": "."}
+  ]
+}
+```
+
+Native binding fields are `host`, `model`, `effort`, `executorId`,
+`authentication: "native-subscription"`, and `observation` (the actual host
+metadata/error, never credentials). Default Codex routes are Luna low for
+mechanical work, Terra medium for patterns, Sol medium for implementation, Sol
+high for a correctness proof, Astra high for difficult work. Claude routes use
+Haiku/Sonnet/Opus with native-default effort. These are explicit project policy,
+not learned quality estimates. `requested: {host, model, effort}` plus
+`selectionReason` preserves an explicit choice; `preserveMainModel: true`
+retains the active main model and requires its explicit `requested` route.
+Ultra otherwise requires `explicitUltra: true`.
+Max/ultra are forwarded unchanged. No monetary/token/request/quota ceilings,
+provider keys, OpenRouter fallback, inferred savings, or automatic escalation.
+
+`pause <id> <owner> <exact reason>` releases the claim without discarding work;
+`resume <id> <owner>` requires unchanged base/outside scope and a new native
+handoff. On native unavailability, pause and report exact client/model/error.
+On an explicit user review hold, stop: neither a scheduler nor an active goal
+releases that hold. A stale operation lock after a hard crash requires checking
+the recorded process and any child before explicit recovery; it is never
+automatically stolen. Use `inspect`, then `reconcile <id> <owner> <lock-nonce-or-none>
+<reason>` to repair an interrupted claim transition. Recovery checks the exact
+nonce, PID/start identity and child process group, archives the old lock and
+records the reason. A live owner/child or an uncertain spawn window refuses
+recovery. An unfinished run needs a new handoff afterward. `status` and records
+survive process restarts; no failed/intended command is turned into a pass.
+
+Records/logs live under ignored `.metaharness/delivery/`, separate from managed
+Ruflo stores. They bind the working source including pre-existing outside work;
+they are scoped development evidence, not a clean release-candidate attestation.
+Linux `flock` and `/proc` provide operation exclusion and process identity;
+the OS lease also covers reconciliation and releases on owner exit.
+The native identity observation is trusted host/operator input, not a provider
+signature. This cooperative harness does not sandbox arbitrary trusted build
+scripts or prevent a human/tool from bypassing it: canonical agent instructions
+require using it. Acceptance-command selection remains the owner's correctness
+responsibility; a zero exit code alone cannot prove a meaningful test selection.
+Build environments preserve selected Cargo/Rust/owned-fixture settings but omit
+provider-specific configuration variables, API keys and proxy overrides. Trusted
+build scripts still have ordinary local filesystem access, including `HOME`;
+this is not native-credential isolation. Never put credentials in task arguments,
+handoff observations, or logs. Model transport is owned by the native host.
+The real closed-candidate isolation and replay checks below are not weakened.
 
 ## Local verification
 
@@ -23,7 +131,7 @@ npm run build
 npm test
 ```
 
-CI tests use fake model processes and make no provider calls. Runtime model
+CI tests use fake model processes and make no provider calls. Historical candidate model
 execution requires successful native subscription preflights. Provider API
 keys, ambient proxy variables, base-URL overrides, OpenRouter, and Requesty are
 rejected. The controller injects only a loopback CONNECT endpoint backed by its

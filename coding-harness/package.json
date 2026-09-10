@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc && node scripts/sync-harness-manifest.mjs && node scripts/harden-build.mjs",
     "test": "vitest run",
+    "delivery": "node dist/delivery-cli.js",
     "postgres-observation-qualification": "node dist/postgres-observation-qualification-cli.js",
     "prepublishOnly": "node scripts/deny-publish.mjs"
   },

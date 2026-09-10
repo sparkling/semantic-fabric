@@ -47,9 +47,9 @@ import {
 }
   from './programme-v5-post-historical-paths.js';
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '60abb83262fe01eb8f1a1129c6fa2dd65964388c2135523702b9aa32542b507e';
-const ACCEPTANCE_DIGEST = '668a63f1a184041ec14312d53cdb9e447d6425766d8382d452608ba5f9fa0f7a';
-const ENVELOPE_DIGEST = '5bde23e8888be8d52e8059b86195f5e62c73ee26971273c4bfbbae0a870d3566';
+const POLICY_FINGERPRINT = 'cc01f2ca7a43edff28586e63c4a1aba562093274afd6142ca7749639a919663f';
+const ACCEPTANCE_DIGEST = 'c71a27231660ba1239b3771e4907be213676afe495b87b37cebab68e99caea40';
+const ENVELOPE_DIGEST = '0b4fd2f2bb415d48075a0041e776a7fb405eba331131178da1377efcff6c8711';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
@@ -69,8 +69,8 @@ describe('strict schema-v5 programme envelope', () => {
     expect(serializeProgrammeEnvelope(created, {
       schemaVersion: 5, policyFingerprint: POLICY_FINGERPRINT,
     })).toBe(serialized);
-    expect(parsed.envelopeDigest).toBe(ENVELOPE_DIGEST);
-    expect(parsed.programmeAcceptanceDigest).toBe(ACCEPTANCE_DIGEST);
+    expect([parsed.envelopeDigest, parsed.programmeAcceptanceDigest])
+      .toEqual([ENVELOPE_DIGEST, ACCEPTANCE_DIGEST]);
     expect(parsed.receiptChain.receipts).toHaveLength(1);
     expect(parsed.programmeAcceptance).toMatchObject({
       receiptDigest: fixture.receipt.digest,

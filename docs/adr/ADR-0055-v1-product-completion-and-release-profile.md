@@ -350,13 +350,7 @@ release run, and a previous-head result cannot attest a later commit. Pure
 documentation status changes use structural, link, line-count, and diff checks;
 they do not require an unrelated product rebuild.
 
-Native Codex/Claude agents build through normal edit/test/inspect loops. Ruflo
-MCP retains useful coordination and verified outcomes. ADR-0037's closed
-candidate evaluator is an optional experiment, not the default builder, a
-per-commit gate or a product oracle. Its legacy worktree-creating launchers are
-incompatible with the main-only rule and must not run in this programme. Keep
-existing isolation checks intact; do not expand or retrofit that harness merely
-to deliver v1. Research scores and harness evolution remain post-1.0.
+**User correction 2026-09-10:** every building task uses `coding-harness`'s main-only delivery mode: scoped task and explicit existing-change adoption → native model/effort handoff → actual acceptance/build commands → MetaHarness verification → scoped main commit → exact-commit completion. Native Codex/Claude still edit; the harness launches no second model host. Ruflo MCP retains coordination and verified outcomes; local development records are not managed memory. Failed attempts remain recorded; source/log drift invalidates passes. Operator-observed native metadata is not provider attestation, and this cooperative single-writer harness is not an OS sandbox or release proof. Model selection follows the table below without learned-routing claims or subscription quotas. ADR-0037's historical closed-candidate experiment remains optional; its worktree launchers must not run. Existing isolation/replay law stays intact; research/evolution remains post-1.0. User pauses take precedence over queued continuation.
 
 ### 7. Status and claim discipline
 
