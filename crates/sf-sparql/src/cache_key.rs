@@ -1,7 +1,8 @@
-//! Fallible, byte-bounded canonical rendering for a future controlled cache path.
+//! Fallible canonical rendering with explicit byte or request-work bounds.
 
 use std::fmt;
 
+use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 use spargebra::Query;
 
 use super::{CompileProfileId, CompileScope, PlanKey};
@@ -19,6 +20,66 @@ pub(crate) enum BoundedCacheKeyError {
     AllocationFailed,
     #[error("canonical cache key formatting failed")]
     FormattingFailed,
+    #[error(transparent)]
+    Control(QueryControlError),
+}
+
+/// Pay for canonical output, each requested growth/relocation and the one hash.
+/// The existing AST envelope bounds recursive formatting; formatter-internal
+/// traversal/temporaries and cache lookup/eviction work remain separate gaps.
+/// No new guessed canonical-byte ceiling is imposed: finite request work bounds
+/// every requested allocation. An allocator may grant more than requested.
+pub(crate) fn plan_key_with_work_control(
+    query: &Query,
+    scope: CompileScope,
+    profile: CompileProfileId,
+    control: &dyn QueryControl,
+) -> crate::Result<PlanKey> {
+    use crate::compile_envelope::{algebra::AlgebraEnvelopeV1, CompileEnvelopeError};
+
+    control.checkpoint()?;
+    control.consume(QueryCharge::CompilerWork, 1)?;
+    control.checkpoint()?;
+    AlgebraEnvelopeV1::validate(query).map_err(|error| {
+        let cause = match error {
+            CompileEnvelopeError::AccountingOverflow => QueryControlError::AccountingOverflow,
+            CompileEnvelopeError::AllocationFailed => QueryControlError::CompilerResourceExhausted,
+            CompileEnvelopeError::LimitExceeded { .. } => {
+                QueryControlError::CompilerEnvelopeExceeded
+            }
+        };
+        crate::Error::from(control.terminate(cause))
+    })?;
+    control.checkpoint()?;
+    let mut writer = BoundedWriter::new(usize::MAX, |output: &mut String, additional| {
+        output.try_reserve_exact(additional).map_err(|_| ())
+    });
+    writer.control = Some(control);
+    let formatted = fmt::write(&mut writer, format_args!("{query}"));
+    let canonical = writer.finish(formatted).map_err(|error| match error {
+        BoundedCacheKeyError::Control(cause) => crate::Error::from(cause),
+        BoundedCacheKeyError::AccountingOverflow => control
+            .terminate(QueryControlError::AccountingOverflow)
+            .into(),
+        BoundedCacheKeyError::AllocationFailed => control
+            .terminate(QueryControlError::CompilerResourceExhausted)
+            .into(),
+        BoundedCacheKeyError::LimitExceeded { .. } => control
+            .terminate(QueryControlError::CompilerEnvelopeExceeded)
+            .into(),
+        BoundedCacheKeyError::FormattingFailed => {
+            crate::Error::Mapping("canonical cache key formatting failed".into())
+        }
+    });
+    control.checkpoint()?;
+    let canonical = canonical?;
+    let bytes = u64::try_from(canonical.len())
+        .map_err(|_| control.terminate(QueryControlError::AccountingOverflow))?;
+    control.consume(QueryCharge::CompilerWork, bytes)?;
+    control.checkpoint()?;
+    let key = PlanKey::from_canonical(scope, profile, canonical);
+    control.checkpoint()?;
+    Ok(key)
 }
 
 /// Construct the same collision-safe key as the uncontrolled path without
@@ -62,14 +123,16 @@ where
     writer.finish(format_result)
 }
 
-struct BoundedWriter<R> {
+struct BoundedWriter<'control, R> {
     output: String,
     maximum_bytes: usize,
     failure: Option<BoundedCacheKeyError>,
     reserve: R,
+    control: Option<&'control dyn QueryControl>,
+    requested_capacity: usize,
 }
 
-impl<R> BoundedWriter<R> {
+impl<R> BoundedWriter<'_, R> {
     const MIN_GROWTH_BYTES: usize = 64;
 
     fn new(maximum_bytes: usize, reserve: R) -> Self {
@@ -78,6 +141,8 @@ impl<R> BoundedWriter<R> {
             maximum_bytes,
             failure: None,
             reserve,
+            control: None,
+            requested_capacity: 0,
         }
     }
 
@@ -96,11 +161,34 @@ impl<R> BoundedWriter<R> {
         Err(fmt::Error)
     }
 
+    fn charge(&mut self, units: &[usize]) -> fmt::Result {
+        let Some(control) = self.control else {
+            return Ok(());
+        };
+        let result = (|| {
+            control.checkpoint()?;
+            let amount = units
+                .iter()
+                .try_fold(0_u64, |total, &value| {
+                    u64::try_from(value)
+                        .ok()
+                        .and_then(|value| total.checked_add(value))
+                })
+                .ok_or_else(|| control.terminate(QueryControlError::AccountingOverflow))?;
+            control.consume(QueryCharge::CompilerWork, amount)?;
+            control.checkpoint()
+        })();
+        result.map_err(|error| {
+            self.failure = Some(BoundedCacheKeyError::Control(error));
+            fmt::Error
+        })
+    }
+
     fn reserve_for(&mut self, required_bytes: usize) -> fmt::Result
     where
         R: FnMut(&mut String, usize) -> Result<(), ()>,
     {
-        if required_bytes <= self.output.capacity() {
+        if required_bytes <= self.requested_capacity {
             return Ok(());
         }
 
@@ -109,8 +197,7 @@ impl<R> BoundedWriter<R> {
         // for every formatter fragment can otherwise turn a one-byte-at-a-time
         // `Display` implementation into linearly many reallocations.
         let doubled = self
-            .output
-            .capacity()
+            .requested_capacity
             .checked_mul(2)
             .unwrap_or(self.maximum_bytes);
         let target_capacity = required_bytes
@@ -120,14 +207,18 @@ impl<R> BoundedWriter<R> {
         let Some(additional) = target_capacity.checked_sub(self.output.len()) else {
             return self.fail(BoundedCacheKeyError::AccountingOverflow);
         };
+        // Pay the full requested target, including slack, and relocation of
+        // existing payload BEFORE asking the allocator to grow this buffer.
+        self.charge(&[target_capacity, self.output.len()])?;
         if (self.reserve)(&mut self.output, additional).is_err() {
             return self.fail(BoundedCacheKeyError::AllocationFailed);
         }
+        self.requested_capacity = target_capacity;
         Ok(())
     }
 }
 
-impl<R> fmt::Write for BoundedWriter<R>
+impl<R> fmt::Write for BoundedWriter<'_, R>
 where
     R: FnMut(&mut String, usize) -> Result<(), ()>,
 {
@@ -135,6 +226,7 @@ where
         if self.failure.is_some() {
             return Err(fmt::Error);
         }
+        self.charge(&[fragment.len()])?;
 
         let required_bytes =
             match checked_required_bytes(self.output.len(), fragment.len(), self.maximum_bytes) {
@@ -142,10 +234,15 @@ where
                 Err(error) => return self.fail(error),
             };
         self.reserve_for(required_bytes)?;
+        self.charge(&[])?;
         self.output.push_str(fragment);
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "cache_key_control_tests.rs"]
+mod control_tests;
 
 fn checked_required_bytes(
     current_bytes: usize,

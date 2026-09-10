@@ -255,8 +255,29 @@ impl SecurityScopedCompiler<'_> {
         let query = crate::parse_query(sparql)?;
         let profile = CompileProfileId::Uncontrolled;
         let security_identity = context.cache_identity();
-        let key =
-            SecurityPlanKey::from_query(&query, self.binding.scope(), profile, security_identity);
+        let key = match work_control {
+            Some(control) => {
+                let key = super::bounded_key::plan_key_with_work_control(
+                    &query,
+                    self.binding.scope(),
+                    profile,
+                    control,
+                )?;
+                SecurityPlanKey::from_canonical_with_hash(
+                    key.scope,
+                    key.profile,
+                    security_identity,
+                    key.structural_hash,
+                    key.canonical,
+                )
+            }
+            None => SecurityPlanKey::from_query(
+                &query,
+                self.binding.scope(),
+                profile,
+                security_identity,
+            ),
+        };
         control.checkpoint().map_err(crate::Error::from)?;
         if let Some(cached) = self.cache.get(&key) {
             if cached.scope != self.binding.scope() {

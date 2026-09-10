@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use sf_core::query_control::{
+    QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+};
 use sf_core::security_context::{
     PolicySnapshotId, RequestAttributesIdentity, SecurityContext, SubjectIdentity,
 };
@@ -310,26 +314,54 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
     let cache = security_cache();
     let compiler = binding.for_security_policy(policy(1), &cache);
     let alice = context(1, 2, 3);
+    let key_control = control(u64::MAX);
+    crate::cache::bounded_key::plan_key_with_work_control(
+        &crate::parse_query(query).unwrap(),
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        &key_control,
+    )
+    .unwrap();
+    let key_work = key_control.consumed(QueryCharge::CompilerWork);
     assert!(compiler
-        .compile_shared_with_work_control(&alice, query, &control(0))
+        .compile_shared_with_work_control(&alice, query, &control(key_work))
         .is_err());
+    assert_eq!(
+        cache.access_counts(),
+        (1, 0),
+        "failure follows paid key lookup"
+    );
     assert_eq!(cache.len(), 0);
     let paid = control(u64::MAX);
     let first = compiler
         .compile_shared_with_work_control(&alice, query, &paid)
         .unwrap();
     assert!(paid.consumed(QueryCharge::CompilerWork) > 0);
-    let hit_control = control(0);
+    let hit_control = control(u64::MAX);
     let hit = compiler
         .compile_shared_with_work_control(&alice, query, &hit_control)
         .unwrap();
     assert!(Arc::ptr_eq(&first, &hit));
-    assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), key_work);
+    assert!(key_work > 0 && key_work < paid.consumed(QueryCharge::CompilerWork));
+    cache.reset_access_counts();
     assert!(compiler
-        .compile_shared_with_work_control(&context(1, 4, 3), query, &control(0))
+        .compile_shared_with_work_control(&alice, query, &control(key_work - 1))
+        .is_err());
+    assert_eq!(
+        cache.access_counts(),
+        (0, 0),
+        "unpaid hash cannot reach cache lookup"
+    );
+    let exact = compiler
+        .compile_shared_with_work_control(&alice, query, &control(key_work))
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &exact));
+    assert!(compiler
+        .compile_shared_with_work_control(&context(1, 4, 3), query, &control(key_work))
         .is_err());
     assert!(compiler
-        .compile_shared_with_work_control(&context(1, 2, 4), query, &control(0))
+        .compile_shared_with_work_control(&context(1, 2, 4), query, &control(key_work))
         .is_err());
     assert_eq!(cache.len(), 1);
     assert_eq!(binding.cache_len(), 0);
@@ -360,4 +392,74 @@ fn policy_mismatch_precedes_cancelled_control_and_cancelled_hits_cannot_escape()
         Err(SecurityCompileError::PolicyMismatch)
     ));
     assert_eq!(cache.access_counts(), (0, 0));
+}
+
+struct CancelAtHash {
+    budget: QueryBudget,
+    key_work: u64,
+    checkpoints: AtomicUsize,
+}
+
+impl QueryControl for CancelAtHash {
+    fn checkpoint(&self) -> Result<(), QueryControlError> {
+        self.budget.checkpoint()?;
+        if self.budget.consumed(QueryCharge::CompilerWork) == self.key_work
+            && self.checkpoints.fetch_sub(1, Ordering::SeqCst) == 1
+        {
+            self.budget.terminate(QueryControlError::Cancelled);
+        }
+        self.budget.checkpoint()
+    }
+
+    fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError> {
+        self.budget.consume(charge, amount)
+    }
+
+    fn terminate(&self, cause: QueryControlError) -> QueryControlError {
+        self.budget.terminate(cause)
+    }
+}
+
+#[test]
+fn raw_cache_reuse_and_hash_cancellation_preserve_access_boundary() {
+    let binding = binding();
+    let cache = security_cache();
+    let compiler = binding.for_security_policy(policy(1), &cache);
+    let context = context(1, 2, 3);
+    let raw = compiler.compile_shared(&context, QUERY).unwrap();
+    let budget = |work| QueryBudget::new(QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX));
+    let measured = budget(u64::MAX);
+    let controlled = compiler
+        .compile_shared_with_work_control(&context, QUERY, &measured)
+        .unwrap();
+    assert!(Arc::ptr_eq(&raw, &controlled));
+    let key_work = measured.consumed(QueryCharge::CompilerWork);
+    let exact = compiler
+        .compile_shared_with_work_control(&context, QUERY, &budget(key_work))
+        .unwrap();
+    assert!(Arc::ptr_eq(&raw, &exact));
+    for warm in [false, true] {
+        let cache = security_cache();
+        let compiler = binding.for_security_policy(policy(1), &cache);
+        if warm {
+            compiler.compile_shared(&context, QUERY).unwrap();
+        }
+        for checkpoints in [1, 2] {
+            let control = CancelAtHash {
+                budget: budget(key_work),
+                key_work,
+                checkpoints: AtomicUsize::new(checkpoints),
+            };
+            cache.reset_access_counts();
+            assert!(matches!(
+                compiler.compile_shared_with_work_control(&context, QUERY, &control),
+                Err(SecurityCompileError::Compiler(crate::Error::QueryControl(
+                    QueryControlError::Cancelled
+                )))
+            ));
+            assert_eq!(control.checkpoints.load(Ordering::SeqCst), 0);
+            assert_eq!(cache.access_counts(), (0, 0));
+            assert_eq!(cache.len(), usize::from(warm));
+        }
+    }
 }

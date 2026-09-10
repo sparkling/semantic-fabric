@@ -244,9 +244,20 @@ fn failed_path_expansion_cannot_cache_and_paid_hits_share_the_plan() {
         8,
     );
     let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
+    let key_control = budget(u64::MAX);
+    crate::cache::bounded_key::plan_key_with_work_control(
+        &crate::parse_query(query).unwrap(),
+        binding.scope(),
+        crate::cache::CompileProfileId::Uncontrolled,
+        &key_control,
+    )
+    .unwrap();
+    let key_work = key_control.consumed(QueryCharge::CompilerWork);
+    let short = budget(key_work);
     assert!(binding
-        .compile_shared_with_work_control(query, &budget(0))
+        .compile_shared_with_work_control(query, &short)
         .is_err());
+    assert_eq!(short.consumed(QueryCharge::CompilerWork), key_work);
     assert_eq!(binding.cache_len(), 0);
     let paid = budget(100_000);
     let first = binding
@@ -254,7 +265,7 @@ fn failed_path_expansion_cannot_cache_and_paid_hits_share_the_plan() {
         .unwrap();
     assert!(paid.consumed(QueryCharge::CompilerWork) > 0);
     let second = binding
-        .compile_shared_with_work_control(query, &budget(0))
+        .compile_shared_with_work_control(query, &budget(key_work))
         .unwrap();
     assert!(std::sync::Arc::ptr_eq(&first, &second));
     assert_eq!(

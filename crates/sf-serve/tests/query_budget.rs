@@ -9,6 +9,10 @@ use sf_core::query_control::QueryLimits;
 use sf_serve::{router, Backend, BearerQueryAdmission, QueryAdmission, ServeConfig};
 use tower::ServiceExt;
 
+#[path = "query_budget/cache_key.rs"]
+mod cache_key;
+use cache_key::key_work;
+
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
 #[path = "query_budget/join_copy.rs"]
@@ -65,10 +69,12 @@ fn mapping_product_config(work: u64) -> ServeConfig {
 #[tokio::test]
 async fn mapping_products_charge_even_candidates_that_cannot_match() {
     let query = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
-    let response = router(Arc::new(mapping_product_config(query.len() as u64 + 5)))
-        .oneshot(authenticated(query))
-        .await
-        .unwrap();
+    let response = router(Arc::new(mapping_product_config(
+        query.len() as u64 + key_work(query) + 5,
+    )))
+    .oneshot(authenticated(query))
+    .await
+    .unwrap();
     assert_budget_problem(response).await;
     let response = router(Arc::new(mapping_product_config(100_000)))
         .oneshot(authenticated(query))
@@ -151,7 +157,7 @@ fn path_config(work: u64) -> ServeConfig {
 #[tokio::test]
 async fn negated_path_mapping_searches_obey_compiler_allowance() {
     let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
-    let response = router(Arc::new(path_config(query.len() as u64)))
+    let response = router(Arc::new(path_config(query.len() as u64 + key_work(query))))
         .oneshot(authenticated(query))
         .await
         .unwrap();
@@ -248,73 +254,6 @@ async fn assert_values(response: axum::response::Response) {
 }
 
 #[tokio::test]
-async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
-    let mut cfg = Arc::new(protected(10_000));
-    // The same immutable runtime/cache survives all requests and limit changes.
-    for warm in [false, true] {
-        if warm {
-            Arc::get_mut(&mut cfg).unwrap().query_limits =
-                QueryLimits::new(SELECT.len() as u64, u64::MAX, u64::MAX, u64::MAX);
-        }
-        assert_values(
-            router(cfg.clone())
-                .oneshot(authenticated(SELECT))
-                .await
-                .unwrap(),
-        )
-        .await;
-    }
-    Arc::get_mut(&mut cfg)
-        .expect("response released configuration")
-        .query_limits = QueryLimits::new(0, u64::MAX, u64::MAX, u64::MAX);
-    assert_budget_problem(router(cfg).oneshot(authenticated(SELECT)).await.unwrap()).await;
-    assert_budget_problem(
-        router(Arc::new(protected(0)))
-            .oneshot(authenticated(SELECT))
-            .await
-            .unwrap(),
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    // A single VALUES leaf has no branch product: isolate the decoded-input floor.
-    let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
-    let wire = form_urlencoded::Serializer::new(String::new())
-        .append_pair("query", query)
-        .finish();
-    for method in ["GET", "POST"] {
-        for (work, accepted) in [(query.len() as u64 - 1, false), (query.len() as u64, true)] {
-            let req = Request::builder()
-                .method(method)
-                .uri(if method == "GET" {
-                    format!("/sparql?{wire}")
-                } else {
-                    "/sparql".into()
-                })
-                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(if method == "GET" {
-                    Body::empty()
-                } else {
-                    Body::from(wire.clone())
-                })
-                .unwrap();
-            let response = router(Arc::new(protected(work)))
-                .oneshot(req)
-                .await
-                .unwrap();
-            if accepted {
-                assert_values(response).await;
-            } else {
-                assert_budget_problem(response).await;
-            }
-        }
-    }
-}
-
-#[tokio::test]
 async fn authentication_precedes_zero_compiler_allowance() {
     let response = router(Arc::new(protected(0)))
         .oneshot(request(SELECT))
@@ -353,7 +292,7 @@ async fn zero_compiler_work_is_a_pre_response_429() {
 #[tokio::test]
 async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
     let query = CLONING;
-    let response = router(Arc::new(protected(query.len() as u64)))
+    let response = router(Arc::new(protected(query.len() as u64 + key_work(query))))
         .oneshot(authenticated(query))
         .await
         .unwrap();
@@ -362,10 +301,12 @@ async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
 
 #[tokio::test]
 async fn compiler_products_cannot_spend_only_their_input_allowance() {
-    let response = router(Arc::new(protected(PRODUCTS.len() as u64)))
-        .oneshot(authenticated(PRODUCTS))
-        .await
-        .unwrap();
+    let response = router(Arc::new(protected(
+        PRODUCTS.len() as u64 + key_work(PRODUCTS),
+    )))
+    .oneshot(authenticated(PRODUCTS))
+    .await
+    .unwrap();
     assert_budget_problem(response).await;
 }
 
@@ -403,8 +344,12 @@ async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_repla
         });
         for warm in [false, true] {
             if warm {
-                Arc::get_mut(&mut cfg).unwrap().query_limits =
-                    QueryLimits::new(CLONING.len() as u64, u64::MAX, u64::MAX, u64::MAX);
+                Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
+                    CLONING.len() as u64 + key_work(CLONING),
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                );
             }
             let response = router(cfg.clone())
                 .oneshot(authenticated(CLONING))

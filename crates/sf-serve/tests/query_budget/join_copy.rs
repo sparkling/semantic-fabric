@@ -9,7 +9,7 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
         "SELECT ?a ?b WHERE {{ VALUES ?a {{ 0 1 }} VALUES ?b {{ \"{payload}\" \"{payload}!\" }} }}"
     );
     // More than input admission alone, but insufficient for the repeated right payload.
-    let mut cfg = Arc::new(protected(query.len() as u64 + 512));
+    let mut cfg = Arc::new(protected(query.len() as u64 + key_work(&query) + 512));
     assert_budget_problem(
         router(cfg.clone())
             .oneshot(authenticated(&query))
@@ -29,8 +29,12 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
     for warm in [false, true] {
         if warm {
             // A completed shared-plan hit need not repeat either branch copy.
-            Arc::get_mut(&mut cfg).unwrap().query_limits =
-                QueryLimits::new(query.len() as u64, u64::MAX, u64::MAX, u64::MAX);
+            Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
+                query.len() as u64 + key_work(&query),
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+            );
         }
         let response = router(cfg.clone())
             .oneshot(authenticated(&query))
