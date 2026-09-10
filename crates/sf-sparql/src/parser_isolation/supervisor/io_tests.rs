@@ -162,9 +162,20 @@ mod linux_tests {
     fn partial_stalled_write_is_bounded_by_the_same_deadline() {
         const INPUT_BYTES: usize = 2 * 1024 * 1024;
         let executable = prepared("/bin/sh");
-        let mut child = spawn_stalled_shell(&executable, INPUT_BYTES as u64);
-        let pidfd = child.duplicate_pidfd().unwrap();
+        // This witness requires progress before expiry, unlike stalled_read.
+        // Allocate before spawning and allow test scheduling under parallel load;
+        // still require expiry at the original, never-reset spawn deadline.
         let input = vec![b'X'; INPUT_BYTES];
+        let mut values = short_limits(INPUT_BYTES as u64).values();
+        values.wall_time_millis = 2_000;
+        let mut child = spawn_fixture(
+            &executable,
+            ParserWorkerLimits::new(values).unwrap(),
+            &[b"sh", b"-c", b"while :; do :; done"],
+        )
+        .expect("launch partial-write fixture");
+        let deadline = child.wall_deadline;
+        let pidfd = child.duplicate_pidfd().unwrap();
 
         assert!(matches!(
             child.write_all_until_deadline(&input),
@@ -172,6 +183,8 @@ mod linux_tests {
         ));
         assert!(child.sent_bytes() > 0);
         assert!(child.sent_bytes() < INPUT_BYTES as u64);
+        assert_eq!(child.wall_deadline, deadline);
+        assert!(Instant::now() >= deadline);
         assert!(child.child.is_none());
         assert!(!pidfd_targets_live_process(&pidfd));
     }
@@ -179,24 +192,26 @@ mod linux_tests {
     #[test]
     fn truncated_output_is_closed_and_reaped_without_reflecting_bytes() {
         let executable = prepared("/bin/sh");
-        let mut child = spawn_fixture(
-            &executable,
-            short_limits(v1_limits().values().max_input_bytes),
-            &[b"sh", b"-c", b"printf X"],
-        )
-        .expect("launch truncating fixture");
+        // This proves exact EOF classification, not progress within 100ms.
+        let mut child = spawn_fixture(&executable, v1_limits(), &[b"sh", b"-c", b"printf X"])
+            .expect("launch truncating fixture");
         let pidfd = child.duplicate_pidfd().unwrap();
         let mut output = [0_u8; 2];
 
         let error = child
             .read_exact_until_deadline(&mut output)
             .expect_err("one output byte cannot satisfy a two-byte frame");
-        assert!(matches!(
-            error,
-            SupervisorError::InvalidState(
-                "parser worker output ended before the fixed read completed"
-            ) | SupervisorError::InvalidState("parser worker exited before fixed I/O completed")
-        ));
+        assert!(
+            matches!(
+                error,
+                SupervisorError::InvalidState(
+                    "parser worker output ended before the fixed read completed"
+                ) | SupervisorError::InvalidState(
+                    "parser worker exited before fixed I/O completed"
+                )
+            ),
+            "{error:?}"
+        );
         assert_eq!(child.received_bytes(), 1);
         assert!(child.child.is_none());
         assert!(!pidfd_targets_live_process(&pidfd));

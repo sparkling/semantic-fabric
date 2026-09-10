@@ -93,10 +93,11 @@ cloning and sufficient work preserves the exact bag; cache hits avoid clone repl
 Operation-local measurement limits grant no whole-plan admission authority.
 Required exact-bound, cancellation, no-cache-on-clone-failure and partition checks
 protect this wiring. Tree inner-join lowering now precharges checked candidate
-products and exact left-branch copies, with between-pair cancellation. Authenticated
-HTTP tests prove pre-source rejection and all 64 exact VALUES tuples on success;
-pruned/empty products and inclusive bounds are test-locked. Merge internals/right
-copies, parsing/build and other compiler work remain open. Atom resolution now
+products and exact left-branch copies, then conservatively reserves the same right
+branch before direct field copies, without a shadow clone. Authenticated HTTP tests
+prove pre-source rejection, exact VALUES bags, recovery and completed-cache reuse;
+inclusive bounds, cancellation and path-guard precedence are test-locked. Unifier
+allocations, nullable sets, extra left-internal copies and other compiler work remain open. Atom resolution now
 reserves map/POM visits, graph comparisons/filtering, class/POM products and parent
 lookups, and meters actual logical-source copies. Direct lineage retains the same
 control alongside its existing eligibility/recipe charges; nested contexts preserve

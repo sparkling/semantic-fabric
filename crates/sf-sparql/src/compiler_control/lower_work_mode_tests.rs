@@ -243,12 +243,12 @@ fn inner_join_condition_over_three_branches_uses_the_owned_final_schedule() {
         cond: vec![IqCond::Exists(Box::new(body))],
     };
 
-    // Two products (1×3 and 3×1), each copying only empty scalar branches,
+    // Two products (1×3 and 3×1), each reserving empty scalar branches on both sides,
     // precede the independent B-1 EXISTS-clone schedule.
     let empty_copy = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(&Branch::empty()))
         .unwrap()
         .deep_clone_work;
-    assert_direct_schedule(source, 3, work, 6 * (1 + empty_copy));
+    assert_direct_schedule(source, 3, work, 6 * (1 + 2 * empty_copy));
 }
 
 fn whole_pipeline_fixture() -> (Query, u64) {

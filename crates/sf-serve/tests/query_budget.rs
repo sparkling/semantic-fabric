@@ -11,6 +11,8 @@ use tower::ServiceExt;
 
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
+#[path = "query_budget/join_copy.rs"]
+mod join_copy;
 #[path = "query_budget/null_terms.rs"]
 mod null_terms;
 #[path = "query_budget/ordinary_identity.rs"]

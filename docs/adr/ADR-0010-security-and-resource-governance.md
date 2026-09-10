@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -330,7 +330,7 @@ closes the ignored compiler-input allowance, not total parser/optimizer CPU,
 catalog/product growth, recursive destruction or the broader governance gate.
 The raw compiler and dormant governed pipeline are not promoted by this change.
 
-**Owned clone-work update (2026-09-08):** ordinary and security-scoped serving
+**Owned clone-work update (2026-09-10):** ordinary and security-scoped serving
 misses, uncached preflight and bounded federation tree compilation now carry
 the same control through existing normalization/lowering/nested-cascade clone
 operations. Each performed clone is measured and reserved before copying; its
@@ -342,12 +342,17 @@ insertion may retain the completed valid plan, but cannot return it to that call
 Tests prove exact/N-1 charging, cumulative uncached passes, cancellation,
 security partitioning and public `EXISTS` rejection before source admission with
 exact sufficient-budget results. Tree inner joins also prospectively reserve every
-candidate pair and exact scalar left-branch clone, including later-pruned pairs,
-with checkpoints between pairs. Authenticated VALUES products reject before source
-admission or preserve all 64 tuples; raw merge semantics remain unchanged. This
-does not govern work inside merge or its right-field copies. Parsing, key rendering,
-build/resolve, other products/copies and destruction remain open; `l-query-budget` stays
-open. Direct multi-origin unfolding retains its separate eligibility/recipe charges.
+candidate pair and exact scalar left-branch clone, including later-pruned pairs.
+Before direct right-field copies, one whole-branch measurement conservatively
+reserves that same borrowed source without a shadow clone. Checkpoints surround
+the operation; the existing path guard still rejects/prunes before right-copy work.
+Exact/N-1 tests cover bindings, scans, conditions, OPTIONAL and subplan payloads;
+authenticated right-heavy VALUES tests prove pre-source rejection, permit recovery,
+exact successful bags and completed-cache reuse. This covers direct copies only:
+unifier-produced conditions, nullable-alias sets and extra left-internal copies
+remain open, as do parsing, key rendering, build/resolve, other products/copies
+and destruction. `l-query-budget` stays open; direct multi-origin unfolding
+retains its separate eligibility/recipe charges.
 
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,
@@ -397,6 +402,9 @@ Syntax is redacted 400, structural envelope 429, resource allocation 503, deadli
 mislabelled query fuel exhaustion. Cap-one CLI survival/recovery, exact ordinary
 bindings, normal/lineage inputs, scope restoration and owned pipe cancellation
 tests cover this slice. Wider compiler/source work and release qualification stay open.
+**Qualification correction (2026-09-10):** I/O tests separate short deadline expiry
+from partial-write/EOF fixtures that must first make progress. They retain exact
+byte/error/reaping assertions and the immutable spawn deadline; production limits are unchanged.
 
 ## More Information
 

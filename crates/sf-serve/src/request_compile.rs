@@ -307,6 +307,10 @@ mod tests {
             "SELECT ?a ?b ?c WHERE { VALUES ?a { 0 1 2 3 } ",
             "VALUES ?b { 0 1 2 3 } VALUES ?c { 0 1 2 3 } }",
         );
+        let right_heavy = format!(
+            "SELECT ?a ?b WHERE {{ VALUES ?a {{ 0 1 }} VALUES ?b {{ \"{}\" }} }}",
+            "λ".repeat(1024),
+        );
         let absent = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
         let mapping = sf_mapping::parse_r2rml(
             r#"
@@ -335,6 +339,7 @@ mod tests {
         for (query, maps, extra) in [
             (cloning, vec![], 0),
             (products, vec![], 0),
+            (right_heavy.as_str(), vec![], 512),
             (absent, mapping, 5),
             (
                 "SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s <http://example.test/a>+ ?o } }",
@@ -361,7 +366,7 @@ mod tests {
             let request = Request::post("/sparql")
                 .header("content-type", "application/sparql-query")
                 .header("authorization", "Bearer test-only-product-work-credential")
-                .body(Body::from(query))
+                .body(Body::from(query.to_owned()))
                 .unwrap();
             let mut preflight_budget = cfg.request_budget();
             preflight_budget

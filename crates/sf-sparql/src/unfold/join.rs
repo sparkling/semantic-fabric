@@ -4,6 +4,7 @@ use crate::{iq::Branch, CompilerWorkMode, Result};
 
 /// Charge all candidate pairs before building any, including pairs that prune.
 /// Each left copy is separately measured immediately before that exact clone.
+/// Before direct right-field copies, reserve a conservative whole right branch.
 /// This is operation-local accounting, not a whole-compiler or merge-work bound.
 pub(crate) fn join_branches_with_work_mode(
     left: Vec<Branch>,
@@ -21,7 +22,14 @@ pub(crate) fn join_branches_with_work_mode(
                 CompilerWorkMode::Uncontrolled => l.clone(),
                 CompilerWorkMode::Metered(context) => context.clone_branch(l)?,
             };
-            if let Some(branch) = super::merge(copied, r)? {
+            let merged = match work {
+                // The path guard in merge returns before any direct right copy.
+                CompilerWorkMode::Metered(context) if copied.path.is_none() && r.path.is_none() => {
+                    context.with_reserved_branch_copy(r, |source| super::merge(copied, source))?
+                }
+                _ => super::merge(copied, r)?,
+            };
+            if let Some(branch) = merged {
                 out.push(branch);
             }
             if let CompilerWorkMode::Metered(context) = work {
@@ -64,6 +72,112 @@ mod tests {
     }
 
     #[test]
+    fn right_branch_payload_cannot_use_only_the_pair_and_left_copy_allowance() {
+        let left = Branch::empty();
+        let mut right = Branch::single(crate::iq::Scan {
+            alias: 2,
+            source: sf_core::ir::LogicalSource::Table("source".repeat(1024)).into(),
+        });
+        right.bindings.insert(
+            "right".into(),
+            crate::iq::TermDef::Const(
+                sf_core::Literal::new_simple_literal("payload".repeat(1024)).into(),
+            ),
+        );
+        let only_left = budget(1 + clone_work(&left));
+        assert!(matches!(
+            join(vec![left], vec![right], &only_left),
+            Err(crate::Error::QueryControl(
+                QueryControlError::CompilerWorkExceeded
+            ))
+        ));
+    }
+
+    #[test]
+    fn every_direct_right_field_is_reserved_and_preserves_its_payload() {
+        use crate::iq::{ColRef, OptJoin, Scan, SqlCond, SubPlanJoin, TermDef};
+        let scan = Scan {
+            alias: 2,
+            source: sf_core::ir::LogicalSource::Table("source".repeat(1024)).into(),
+        };
+        let condition = SqlCond::IsNull(ColRef::new(2, "column".repeat(1024)));
+        let mut variants = vec![Branch::empty(); 5];
+        variants[0].core.push(scan.clone());
+        variants[1].bindings.insert(
+            "variable".repeat(1024),
+            TermDef::Const(sf_core::Literal::new_simple_literal("payload".repeat(1024)).into()),
+        );
+        variants[2].where_conds.push(condition.clone());
+        variants[3].opts.push(OptJoin {
+            scan: scan.clone(),
+            on: vec![condition.clone()],
+            extra: vec![condition.clone()],
+        });
+        variants[4].subplan_joins.push(SubPlanJoin {
+            alias: 3,
+            plan: Box::new(crate::Plan {
+                branches: vec![Branch::single(scan)],
+                form: crate::PlanForm::Select {
+                    vars: vec!["inner".repeat(1024)],
+                },
+                distinct: false,
+                limit: None,
+                offset: 0,
+                order: vec![],
+                rust_group: None,
+                dialect: sf_sql::Dialect::Sqlite,
+                dedup_scopes: vec![],
+                construct_drops_some_branch_var: false,
+            }),
+            on: vec![condition],
+            left: false,
+        });
+        for right in variants {
+            let left = Branch::empty();
+            let left_work = clone_work(&left);
+            let work = 1 + left_work + clone_work(&right);
+            let short = budget(work - 1);
+            assert!(matches!(
+                join(vec![left.clone()], vec![right.clone()], &short),
+                Err(crate::Error::QueryControl(
+                    QueryControlError::CompilerWorkExceeded
+                ))
+            ));
+            assert_eq!(short.consumed(QueryCharge::CompilerWork), 1 + left_work);
+            let exact = budget(work);
+            let actual = join(vec![left.clone()], vec![right.clone()], &exact).unwrap();
+            let raw = super::super::join_branches(vec![left], vec![right]).unwrap();
+            assert_eq!(format!("{actual:?}"), format!("{raw:?}"));
+            assert_eq!(exact.consumed(QueryCharge::CompilerWork), work);
+        }
+    }
+
+    #[test]
+    fn path_rejection_precedes_any_right_copy_reservation() {
+        use crate::iq::{HopExpr, HopRelation, PathClosure, PathKind};
+        let mut path = Branch::empty();
+        path.path = Some(PathClosure {
+            alias: 2,
+            kind: PathKind::OneOrMore,
+            hop: HopExpr::Pred(HopRelation {
+                source: sf_core::ir::LogicalSource::Table("edges".into()),
+                subj_col: "s".into(),
+                obj_col: "o".into(),
+            }),
+        });
+        for (left, right) in [(path.clone(), Branch::empty()), (Branch::empty(), path)] {
+            let work = 1 + clone_work(&left);
+            let control = budget(work);
+            assert!(matches!(
+                join(vec![left], vec![right], &control),
+                Err(crate::Error::Unsupported(_))
+            ));
+            assert_eq!(control.consumed(QueryCharge::CompilerWork), work);
+            assert_eq!(control.checkpoint(), Ok(()));
+        }
+    }
+
+    #[test]
     fn candidate_product_is_reserved_before_any_clone_including_pruned_pairs() {
         // Even when every pair will prune, reserve the attempted product first.
         let branch = |iri| {
@@ -87,7 +201,7 @@ mod tests {
         let only_pairs = budget(6);
         assert!(join(vec![l.clone(); 2], vec![r.clone(); 3], &only_pairs).is_err());
         assert_eq!(only_pairs.consumed(QueryCharge::CompilerWork), 6);
-        let exact = budget(6 + 6 * clone_work(&l));
+        let exact = budget(6 + 6 * (clone_work(&l) + clone_work(&r)));
         assert!(join(vec![l; 2], vec![r; 3], &exact).unwrap().is_empty());
         assert_eq!(
             exact.consumed(QueryCharge::CompilerWork),
@@ -96,9 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn exact_pair_and_scalar_clone_boundary_preserves_raw_bag() {
+    fn exact_pair_and_both_scalar_copy_boundary_preserves_raw_bag() {
         let l = Branch::empty();
-        let work = 6 + 6 * clone_work(&l);
+        let work = 6 + 12 * clone_work(&l);
         let exact = budget(work);
         let actual = join(vec![l.clone(); 2], vec![l.clone(); 3], &exact).unwrap();
         let raw = super::super::join_branches(vec![l.clone(); 2], vec![l.clone(); 3]).unwrap();
@@ -162,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_between_pairs_prevents_the_next_clone() {
+    fn cancellation_after_left_copy_prevents_right_reservation() {
         let after_one = 6 + clone_work(&Branch::empty());
         let control = CancelAfterProduct(budget(u64::MAX), after_one);
         assert!(matches!(
@@ -170,6 +284,26 @@ mod tests {
             Err(crate::Error::QueryControl(QueryControlError::Cancelled))
         ));
         assert_eq!(control.0.consumed(QueryCharge::CompilerWork), after_one);
+    }
+
+    #[test]
+    fn cancellation_during_right_reservation_prevents_copy_operation() {
+        let source = Branch::empty();
+        let control = CancelAfterProduct(budget(u64::MAX), clone_work(&source));
+        let called = std::cell::Cell::new(false);
+        let result = CompileContext::new(&control).with_reserved_branch_copy(&source, |_| {
+            called.set(true);
+            Ok(())
+        });
+        assert!(matches!(
+            result,
+            Err(crate::Error::QueryControl(QueryControlError::Cancelled))
+        ));
+        assert!(!called.get());
+        assert_eq!(
+            control.0.consumed(QueryCharge::CompilerWork),
+            clone_work(&source)
+        );
     }
 
     #[test]

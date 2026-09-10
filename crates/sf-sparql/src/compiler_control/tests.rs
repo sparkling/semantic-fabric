@@ -136,6 +136,69 @@ fn compile_context_binds_exact_measure_reservation_and_one_clone() {
 }
 
 #[test]
+fn branch_copy_reservation_binds_the_source_and_precedes_the_operation() {
+    let source = branch_forest().remove(0);
+    let work = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(&source))
+        .unwrap()
+        .deep_clone_work;
+    for allowance in [work - 1, work] {
+        let control = budget(allowance);
+        let called = std::cell::Cell::new(false);
+        let result = CompileContext::new(&control).with_reserved_branch_copy(&source, |measured| {
+            assert!(std::ptr::eq(measured, &source));
+            assert_eq!(control.consumed(QueryCharge::CompilerWork), work);
+            called.set(true);
+            Ok(measured.core[0].clone())
+        });
+        assert_eq!(called.get(), allowance == work);
+        if allowance == work {
+            assert_eq!(
+                format!("{:?}", result.unwrap()),
+                format!("{:?}", source.core[0])
+            );
+        } else {
+            assert_control_error(result.unwrap_err(), QueryControlError::CompilerWorkExceeded);
+            assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
+        }
+    }
+}
+
+#[test]
+fn branch_copy_observes_cancellation_before_and_after_the_operation() {
+    let source = Branch::empty();
+    for (already_cancelled, operation_fails) in [(true, false), (false, false), (false, true)] {
+        let control = budget(u64::MAX);
+        if already_cancelled {
+            control.terminate(QueryControlError::Cancelled);
+        }
+        let called = std::cell::Cell::new(false);
+        let result = CompileContext::new(&control).with_reserved_branch_copy(&source, |_| {
+            called.set(true);
+            control.terminate(QueryControlError::Cancelled);
+            if operation_fails {
+                Err(Error::Unsupported("fixture merge rejection".into()))
+            } else {
+                Ok(())
+            }
+        });
+        assert_control_error(result.unwrap_err(), QueryControlError::Cancelled);
+        assert_eq!(called.get(), !already_cancelled);
+        assert_eq!(
+            control.consumed(QueryCharge::CompilerWork),
+            u64::from(!already_cancelled)
+        );
+    }
+    let control = budget(u64::MAX);
+    assert!(matches!(
+        CompileContext::new(&control).with_reserved_branch_copy(&source, |_| {
+            Err::<(), _>(Error::Unsupported("fixture merge rejection".into()))
+        }),
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(control.checkpoint(), Ok(()));
+}
+
+#[test]
 fn compile_context_binds_exact_iq_condition_measure_to_one_clone() {
     let source = nested_iq_conditions();
     let measure =

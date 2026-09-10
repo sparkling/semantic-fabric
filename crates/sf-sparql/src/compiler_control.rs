@@ -148,6 +148,25 @@ impl<'control> CompileContext<'control> {
         Ok(branch.clone())
     }
 
+    /// Reserve one conservative whole-branch copy before the inner join copies
+    /// direct fields from this same borrowed source. The caller must copy each
+    /// field at most once; this does not account for unification or temporary
+    /// allocations inside the merge, and creates no shadow branch clone.
+    pub(crate) fn with_reserved_branch_copy<T>(
+        &self,
+        source: &Branch,
+        operation: impl FnOnce(&Branch) -> Result<T>,
+    ) -> Result<T> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(source))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        self.checkpoint()?;
+        let result = operation(source);
+        self.checkpoint()?;
+        result
+    }
+
     /// Bind the measured source payload to the actual one owned scan copy.
     pub(crate) fn clone_logical_source(
         &self,
