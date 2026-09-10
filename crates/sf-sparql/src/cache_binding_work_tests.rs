@@ -1,6 +1,6 @@
 use super::*;
 use crate::iq::node::{IqCond, IqNode};
-use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 use sf_core::{
     query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits},
     SourceId,
@@ -38,6 +38,10 @@ fn key_work() -> u64 {
 }
 
 fn clone_work() -> u64 {
+    clone_cost().total_work
+}
+
+fn clone_cost() -> crate::plan_measure::test_support::CopyWork {
     let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
         panic!()
     };
@@ -51,9 +55,7 @@ fn clone_work() -> u64 {
     let [IqCond::Exists(inner)] = cond.as_slice() else {
         panic!()
     };
-    measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(inner))
-        .unwrap()
-        .deep_clone_work
+    measure_copy_root(CompilerCloneRootV1::IqNode(inner)).unwrap()
 }
 
 fn build_work() -> u64 {
@@ -108,7 +110,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     ));
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        key + build + work
+        key + build + work + clone_cost().measurement_work
     );
     assert_eq!(binding.cache_len(), 0);
     let exact = budget(key + build + 2 * work);
@@ -157,7 +159,11 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
         assert_eq!(second.is_ok(), allowance == total);
         assert_eq!(
             control.consumed(QueryCharge::CompilerWork),
-            if second.is_ok() { total } else { total - work }
+            if second.is_ok() {
+                total
+            } else {
+                total - clone_cost().deep_clone_work
+            }
         );
         assert_eq!(binding.cache_len(), 0);
     }

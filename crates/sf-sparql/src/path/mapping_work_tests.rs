@@ -1,6 +1,6 @@
 use super::*;
 use crate::compiler_control::CompileContext;
-use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 use sf_core::ir::{LogicalSource, TriplesMap};
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
@@ -58,11 +58,7 @@ fn copy_work(maps: &[TriplesMap]) -> u64 {
         CompilerCloneRootV1::LogicalSource(&tm.source),
     ]
     .into_iter()
-    .map(|root| {
-        measure_compiler_clone_root_v1(root)
-            .unwrap()
-            .deep_clone_work
-    })
+    .map(|root| measure_copy_root(root).unwrap().total_work)
     .sum()
 }
 

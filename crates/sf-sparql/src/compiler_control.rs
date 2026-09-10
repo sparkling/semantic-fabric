@@ -8,7 +8,7 @@ use crate::compile_envelope::CompileEnvelopeError;
 use crate::iq::node::{BindDef, IqCond, IqNode, Var};
 use crate::iq::Branch;
 use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, measure_compiler_clone_root_v1,
+    measure_compiler_clone_collection_with_control, measure_compiler_clone_root_with_control,
     CompilerCloneCollectionV1, CompilerCloneRootV1,
 };
 use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
@@ -131,9 +131,9 @@ impl<'control> CompileContext<'control> {
     /// or reserving after the allocation has already happened.
     pub(crate) fn clone_branch_forest(&self, branches: &[Branch]) -> Result<Vec<Branch>> {
         self.checkpoint()?;
-        let measure =
-            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(branches))
-                .map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_collection(CompilerCloneCollectionV1::Branches(branches))
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(branches.to_vec())
     }
@@ -142,7 +142,8 @@ impl<'control> CompileContext<'control> {
     /// a synthetic collection slot.
     pub(crate) fn clone_branch(&self, branch: &Branch) -> Result<Branch> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(branch))
+        let measure = self
+            .measure_root(CompilerCloneRootV1::Branch(branch))
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(branch.clone())
@@ -158,7 +159,8 @@ impl<'control> CompileContext<'control> {
         operation: impl FnOnce(&Branch) -> Result<T>,
     ) -> Result<T> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(source))
+        let measure = self
+            .measure_root(CompilerCloneRootV1::Branch(source))
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         self.checkpoint()?;
@@ -173,7 +175,8 @@ impl<'control> CompileContext<'control> {
         source: &sf_core::ir::LogicalSource,
     ) -> Result<sf_core::ir::LogicalSource> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::LogicalSource(source))
+        let measure = self
+            .measure_root(CompilerCloneRootV1::LogicalSource(source))
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(source.clone())
@@ -185,7 +188,8 @@ impl<'control> CompileContext<'control> {
         map: &sf_core::ir::TermMap,
     ) -> Result<sf_core::ir::TermMap> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::TermMap(map))
+        let measure = self
+            .measure_root(CompilerCloneRootV1::TermMap(map))
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(map.clone())
@@ -198,10 +202,9 @@ impl<'control> CompileContext<'control> {
     /// reservation for multiple Union arms.
     pub(crate) fn clone_iq_conditions(&self, conditions: &[IqCond]) -> Result<Vec<IqCond>> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_collection_v1(
-            CompilerCloneCollectionV1::IqConditions(conditions),
-        )
-        .map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_collection(CompilerCloneCollectionV1::IqConditions(conditions))
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(conditions.to_vec())
     }
@@ -209,9 +212,9 @@ impl<'control> CompileContext<'control> {
     /// Measure, reserve, and perform exactly one recursive IQ-node collection clone.
     pub(crate) fn clone_iq_nodes(&self, nodes: &[IqNode]) -> Result<Vec<IqNode>> {
         self.checkpoint()?;
-        let measure =
-            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(nodes))
-                .map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_collection(CompilerCloneCollectionV1::IqNodes(nodes))
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(nodes.to_vec())
     }
@@ -222,7 +225,8 @@ impl<'control> CompileContext<'control> {
     /// one-element collection would charge work that the actual clone never does.
     pub(crate) fn clone_iq_node(&self, node: &IqNode) -> Result<IqNode> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(node))
+        let measure = self
+            .measure_root(CompilerCloneRootV1::IqNode(node))
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(node.clone())
@@ -234,10 +238,9 @@ impl<'control> CompileContext<'control> {
         substitution: &BTreeMap<Var, BindDef>,
     ) -> Result<BTreeMap<Var, BindDef>> {
         self.checkpoint()?;
-        let measure = measure_compiler_clone_collection_v1(
-            CompilerCloneCollectionV1::IqSubstitution(substitution),
-        )
-        .map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_collection(CompilerCloneCollectionV1::IqSubstitution(substitution))
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(substitution.clone())
     }
@@ -245,9 +248,9 @@ impl<'control> CompileContext<'control> {
     /// Measure, reserve, and perform exactly one IQ-variable collection clone.
     pub(crate) fn clone_variables(&self, variables: &[Var]) -> Result<Vec<Var>> {
         self.checkpoint()?;
-        let measure =
-            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(variables))
-                .map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_collection(CompilerCloneCollectionV1::Variables(variables))
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(variables.to_vec())
     }
@@ -256,15 +259,29 @@ impl<'control> CompileContext<'control> {
     /// BUILD adapter binds this root to its borrowed source and single clone.
     pub(crate) fn reserve_ast_copy(&self, root: CompilerCloneRootV1<'_>) -> Result<()> {
         self.checkpoint()?;
-        self.reserve_checked_sum(&[1])?;
-        let measure =
-            measure_compiler_clone_root_v1(root).map_err(|error| self.measurement_error(error))?;
+        let measure = self
+            .measure_root(root)
+            .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         self.checkpoint()
     }
 
     pub(crate) fn reject_build_resource(&self, reason: QueryControlError) -> Error {
         self.meter.control.terminate(reason).into()
+    }
+
+    fn measure_root(
+        &self,
+        root: CompilerCloneRootV1<'_>,
+    ) -> std::result::Result<PlanMeasureV1, PlanMeasureError> {
+        measure_compiler_clone_root_with_control(root, self.meter.control)
+    }
+
+    fn measure_collection(
+        &self,
+        root: CompilerCloneCollectionV1<'_>,
+    ) -> std::result::Result<PlanMeasureV1, PlanMeasureError> {
+        measure_compiler_clone_collection_with_control(root, self.meter.control)
     }
 
     fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {
@@ -275,6 +292,7 @@ impl<'control> CompileContext<'control> {
 
     fn measurement_error(&self, error: PlanMeasureError) -> Error {
         match error {
+            PlanMeasureError::Control(cause) => self.meter.control.terminate(cause).into(),
             PlanMeasureError::AccountingOverflow => self.meter.accounting_overflow(),
             PlanMeasureError::LimitExceeded { .. } => self
                 .meter

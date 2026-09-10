@@ -215,8 +215,11 @@ pub(super) fn visit_graph_pattern<'a>(
             walker.collection(bindings.len())?;
             for row in bindings {
                 walker.collection(row.len())?;
-                for term in row.iter().flatten() {
-                    walker.push(depth, Work::GroundTerm(term))?;
+                for term in row {
+                    walker.checkpoint()?;
+                    if let Some(term) = term {
+                        walker.push(depth, Work::GroundTerm(term))?;
+                    }
                 }
             }
         }

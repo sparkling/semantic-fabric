@@ -8,7 +8,7 @@ use crate::compile_envelope::{CompileEnvelopeError, CompileEnvelopeLimit};
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::{Branch, Scan, TermDef};
 use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
+    measure_copy_collection, measure_copy_root, CompilerCloneCollectionV1,
 };
 use crate::plan_measure::{PlanMeasureError, PlanMeasureLimit};
 use crate::Error;
@@ -77,8 +77,17 @@ fn compile_context_reservations_cover_zero_exact_n_and_n_plus_one() {
     let zero = budget(0);
     let zero_context = CompileContext::new(&zero);
     assert_eq!(zero_context.reserve_checked_sum(&[]).unwrap(), 0);
-    assert!(zero_context.clone_branch_forest(&[]).unwrap().is_empty());
+    assert_control_error(
+        zero_context.clone_branch_forest(&[]).unwrap_err(),
+        QueryControlError::CompilerWorkExceeded,
+    );
     assert_eq!(zero.consumed(QueryCharge::CompilerWork), 0);
+    let empty = budget(2); // entry and empty collection record, no clone payload
+    assert!(CompileContext::new(&empty)
+        .clone_branch_forest(&[])
+        .unwrap()
+        .is_empty());
+    assert_eq!(empty.consumed(QueryCharge::CompilerWork), 2);
 
     let exact = budget(6);
     let exact_context = CompileContext::new(&exact);
@@ -99,9 +108,8 @@ fn compile_context_reservations_cover_zero_exact_n_and_n_plus_one() {
 #[test]
 fn compile_context_binds_exact_measure_reservation_and_one_clone() {
     let source = branch_forest();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(&source)).unwrap();
-    let exact = budget(measure.deep_clone_work);
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::Branches(&source)).unwrap();
+    let exact = budget(measure.total_work);
     let exact_context = CompileContext::new(&exact);
     let source_allocation = source.as_ptr();
 
@@ -120,11 +128,11 @@ fn compile_context_binds_exact_measure_reservation_and_one_clone() {
     assert_ne!(cloned.as_ptr(), source_allocation);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
     assert_eq!(exact.consumed(QueryCharge::SourceWork), 0);
 
-    let short = budget(measure.deep_clone_work - 1);
+    let short = budget(measure.total_work - 1);
     let short_context = CompileContext::new(&short);
     assert_control_error(
         short_context
@@ -132,15 +140,17 @@ fn compile_context_binds_exact_measure_reservation_and_one_clone() {
             .expect_err("the exact clone measure exceeds the budget"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
 }
 
 #[test]
 fn branch_copy_reservation_binds_the_source_and_precedes_the_operation() {
     let source = branch_forest().remove(0);
-    let work = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(&source))
-        .unwrap()
-        .deep_clone_work;
+    let measure = measure_copy_root(CompilerCloneRootV1::Branch(&source)).unwrap();
+    let work = measure.total_work;
     for allowance in [work - 1, work] {
         let control = budget(allowance);
         let called = std::cell::Cell::new(false);
@@ -158,7 +168,10 @@ fn branch_copy_reservation_binds_the_source_and_precedes_the_operation() {
             );
         } else {
             assert_control_error(result.unwrap_err(), QueryControlError::CompilerWorkExceeded);
-            assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
+            assert_eq!(
+                control.consumed(QueryCharge::CompilerWork),
+                measure.measurement_work
+            );
         }
     }
 }
@@ -166,6 +179,9 @@ fn branch_copy_reservation_binds_the_source_and_precedes_the_operation() {
 #[test]
 fn branch_copy_observes_cancellation_before_and_after_the_operation() {
     let source = Branch::empty();
+    let work = measure_copy_root(CompilerCloneRootV1::Branch(&source))
+        .unwrap()
+        .total_work;
     for (already_cancelled, operation_fails) in [(true, false), (false, false), (false, true)] {
         let control = budget(u64::MAX);
         if already_cancelled {
@@ -185,7 +201,7 @@ fn branch_copy_observes_cancellation_before_and_after_the_operation() {
         assert_eq!(called.get(), !already_cancelled);
         assert_eq!(
             control.consumed(QueryCharge::CompilerWork),
-            u64::from(!already_cancelled)
+            if already_cancelled { 0 } else { work }
         );
     }
     let control = budget(u64::MAX);
@@ -202,9 +218,8 @@ fn branch_copy_observes_cancellation_before_and_after_the_operation() {
 fn compile_context_binds_exact_iq_condition_measure_to_one_clone() {
     let source = nested_iq_conditions();
     let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&source))
-            .unwrap();
-    let exact = budget(measure.deep_clone_work);
+        measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&source)).unwrap();
+    let exact = budget(measure.total_work);
     let source_allocation = source.as_ptr();
 
     let cloned = CompileContext::new(&exact)
@@ -215,10 +230,10 @@ fn compile_context_binds_exact_iq_condition_measure_to_one_clone() {
     assert_ne!(cloned.as_ptr(), source_allocation);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 
-    let short = budget(measure.deep_clone_work - 1);
+    let short = budget(measure.total_work - 1);
     assert_control_error(
         CompileContext::new(&short)
             .clone_iq_conditions(&source)
@@ -226,7 +241,10 @@ fn compile_context_binds_exact_iq_condition_measure_to_one_clone() {
         QueryControlError::CompilerWorkExceeded,
     );
     assert_eq!(source.as_ptr(), source_allocation);
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
 }
 
 #[test]

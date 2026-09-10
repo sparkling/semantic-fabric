@@ -225,8 +225,11 @@ pub(super) fn push_value_rows<'a>(
     walker.collection(rows.len())?;
     for row in rows {
         walker.collection(row.len())?;
-        for term in row.iter().flatten() {
-            walker.push(depth, Work::TermDef(term))?;
+        for term in row {
+            walker.checkpoint()?;
+            if let Some(term) = term {
+                walker.push(depth, Work::TermDef(term))?;
+            }
         }
     }
     Ok(())

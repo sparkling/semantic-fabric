@@ -9,9 +9,7 @@ use sf_core::{Literal, Term};
 use crate::compiler_control::CompileContext;
 use crate::iq::node::{BindDef, IqNode, Var};
 use crate::iq::{Scan, TermDef};
-use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
-};
+use crate::plan_measure::clone_root::{measure_copy_collection, CompilerCloneCollectionV1};
 use crate::{CompilerWorkMode, Error};
 
 const BOUND_VAR: &str = "bound-variable-with-owned-payload";
@@ -20,6 +18,8 @@ struct ConstructionUnionFixture {
     tree: IqNode,
     substitution_work: u64,
     project_work: u64,
+    substitution_measurement: u64,
+    project_measurement: u64,
     owned_substitution_pointer: usize,
     owned_project_pointer: usize,
 }
@@ -101,18 +101,13 @@ fn construction_union_fixture() -> ConstructionUnionFixture {
     let (substitution, owned_substitution_pointer) = nested_substitution();
     let project = projected_variables();
     let owned_project_pointer = project[0].as_ptr() as usize;
-    let substitution_work = measure_compiler_clone_collection_v1(
-        CompilerCloneCollectionV1::IqSubstitution(&substitution),
-    )
-    .unwrap()
-    .deep_clone_work;
+    let substitution_work =
+        measure_copy_collection(CompilerCloneCollectionV1::IqSubstitution(&substitution)).unwrap();
     let project_work =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(&project))
-            .unwrap()
-            .deep_clone_work;
+        measure_copy_collection(CompilerCloneCollectionV1::Variables(&project)).unwrap();
 
-    assert!(substitution_work > 0);
-    assert!(project_work > 0);
+    assert!(substitution_work.total_work > 0);
+    assert!(project_work.total_work > 0);
 
     ConstructionUnionFixture {
         tree: IqNode::Construction {
@@ -127,8 +122,10 @@ fn construction_union_fixture() -> ConstructionUnionFixture {
             subst: substitution,
             project,
         },
-        substitution_work,
-        project_work,
+        substitution_work: substitution_work.total_work,
+        project_work: project_work.total_work,
+        substitution_measurement: substitution_work.measurement_work,
+        project_measurement: project_work.measurement_work,
         owned_substitution_pointer,
         owned_project_pointer,
     }
@@ -138,9 +135,8 @@ fn construction_union_fixture() -> ConstructionUnionFixture {
 fn exact_iq_substitution_clone_accepts_n_and_rejects_n_minus_one() {
     let (source, source_payload) = nested_substitution();
     let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqSubstitution(&source))
-            .unwrap();
-    let exact = budget(measure.deep_clone_work);
+        measure_copy_collection(CompilerCloneCollectionV1::IqSubstitution(&source)).unwrap();
+    let exact = budget(measure.total_work);
 
     let cloned = CompileContext::new(&exact)
         .clone_iq_substitution(&source)
@@ -150,10 +146,10 @@ fn exact_iq_substitution_clone_accepts_n_and_rejects_n_minus_one() {
     assert_ne!(substitution_payload_pointer(&cloned), source_payload);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 
-    let short = budget(measure.deep_clone_work - 1);
+    let short = budget(measure.total_work - 1);
     assert_control_error(
         CompileContext::new(&short)
             .clone_iq_substitution(&source)
@@ -161,7 +157,10 @@ fn exact_iq_substitution_clone_accepts_n_and_rejects_n_minus_one() {
         QueryControlError::CompilerWorkExceeded,
     );
     assert_eq!(substitution_payload_pointer(&source), source_payload);
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
     assert_eq!(
         short.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -173,10 +172,8 @@ fn exact_variable_collection_clone_accepts_n_and_rejects_n_minus_one() {
     let source = projected_variables();
     let source_allocation = source.as_ptr();
     let source_payload = source[0].as_ptr();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(&source))
-            .unwrap();
-    let exact = budget(measure.deep_clone_work);
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::Variables(&source)).unwrap();
+    let exact = budget(measure.total_work);
 
     let cloned = CompileContext::new(&exact)
         .clone_variables(&source)
@@ -187,10 +184,10 @@ fn exact_variable_collection_clone_accepts_n_and_rejects_n_minus_one() {
     assert_ne!(cloned[0].as_ptr(), source_payload);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 
-    let short = budget(measure.deep_clone_work - 1);
+    let short = budget(measure.total_work - 1);
     assert_control_error(
         CompileContext::new(&short)
             .clone_variables(&source)
@@ -199,7 +196,10 @@ fn exact_variable_collection_clone_accepts_n_and_rejects_n_minus_one() {
     );
     assert_eq!(source.as_ptr(), source_allocation);
     assert_eq!(source[0].as_ptr(), source_payload);
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
     assert_eq!(
         short.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -279,15 +279,21 @@ fn construction_union_rejections_pin_substitution_then_projection_operation_orde
     let substitution = fixture.substitution_work;
     let project = fixture.project_work;
 
-    assert_construction_union_rejection(substitution - 1, 0);
-    assert_construction_union_rejection(substitution + project - 1, substitution);
-    assert_construction_union_rejection(2 * substitution + project - 1, substitution + project);
+    assert_construction_union_rejection(substitution - 1, fixture.substitution_measurement);
+    assert_construction_union_rejection(
+        substitution + project - 1,
+        substitution + fixture.project_measurement,
+    );
+    assert_construction_union_rejection(
+        2 * substitution + project - 1,
+        substitution + project + fixture.substitution_measurement,
+    );
     assert_construction_union_rejection(
         2 * (substitution + project) - 1,
-        2 * substitution + project,
+        2 * substitution + project + fixture.project_measurement,
     );
     assert_construction_union_rejection(
         2 * (substitution + project) + project - 1,
-        2 * (substitution + project),
+        2 * (substitution + project) + fixture.project_measurement,
     );
 }

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-10
+updated: 2026-09-11
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -399,9 +399,23 @@ Public ordinary/security tests retain paid-key hits without rebuilding, reject
 unpaid BUILD before held-source admission and recover compiler capacity; later-phase
 tests separately pay BUILD rather than masking their original operation boundary.
 Fallible vector allocation is local: derived Clone/Box/string/map allocations,
-physical allocator overgrant, measurement traversal/preemption and destruction
+physical allocator overgrant and destruction
 remain unqualified, alongside other compiler/source/release work. No governed
 profile or whole-application completion is claimed.
+
+**Clone-measurement update (2026-09-11):** every existing controlled copy now
+uses the same request identity inside its iterative V1 measurement walk. Entry,
+pushes, metric records, collection iteration and logical stack target/relocation
+are prepaid before use; allocation is fallible and allocator slack grants no free
+logical growth. Optional/UNDEF slots observe cancellation even without a payload.
+Measurement reads payload lengths without copying bytes; its work is separate
+from the unchanged exact clone metric and subsequent copy reservation. A refused
+copy retains completed measurement work. Raw metrics and depth/pending envelopes
+remain unchanged. Hand-counted exact/N-1, no-unpaid-allocation, every-step
+cancellation/deadline and default-stack tests cover the walker; caller schedules
+retain later-phase targets and public pre-source rejection/cache recovery checks.
+Derived Clone/Box/string/map allocation, physical heap/destruction, other compiler
+phases, source/backend and exact-release guarantees remain required and open.
 
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,

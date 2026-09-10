@@ -2,16 +2,17 @@
 //!
 //! The metric is deliberately independent of allocator layout: one unit per
 //! visited clone carrier, collection slot, and owned payload byte. It is meant
-//! for a future pre-charge before exact plan, branch-forest, or IQ-fragment
-//! clones, not as a byte-size estimate. V1 limits are provisional until corpus
-//! calibration, and this module is not wired into compilation, serving, or the
-//! plan cache.
+//! for precharging exact plan, branch-forest, or IQ-fragment clones, not as a
+//! byte-size estimate. Controlled compiler copies separately pay measurement
+//! traversal and logical work-stack growth; raw measurements retain V1 metrics.
 //!
 //! The measurement walk is iterative. It does not make the model's derived
 //! `Clone` implementations iterative or allocation-fallible.
 
 use std::collections::TryReserveError;
 use std::fmt;
+
+use sf_core::query_control::{QueryControl, QueryControlError};
 
 use ::spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
@@ -34,9 +35,11 @@ use crate::iq::{
 use crate::{DedupScope, Plan, PlanForm};
 
 pub(crate) mod clone_root;
+mod control;
 mod iq;
 mod mapping;
 mod model;
+mod plan;
 mod spargebra;
 
 /// These independent ceilings must receive a new profile identity if changed
@@ -80,6 +83,8 @@ pub(crate) enum PlanMeasureError {
     AccountingOverflow,
     #[error("plan measure V1 work-stack allocation failed")]
     AllocationFailed,
+    #[error("plan measurement interrupted: {0}")]
+    Control(#[from] QueryControlError),
 }
 
 impl From<TryReserveError> for PlanMeasureError {
@@ -193,6 +198,8 @@ enum Work<'a> {
 struct Walker<'a> {
     limits: PlanMeasureLimits,
     stack: Vec<Pending<'a>>,
+    logical_capacity: usize,
+    control: Option<&'a dyn QueryControl>,
     measure: PlanMeasureV1,
 }
 
@@ -201,6 +208,8 @@ impl<'a> Walker<'a> {
         Self {
             limits,
             stack: Vec::new(),
+            logical_capacity: 0,
+            control: None,
             measure: PlanMeasureV1 {
                 nodes: 0,
                 collection_slots: 0,
@@ -218,12 +227,14 @@ impl<'a> Walker<'a> {
     }
 
     fn finish(mut self) -> Result<PlanMeasureV1, PlanMeasureError> {
-        while let Some(Pending { work, depth }) = self.stack.pop() {
+        while !self.stack.is_empty() {
+            self.checkpoint()?;
+            let Pending { work, depth } = self.stack.pop().expect("nonempty work stack");
             self.record_node()?;
             match work {
-                Work::Plan(value) => model::visit_plan(&mut self, value, depth)?,
-                Work::PlanForm(value) => model::visit_plan_form(&mut self, value, depth)?,
-                Work::DedupScope(value) => model::visit_dedup_scope(&mut self, value, depth)?,
+                Work::Plan(value) => plan::visit_plan(&mut self, value, depth)?,
+                Work::PlanForm(value) => plan::visit_plan_form(&mut self, value, depth)?,
+                Work::DedupScope(value) => plan::visit_dedup_scope(&mut self, value, depth)?,
                 Work::Branch(value) => model::visit_branch(&mut self, value, depth)?,
                 Work::Scan(value) => model::visit_scan(&mut self, value, depth)?,
                 Work::OptJoin(value) => model::visit_opt_join(&mut self, value, depth)?,
@@ -304,6 +315,7 @@ impl<'a> Walker<'a> {
                 Work::IqBindDef(value) => iq::visit_bind_def(&mut self, value, depth)?,
             }
         }
+        self.checkpoint()?;
         Ok(self.measure)
     }
 
@@ -315,6 +327,7 @@ impl<'a> Walker<'a> {
     }
 
     fn push_at(&mut self, work: Work<'a>, depth: usize) -> Result<(), PlanMeasureError> {
+        self.charge(1)?;
         enforce_usize(PlanMeasureLimit::Depth, depth, self.limits.max_depth)?;
         let pending = self
             .stack
@@ -326,9 +339,7 @@ impl<'a> Walker<'a> {
             pending,
             self.limits.max_pending_items,
         )?;
-        if self.stack.len() == self.stack.capacity() {
-            self.stack.try_reserve(1)?;
-        }
+        self.reserve_stack()?;
         self.stack.push(Pending { work, depth });
         self.measure.max_depth = self.measure.max_depth.max(depth);
         self.measure.max_pending_items = self.measure.max_pending_items.max(pending);
@@ -336,6 +347,7 @@ impl<'a> Walker<'a> {
     }
 
     fn collection(&mut self, slots: usize) -> Result<(), PlanMeasureError> {
+        self.charge(slots)?;
         let slots = u64::try_from(slots).map_err(|_| PlanMeasureError::AccountingOverflow)?;
         self.record(
             PlanMeasureLimit::CollectionSlots,
@@ -377,6 +389,7 @@ impl<'a> Walker<'a> {
         amount: u64,
         maximum: u64,
     ) -> Result<(), PlanMeasureError> {
+        self.charge(1)?;
         let current = match dimension {
             PlanMeasureLimit::Nodes => self.measure.nodes,
             PlanMeasureLimit::CollectionSlots => self.measure.collection_slots,
@@ -431,3 +444,10 @@ mod tests;
 #[cfg(test)]
 #[path = "plan_measure/clone_roots_tests.rs"]
 mod clone_roots_tests;
+
+#[cfg(test)]
+#[path = "plan_measure/control_tests.rs"]
+mod control_tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;

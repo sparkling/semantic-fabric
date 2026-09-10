@@ -44,7 +44,7 @@ pub(crate) fn join_branches_with_work_mode(
 mod tests {
     use super::*;
     use crate::compiler_control::CompileContext;
-    use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+    use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
     use sf_core::query_control::{
         QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
     };
@@ -66,9 +66,9 @@ mod tests {
     }
 
     fn clone_work(branch: &Branch) -> u64 {
-        measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(branch))
+        measure_copy_root(CompilerCloneRootV1::Branch(branch))
             .unwrap()
-            .deep_clone_work
+            .total_work
     }
 
     #[test]
@@ -143,7 +143,11 @@ mod tests {
                     QueryControlError::CompilerWorkExceeded
                 ))
             ));
-            assert_eq!(short.consumed(QueryCharge::CompilerWork), 1 + left_work);
+            let measured = measure_copy_root(CompilerCloneRootV1::Branch(&right)).unwrap();
+            assert_eq!(
+                short.consumed(QueryCharge::CompilerWork),
+                1 + left_work + measured.measurement_work
+            );
             let exact = budget(work);
             let actual = join(vec![left.clone()], vec![right.clone()], &exact).unwrap();
             let raw = super::super::join_branches(vec![left], vec![right]).unwrap();
@@ -223,7 +227,9 @@ mod tests {
         assert!(join(vec![l.clone(); 2], vec![l; 3], &short).is_err());
         assert_eq!(
             short.consumed(QueryCharge::CompilerWork),
-            work - clone_work(&Branch::empty())
+            work - measure_copy_root(CompilerCloneRootV1::Branch(&Branch::empty()))
+                .unwrap()
+                .deep_clone_work
         );
     }
 

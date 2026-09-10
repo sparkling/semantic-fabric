@@ -12,7 +12,7 @@ use super::control::{BuildVec, BuildWork};
 use super::test_support::{bgp, iri, pattern, triple, var};
 use super::{build_tree, build_tree_with_work_control};
 use crate::compiler_control::CompileContext;
-use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 use crate::{CompilerWorkMode, Error};
 
 fn budget(work: u64) -> QueryBudget {
@@ -221,19 +221,17 @@ fn prospective_growth_and_source_bound_copy_fail_before_mutation() {
     assert_eq!(out.values, [7]);
     assert_eq!(control.consumed(QueryCharge::CompilerWork), 1);
     let source = Literal::from("東京".repeat(1024));
-    let copy = measure_compiler_clone_root_v1(CompilerCloneRootV1::Literal(&source))
-        .unwrap()
-        .deep_clone_work;
-    let short = budget(copy);
+    let copy = measure_copy_root(CompilerCloneRootV1::Literal(&source)).unwrap();
+    let short = budget(copy.total_work - 1);
     assert!(metered(&short).copied(&source).is_err());
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        1,
+        copy.measurement_work,
         "measurement precedes the refused copy"
     );
-    let exact = budget(1 + copy);
+    let exact = budget(copy.total_work);
     assert_eq!(metered(&exact).copied(&source).unwrap(), source);
-    assert_eq!(exact.consumed(QueryCharge::CompilerWork), 1 + copy);
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), copy.total_work);
 }
 
 #[test]

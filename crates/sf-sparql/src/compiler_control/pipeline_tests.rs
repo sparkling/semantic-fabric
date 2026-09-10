@@ -10,9 +10,7 @@ use super::*;
 use crate::compiler_control::CompileContext;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::{Branch, Scan, SubPlanJoin, TermDef};
-use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
-};
+use crate::plan_measure::clone_root::{measure_copy_collection, CompilerCloneCollectionV1};
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
     QueryBudget::new(QueryLimits::new(
@@ -142,11 +140,11 @@ fn assert_control_error(error: Error, expected: QueryControlError) {
 #[test]
 fn metered_nested_subplan_clone_accepts_the_exact_measure() {
     let source = outer_with_nested_plan();
-    let measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
-        nested_branches(&source),
-    ))
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::Branches(nested_branches(
+        &source,
+    )))
     .unwrap();
-    let budget = budget(measure.deep_clone_work);
+    let budget = budget(measure.total_work);
     let mode = CompilerWorkMode::Metered(CompileContext::new(&budget));
     let mut metered = source.clone();
     let mut raw = source;
@@ -157,18 +155,18 @@ fn metered_nested_subplan_clone_accepts_the_exact_measure() {
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 }
 
 #[test]
 fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
     let mut source = outer_with_nested_plan();
-    let measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
-        nested_branches(&source),
-    ))
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::Branches(nested_branches(
+        &source,
+    )))
     .unwrap();
-    let budget = budget(measure.deep_clone_work - 1);
+    let budget = budget(measure.total_work - 1);
     let before = format!("{source:?}");
     let allocation = nested_branches(&source).as_ptr();
 
@@ -184,7 +182,10 @@ fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
 
     assert_eq!(format!("{source:?}"), before);
     assert_eq!(nested_branches(&source).as_ptr(), allocation);
-    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        budget.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
     assert_eq!(
         budget.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -194,15 +195,15 @@ fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
 #[test]
 fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
     let mut source = outer_with_two_nested_levels();
-    let outer_measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
+    let outer_measure = measure_copy_collection(CompilerCloneCollectionV1::Branches(
         nested_branches(&source),
     ))
     .unwrap();
-    let inner_measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
+    let inner_measure = measure_copy_collection(CompilerCloneCollectionV1::Branches(
         second_level_branches(&source),
     ))
     .unwrap();
-    let budget = budget(outer_measure.deep_clone_work + inner_measure.deep_clone_work - 1);
+    let budget = budget(outer_measure.total_work + inner_measure.total_work - 1);
     let before = format!("{source:?}");
     let original_outer_allocation = nested_branches(&source).as_ptr();
 
@@ -224,7 +225,7 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
     );
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        outer_measure.deep_clone_work,
+        outer_measure.total_work + inner_measure.measurement_work,
         "completed operation charges are never refunded"
     );
     assert_eq!(
@@ -236,10 +237,8 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
 #[test]
 fn metered_filter_over_three_arms_charges_two_exact_nested_condition_clones() {
     let cond = condition_with_nested_exists();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
-            .unwrap();
-    let expected = measure.deep_clone_work.checked_mul(2).unwrap();
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
+    let expected = measure.total_work.checked_mul(2).unwrap();
     let budget = budget(expected);
 
     let normalized = iq::normalize::normalize_with_work_mode(
@@ -255,10 +254,8 @@ fn metered_filter_over_three_arms_charges_two_exact_nested_condition_clones() {
 #[test]
 fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
     let cond = condition_with_nested_exists();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
-            .unwrap();
-    let budget = budget(measure.deep_clone_work * 2 - 1);
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
+    let budget = budget(measure.total_work * 2 - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -271,7 +268,7 @@ fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work,
+        measure.total_work + measure.measurement_work,
         "completed operation charges are never refunded"
     );
 }
@@ -279,11 +276,9 @@ fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
 #[test]
 fn metered_filter_union_exact_n_matches_the_public_raw_path() {
     let cond = condition_with_nested_exists();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
-            .unwrap();
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
     let source = filter_over_union(&[31, 32], cond);
-    let budget = budget(measure.deep_clone_work);
+    let budget = budget(measure.total_work);
 
     let raw = iq::normalize::normalize(source.clone()).unwrap();
     let metered = iq::normalize::normalize_with_work_mode(
@@ -295,17 +290,15 @@ fn metered_filter_union_exact_n_matches_the_public_raw_path() {
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 }
 
 #[test]
 fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
     let cond = condition_with_nested_exists();
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
-            .unwrap();
-    let budget = budget(measure.deep_clone_work - 1);
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
+    let budget = budget(measure.total_work - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -316,7 +309,10 @@ fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
         QueryControlError::CompilerWorkExceeded,
     );
 
-    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        budget.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
     assert_eq!(
         budget.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)

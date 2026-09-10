@@ -25,6 +25,8 @@ impl CompilerBinding {
     /// Cache identity and semantics are unchanged: this does not activate
     /// `GovernedV1`. A shared hit performs no recursive plan clone to charge.
     /// Measurement limits protect each performed clone, not whole-plan admission.
+    /// The iterative measurement itself pays traversal/logical stack work and
+    /// observes cancellation, separately from reserving the measured clone payload.
     pub fn compile_shared_with_work_control(
         &self,
         sparql: &str,

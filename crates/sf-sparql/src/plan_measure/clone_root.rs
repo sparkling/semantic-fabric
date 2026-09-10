@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use sf_core::query_control::QueryControl;
+
 use ::spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
     PropertyPathExpression, QueryDataset,
@@ -123,18 +125,38 @@ pub(crate) enum CompilerCloneCollectionV1<'a> {
     TriplesMaps(&'a [TriplesMap]),
 }
 
+#[cfg(test)]
 pub(crate) fn measure_compiler_clone_root_v1(
     root: CompilerCloneRootV1<'_>,
 ) -> Result<PlanMeasureV1, PlanMeasureError> {
     measure_compiler_clone_root_with_limits(root, PlanMeasureLimits::V1)
 }
 
+#[cfg(test)]
 pub(crate) fn measure_compiler_clone_collection_v1(
     collection: CompilerCloneCollectionV1<'_>,
 ) -> Result<PlanMeasureV1, PlanMeasureError> {
     measure_compiler_clone_collection_with_limits(collection, PlanMeasureLimits::V1)
 }
 
+pub(crate) fn measure_compiler_clone_root_with_control(
+    root: CompilerCloneRootV1<'_>,
+    control: &dyn QueryControl,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    Walker::controlled(PlanMeasureLimits::V1, control)?.run(root.into_work())
+}
+
+pub(crate) fn measure_compiler_clone_collection_with_control(
+    collection: CompilerCloneCollectionV1<'_>,
+    control: &dyn QueryControl,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    measure_collection(
+        collection,
+        Walker::controlled(PlanMeasureLimits::V1, control)?,
+    )
+}
+
+#[cfg(test)]
 pub(super) fn measure_compiler_clone_root_with_limits(
     root: CompilerCloneRootV1<'_>,
     limits: PlanMeasureLimits,
@@ -142,11 +164,18 @@ pub(super) fn measure_compiler_clone_root_with_limits(
     Walker::new(limits).run(root.into_work())
 }
 
+#[cfg(test)]
 pub(super) fn measure_compiler_clone_collection_with_limits(
     collection: CompilerCloneCollectionV1<'_>,
     limits: PlanMeasureLimits,
 ) -> Result<PlanMeasureV1, PlanMeasureError> {
-    let mut walker = Walker::new(limits);
+    measure_collection(collection, Walker::new(limits))
+}
+
+fn measure_collection<'a>(
+    collection: CompilerCloneCollectionV1<'a>,
+    mut walker: Walker<'a>,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
     match collection {
         CompilerCloneCollectionV1::Branches(values) => {
             push_roots(&mut walker, values, Work::Branch)?
@@ -310,8 +339,11 @@ fn push_term_def_row<'a>(
     row: &'a [Option<TermDef>],
 ) -> Result<(), PlanMeasureError> {
     walker.collection(row.len())?;
-    for value in row.iter().flatten() {
-        walker.push(0, Work::TermDef(value))?;
+    for value in row {
+        walker.checkpoint()?;
+        if let Some(value) = value {
+            walker.push(0, Work::TermDef(value))?;
+        }
     }
     Ok(())
 }
@@ -332,8 +364,11 @@ fn push_ground_row<'a>(
     row: &'a [Option<GroundTerm>],
 ) -> Result<(), PlanMeasureError> {
     walker.collection(row.len())?;
-    for value in row.iter().flatten() {
-        walker.push(0, Work::GroundTerm(value))?;
+    for value in row {
+        walker.checkpoint()?;
+        if let Some(value) = value {
+            walker.push(0, Work::GroundTerm(value))?;
+        }
     }
     Ok(())
 }
@@ -341,3 +376,6 @@ fn push_ground_row<'a>(
 #[cfg(test)]
 #[path = "clone_root_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use super::test_support::{measure_copy_collection, measure_copy_root};

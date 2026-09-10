@@ -10,14 +10,14 @@ use crate::compiler_control::CompileContext;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::{CmpOp, ColRef, Scan, SqlCond, TermDef};
 use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, measure_compiler_clone_root_v1,
-    CompilerCloneCollectionV1, CompilerCloneRootV1,
+    measure_copy_collection, measure_copy_root, CompilerCloneCollectionV1, CompilerCloneRootV1,
 };
 
 struct InnerFixture {
     tree: IqNode,
     fixed_work: u64,
     condition_work: u64,
+    condition_measurement: u64,
     owned_fixed_pointer: usize,
     owned_condition_pointer: usize,
 }
@@ -27,6 +27,7 @@ struct LeftFixture {
     right_work: u64,
     fake_collection_work: u64,
     condition_work: u64,
+    condition_measurement: u64,
     owned_right_pointer: usize,
     owned_condition_pointer: usize,
 }
@@ -124,17 +125,14 @@ fn inner_fixture(arm_count: usize) -> InnerFixture {
     let fixed_left = nested_scan(10, "owned-inner-left");
     let owned_fixed_pointer = scan_parts(&fixed_left).2;
     let fixed = [fixed_left, scan_leaf(20, "fixed-inner-right")];
-    let fixed_work =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&fixed))
-            .unwrap()
-            .deep_clone_work;
+    let fixed_work = measure_copy_collection(CompilerCloneCollectionV1::IqNodes(&fixed))
+        .unwrap()
+        .total_work;
     let [fixed_left, fixed_right] = fixed;
     let (condition, owned_condition_pointer) =
         conditions_with_nested_exists("owned-inner-condition");
-    let condition_work =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&condition))
-            .unwrap()
-            .deep_clone_work;
+    let condition_cost =
+        measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&condition)).unwrap();
 
     InnerFixture {
         tree: IqNode::InnerJoin {
@@ -142,7 +140,8 @@ fn inner_fixture(arm_count: usize) -> InnerFixture {
             cond: condition,
         },
         fixed_work,
-        condition_work,
+        condition_work: condition_cost.total_work,
+        condition_measurement: condition_cost.measurement_work,
         owned_fixed_pointer,
         owned_condition_pointer,
     }
@@ -151,20 +150,18 @@ fn inner_fixture(arm_count: usize) -> InnerFixture {
 fn left_fixture(arm_count: usize) -> LeftFixture {
     let right = nested_scan(20, "owned-left-join-right");
     let owned_right_pointer = scan_parts(&right).2;
-    let right_work = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&right))
+    let right_work = measure_copy_root(CompilerCloneRootV1::IqNode(&right))
         .unwrap()
-        .deep_clone_work;
-    let fake_collection_work = measure_compiler_clone_collection_v1(
-        CompilerCloneCollectionV1::IqNodes(std::slice::from_ref(&right)),
-    )
+        .total_work;
+    let fake_collection_work = measure_copy_collection(CompilerCloneCollectionV1::IqNodes(
+        std::slice::from_ref(&right),
+    ))
     .unwrap()
-    .deep_clone_work;
+    .total_work;
     let (condition, owned_condition_pointer) =
         conditions_with_nested_exists("owned-left-join-condition");
-    let condition_work =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&condition))
-            .unwrap()
-            .deep_clone_work;
+    let condition_cost =
+        measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&condition)).unwrap();
 
     LeftFixture {
         tree: IqNode::LeftJoin {
@@ -174,7 +171,8 @@ fn left_fixture(arm_count: usize) -> LeftFixture {
         },
         right_work,
         fake_collection_work,
-        condition_work,
+        condition_work: condition_cost.total_work,
+        condition_measurement: condition_cost.measurement_work,
         owned_right_pointer,
         owned_condition_pointer,
     }
@@ -186,10 +184,9 @@ fn exact_iq_node_collection_clone_accepts_n_and_rejects_n_minus_one() {
         nested_scan(51, "collection-nested"),
         scan_leaf(52, "collection-tail"),
     ];
-    let measure =
-        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&source)).unwrap();
+    let measure = measure_copy_collection(CompilerCloneCollectionV1::IqNodes(&source)).unwrap();
     let source_allocation = source.as_ptr();
-    let exact = budget(measure.deep_clone_work);
+    let exact = budget(measure.total_work);
 
     let cloned = CompileContext::new(&exact).clone_iq_nodes(&source).unwrap();
 
@@ -197,10 +194,10 @@ fn exact_iq_node_collection_clone_accepts_n_and_rejects_n_minus_one() {
     assert_ne!(cloned.as_ptr(), source_allocation);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        measure.deep_clone_work
+        measure.total_work
     );
 
-    let short = budget(measure.deep_clone_work - 1);
+    let short = budget(measure.total_work - 1);
     assert_control_error(
         CompileContext::new(&short)
             .clone_iq_nodes(&source)
@@ -208,38 +205,41 @@ fn exact_iq_node_collection_clone_accepts_n_and_rejects_n_minus_one() {
         QueryControlError::CompilerWorkExceeded,
     );
     assert_eq!(source.as_ptr(), source_allocation);
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        measure.measurement_work
+    );
 }
 
 #[test]
 fn exact_scalar_iq_node_clone_does_not_charge_a_fake_collection_slot() {
     let source = nested_scan(61, "scalar-nested");
     let source_payload = scan_parts(&source).2;
-    let scalar = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&source)).unwrap();
-    let collection = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(
+    let scalar = measure_copy_root(CompilerCloneRootV1::IqNode(&source)).unwrap();
+    let collection = measure_copy_collection(CompilerCloneCollectionV1::IqNodes(
         std::slice::from_ref(&source),
     ))
     .unwrap();
-    let exact = budget(scalar.deep_clone_work);
+    let exact = budget(scalar.total_work);
 
     let cloned = CompileContext::new(&exact).clone_iq_node(&source).unwrap();
 
     assert_eq!(collection.deep_clone_work, scalar.deep_clone_work + 1);
     assert_eq!(format!("{cloned:?}"), format!("{source:?}"));
     assert_ne!(scan_parts(&cloned).2, source_payload);
-    assert_eq!(
-        exact.consumed(QueryCharge::CompilerWork),
-        scalar.deep_clone_work
-    );
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), scalar.total_work);
 
-    let short = budget(scalar.deep_clone_work - 1);
+    let short = budget(scalar.total_work - 1);
     assert_control_error(
         CompileContext::new(&short)
             .clone_iq_node(&source)
             .expect_err("N-1 must reject before the scalar IQ-node clone"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        scalar.measurement_work
+    );
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn inner_join_condition_rejection_keeps_the_fixed_collection_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        per_arm + fixture.fixed_work,
+        per_arm + fixture.fixed_work + fixture.condition_measurement,
         "the first arm and the second fixed collection clone are not refunded"
     );
 }
@@ -326,8 +326,8 @@ fn left_join_three_arm_fanout_uses_scalar_right_charges_and_matches_raw() {
 
     assert_eq!(
         fixture.fake_collection_work,
-        fixture.right_work + 1,
-        "the scalar schedule excludes a synthetic collection slot"
+        fixture.right_work + 3,
+        "one synthetic slot plus its collection record/iteration are excluded"
     );
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), expected);
@@ -369,7 +369,7 @@ fn left_join_condition_rejection_keeps_the_scalar_right_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        per_arm + fixture.right_work,
+        per_arm + fixture.right_work + fixture.condition_measurement,
         "the first arm and the second scalar clone are not refunded"
     );
     assert_eq!(

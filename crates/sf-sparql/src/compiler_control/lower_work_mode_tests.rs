@@ -12,7 +12,7 @@ use crate::compiler_control::CompileContext;
 use crate::compiler_schema::ColumnTypeUse;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::Scan;
-use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
     QueryBudget::new(QueryLimits::new(
@@ -30,7 +30,7 @@ fn assert_control_error(error: Error, expected: QueryControlError) {
     }
 }
 
-fn exists_body(alias: usize, marker: &str) -> (IqNode, u64) {
+fn exists_body(alias: usize, marker: &str) -> (IqNode, u64, u64) {
     let node = IqNode::Extensional {
         scan: Scan {
             alias,
@@ -38,11 +38,9 @@ fn exists_body(alias: usize, marker: &str) -> (IqNode, u64) {
         },
         bind: BTreeMap::new(),
     };
-    let work = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&node))
-        .unwrap()
-        .deep_clone_work;
-    assert!(work > 0);
-    (node, work)
+    let work = measure_copy_root(CompilerCloneRootV1::IqNode(&node)).unwrap();
+    assert!(work.total_work > 0);
+    (node, work.total_work, work.measurement_work)
 }
 
 fn values(branch_count: usize) -> IqNode {
@@ -62,11 +60,17 @@ fn lower(source: IqNode, work_mode: CompilerWorkMode<'_>) -> Result<Plan> {
     )
 }
 
-fn assert_direct_schedule(source: IqNode, branch_count: u64, clone_work: u64, prior_work: u64) {
+fn assert_direct_schedule(
+    source: IqNode,
+    branch_count: u64,
+    clone_work: u64,
+    prior_work: u64,
+    measurement: u64,
+) {
     assert!(branch_count >= 3);
     let expected = prior_work + clone_work.checked_mul(branch_count - 1).unwrap();
     let retained_before_last_rejection =
-        prior_work + clone_work.checked_mul(branch_count - 2).unwrap();
+        prior_work + clone_work.checked_mul(branch_count - 2).unwrap() + measurement;
     let exact = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -134,7 +138,7 @@ fn nested_branch_count(plan: &Plan) -> usize {
 
 #[test]
 fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_one() {
-    let (body, work) = exists_body(81, "owned-final-subplan-exists-body");
+    let (body, work, _) = exists_body(81, "owned-final-subplan-exists-body");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
     let expected = work * 2;
     let control = budget(expected);
@@ -159,7 +163,7 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
 
 #[test]
 fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
-    let (body, work) = exists_body(82, "first-subplan-exists-boundary");
+    let (body, work, measurement) = exists_body(82, "first-subplan-exists-boundary");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
     let control = budget(work - 1);
 
@@ -171,7 +175,7 @@ fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
         .expect_err("N-1 must reject inside the nested SubPlan before its EXISTS clone"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(control.consumed(QueryCharge::CompilerWork), measurement);
     assert_eq!(
         control.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -180,8 +184,9 @@ fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
 
 #[test]
 fn later_nested_exists_failure_retains_the_completed_clone_charge() {
-    let (first, first_work) = exists_body(83, "first-completed-subplan-exists-clone");
-    let (second, second_work) = exists_body(84, "second-rejected-subplan-exists-clone");
+    let (first, first_work, _) = exists_body(83, "first-completed-subplan-exists-clone");
+    let (second, second_work, second_measurement) =
+        exists_body(84, "second-rejected-subplan-exists-clone");
     let source = nested_subplan_with_conditions(
         vec![
             IqCond::Exists(Box::new(first)),
@@ -199,7 +204,10 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
         .expect_err("the second EXISTS clone must reject after the first completes"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), first_work);
+    assert_eq!(
+        control.consumed(QueryCharge::CompilerWork),
+        first_work + second_measurement
+    );
     assert_eq!(
         control.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -208,7 +216,7 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
 
 #[test]
 fn wrapped_exists_over_four_filter_branches_charges_three_clones() {
-    let (body, work) = exists_body(85, "wrapped-filter-exists-body");
+    let (body, work, measurement) = exists_body(85, "wrapped-filter-exists-body");
     let nested_exists = IqCond::Exists(Box::new(body));
     let negated = IqCond::Not(Box::new(nested_exists));
     let wrapped = IqCond::And(vec![IqCond::Or(vec![negated])]);
@@ -217,12 +225,12 @@ fn wrapped_exists_over_four_filter_branches_charges_three_clones() {
         cond: vec![wrapped],
     };
 
-    assert_direct_schedule(source, 4, work, 0);
+    assert_direct_schedule(source, 4, work, 0, measurement);
 }
 
 #[test]
 fn construction_filter_over_three_branches_uses_the_owned_final_schedule() {
-    let (body, work) = exists_body(86, "construction-filter-exists-body");
+    let (body, work, measurement) = exists_body(86, "construction-filter-exists-body");
     let source = IqNode::Construction {
         child: Box::new(IqNode::Filter {
             child: Box::new(values(3)),
@@ -232,12 +240,12 @@ fn construction_filter_over_three_branches_uses_the_owned_final_schedule() {
         project: Vec::new(),
     };
 
-    assert_direct_schedule(source, 3, work, 0);
+    assert_direct_schedule(source, 3, work, 0, measurement);
 }
 
 #[test]
 fn inner_join_condition_over_three_branches_uses_the_owned_final_schedule() {
-    let (body, work) = exists_body(87, "inner-join-condition-exists-body");
+    let (body, work, measurement) = exists_body(87, "inner-join-condition-exists-body");
     let source = IqNode::InnerJoin {
         children: vec![values(3), IqNode::True],
         cond: vec![IqCond::Exists(Box::new(body))],
@@ -245,13 +253,13 @@ fn inner_join_condition_over_three_branches_uses_the_owned_final_schedule() {
 
     // Two products (1×3 and 3×1), each reserving empty scalar branches on both sides,
     // precede the independent B-1 EXISTS-clone schedule.
-    let empty_copy = measure_compiler_clone_root_v1(CompilerCloneRootV1::Branch(&Branch::empty()))
+    let empty_copy = measure_copy_root(CompilerCloneRootV1::Branch(&Branch::empty()))
         .unwrap()
-        .deep_clone_work;
-    assert_direct_schedule(source, 3, work, 6 * (1 + 2 * empty_copy));
+        .total_work;
+    assert_direct_schedule(source, 3, work, 6 * (1 + 2 * empty_copy), measurement);
 }
 
-fn whole_pipeline_fixture() -> (Query, u64) {
+fn whole_pipeline_fixture() -> (Query, u64, u64) {
     let query = SparqlParser::new()
         .parse_query(
             "SELECT ?x WHERE { VALUES ?x { 1 2 3 } \
@@ -275,10 +283,8 @@ fn whole_pipeline_fixture() -> (Query, u64) {
     let [IqCond::Exists(inner)] = cond.as_slice() else {
         panic!("fixture must carry one EXISTS condition")
     };
-    let work = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(inner))
-        .unwrap()
-        .deep_clone_work;
-    (query, work)
+    let work = measure_copy_root(CompilerCloneRootV1::IqNode(inner)).unwrap();
+    (query, work.total_work, work.measurement_work)
 }
 
 fn translate_fixture(query: &Query, control: &QueryBudget) -> Result<Plan> {
@@ -295,7 +301,7 @@ fn translate_fixture(query: &Query, control: &QueryBudget) -> Result<Plan> {
 
 #[test]
 fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge() {
-    let (query, work) = whole_pipeline_fixture();
+    let (query, work, measurement) = whole_pipeline_fixture();
     let Query::Select { pattern, .. } = &query else {
         panic!()
     };
@@ -318,7 +324,10 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
             .expect_err("whole-pipeline N-1 must reject before the second EXISTS clone"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), build + work);
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        build + work + measurement
+    );
     assert_eq!(
         short.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)

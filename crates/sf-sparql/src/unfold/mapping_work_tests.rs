@@ -1,6 +1,6 @@
 use super::*;
 use crate::compiler_control::CompileContext;
-use crate::plan_measure::clone_root::{measure_compiler_clone_root_v1, CompilerCloneRootV1};
+use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 use sf_core::ir::{ObjectMap, RefObjectMap, SubjectMap};
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
@@ -60,9 +60,9 @@ fn expand(
 }
 
 fn source_work(source: &LogicalSource) -> u64 {
-    measure_compiler_clone_root_v1(CompilerCloneRootV1::LogicalSource(source))
+    measure_copy_root(CompilerCloneRootV1::LogicalSource(source))
         .unwrap()
-        .deep_clone_work
+        .total_work
 }
 
 #[test]
@@ -99,7 +99,11 @@ fn source_copies_are_exact_and_preserve_raw_branch_order() {
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), 8 + 6 * copy);
     let short = budget(8 + 6 * copy - 1);
     assert!(expand(&maps, &tp, None, &short).is_err());
-    assert_eq!(short.consumed(QueryCharge::CompilerWork), 8 + 5 * copy);
+    let measured = measure_copy_root(CompilerCloneRootV1::LogicalSource(&maps[0].source)).unwrap();
+    assert_eq!(
+        short.consumed(QueryCharge::CompilerWork),
+        8 + 5 * copy + measured.measurement_work
+    );
 }
 
 #[test]
