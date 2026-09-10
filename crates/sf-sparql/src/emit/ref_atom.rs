@@ -53,14 +53,14 @@ pub(super) fn actuals(
         iri_unreserved_columns: columns
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| iri_cmp::unreserved_column(c, &sources).then(|| format!("c{i}")))
+            .filter(|(_, c)| iri_cmp::unreserved_column(c, &sources))
+            .map(|(i, _)| format!("c{i}"))
             .collect(),
         static_iri_columns: columns
             .iter()
             .enumerate()
-            .filter_map(|(i, column)| {
-                iri_cmp::static_iri_column(column, &sources).then(|| format!("c{i}"))
-            })
+            .filter(|(_, column)| iri_cmp::static_iri_column(column, &sources))
+            .map(|(i, _)| format!("c{i}"))
             .collect(),
         text_columns: columns
             .iter()

@@ -376,7 +376,7 @@ fn mysql_static_template_authority_requires_every_slot_and_encodes_once() {
     let ScanSource::Projection { input, .. } = &mut renamed.source else {
         unreachable!()
     };
-    *input = Box::new(scan);
+    **input = scan;
     assert!(iri_cmp::static_iri_name(
         "rendered",
         &scan_actuals(&renamed, Dialect::MySql, &catalog)
