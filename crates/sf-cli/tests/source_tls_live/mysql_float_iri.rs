@@ -1,5 +1,7 @@
 //! Static template identity follows Rust's native decoder, not SQL text.
 use super::*;
+#[path = "mysql_mixed_float_iri.rs"]
+pub(super) mod mixed;
 
 #[test]
 #[ignore = "requires owned pinned MySQL TLS fixture"]

@@ -347,11 +347,7 @@ fn native_float_template_joins_keep_width_and_source_key_semantics() {
         for peer in [
             None,
             Some(NativeScalarKey::Integer),
-            Some(if key == NativeScalarKey::MysqlFloat4 {
-                NativeScalarKey::MysqlFloat8
-            } else {
-                NativeScalarKey::MysqlFloat4
-            }),
+            Some(NativeScalarKey::PostgresFloat4),
         ] {
             actuals.get_mut(&1).unwrap().scalar_columns.clear();
             if let Some(peer) = peer {
@@ -363,6 +359,40 @@ fn native_float_template_joins_keep_width_and_source_key_semantics() {
             }
             assert!(key_equality(&a, &b, Dialect::MySql, &actuals).is_err());
         }
+        let peer = if key == NativeScalarKey::MysqlFloat4 {
+            NativeScalarKey::MysqlFloat8
+        } else {
+            NativeScalarKey::MysqlFloat4
+        };
+        actuals
+            .get_mut(&1)
+            .unwrap()
+            .scalar_columns
+            .insert("v".into(), peer);
+        let sql = key_equality(&a, &b, Dialect::MySql, &actuals)
+            .unwrap()
+            .unwrap();
+        assert!(sql.contains("JSON_UNQUOTE"));
+        assert!(sql.contains("WITH"));
+        assert!(sql.contains("utf8mb4_0900_bin"));
+        Dialect::MySql
+            .emit_via_ast(&format!("SELECT {sql} FROM items t0, items t1"))
+            .unwrap();
+        let native = render_cond(
+            &SqlCond::NativeColEq(a.clone(), b.clone()),
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0,
+        )
+        .unwrap();
+        assert!(
+            !native.contains("JSON"),
+            "mixed-width FK equality stays native"
+        );
+        actuals.get_mut(&1).unwrap().datatype_columns.clear();
+        assert!(key_equality(&a, &b, Dialect::MySql, &actuals).is_err());
     }
 }
 

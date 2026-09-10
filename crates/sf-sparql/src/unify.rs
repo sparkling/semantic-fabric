@@ -682,6 +682,7 @@ pub fn filter_cond(
         // natural derived pairs still need live decoder authority on all drivers.
         Expression::SameTerm(a, b) => literal_cmp::filter(a, b, None, bindings)
             .map(Ok)
+            .or_else(|| literal_cmp::template_identity(a, b, bindings))
             .unwrap_or_else(|| cmp(a, b, CmpOp::Eq, bindings)),
         Expression::Greater(a, b) => cmp(a, b, CmpOp::Gt, bindings),
         Expression::GreaterOrEqual(a, b) => cmp(a, b, CmpOp::Ge, bindings),
@@ -909,6 +910,9 @@ fn cmp(
     }
     if let Some(comparison) = iri_cmp::filter(a, b, op, bindings) {
         return Ok(comparison);
+    }
+    if literal_cmp::template_value_needs_construction(a, b, bindings) {
+        return Err("typed literal-template FILTER requires qualified value construction, not RDF-key equality".into());
     }
     match (a, b) {
         // ADR-0032 D3 item 4: `star::rewrite_equality`'s "both composed"
@@ -1524,7 +1528,7 @@ mod tests {
             Dialect::Sqlite,
         )
         .unwrap_err();
-        assert!(err.contains("template-bound components"), "{err}");
+        assert!(err.contains("qualified value construction"), "{err}");
     }
 
     /// A MIXED shape (one side template-bound, the other a bare column or a

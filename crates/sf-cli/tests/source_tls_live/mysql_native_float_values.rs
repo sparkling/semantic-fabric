@@ -174,6 +174,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_identity(fixture, database);
     iri::assert_all(fixture, database);
     iri::assert_double(fixture, database);
+    iri::mixed::assert_all(fixture, database);
 }
 
 #[test]

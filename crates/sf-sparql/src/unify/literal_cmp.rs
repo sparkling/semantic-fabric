@@ -2,6 +2,58 @@
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 
+fn template_pair<'a>(
+    a: &Expression,
+    b: &Expression,
+    bindings: &'a BTreeMap<String, TermDef>,
+) -> Option<[(&'a TermDef, &'a TermSpec); 2]> {
+    let get = |expr: &Expression| {
+        let Expression::Variable(var) = expr else {
+            return None;
+        };
+        let def = bindings.get(var.as_str())?;
+        let TermDef::Derived {
+            term_map: TermMap::Template(_, spec),
+            ..
+        } = def
+        else {
+            return None;
+        };
+        (spec.term_type == TermType::Literal).then_some((def, spec))
+    };
+    Some([get(a)?, get(b)?])
+}
+
+/// Template lexicals are RDF identity, not typed FILTER value construction.
+/// Keep this distinction before align_templates erases the term specification.
+pub(super) fn template_value_needs_construction(
+    a: &Expression,
+    b: &Expression,
+    bindings: &BTreeMap<String, TermDef>,
+) -> bool {
+    template_pair(a, b, bindings).is_some_and(|pair| {
+        pair.iter().any(|(_, spec)| {
+            spec.language.is_none()
+                && spec.datatype.as_ref().is_some_and(|datatype| {
+                    datatype.as_str() != "http://www.w3.org/2001/XMLSchema#string"
+                })
+        })
+    })
+}
+
+pub(super) fn template_identity(
+    a: &Expression,
+    b: &Expression,
+    bindings: &BTreeMap<String, TermDef>,
+) -> Option<Result<SqlCond, String>> {
+    let [(left, _), (right, _)] = template_pair(a, b, bindings)?;
+    Some(match unify(left, right) {
+        Unify::Sat(conditions) => Ok(SqlCond::And(conditions)),
+        Unify::Empty => Ok(SqlCond::Or(vec![])),
+        Unify::Unsupported(why) => Err(why),
+    })
+}
+
 /// A different RDF kind is never a raw-column equality. NULL source columns
 /// still mean an unbound operand, not a false expression that NOT may admit.
 pub(super) fn kind_mismatch(
@@ -111,4 +163,65 @@ pub(super) fn filter(
         return None;
     }
     Some(SqlCond::LiteralCmp(Box::new(cmp)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_template_value_filters_do_not_borrow_identity_keys() {
+        let variable = |name| Expression::Variable(Variable::new(name).unwrap());
+        for (left, right) in [
+            ("float", "float"),
+            ("int", "decimal"),
+            ("dateTime", "dateTime"),
+        ] {
+            let bindings = [("a", "v", left), ("b", "w", right)]
+                .into_iter()
+                .map(|(var, column, datatype)| {
+                    (
+                        var.to_owned(),
+                        TermDef::Derived {
+                            term_map: TermMap::Template(
+                                sf_core::ir::Template::parse(&format!("{{{column}}}")).unwrap(),
+                                TermSpec::typed_literal(
+                                    sf_core::NamedNode::new(format!(
+                                        "http://www.w3.org/2001/XMLSchema#{datatype}"
+                                    ))
+                                    .unwrap(),
+                                ),
+                            ),
+                            alias: 0,
+                        },
+                    )
+                })
+                .collect();
+            let a = variable("a");
+            let b = variable("b");
+            for expr in [
+                Expression::Equal(Box::new(a.clone()), Box::new(b.clone())),
+                Expression::Not(Box::new(Expression::Equal(
+                    Box::new(a.clone()),
+                    Box::new(b.clone()),
+                ))),
+            ] {
+                let error = filter_cond(&expr, &bindings, Dialect::MySql).unwrap_err();
+                assert!(error.contains("qualified value construction"), "{error}");
+            }
+            let same = filter_cond(
+                &Expression::SameTerm(Box::new(a), Box::new(b)),
+                &bindings,
+                Dialect::MySql,
+            )
+            .unwrap();
+            if left == right {
+                assert!(
+                    matches!(same, SqlCond::And(ref conditions) if matches!(conditions.as_slice(), [SqlCond::ColEq(..)]))
+                );
+            } else {
+                assert!(matches!(same, SqlCond::Or(ref conditions) if conditions.is_empty()));
+            }
+        }
+    }
 }

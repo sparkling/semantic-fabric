@@ -17,6 +17,8 @@ pub(in crate::emit) fn negative_zero(raw: &str) -> String {
 }
 
 /// Same-decoder RDF keys are injective in the native value plus zero sign.
+/// Unlike floating widths compare their own decoded lexicals, never widened
+/// numeric values: f32(1.1) and f64(1.1) spell alike but are different numbers.
 /// NativeColEq (source foreign-key semantics) deliberately does not call this.
 pub(in crate::emit) fn key_equality(
     a: &ColRef,
@@ -31,16 +33,27 @@ pub(in crate::emit) fn key_equality(
     if dialect != Dialect::MySql || ![ak, bk].into_iter().flatten().any(is_float) {
         return Ok(None);
     }
-    if ak != bk
+    if ![ak, bk].into_iter().all(|key| key.is_some_and(is_float))
         || [a, b]
             .iter()
             .any(|c| literal_datatype::fact(c, actuals) != Some(Some(Double)))
     {
         return Err(Error::Unsupported(
-            "MySQL floating RDF join requires the same retained decoder width".into(),
+            "MySQL floating RDF join requires retained native floating decoders".into(),
         ));
     }
     let (left, right) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
+    if ak != bk {
+        let lexical = |raw: &str, key| {
+            iri_cmp::scalar_lexical(key, raw, dialect)
+                .map(|sql| path_comparison::exact_text(sql, dialect))
+        };
+        return Ok(Some(format!(
+            "({}={})",
+            lexical(&left, ak.expect("checked floating decoder"))?,
+            lexical(&right, bk.expect("checked floating decoder"))?
+        )));
+    }
     Ok(Some(format!(
         "({left}={right} AND ({})=({}))",
         negative_zero(&left),
