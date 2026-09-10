@@ -1,5 +1,6 @@
 //! Identity of finite native MySQL floating values, without a text-key grant.
 use super::*;
+use crate::iq::{Scan, ScanSource};
 use sf_core::datatype::XsdTypeCode::Double;
 
 pub(in crate::emit) fn is_float(key: NativeScalarKey) -> bool {
@@ -13,6 +14,99 @@ pub(in crate::emit) fn is_float(key: NativeScalarKey) -> bool {
 /// Only inspect the sign at zero; this is NOT a general MySQL lexical recipe.
 pub(in crate::emit) fn negative_zero(raw: &str) -> String {
     format!("CASE WHEN {raw} IS NULL THEN NULL WHEN {raw}=0 THEN LEFT(JSON_UNQUOTE(JSON_EXTRACT(JSON_ARRAY({raw}),'$[0]')),1)='-' ELSE FALSE END")
+}
+
+/// Same-decoder RDF keys are injective in the native value plus zero sign.
+/// NativeColEq (source foreign-key semantics) deliberately does not call this.
+pub(in crate::emit) fn key_equality(
+    a: &ColRef,
+    b: &ColRef,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+) -> Result<Option<String>> {
+    let (ak, bk) = (
+        iri_cmp::scalar_column(a, actuals),
+        iri_cmp::scalar_column(b, actuals),
+    );
+    if dialect != Dialect::MySql || ![ak, bk].into_iter().flatten().any(is_float) {
+        return Ok(None);
+    }
+    if ak != bk
+        || [a, b]
+            .iter()
+            .any(|c| literal_datatype::fact(c, actuals) != Some(Some(Double)))
+    {
+        return Err(Error::Unsupported(
+            "MySQL floating RDF join requires the same retained decoder width".into(),
+        ));
+    }
+    let (left, right) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
+    Ok(Some(format!(
+        "({left}={right} AND ({})=({}))",
+        negative_zero(&left),
+        negative_zero(&right)
+    )))
+}
+
+pub(in crate::emit) fn template_has_float(
+    segments: &[sf_core::ir::Segment],
+    alias: usize,
+    actuals: &ActualColumns,
+) -> bool {
+    segments.iter().any(|segment| matches!(segment,
+        sf_core::ir::Segment::Column(name)
+            if iri_cmp::scalar_column(&ColRef::new(alias, name.clone()), actuals).is_some_and(is_float)))
+}
+
+/// A shape-mismatch comparison must use the same exact recipe as IRI constants,
+/// never MySQL's implicit FLOAT/DOUBLE-to-text conversion inside CONCAT.
+pub(in crate::emit) fn template_comparison(
+    cond: &SqlCond,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<Option<String>> {
+    use crate::iq::iri_cmp::{IriComparison, IriOperand, IriPart};
+    let SqlCond::TemplateEq(left, a, right, b, iri) = cond else {
+        return Ok(None);
+    };
+    if dialect != Dialect::MySql
+        || !(template_has_float(left, *a, actuals) || template_has_float(right, *b, actuals))
+    {
+        return Ok(None);
+    }
+    if !iri {
+        return Err(Error::Unsupported(
+            "native MySQL floating literal-template comparison requires qualified construction"
+                .into(),
+        ));
+    }
+    let operand = |segments: &[sf_core::ir::Segment], alias| IriOperand::Template {
+        parts: segments
+            .iter()
+            .map(|segment| match segment {
+                sf_core::ir::Segment::Literal(text) => IriPart::Literal(text.clone()),
+                sf_core::ir::Segment::Column(name) => {
+                    IriPart::Column(ColRef::new(alias, name.clone()))
+                }
+            })
+            .collect(),
+        base: None,
+    };
+    iri_cmp::render(
+        &IriComparison {
+            left: operand(left, *a),
+            right: operand(right, *b),
+        },
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+    )
+    .map(Some)
 }
 
 /// Within an unchanged finite decoder, its raw number and zero sign are an
@@ -60,6 +154,11 @@ pub(in crate::emit) fn validate_union(
             .values()
             .flat_map(TermDef::columns)
             .any(|column| iri_cmp::scalar_column(&column, &actuals).is_some_and(is_float))
+            || branch
+                .core
+                .iter()
+                .chain(branch.opts.iter().map(|join| &join.scan))
+                .any(|scan| has_rendered_float(scan, dialect, catalog))
         {
             return Err(Error::Unsupported(
                 "native MySQL floating UNION requires qualified pooled decoder normalization"
@@ -68,6 +167,28 @@ pub(in crate::emit) fn validate_union(
         }
     }
     Ok(())
+}
+
+/// Rendered pooling hides a template's source scalar behind a text column.
+/// Check before that lineage is erased; raw D1/pass-through projections remain
+/// governed by the output-consumer check above. This is only a UNION veto.
+fn has_rendered_float(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> bool {
+    match &scan.source {
+        ScanSource::Projection { input, columns, .. } => {
+            let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
+            columns.iter().any(|(_, term)| {
+                matches!(term,
+                TermMap::Template(template, _)
+                    if template_has_float(template.segments(), input.alias, &actuals))
+            }) || has_rendered_float(input, dialect, catalog)
+        }
+        ScanSource::RefAtom { input, .. } => input
+            .core
+            .iter()
+            .chain(input.opts.iter().map(|join| &join.scan))
+            .any(|scan| has_rendered_float(scan, dialect, catalog)),
+        ScanSource::Logical(_) | ScanSource::Path { .. } => false,
+    }
 }
 
 pub(in crate::emit) fn comparison(

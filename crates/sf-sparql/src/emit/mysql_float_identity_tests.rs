@@ -308,3 +308,127 @@ fn mysql_typed_float_partition_retains_native_payload() {
     let sql = emit_subplan_sql(&plan, Dialect::MySql, &catalog).unwrap().0;
     assert!(sql.contains("ROW_NUMBER()"));
 }
+
+#[test]
+fn native_float_template_joins_keep_width_and_source_key_semantics() {
+    for key in [NativeScalarKey::MysqlFloat4, NativeScalarKey::MysqlFloat8] {
+        let (_, catalog, mut actuals) = setup(key);
+        actuals.insert(1, actuals[&0].clone());
+        let (a, b) = (ColRef::new(0, "v"), ColRef::new(1, "v"));
+        for cond in [
+            SqlCond::ColEq(a.clone(), b.clone()),
+            SqlCond::NullSafeEq(a.clone(), b.clone()),
+        ] {
+            let sql = render_cond(
+                &cond,
+                Dialect::MySql,
+                &catalog,
+                &actuals,
+                &mut vec![],
+                &mut 0,
+            )
+            .unwrap();
+            assert!(sql.contains("JSON_UNQUOTE"));
+            assert!(!sql.contains("WITH"));
+        }
+        let native = render_cond(
+            &SqlCond::NativeColEq(a.clone(), b.clone()),
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0,
+        )
+        .unwrap();
+        assert!(
+            !native.contains("JSON"),
+            "foreign keys retain SQL value semantics"
+        );
+        for peer in [
+            None,
+            Some(NativeScalarKey::Integer),
+            Some(if key == NativeScalarKey::MysqlFloat4 {
+                NativeScalarKey::MysqlFloat8
+            } else {
+                NativeScalarKey::MysqlFloat4
+            }),
+        ] {
+            actuals.get_mut(&1).unwrap().scalar_columns.clear();
+            if let Some(peer) = peer {
+                actuals
+                    .get_mut(&1)
+                    .unwrap()
+                    .scalar_columns
+                    .insert("v".into(), peer);
+            }
+            assert!(key_equality(&a, &b, Dialect::MySql, &actuals).is_err());
+        }
+    }
+}
+
+#[test]
+fn float_template_fallback_and_rendered_pool_cannot_bypass_authority() {
+    use sf_core::ir::{Template, TermSpec};
+    let template = Template::parse("http://ex/{v}").unwrap();
+    for key in [NativeScalarKey::MysqlFloat4, NativeScalarKey::MysqlFloat8] {
+        let (_, catalog, actuals) = setup(key);
+        let cond = SqlCond::TemplateEq(
+            template.segments().to_vec(),
+            0,
+            template.segments().to_vec(),
+            0,
+            true,
+        );
+        let comparison = render_cond(
+            &cond,
+            Dialect::MySql,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0,
+        );
+        let input = Scan {
+            alias: 0,
+            source: LogicalSource::Table("items".into()).into(),
+        };
+        let mut branch = Branch::single(Scan {
+            alias: 1,
+            source: ScanSource::Projection {
+                input: Box::new(input),
+                columns: vec![(
+                    "rendered".into(),
+                    TermMap::Template(template.clone(), TermSpec::iri()),
+                )],
+                guards: vec![],
+                distinct: false,
+                native_keys: vec![],
+                lexical_keys: vec![],
+            },
+        });
+        branch.bindings.insert(
+            "o".into(),
+            TermDef::Derived {
+                term_map: TermMap::Column("rendered".into(), TermSpec::iri()),
+                alias: 1,
+            },
+        );
+        let rendered = scan_ref(
+            &branch.core[0],
+            Dialect::MySql,
+            &catalog,
+            &mut vec![],
+            &mut 0,
+        );
+        for result in [comparison, rendered] {
+            assert_eq!(result.is_ok(), key == NativeScalarKey::MysqlFloat4);
+            if let Ok(sql) = result {
+                assert!(sql.contains("__sf_short_selected"));
+            }
+        }
+        assert!(validate_union(&[branch.clone()], Dialect::MySql, &catalog).is_ok());
+        assert!(
+            validate_union(&[branch.clone(), branch], Dialect::MySql, &catalog).is_err(),
+            "rendered text cannot conceal native floating lineage in a pool"
+        );
+    }
+}

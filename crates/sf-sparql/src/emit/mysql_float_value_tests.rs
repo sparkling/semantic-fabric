@@ -319,7 +319,10 @@ fn mysql_native_floating_widths_keep_value_and_lexical_authority_separate() {
             Some(key),
             None
         ));
-        assert!(iri_cmp::scalar_lexical(key, "v", Dialect::MySql).is_err());
+        assert_eq!(
+            iri_cmp::scalar_lexical(key, "v", Dialect::MySql).is_ok(),
+            key == NativeScalarKey::MysqlFloat4
+        );
         let LiteralOperand::Column { spec, .. } = &mut cmp.left else {
             unreachable!()
         };

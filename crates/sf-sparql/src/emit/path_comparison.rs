@@ -375,7 +375,10 @@ pub(super) fn render_key_equality(
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
-) -> String {
+) -> Result<String> {
+    if let Some(sql) = mysql_float_value::identity::key_equality(a, b, dialect, actuals)? {
+        return Ok(sql);
+    }
     let comparison_decode = |column: &ColRef| {
         let source = actuals.get(&column.alias)?;
         source
@@ -395,7 +398,7 @@ pub(super) fn render_key_equality(
                 })
                 .unwrap_or_else(|| rdf_text_column(column, dialect, catalog, actuals))
         };
-        return format!("{} = {}", comparison(a), comparison(b));
+        return Ok(format!("{} = {}", comparison(a), comparison(b)));
     }
     let (mut left, mut right) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
     let path = [a, b]
@@ -412,5 +415,5 @@ pub(super) fn render_key_equality(
             right = exact_text(right, dialect);
         }
     }
-    format!("{left} = {right}")
+    Ok(format!("{left} = {right}"))
 }

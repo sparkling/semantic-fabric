@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-19
-updated: 2026-09-09
+updated: 2026-09-10
 tags: [set-semantics, bgp-dedup, duplicate-rows, soundness, union-dedup, key-elision]
 supersedes: []
 depends-on:
@@ -243,12 +243,12 @@ fail terminally even when hidden by COUNT/ASK; cap-one recovery is required.
 A global incomplete-date-to-zero rewrite is not sound and is not implemented.
 
 MySQL natural DATE/DATETIME now retains native payload and datatype while decoder-qualified identity keys match canonical Rust output; query constants remain verbatim. Required owned TLS CLI checks cover canonical/noncanonical fixed and sameTerm matches, DATE/leap/year-zero/extrema and DATETIME fractions, duplicate bags, nested projection, mixed literal/IRI joins, NULL/negation, invalid hidden SELECT/COUNT/ASK terms, cap-one recovery and denied-invalid-row policy/existential/OPTIONAL isolation. Coercing mixed temporal SubPlans retain a rejection marker instead of falling back to raw equality. Wider natural/native identity and native-consumer copies remain open.
+Native MySQL FLOAT static IRI lookup now shares the proven shortest-decimal selector (2026-09-10, ADR-0015). Decoded D1/DISTINCT keys preserve original values plus zero sign, including duplicate constant-subject IRI bags and COUNT. Same-width FLOAT/DOUBLE RDF slot joins now distinguish signed zero; native foreign-key equality is unchanged. Differently shaped FLOAT IRI comparisons and single-arm rendering use exact lexical recipes; DOUBLE lexical construction remains unqualified. Multi-arm floating pools also inspect rendered projection inputs before text metadata hides their native lineage. Required owned TLS edge/policy/NULL/bag tests and focused decoder/pooling tests cover this slice; general pooled normalization and remaining release guarantees remain open.
 Natural validation is captured on the original MySQL atom before projection or
 aggregation hides it. Rust remains the output canonicalizer; only proved natural
 identity uses the SQL calendar/fraction recipe. Raw IRI/different-datatype literal recipes
 retain decoded spellings, and natural facts do not confer raw-IRI authority.
-PostgreSQL numeric/temporal and native floating recipes also remain unqualified:
-plain numeric casts would bypass PostgreSQL decoder errors for NaN/infinity.
+Only the individually qualified native recipes in ADR-0015 confer identity authority; other numeric/temporal recipes remain unqualified. Plain SQL casts are not decoder proof.
 Unsupported recipes can reject formerly valid
 native lookups; restoring their decoder-exact behavior remains required work,
 not a scope deferral or a whole identity/release gate closure. Path-endpoint FILTERs

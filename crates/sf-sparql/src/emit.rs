@@ -1715,7 +1715,7 @@ fn render_cond(
         SqlCond::LiteralCmp(cmp) => {
             literal_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?
         }
-        SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals),
+        SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals)?,
         SqlCond::NativeColEq(a, b) => format!(
             "{} = {}",
             colref(a, dialect, actuals),
@@ -1723,7 +1723,7 @@ fn render_cond(
         ),
         SqlCond::NullSafeEq(a, b) => {
             let (la, lb) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
-            let equal = render_key_equality(a, b, dialect, catalog, actuals);
+            let equal = render_key_equality(a, b, dialect, catalog, actuals)?;
             format!("({equal} OR {la} IS NULL OR {lb} IS NULL)")
         }
         SqlCond::Cmp(a, op, val) | SqlCond::NativeCmp(a, op, val) => {
@@ -1858,6 +1858,11 @@ fn render_cond(
         // argument (why a NULL underlying column correctly excludes the row
         // rather than needing special-casing here).
         SqlCond::TemplateEq(sx, a1, sy, a2, encode_iri) => {
+            if let Some(sql) = mysql_float_value::identity::template_comparison(
+                cond, dialect, catalog, actuals, params, pidx,
+            )? {
+                return Ok(sql);
+            }
             let r1 = render_template_concat(
                 sx,
                 *encode_iri,

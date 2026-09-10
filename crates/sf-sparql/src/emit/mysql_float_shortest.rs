@@ -61,13 +61,29 @@ pub(super) fn candidates(precision: usize) -> String {
 }
 
 pub(super) fn float_value(raw: &str) -> String {
+    float_result(raw, false)
+}
+
+/// Rust Display emits the selected shortest digits in fixed decimal notation.
+/// Only retained MYSQL_TYPE_FLOAT wire width authorizes this lexical recipe.
+pub(super) fn float_lexical(raw: &str) -> String {
+    float_result(raw, true)
+}
+
+fn float_result(raw: &str, lexical: bool) -> String {
     let min = power_two(-126);
     let scaling = scaling();
     let digits = digits();
     let candidates = candidates(9);
+    let result = if lexical {
+        let negative_zero = super::identity::negative_zero("v");
+        format!("CASE WHEN v IS NULL THEN NULL WHEN v=0 THEN CASE WHEN {negative_zero} THEN '-0' ELSE '0' END ELSE CONCAT(CASE WHEN v<0 THEN '-' ELSE '' END,COALESCE((SELECT CASE WHEN candidate_order<0 THEN CONCAT('0.',REPEAT('0',-candidate_order-1),CAST(candidate_digits AS CHAR)) WHEN candidate_order+1>=LENGTH(candidate_digits) THEN RPAD(CAST(candidate_digits AS CHAR),candidate_order+1,'0') ELSE CONCAT(SUBSTRING(candidate_digits,1,candidate_order+1),'.',SUBSTRING(candidate_digits,candidate_order+2)) END FROM __sf_short_selected),JSON_UNQUOTE(JSON_EXTRACT('semantic-fabric-invalid-native-float','$')))) END")
+    } else {
+        "JSON_ARRAY(CASE WHEN v IS NULL THEN 3 ELSE 0 END,CAST(CASE WHEN v IS NULL OR v=0 THEN 0 ELSE SIGN(v)*COALESCE((SELECT CAST(lexical AS DOUBLE) FROM __sf_short_selected),CAST(JSON_EXTRACT('semantic-fabric-invalid-native-float','$') AS DOUBLE)) END AS DOUBLE))".into()
+    };
     // Match Rust flt2dec::decoder, including doubled subnormal mantissas
-    // and the asymmetric minimum-normal interval. Keep this authority local
-    // to numeric value conversion, not generic lexical/template identity.
+    // and the asymmetric minimum-normal interval. Numeric and raw lexical
+    // consumers share selection, but choose different final representations.
     format!(
         r#"(WITH
       __sf_native_input AS (SELECT {raw} AS v LIMIT 18446744073709551615),
@@ -86,11 +102,11 @@ pub(super) fn float_value(raw: &str) -> String {
         CAST(LENGTH(lo) AS SIGNED)-1+LEAST(me,0) AS low_order,CAST(TRIM(TRAILING '0' FROM lo) AS BINARY) AS low_digits,
         CAST(LENGTH(hi) AS SIGNED)-1+LEAST(me,0) AS high_order,CAST(TRIM(TRAILING '0' FROM hi) AS BINARY) AS high_digits FROM __sf_short_pivot LIMIT 18446744073709551615)
       {candidates},
-      __sf_short_selected AS (SELECT lexical FROM __sf_short_lexicals WHERE
+      __sf_short_selected AS (SELECT lexical,candidate_digits,candidate_order FROM __sf_short_lexicals WHERE
         ((candidate_order,candidate_digits)>(low_order,low_digits) AND (candidate_order,candidate_digits)<(high_order,high_digits))
         OR (inclusive AND ((candidate_order,candidate_digits)=(low_order,low_digits) OR (candidate_order,candidate_digits)=(high_order,high_digits)))
         ORDER BY precision_digits,preference LIMIT 1)
-      SELECT JSON_ARRAY(CASE WHEN v IS NULL THEN 3 ELSE 0 END,CAST(CASE WHEN v IS NULL OR v=0 THEN 0 ELSE SIGN(v)*COALESCE((SELECT CAST(lexical AS DOUBLE) FROM __sf_short_selected),CAST(JSON_EXTRACT('semantic-fabric-invalid-native-float','$') AS DOUBLE)) END AS DOUBLE)) FROM __sf_native_input)"#
+      SELECT {result} FROM __sf_native_input)"#
     )
 }
 

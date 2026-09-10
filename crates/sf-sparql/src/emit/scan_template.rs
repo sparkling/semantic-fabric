@@ -222,6 +222,21 @@ pub(super) fn render(
     }
     let iri = spec.term_type == TermType::Iri;
     let mut decoded = HashMap::new();
+    if dialect == Dialect::MySql {
+        for segment in recipe.segments() {
+            if let Segment::Column(name) = segment {
+                let column = ColRef::new(alias, name.clone());
+                if let Some(key) = iri_cmp::scalar_column(&column, actuals)
+                    .filter(|key| mysql_float_value::identity::is_float(*key))
+                {
+                    decoded.insert(
+                        name.as_ref(),
+                        iri_cmp::scalar_lexical(key, &colref(&column, dialect, actuals), dialect)?,
+                    );
+                }
+            }
+        }
+    }
     if dialect == Dialect::Sqlite && iri {
         for segment in recipe.segments() {
             let Segment::Column(name) = segment else {

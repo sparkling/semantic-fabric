@@ -1,5 +1,7 @@
 //! Native floating constructors use Rust's wire lexical, not SQL widening.
 use super::*;
+#[path = "mysql_float_iri.rs"]
+mod iri;
 
 #[test]
 #[ignore = "requires owned pinned MySQL TLS fixture"]
@@ -9,8 +11,7 @@ fn mysql_native_float_values_follow_wire_lexicals() {
     assert_float(&fixture, &database);
 }
 
-fn assert_float(fixture: &Fixture, database: &Database) {
-    mappings(fixture);
+fn native_float_values() -> Vec<f32> {
     let mut values = vec![
         1.1_f32,
         1.1,
@@ -35,6 +36,12 @@ fn assert_float(fixture: &Fixture, database: &Database) {
             values.extend([value, -value]);
         }
     }
+    values
+}
+
+fn assert_float(fixture: &Fixture, database: &Database) {
+    mappings(fixture);
+    let values = native_float_values();
     let lexicals: Vec<_> = values.iter().map(ToString::to_string).collect();
     // Seed the exact binary32 value widened to f64. A shortest f32 decimal
     // spelling may exceed FLT_MAX before MySQL's strict assignment rounding.
@@ -165,6 +172,7 @@ pub(super) fn assert_all(fixture: &Fixture, database: &Database) {
     assert_float(fixture, database);
     assert_double_override(fixture, database);
     assert_identity(fixture, database);
+    iri::assert_all(fixture, database);
 }
 
 #[test]

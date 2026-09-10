@@ -11,6 +11,10 @@ mod shortest;
 #[path = "mysql_float_text.rs"]
 mod text;
 
+pub(super) fn float_lexical(raw: &str) -> String {
+    shortest::float_lexical(raw)
+}
+
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,

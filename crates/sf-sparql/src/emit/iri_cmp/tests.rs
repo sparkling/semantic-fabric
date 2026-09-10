@@ -292,6 +292,37 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
 }
 
 #[test]
+fn mysql_float4_template_key_is_only_a_retained_fixed_ascii_recipe() {
+    let sql = scalar_template_key(NativeScalarKey::MysqlFloat4, "v", Dialect::MySql).unwrap();
+    assert!(sql.contains("SELECT 9 AS precision_digits"));
+    assert!(!sql.contains("SELECT 10 AS precision_digits"));
+    assert!(sql.contains("candidate_order+1"));
+    assert!(sql.contains("THEN '-0' ELSE '0'"));
+    assert!(sql.contains("WHEN v IS NULL THEN NULL"));
+    Dialect::MySql
+        .emit_via_ast(&format!("SELECT {sql} FROM items"))
+        .unwrap();
+    for dialect in [Dialect::Postgres, Dialect::Sqlite] {
+        assert!(scalar_lexical(NativeScalarKey::MysqlFloat4, "v", dialect).is_err());
+    }
+    assert!(scalar_template_key(NativeScalarKey::MysqlFloat8, "v", Dialect::MySql).is_err());
+    let parts = vec![
+        IriPart::Literal("http://ex/".into()),
+        IriPart::Column(ColRef::new(0, "v")),
+    ];
+    assert!(template(
+        &parts,
+        None,
+        Dialect::MySql,
+        &ColumnCatalog::default(),
+        &ActualColumns::new(),
+        &mut vec![],
+        &mut 0
+    )
+    .is_err());
+}
+
+#[test]
 fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
     for (dialect, key) in [
         (Dialect::Postgres, NativeScalarKey::MysqlDecimal),
@@ -321,6 +352,8 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
         NativeScalarKey::MysqlTimestamp,
         NativeScalarKey::MysqlTime,
         NativeScalarKey::MysqlBinaryBytes,
+        NativeScalarKey::MysqlFloat4,
+        NativeScalarKey::MysqlFloat8,
     ] {
         let mut catalog = ColumnCatalog::default();
         catalog
@@ -375,10 +408,12 @@ fn scalar_recipes_do_not_cross_providers_or_coercing_union_outputs() {
                 | NativeScalarKey::MysqlBit
                 | NativeScalarKey::MysqlTimestamp
                 | NativeScalarKey::MysqlTime
+                | NativeScalarKey::MysqlFloat4
+                | NativeScalarKey::MysqlFloat8
         ) {
             assert!(
                 actuals.scalar_columns.is_empty(),
-                "decimal, BIT and temporal UNION coercion has no identity proof"
+                "decimal, BIT, temporal and floating UNION coercion has no identity proof"
             );
         } else {
             assert_eq!(actuals.scalar_columns, expected);
