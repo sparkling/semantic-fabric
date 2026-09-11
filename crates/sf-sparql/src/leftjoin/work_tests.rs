@@ -118,21 +118,28 @@ fn optional_work_direct_match_copies_exact_left_and_right_fields() {
     right
         .where_conds
         .push(SqlCond::IsNull(ColRef::new(2, "right_column")));
-    let expected = copy_work(&left) + copy_work(&right);
+    let copies = copy_work(&left) + copy_work(&right);
+    // Empty alias preparation costs one. The two post-copy lookups each
+    // pay dispatch + one comparison + min(len("left"), len("right")) bytes.
+    let prefix = 1;
+    let expected = prefix + copies + 2 * (1 + 1 + 4);
     let exact = budget(expected);
     let got =
         inner_join_one_with_work_mode(&left, &right, None, Dialect::Sqlite, mode(&exact)).unwrap();
     let raw = inner_join_one(&left, &right, None, Dialect::Sqlite).unwrap();
     assert_eq!(format!("{got:?}"), format!("{raw:?}"));
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), expected);
-    let short = budget(expected - 1);
+    // Keep testing refusal at the original right-copy boundary, not at a
+    // later helper lookup whose work was added after this regression.
+    let short = budget(prefix + copies - 1);
     assert!(matches!(
         inner_join_one_with_work_mode(&left, &right, None, Dialect::Sqlite, mode(&short)),
         Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
     ));
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        copy_work(&left)
+        prefix
+            + copy_work(&left)
             + measure_copy_root(CompilerCloneRootV1::Branch(&right))
                 .unwrap()
                 .measurement_work
@@ -149,7 +156,8 @@ fn optional_work_anti_match_copies_left_only_when_filter_needs_it() {
         None,
         Some(Expression::Bound(Variable::new("left").unwrap())),
     ] {
-        let expected = copy_work(&right) + if expr.is_some() { copy_work(&left) } else { 0 };
+        // One paid empty preparation; no right bindings to look up afterward.
+        let expected = 1 + copy_work(&right) + if expr.is_some() { copy_work(&left) } else { 0 };
         let exact = budget(expected);
         let got = not_exists_cond_for_with_work_mode(
             &left,

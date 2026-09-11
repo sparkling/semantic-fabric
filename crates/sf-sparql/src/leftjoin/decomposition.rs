@@ -45,22 +45,26 @@ pub(crate) fn inner_join_one_with_work_mode(
                 .to_owned(),
         ));
     }
-    if shared_reads_left_subplan(left, right) {
+    let prep = preparation::Preparation::new(left, mode)?;
+    if prep.shared_reads_left_subplan(left, right)? {
         return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
     }
     work::copies(left, right, true, mode, |left, right| {
-        let opt_aliases: HashSet<usize> = left.nullable_aliases();
         let mut where_conds = left.where_conds.clone();
         let mut bindings = left.bindings.clone();
 
         // Shared-variable compatibility → NULL-safe WHERE conditions (R1 analogue).
         for (var, rdef) in &right.bindings {
-            if let Some(ldef) = left.bindings.get(var) {
-                let left_nullable = def_is_nullable(ldef, &opt_aliases);
+            if let Some(ldef) = prep.lookup(&left.bindings, var)? {
+                let left_nullable = prep.nullable(ldef)?;
                 match unify(ldef, rdef) {
                     Unify::Sat(conds) => {
                         for c in conds {
-                            where_conds.push(null_safe(c, left_nullable));
+                            work::push_owned(
+                                BuildWork::new(mode),
+                                &mut where_conds,
+                                conditions::null_safe(c, left_nullable, mode)?,
+                            )?;
                         }
                     }
                     Unify::Empty => return Ok(None),
@@ -75,11 +79,11 @@ pub(crate) fn inner_join_one_with_work_mode(
         // Prepare the combined FILTER view in the output map itself. Shared vars
         // retain their original left definition until after FILTER lowering; the
         // deferred replacements below then install R2 COALESCE definitions.
-        let mut nullable_shared = Vec::new();
+        let mut nullable_shared = BuildVec::new(Vec::new());
         for (var, rdef) in &right.bindings {
-            match left.bindings.get(var) {
-                Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
-                    nullable_shared.push((var.as_str(), rdef));
+            match prep.lookup(&left.bindings, var)? {
+                Some(ldef) if prep.nullable(ldef)? => {
+                    BuildWork::new(mode).push(&mut nullable_shared, (var.as_str(), rdef))?;
                 }
                 Some(_) => {} // non-nullable left — value equals right by join condition
                 None => {
@@ -95,7 +99,7 @@ pub(crate) fn inner_join_one_with_work_mode(
             );
         }
 
-        for (var, rdef) in nullable_shared {
+        for (var, rdef) in nullable_shared.into_inner() {
             let (var, ldef) = bindings
                 .remove_entry(var)
                 .expect("nullable shared binding came from the left branch");
@@ -201,20 +205,24 @@ pub(crate) fn not_exists_cond_for_with_work_mode(
                 .to_owned(),
         ));
     }
-    if shared_reads_left_subplan(left, right) {
+    let prep = preparation::Preparation::new(left, mode)?;
+    if prep.shared_reads_left_subplan(left, right)? {
         return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
     }
     work::copies(left, right, expr.is_some(), mode, |left, right| {
-        let opt_aliases: HashSet<usize> = left.nullable_aliases();
         let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
         for (var, rdef) in &right.bindings {
-            if let Some(ldef) = left.bindings.get(var) {
-                let left_nullable = def_is_nullable(ldef, &opt_aliases);
+            if let Some(ldef) = prep.lookup(&left.bindings, var)? {
+                let left_nullable = prep.nullable(ldef)?;
                 match unify(ldef, rdef) {
                     Unify::Sat(cond_list) => {
                         for c in cond_list {
-                            conds.push(null_safe(c, left_nullable));
+                            work::push_owned(
+                                BuildWork::new(mode),
+                                &mut conds,
+                                conditions::null_safe(c, left_nullable, mode)?,
+                            )?;
                         }
                     }
                     // Unification is impossible → this Ri can never match left →

@@ -2,8 +2,8 @@
 use super::*;
 use crate::build::control::{BuildVec, BuildWork};
 use crate::leftjoin::{
-    inner_join_one_with_work_mode as inner_join_one,
-    not_exists_cond_for_with_work_mode as not_exists_cond_for, work,
+    conditions, inner_join_one_with_work_mode as inner_join_one,
+    not_exists_cond_for_with_work_mode as not_exists_cond_for, preparation, work,
 };
 
 /// The OPTS-FREE form of `left OPT right` — the ISWC-2018 `(P⋈R)∪(P−R)` decomposition,
@@ -145,18 +145,18 @@ pub(super) fn left_join_over_subplan(
                                               // COALESCE. (Chained SubPlan-OPTIONALs: the SECOND correlates on the FIRST's
                                               // subplan var, which `nullable_aliases` now flags, and emit renders subplans in
                                               // order so the ON reference is valid SQL.)
-            let opt_aliases: HashSet<usize> = l.nullable_aliases();
+            let prep = preparation::Preparation::new(&l, mode)?;
             // R1: shared-variable compatibility ON (NullSafeEq when the left side is a
             // prior-OPTIONAL nullable determinant, else the plain equality).
-            let mut on: Vec<SqlCond> = Vec::new();
+            let mut on = BuildVec::new(Vec::new());
             let mut disjoint = false;
             for (var, rdef) in &right.bindings {
-                if let Some(ldef) = l.bindings.get(var) {
-                    let left_nullable = def_is_nullable(ldef, &opt_aliases);
+                if let Some(ldef) = prep.lookup(&l.bindings, var)? {
+                    let left_nullable = prep.nullable(ldef)?;
                     match unify(ldef, rdef) {
                         Unify::Sat(conds) => {
                             for c in conds {
-                                on.push(null_safe(c, left_nullable));
+                                work.push(&mut on, conditions::null_safe(c, left_nullable, mode)?)?;
                             }
                         }
                         // Provably disjoint on a shared var ⇒ the OPTIONAL can never match ⇒
@@ -175,8 +175,8 @@ pub(super) fn left_join_over_subplan(
             // R2: COALESCE for a nullable-left shared var (its value comes from the right when
             // the left was unbound); plain right def for a right-only var (possibly NULL output).
             for (var, rdef) in &right.bindings {
-                match l.bindings.get(var) {
-                    Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
+                match prep.lookup(&l.bindings, var)? {
+                    Some(ldef) if prep.nullable(ldef)? => {
                         l.bindings.insert(
                             var.clone(),
                             TermDef::Coalesce(
@@ -198,7 +198,7 @@ pub(super) fn left_join_over_subplan(
             }
             let mut sp2 = sp.clone();
             sp2.left = true;
-            sp2.on = on;
+            sp2.on = on.into_inner();
             work::push_owned(work, &mut l.subplan_joins, sp2)?;
             Ok(l)
         })?;

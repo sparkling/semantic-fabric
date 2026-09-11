@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "request_cache_identity_tests.rs"]
 mod cache_identity;
+#[path = "request_optional_preparation_tests.rs"]
+mod preparation;
 
 const QUERIES: [&str; 4] = [
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional } }",
@@ -31,6 +33,7 @@ enum MappedProfile {
     Scope,
     Alias,
     Identity,
+    Preparation,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -144,7 +147,7 @@ fn mapped_work(
         MappedProfile::Scope => compiler_key::lower_scope_work(query, maps),
         MappedProfile::Optional => compiler_key::lowering_work(query, maps),
         MappedProfile::Alias => compiler_key::lower_alias_work(query, maps),
-        MappedProfile::Identity => {
+        MappedProfile::Identity | MappedProfile::Preparation => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
     };
@@ -202,7 +205,9 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
             .build()
             .unwrap()
             .block_on(async {
-                if profile == MappedProfile::Identity {
+                if profile == MappedProfile::Preparation {
+                    preparation::cases().await;
+                } else if profile == MappedProfile::Identity {
                     cache_identity::cases().await;
                 } else {
                     mapped_admission_cases(profile).await;
@@ -246,7 +251,9 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Scope => SCOPE_QUERIES.as_slice(),
         MappedProfile::Optional => QUERIES.as_slice(),
         MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
-        MappedProfile::Identity => unreachable!("separate cache-identity acceptance"),
+        MappedProfile::Identity | MappedProfile::Preparation => {
+            unreachable!("separate helper acceptance")
+        }
     };
     for (variant, query) in queries.iter().copied().enumerate() {
         let (prefix, normalized, exact) = mapped_work(query, &maps, profile);

@@ -13,7 +13,7 @@ implements:
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-09-11): accepted, partially implemented.**
+> **Implementation status (2026-09-11): accepted, partially implemented.** OPTIONAL helper update (2026-09-11): scan, match/anti decomposition and pure-SubPlan OPTIONAL now prepay nullable/derived-alias inventories, shared-name comparisons, depth-checked borrowed term/graph/segment scans, NULL-safe condition vectors/column copies and generated-condition/deferred-binding appends. They no longer clone column inventories or shift NULL-safe disjunctions. Required exact/N-1 and every-charge stop tests retain raw semantics, graph-scoped blank-node absence, aggregate nullability and sound-501 boundaries. Two mapped ordinary/authenticated chained OPTIONAL paths, including DISTINCT SubPlan, reject at the observed nullable-alias helper before held source admission, then recover exact duplicate/UNBOUND-coalesced results, right-only bindings and compiler/source capacity on funded cold/key-only warm requests. Initial shape selection, general unifier/FILTER work, non-OPTIONAL consumers and remaining compiler/source/backend/release guarantees stay open; no GovernedV1 or physical-heap/drop claim.
 > `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
 > identities with explicit construction, redacted diagnostics and no default or
 > anonymous context. `a2c25ff` adds a separate plan-cache seam requiring

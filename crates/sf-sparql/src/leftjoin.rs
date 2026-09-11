@@ -16,13 +16,21 @@ use crate::build::control::{BuildVec, BuildWork};
 use crate::iq::{Branch, CmpOp, ColRef, OptJoin, SqlCond, TermDef};
 use crate::unify::{filter_scopes, unify, Unify};
 use crate::{CompilerWorkMode, Error, Result};
+pub(crate) mod conditions;
 mod decomposition;
 mod fast;
+pub(crate) mod preparation;
 pub(crate) mod work;
 #[cfg(test)]
 pub(crate) use decomposition::{inner_join_one, not_exists_cond_for};
 pub(crate) use decomposition::{inner_join_one_with_work_mode, not_exists_cond_for_with_work_mode};
 use fast::build_left_join;
+#[cfg(test)]
+#[path = "leftjoin/condition_work_tests.rs"]
+mod optional_condition_work_tests;
+#[cfg(test)]
+#[path = "leftjoin/preparation_tests.rs"]
+mod optional_preparation_tests;
 #[cfg(test)]
 #[path = "leftjoin/work_test_support.rs"]
 pub(crate) mod optional_work_test_support;
@@ -231,7 +239,7 @@ pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bo
 
 /// The sound-501 message for a shared-variable correlation that reads one of `left`'s
 /// SubPlan derived-table aliases, LEFT- or INNER-joined alike (see
-/// [`shared_reads_left_subplan`]).
+/// [`preparation::Preparation::shared_reads_left_subplan`]).
 pub(crate) const SHARED_LEFT_SUBPLAN_501: &str =
     "OPTIONAL/MINUS decomposition correlating on a variable bound by a SubPlan derived \
      table on the preserved side (its ON/anti-join would reference a table emitted to \
@@ -260,6 +268,7 @@ pub(crate) const SHARED_LEFT_SUBPLAN_501: &str =
 /// by `left_join_over_subplan` (subplans emit in order, so a later one may reference an
 /// earlier one). Only a plain-scan / multi-scan right side routed through these builders
 /// hits the FROM-ordering wall.
+#[cfg(test)]
 fn shared_reads_left_subplan(left: &Branch, right: &Branch) -> bool {
     let sp_aliases: HashSet<usize> = left.subplan_joins.iter().map(|s| s.alias).collect();
     if sp_aliases.is_empty() {

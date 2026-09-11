@@ -53,22 +53,23 @@ pub(super) fn build_left_join(
                 .to_owned(),
         ));
     }
-    if shared_reads_left_subplan(&left, right) {
+    let prep = preparation::Preparation::new(&left, mode)?;
+    if prep.shared_reads_left_subplan(&left, right)? {
         return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
     }
     work::right_copy(right, mode, |right| {
-        let mut on = Vec::new();
+        let mut on = BuildVec::new(Vec::new());
         let mut extra = right.where_conds.clone(); // constant-position constraints stay in the ON (R5)
                                                    // Prior-OPTIONAL aliases on the preserved (left) side: a shared var whose left def
                                                    // reads one of these can be UNBOUND, so its ON equality needs the NULL-safe guard.
-        let opt_aliases: HashSet<usize> = left.nullable_aliases();
         for (var, rdef) in &right.bindings {
-            if let Some(ldef) = left.bindings.get(var) {
-                let left_nullable = def_is_nullable(ldef, &opt_aliases);
+            if let Some(ldef) = prep.lookup(&left.bindings, var)? {
+                let left_nullable = prep.nullable(ldef)?;
                 match unify(ldef, rdef) {
                     Unify::Sat(conds) => {
                         for c in conds {
-                            on.push(null_safe(c, left_nullable)); // R1: shared-var compat, never plain a = b
+                            BuildWork::new(mode)
+                                .push(&mut on, conditions::null_safe(c, left_nullable, mode)?)?;
                         }
                     }
                     Unify::Empty => return Ok(left),
@@ -80,16 +81,16 @@ pub(super) fn build_left_join(
         // definitions can move into their final location immediately; nullable
         // shared replacements stay deferred so FILTER lowering sees the same
         // left-preferred combined bindings as before.
-        let mut nullable_shared = Vec::new();
+        let mut nullable_shared = BuildVec::new(Vec::new());
         // R2 projection (ADR-0007). Prior-OPTIONAL aliases are nullable. A shared
         // variable whose preserved (left) side can be NULL (a nested OPTIONAL) becomes
         // COALESCE(left, right) so the right value survives when left is unbound; a
         // mandatory-left shared var is never NULL (COALESCE(left,right)=left) so we keep
         // the simpler left def; a right-only var is the (possibly NULL) right output.
         for (var, rdef) in &right.bindings {
-            match left.bindings.get(var) {
-                Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
-                    nullable_shared.push((var.as_str(), rdef));
+            match prep.lookup(&left.bindings, var)? {
+                Some(ldef) if prep.nullable(ldef)? => {
+                    BuildWork::new(mode).push(&mut nullable_shared, (var.as_str(), rdef))?;
                 }
                 Some(_) => {}
                 None => {
@@ -104,7 +105,7 @@ pub(super) fn build_left_join(
                     .map_err(Error::Unsupported)?,
             );
         }
-        for (var, rdef) in nullable_shared {
+        for (var, rdef) in nullable_shared.into_inner() {
             let (var, ldef) = left
                 .bindings
                 .remove_entry(var)
@@ -119,7 +120,7 @@ pub(super) fn build_left_join(
             &mut left.opts,
             OptJoin {
                 scan: right.core[0].clone(),
-                on,
+                on: on.into_inner(),
                 extra,
             },
         )?;
