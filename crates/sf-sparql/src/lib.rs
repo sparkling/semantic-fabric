@@ -626,7 +626,7 @@ fn translate_tree_with_column_type_use(
     // identical note in `translate_inner_flat`.
     let (query, star_env) =
         compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
-            star::rewrite_query(query)
+            star::rewrite_query_with_work_mode(query, work_mode)
         })?;
     let query = &query;
     let mut cx = iq::resolve::ResolveCx::new_with_column_type_use(

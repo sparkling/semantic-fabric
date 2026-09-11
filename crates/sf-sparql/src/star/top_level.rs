@@ -24,11 +24,12 @@ use spargebra::Query;
 
 use crate::{Error, Result};
 
-use super::collect_vars::{collect_pattern_vars, collect_query_vars};
+use super::control::StarWork;
 use super::env::StarEnv;
 use super::expr::rewrite_expr;
 use super::util::FreshVars;
 use super::walk::rewrite_pattern;
+use crate::plan_measure::clone_root::CompilerCloneRootV1;
 
 /// Rewrite a whole query's WHERE pattern (rules R1-R7 plus the ADR-0032 D3
 /// composed-variable extensions), threading one whole-query fresh-variable
@@ -42,7 +43,10 @@ use super::walk::rewrite_pattern;
 /// itself (a separate `Vec<TriplePattern>`, not a `GraphPattern`) is
 /// untouched HERE.
 pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
-    let mut n = FreshVars::new(collect_query_vars(query));
+    super::control::rewrite_query_with_work_mode(query, crate::CompilerWorkMode::Uncontrolled)
+}
+
+pub(super) fn rewrite_query_inner(query: &Query, n: &mut FreshVars) -> Result<(Query, StarEnv)> {
     let mut env = StarEnv::new();
     let rewritten = match query {
         // SELECT gets ONE extra rewrite option beyond `rewrite_pattern`: the
@@ -60,7 +64,7 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
             base_iri,
         } => Query::Select {
             dataset: dataset.clone(),
-            pattern: rewrite_top_level_pattern(pattern, &mut n, &mut env)?,
+            pattern: rewrite_top_level_pattern(pattern, n, &mut env)?,
             base_iri: base_iri.clone(),
         },
         Query::Construct {
@@ -71,7 +75,7 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
         } => Query::Construct {
             template: template.clone(),
             dataset: dataset.clone(),
-            pattern: rewrite_pattern(pattern, &mut n, &mut env)?,
+            pattern: rewrite_pattern(pattern, n, &mut env)?,
             base_iri: base_iri.clone(),
         },
         Query::Describe {
@@ -80,7 +84,7 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
             base_iri,
         } => Query::Describe {
             dataset: dataset.clone(),
-            pattern: rewrite_pattern(pattern, &mut n, &mut env)?,
+            pattern: rewrite_pattern(pattern, n, &mut env)?,
             base_iri: base_iri.clone(),
         },
         Query::Ask {
@@ -89,7 +93,7 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
             base_iri,
         } => Query::Ask {
             dataset: dataset.clone(),
-            pattern: rewrite_pattern(pattern, &mut n, &mut env)?,
+            pattern: rewrite_pattern(pattern, n, &mut env)?,
             base_iri: base_iri.clone(),
         },
     };
@@ -163,6 +167,7 @@ pub(super) fn rewrite_top_level_pattern(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
+    n.work.local(CompilerCloneRootV1::GraphPattern(gp))?;
     match gp {
         GraphPattern::Slice {
             inner,
@@ -187,14 +192,15 @@ pub(super) fn rewrite_top_level_pattern(
         GraphPattern::Values {
             variables,
             bindings,
-        } if is_single_column_mixed_values(variables, bindings) => {
+        } if is_single_column_mixed_values(variables, bindings, n.work)? => {
             // Row-partition the ONE mixed column into two uniform VALUES
             // blocks, unioned — reduces VALUES-mixed to the union-mixed case
             // above, reusing the SAME `top_level` relaxation (the ticket's
             // own item 4: "a row-partitioned rewrite into UNION of two
             // VALUES could [close it]"). Each half is now uniform, so
             // `decompose_column`'s mixed check no longer fires for either.
-            let (triple_rows, plain_rows) = partition_values_by_triple_shape(bindings);
+            let (triple_rows, plain_rows) = partition_values_by_triple_shape(bindings, n.work)?;
+            n.work.charge(2)?;
             let left = GraphPattern::Values {
                 variables: variables.clone(),
                 bindings: triple_rows,
@@ -215,8 +221,9 @@ pub(super) fn rewrite_top_level_pattern(
             GraphPattern::Values {
                 variables,
                 bindings,
-            } if is_single_column_mixed_values(variables, bindings) => {
-                let (triple_rows, plain_rows) = partition_values_by_triple_shape(bindings);
+            } if is_single_column_mixed_values(variables, bindings, n.work)? => {
+                let (triple_rows, plain_rows) = partition_values_by_triple_shape(bindings, n.work)?;
+                n.work.charge(2)?;
                 let left = GraphPattern::Values {
                     variables: variables.clone(),
                     bindings: triple_rows,
@@ -245,17 +252,19 @@ pub(super) fn rewrite_top_level_pattern(
 fn is_single_column_mixed_values(
     variables: &[Variable],
     bindings: &[Vec<Option<GroundTerm>>],
-) -> bool {
+    work: StarWork<'_>,
+) -> Result<bool> {
     let [_] = variables else {
-        return false;
+        return Ok(false);
     };
+    work.product(&[2, bindings.len()])?;
     let has_triple = bindings
         .iter()
-        .any(|row| matches!(row[0], Some(GroundTerm::Triple(_))));
+        .any(|row| matches!(row.first(), Some(Some(GroundTerm::Triple(_)))));
     let has_non_triple = bindings
         .iter()
-        .any(|row| matches!(&row[0], Some(g) if !matches!(g, GroundTerm::Triple(_))));
-    has_triple && has_non_triple
+        .any(|row| matches!(row.first(), Some(Some(g)) if !matches!(g, GroundTerm::Triple(_))));
+    Ok(has_triple && has_non_triple)
 }
 
 /// One VALUES block's row set — [`partition_values_by_triple_shape`]'s
@@ -272,17 +281,20 @@ type ValuesRows = Vec<Vec<Option<GroundTerm>>>;
 /// cell that made `has_triple`/`has_non_triple` true).
 pub(super) fn partition_values_by_triple_shape(
     bindings: &[Vec<Option<GroundTerm>>],
-) -> (ValuesRows, ValuesRows) {
-    let mut triple_rows = Vec::new();
-    let mut plain_rows = Vec::new();
+    work: StarWork<'_>,
+) -> Result<(ValuesRows, ValuesRows)> {
+    let mut triple_rows = work.0.vector(bindings.len())?;
+    let mut plain_rows = work.0.vector(bindings.len())?;
     for row in bindings {
-        if matches!(row[0], Some(GroundTerm::Triple(_))) {
-            triple_rows.push(row.clone());
+        work.charge(1)?;
+        let copied = super::control_values::copy_row(row, work)?;
+        if matches!(row.first(), Some(Some(GroundTerm::Triple(_)))) {
+            triple_rows.push(copied);
         } else {
-            plain_rows.push(row.clone());
+            plain_rows.push(copied);
         }
     }
-    (triple_rows, plain_rows)
+    Ok((triple_rows, plain_rows))
 }
 
 /// ADR-0032 D3 item 2 — the uniform-composed-ness law: a `Union`'s two arms
@@ -313,14 +325,17 @@ pub(super) fn rewrite_union(
     env: &mut StarEnv,
     top_level: bool,
 ) -> Result<GraphPattern> {
+    n.work.charge(3)?;
     let rw_left = rewrite_pattern(left, n, env)?;
     let rw_right = rewrite_pattern(right, n, env)?;
 
     if !top_level {
         for (v, left_composes, right_composes) in
-            composed_agreement(left, right, &rw_left, &rw_right, env)
+            composed_agreement(left, right, &rw_left, &rw_right, env, n.work)?
         {
+            n.work.charge(1)?;
             if left_composes != right_composes {
+                n.work.charge(256 + v.as_str().len())?;
                 return Err(Error::Unsupported(format!(
                     "UNION arms disagree on whether ?{} is a triple term (composed by one arm, \
                      an ordinary binding in the other) → 501 (ADR-0032 D3 uniform-composed-ness \
@@ -369,18 +384,31 @@ fn composed_agreement(
     rw_left: &GraphPattern,
     rw_right: &GraphPattern,
     env: &StarEnv,
-) -> Vec<(Variable, bool, bool)> {
-    let left_vars = collect_pattern_vars(left);
-    let right_vars = collect_pattern_vars(right);
-    left_vars
-        .union(&right_vars)
-        .filter_map(|v| {
-            let info = env.get(v)?;
-            let left_composes = collect_pattern_vars(rw_left).contains(&info.s_var);
-            let right_composes = collect_pattern_vars(rw_right).contains(&info.s_var);
-            Some((v.clone(), left_composes, right_composes))
-        })
-        .collect()
+    work: StarWork<'_>,
+) -> Result<Vec<(Variable, bool, bool)>> {
+    let left_vars = work.pattern_vars(left)?;
+    let right_vars = work.pattern_vars(right)?;
+    let left_bound = work.pattern_vars(rw_left)?;
+    let right_bound = work.pattern_vars(rw_right)?;
+    work.union_scan(&left_vars, &right_vars)?;
+    let slots = left_vars
+        .len()
+        .checked_add(right_vars.len())
+        .ok_or_else(|| work.overflow())?;
+    let mut out = work.0.vector(slots)?;
+    for v in left_vars.union(&right_vars) {
+        work.lookup(env.len(), v)?;
+        if let Some(info) = env.get(v) {
+            work.lookup(left_bound.len(), &info.s_var)?;
+            work.lookup(right_bound.len(), &info.s_var)?;
+            out.push((
+                work.variable(v)?,
+                left_bound.contains(&info.s_var),
+                right_bound.contains(&info.s_var),
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// **Run 4 Wave B2** — the static-consumer analog of the bare-Union/mixed-
@@ -418,10 +446,12 @@ fn rewrite_filter_over_union(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
+    n.work.charge(5)?;
     let rw_left = rewrite_pattern(left, n, env)?;
     let rw_right = rewrite_pattern(right, n, env)?;
-    let agreement = composed_agreement(left, right, &rw_left, &rw_right, env);
+    let agreement = composed_agreement(left, right, &rw_left, &rw_right, env, n.work)?;
 
+    n.work.charge(agreement.len())?;
     if agreement.iter().all(|(_, l, r)| l == r) {
         return Ok(GraphPattern::Filter {
             expr: rewrite_expr(expr, n, env)?,
@@ -432,14 +462,15 @@ fn rewrite_filter_over_union(
         });
     }
 
-    let mut env_left = env.clone();
-    let mut env_right = env.clone();
+    let mut env_left = n.work.env_clone(env)?;
+    let mut env_right = n.work.env_clone(env)?;
     for (v, left_composes, right_composes) in &agreement {
+        n.work.charge(1)?;
         if !left_composes {
-            env_left.remove(v);
+            n.work.env_remove(&mut env_left, v)?;
         }
         if !right_composes {
-            env_right.remove(v);
+            n.work.env_remove(&mut env_right, v)?;
         }
     }
     let expr_left = rewrite_expr(expr, n, &mut env_left)?;

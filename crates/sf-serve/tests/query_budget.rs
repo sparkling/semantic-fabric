@@ -12,8 +12,8 @@ use tower::ServiceExt;
 #[path = "query_budget/cache_key.rs"]
 mod cache_key;
 use cache_key::{
-    build_work, key_work, normalization_work, source_free_entry_work, source_free_join_seed_work,
-    source_free_values_work,
+    build_work, key_work, normalization_work, rewrite_work, source_free_entry_work,
+    source_free_join_seed_work, source_free_values_work,
 };
 
 #[path = "query_budget/constant_normalization.rs"]
@@ -79,7 +79,7 @@ fn mapping_product_config(work: u64) -> ServeConfig {
 async fn mapping_products_charge_even_candidates_that_cannot_match() {
     let query = "SELECT ?s ?o WHERE { ?s <http://example.test/absent> ?o }";
     let response = router(Arc::new(mapping_product_config(
-        query.len() as u64 + key_work(query) + build_work(query) + 5,
+        query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query) + 5,
     )))
     .oneshot(authenticated(query))
     .await
@@ -167,7 +167,7 @@ fn path_config(work: u64) -> ServeConfig {
 async fn negated_path_mapping_searches_obey_compiler_allowance() {
     let query = "SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }";
     let response = router(Arc::new(path_config(
-        query.len() as u64 + key_work(query) + build_work(query),
+        query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query),
     )))
     .oneshot(authenticated(query))
     .await
@@ -306,6 +306,7 @@ async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
     let response = router(Arc::new(protected(
         query.len() as u64
             + key_work(query)
+            + rewrite_work(query)
             + build_work(query)
             + normalization_work(query, &[])
             + source_free_entry_work(query).0
@@ -322,6 +323,7 @@ async fn compiler_products_cannot_spend_only_their_input_allowance() {
     let response = router(Arc::new(protected(
         PRODUCTS.len() as u64
             + key_work(PRODUCTS)
+            + rewrite_work(PRODUCTS)
             + build_work(PRODUCTS)
             + normalization_work(PRODUCTS, &[])
             + source_free_entry_work(PRODUCTS).0
@@ -338,7 +340,7 @@ async fn compiler_products_cannot_spend_only_their_input_allowance() {
 
 #[tokio::test]
 async fn compiler_products_preserve_every_exact_public_tuple() {
-    let response = router(Arc::new(protected(100_000)))
+    let response = router(Arc::new(protected(100_000 + rewrite_work(PRODUCTS))))
         .oneshot(authenticated(PRODUCTS))
         .await
         .unwrap();
@@ -362,11 +364,13 @@ async fn compiler_products_preserve_every_exact_public_tuple() {
 
 #[tokio::test]
 async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_replay() {
-    // Retain the old positive fixture's headroom plus only new leaf work:
+    // Retain the old positive fixture's headroom plus initial rewrite and leaf work:
     // three outer rows, then one inner VALUES row for each EXISTS branch.
     // Negative cutpoints and the actual serving defaults are unchanged.
-    let funded =
-        10_000 + source_free_values_work(3, "x") + 3 * source_free_values_work(1, "inside");
+    let funded = 10_000
+        + rewrite_work(CLONING)
+        + source_free_values_work(3, "x")
+        + 3 * source_free_values_work(1, "inside");
     for protected_profile in [false, true] {
         let mut cfg = Arc::new(if protected_profile {
             protected(funded)

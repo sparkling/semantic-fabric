@@ -13,6 +13,8 @@
 use spargebra::algebra::{GraphPattern, PropertyPathExpression};
 use spargebra::term::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
 
+use crate::build::control::BuildVec;
+use crate::plan_measure::clone_root::CompilerCloneRootV1;
 use crate::unfold::RDF_TYPE;
 use crate::Result;
 
@@ -39,6 +41,7 @@ pub(super) fn rewrite_pattern(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
+    n.work.local(CompilerCloneRootV1::GraphPattern(gp))?;
     Ok(match gp {
         GraphPattern::Bgp { patterns } => rewrite_bgp(patterns, n, env)?,
         GraphPattern::Path {
@@ -161,13 +164,17 @@ fn rewrite_bgp(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
-    let mut out = Vec::with_capacity(patterns.len());
+    // One original pattern emits at least one slot unless it short-circuits;
+    // generated slots are reserved at each emission below.
+    let mut out = BuildVec::new(n.work.0.vector(patterns.len())?);
     for tp in patterns {
         if !rewrite_triple(tp, n, env, &mut out)? {
-            return Ok(empty_pattern(n));
+            return empty_pattern(n);
         }
     }
-    Ok(GraphPattern::Bgp { patterns: out })
+    Ok(GraphPattern::Bgp {
+        patterns: out.into_inner(),
+    })
 }
 
 /// Rewrite one triple pattern per rules R1-R4 plus the ADR-0032 D3
@@ -179,8 +186,9 @@ fn rewrite_triple(
     tp: &TriplePattern,
     n: &mut FreshVars,
     env: &mut StarEnv,
-    out: &mut Vec<TriplePattern>,
+    out: &mut BuildVec<TriplePattern>,
 ) -> Result<bool> {
+    n.work.local(CompilerCloneRootV1::TriplePattern(tp))?;
     // R1: a Triple-typed SUBJECT can never match (SPARQL 1.2 §18.1.3) —
     // checked first, uniformly, so it governs R2 (a hand-written
     // `<<(...)>> rdf:reifies <<(...)>>`, X itself a triple term) exactly
@@ -199,13 +207,16 @@ fn rewrite_triple(
             if has_subject_position_triple_term(inner) {
                 return Ok(false);
             }
-            let pf = fresh_var(n);
+            let pf = fresh_var(n)?;
             emit_basic_encoding(&pf, inner, n, out)?;
-            out.push(TriplePattern {
-                subject: tp.subject.clone(),
-                predicate: tp.predicate.clone(),
-                object: pf,
-            });
+            n.work.0.push(
+                out,
+                TriplePattern {
+                    subject: tp.subject.clone(),
+                    predicate: tp.predicate.clone(),
+                    object: pf,
+                },
+            )?;
             return Ok(true);
         }
         // ADR-0032 D3 item 2 (NEW) — `X rdf:reifies ?t`, ?t a BARE variable
@@ -223,9 +234,20 @@ fn rewrite_triple(
         // of component vars — the ordinary shared-variable join then
         // correlates them for free.
         if let TermPattern::Variable(t) = &tp.object {
-            let info = composed_info_for(t, n, env);
-            emit_component_patterns(&tp.object, &info, out);
-            out.push(tp.clone());
+            let info = composed_info_for(t, n, env)?;
+            n.work.charge(
+                16 + RDF_TYPE.len()
+                    + RDF_PROPOSITION_FORM.len()
+                    + RDF_PROPOSITION_FORM_SUBJECT.len()
+                    + RDF_PROPOSITION_FORM_PREDICATE.len()
+                    + RDF_PROPOSITION_FORM_OBJECT.len(),
+            )?;
+            n.work.product(&[4, t.as_str().len()])?;
+            for v in [&info.s_var, &info.p_var, &info.o_var] {
+                n.work.charge(v.as_str().len())?;
+            }
+            emit_component_patterns(&tp.object, &info, out, n)?;
+            n.work.0.push(out, tp.clone())?;
             return Ok(true);
         }
     }
@@ -235,11 +257,14 @@ fn rewrite_triple(
     let Some(object) = substitute_triple(&tp.object, n, out)? else {
         return Ok(false);
     };
-    out.push(TriplePattern {
-        subject: tp.subject.clone(),
-        predicate: tp.predicate.clone(),
-        object,
-    });
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: tp.subject.clone(),
+            predicate: tp.predicate.clone(),
+            object,
+        },
+    )?;
     Ok(true)
 }
 
@@ -254,34 +279,48 @@ fn rewrite_triple(
 fn emit_component_patterns(
     identity: &TermPattern,
     info: &ComposedInfo,
-    out: &mut Vec<TriplePattern>,
-) {
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_TYPE)),
-        object: TermPattern::NamedNode(NamedNode::new_unchecked(RDF_PROPOSITION_FORM)),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_SUBJECT,
-        )),
-        object: TermPattern::Variable(info.s_var.clone()),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_PREDICATE,
-        )),
-        object: TermPattern::Variable(info.p_var.clone()),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_OBJECT,
-        )),
-        object: TermPattern::Variable(info.o_var.clone()),
-    });
+    out: &mut BuildVec<TriplePattern>,
+    n: &mut FreshVars,
+) -> Result<()> {
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_TYPE)),
+            object: TermPattern::NamedNode(NamedNode::new_unchecked(RDF_PROPOSITION_FORM)),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_SUBJECT,
+            )),
+            object: TermPattern::Variable(info.s_var.clone()),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_PREDICATE,
+            )),
+            object: TermPattern::Variable(info.p_var.clone()),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_OBJECT,
+            )),
+            object: TermPattern::Variable(info.o_var.clone()),
+        },
+    )?;
+    Ok(())
 }
 
 /// If `t` is a quoted-triple pattern, replace it with a fresh `__sf_star_{n}`
@@ -296,14 +335,15 @@ fn emit_component_patterns(
 pub(super) fn substitute_triple(
     t: &TermPattern,
     n: &mut FreshVars,
-    out: &mut Vec<TriplePattern>,
+    out: &mut BuildVec<TriplePattern>,
 ) -> Result<Option<TermPattern>> {
+    n.work.local(CompilerCloneRootV1::TermPattern(t))?;
     match t {
         TermPattern::Triple(tp) => {
             if has_subject_position_triple_term(tp) {
                 return Ok(None);
             }
-            let fresh = fresh_var(n);
+            let fresh = fresh_var(n)?;
             emit_basic_encoding(&fresh, tp, n, out)?;
             Ok(Some(fresh))
         }
@@ -325,46 +365,72 @@ pub(super) fn emit_basic_encoding(
     identity: &TermPattern,
     tp: &TriplePattern,
     n: &mut FreshVars,
-    out: &mut Vec<TriplePattern>,
+    out: &mut BuildVec<TriplePattern>,
 ) -> Result<()> {
+    n.work.local(CompilerCloneRootV1::TriplePattern(tp))?;
+    n.work.local(CompilerCloneRootV1::TermPattern(identity))?;
+    // Four output slots/triples and their fixed predicate/type IRIs. Copies of
+    // identity occur four times; the borrowed components are in tp's envelope.
+    for _ in 0..3 {
+        n.work.local(CompilerCloneRootV1::TermPattern(identity))?;
+    }
+    n.work.charge(
+        20 + RDF_TYPE.len()
+            + RDF_PROPOSITION_FORM.len()
+            + RDF_PROPOSITION_FORM_SUBJECT.len()
+            + RDF_PROPOSITION_FORM_PREDICATE.len()
+            + RDF_PROPOSITION_FORM_OBJECT.len(),
+    )?;
     debug_assert!(
         !has_subject_position_triple_term(tp),
         "caller must check has_subject_position_triple_term before minting an identity (R1)"
     );
     let object = match &tp.object {
         TermPattern::Triple(inner) => {
-            let inner_identity = fresh_var(n);
+            let inner_identity = fresh_var(n)?;
             emit_basic_encoding(&inner_identity, inner, n, out)?;
             inner_identity
         }
         other => other.clone(),
     };
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_TYPE)),
-        object: TermPattern::NamedNode(NamedNode::new_unchecked(RDF_PROPOSITION_FORM)),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_SUBJECT,
-        )),
-        object: tp.subject.clone(),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_PREDICATE,
-        )),
-        object: named_node_pattern_to_term_pattern(&tp.predicate),
-    });
-    out.push(TriplePattern {
-        subject: identity.clone(),
-        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-            RDF_PROPOSITION_FORM_OBJECT,
-        )),
-        object,
-    });
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_TYPE)),
+            object: TermPattern::NamedNode(NamedNode::new_unchecked(RDF_PROPOSITION_FORM)),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_SUBJECT,
+            )),
+            object: tp.subject.clone(),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_PREDICATE,
+            )),
+            object: named_node_pattern_to_term_pattern(&tp.predicate),
+        },
+    )?;
+    n.work.0.push(
+        out,
+        TriplePattern {
+            subject: identity.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                RDF_PROPOSITION_FORM_OBJECT,
+            )),
+            object,
+        },
+    )?;
     Ok(())
 }
 
@@ -384,23 +450,27 @@ fn rewrite_path(
     object: &TermPattern,
     n: &mut FreshVars,
 ) -> Result<GraphPattern> {
-    let mut extra = Vec::new();
+    n.work.local(CompilerCloneRootV1::PropertyPath(path))?;
+    n.work.charge(4)?;
+    let mut extra = BuildVec::new(Vec::new());
     let Some(subject) = substitute_triple(subject, n, &mut extra)? else {
-        return Ok(empty_pattern(n));
+        return empty_pattern(n);
     };
     let Some(object) = substitute_triple(object, n, &mut extra)? else {
-        return Ok(empty_pattern(n));
+        return empty_pattern(n);
     };
     let path_node = GraphPattern::Path {
         subject,
         path: path.clone(),
         object,
     };
-    Ok(if extra.is_empty() {
+    Ok(if extra.values.is_empty() {
         path_node
     } else {
         GraphPattern::Join {
-            left: Box::new(GraphPattern::Bgp { patterns: extra }),
+            left: Box::new(GraphPattern::Bgp {
+                patterns: extra.into_inner(),
+            }),
             right: Box::new(path_node),
         }
     })

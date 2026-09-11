@@ -3,6 +3,7 @@ use crate::iq::lower::base_work_tests::one_column_rows_work;
 use crate::iq::lower::condition_ownership_tests::construction_exists_condition_work;
 use crate::iq::node::{IqCond, IqNode};
 use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
+use crate::star::rewrite_work;
 use sf_core::{
     query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits},
     SourceId,
@@ -133,7 +134,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
         one_column_rows_work(3, "x"),
         one_column_rows_work(1, "inside"),
     );
-    let before_second = key + build + condition_prefix + work + between;
+    let before_second = key + rewrite_work(QUERY) + build + condition_prefix + work + between;
     let short = budget(before_second + work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
@@ -185,7 +186,7 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
         one_column_rows_work(1, "inside"),
     );
     let tail = tail + condition_tail;
-    let total = 2 * (build + condition_prefix + between + tail) + 4 * work;
+    let total = 2 * (rewrite_work(QUERY) + build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
     for allowance in [total - tail - 1, total] {
         let control = budget(allowance);
@@ -231,6 +232,7 @@ impl QueryControl for CancelAfterClone {
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
     let work = key_work()
+        + rewrite_work(QUERY)
         + build_work()
         + normalization_work()
         + lower_entry_work().0

@@ -5,7 +5,10 @@ const QUERY: &str = "SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s <http://example.test/
 #[tokio::test]
 async fn empty_named_graph_inventory_still_requires_mapping_work() {
     let response = router(Arc::new(path_config(
-        QUERY.len() as u64 + key_work(QUERY) + super::cache_key::build_work(QUERY),
+        QUERY.len() as u64
+            + key_work(QUERY)
+            + rewrite_work(QUERY)
+            + super::cache_key::build_work(QUERY),
     )))
     .oneshot(authenticated(QUERY))
     .await

@@ -3,9 +3,9 @@ use super::*;
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
 pub(super) use compiler_key::{
-    build_work, constant_compile_work, key_work, normalization_work, source_free_entry_work,
-    source_free_join_seed_work, source_free_values_work, structural_compile_work, CONSTANT_QUERIES,
-    STRUCTURAL_QUERIES,
+    build_work, constant_compile_work, key_work, normalization_work, rewrite_work,
+    source_free_entry_work, source_free_join_seed_work, source_free_values_work,
+    structural_compile_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
 };
 
 fn two_value_rows_construction_work() -> u64 {
@@ -93,6 +93,7 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
     let (prefix, tail) = source_free_entry_work(query);
     let complete = query.len() as u64
         + key_work(query)
+        + rewrite_work(query)
         + build_work(query)
         + normalization_work(query, &[])
         + prefix
@@ -103,7 +104,7 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
             (query.len() as u64 - 1, false),
             (query.len() as u64 + key_work(query) - 1, false),
             (
-                query.len() as u64 + key_work(query) + build_work(query) - 1,
+                query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query) - 1,
                 false,
             ),
             (complete - 1, false),
@@ -156,7 +157,8 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                 } else {
                     let (prefix, tail) = source_free_entry_work(&query);
                     // Warm requests still pay only unchanged input/key work.
-                    build_work(&query)
+                    rewrite_work(&query)
+                        + build_work(&query)
                         + normalization_work(&query, &[])
                         + prefix
                         + tail

@@ -297,7 +297,7 @@ async fn mapped_admission_cases() {
 #[tokio::test]
 async fn structural_normalization_rejects_before_held_source_and_recovers_capacity() {
     for query in compiler_key::STRUCTURAL_QUERIES {
-        let prefix = query.len() as u64 + key_work(query) + build_work(query);
+        let prefix = query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
         let normalization = normalization_work(query, &[]);
         let complete = query.len() as u64 + compiler_key::structural_compile_work(query);
         assert!(complete >= prefix + normalization);

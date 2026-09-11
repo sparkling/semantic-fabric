@@ -59,14 +59,22 @@ pub(super) fn composed_info_for(
     var: &Variable,
     n: &mut FreshVars,
     env: &mut StarEnv,
-) -> ComposedInfo {
-    env.entry(var.clone())
-        .or_insert_with(|| ComposedInfo {
-            s_var: fresh_component_var(n),
-            p_var: fresh_component_var(n),
-            o_var: fresh_component_var(n),
-        })
-        .clone()
+) -> crate::Result<ComposedInfo> {
+    if let Some(info) = n.work.env_get(env, var)? {
+        return Ok(info);
+    }
+    let info = ComposedInfo {
+        s_var: fresh_component_var(n)?,
+        p_var: fresh_component_var(n)?,
+        o_var: fresh_component_var(n)?,
+    };
+    n.work.lookup(env.len(), var)?;
+    n.work.charge(1)?;
+    let key = n.work.variable(var)?;
+    let stored = n.work.info(&info)?;
+    env.insert(key, stored);
+    n.work.checkpoint()?;
+    Ok(info)
 }
 
 /// Rule R7 (Wave 2b — ADR-0032 D2/D3 item 2): pre-substitute a CONSTRUCT

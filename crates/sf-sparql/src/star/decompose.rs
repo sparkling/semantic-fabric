@@ -13,6 +13,8 @@
 use spargebra::algebra::{Expression, Function, GraphPattern};
 use spargebra::term::{GroundTerm, GroundTriple, Variable};
 
+use super::control_values::copy_cell;
+use crate::plan_measure::clone_root::CompilerCloneRootV1;
 use crate::{Error, Result};
 
 use super::env::{composed_info_for, StarEnv};
@@ -61,19 +63,22 @@ pub(super) fn rewrite_extend_inner(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
+    n.work.local(CompilerCloneRootV1::Expression(expression))?;
+    n.work.charge(6)?;
+    n.work.charge(variable.as_str().len())?;
     if let Expression::FunctionCall(Function::Triple, parts) = expression {
         if let [e1, e2, e3] = parts.as_slice() {
-            let info = composed_info_for(variable, n, env);
+            let info = composed_info_for(variable, n, env)?;
             let e1 = rewrite_expr(e1, n, env)?;
             let e2 = rewrite_expr(e2, n, env)?;
             let with_s = GraphPattern::Extend {
                 inner: Box::new(rewritten_inner),
-                variable: info.s_var.clone(),
+                variable: n.work.variable(&info.s_var)?,
                 expression: e1,
             };
             let with_p = GraphPattern::Extend {
                 inner: Box::new(with_s),
-                variable: info.p_var.clone(),
+                variable: n.work.variable(&info.p_var)?,
                 expression: e2,
             };
             return rewrite_extend_inner(with_p, &info.o_var, e3, n, env);
@@ -98,21 +103,30 @@ pub(super) fn rewrite_values(
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     let n_rows = bindings.len();
-    let mut out_columns: Vec<(Variable, Vec<Option<GroundTerm>>)> =
-        Vec::with_capacity(variables.len());
+    let mut out_columns: Vec<(Variable, Vec<Option<GroundTerm>>)> = Vec::new();
     for (i, var) in variables.iter().enumerate() {
-        let cells: Vec<Option<GroundTerm>> = bindings.iter().map(|row| row[i].clone()).collect();
-        decompose_column(var.clone(), cells, n, &mut out_columns, env)?;
+        n.work.charge(1)?;
+        let mut cells = n.work.0.vector(n_rows)?;
+        for row in bindings {
+            cells.push(copy_cell(row.get(i).unwrap_or(&None), n.work)?);
+        }
+        decompose_column(n.work.variable(var)?, cells, n, &mut out_columns, env)?;
     }
-    let out_variables: Vec<Variable> = out_columns.iter().map(|(v, _)| v.clone()).collect();
-    let out_bindings: Vec<Vec<Option<GroundTerm>>> = (0..n_rows)
-        .map(|r| {
-            out_columns
-                .iter()
-                .map(|(_, cells)| cells[r].clone())
-                .collect()
-        })
-        .collect();
+    let mut out_variables = n.work.0.vector(out_columns.len())?;
+    for (var, _) in &out_columns {
+        out_variables.push(n.work.variable(var)?);
+    }
+    // The derived column count is only known now. Pay the actual R*C product
+    // before building the output rows; each deep cell copy is separately paid.
+    n.work.product(&[n_rows, out_columns.len()])?;
+    let mut out_bindings = n.work.0.vector(n_rows)?;
+    for r in 0..n_rows {
+        let mut row = n.work.0.vector(out_columns.len())?;
+        for (_, cells) in &out_columns {
+            row.push(copy_cell(&cells[r], n.work)?);
+        }
+        out_bindings.push(row);
+    }
     Ok(GraphPattern::Values {
         variables: out_variables,
         bindings: out_bindings,
@@ -136,6 +150,13 @@ pub(super) fn decompose_column(
     out: &mut Vec<(Variable, Vec<Option<GroundTerm>>)>,
     env: &mut StarEnv,
 ) -> Result<()> {
+    n.work.product(&[2, cells.len()])?;
+    // A recursive column adds at most three retained column slots. Reallocation
+    // may move all existing logical entries, which is included before append.
+    n.work.product(&[
+        3,
+        out.len().checked_add(1).ok_or_else(|| n.work.overflow())?,
+    ])?;
     let any_triple = cells
         .iter()
         .any(|c| matches!(c, Some(GroundTerm::Triple(_))));
@@ -147,6 +168,7 @@ pub(super) fn decompose_column(
         .iter()
         .any(|c| !matches!(c, None | Some(GroundTerm::Triple(_))))
     {
+        n.work.charge(256 + var.as_str().len())?;
         return Err(Error::Unsupported(format!(
             "VALUES ?{} mixes a ground triple-term cell with a NamedNode/Literal cell for the \
              same variable → 501 (engine-total composed-ness must be uniform per var, ADR-0032 \
@@ -154,11 +176,12 @@ pub(super) fn decompose_column(
             var.as_str()
         )));
     }
-    let info = composed_info_for(&var, n, env);
-    let mut s_cells = Vec::with_capacity(cells.len());
-    let mut p_cells = Vec::with_capacity(cells.len());
-    let mut o_cells = Vec::with_capacity(cells.len());
+    let info = composed_info_for(&var, n, env)?;
+    let mut s_cells = n.work.0.vector(cells.len())?;
+    let mut p_cells = n.work.0.vector(cells.len())?;
+    let mut o_cells = n.work.0.vector(cells.len())?;
     for cell in cells {
+        n.work.charge(4)?;
         match cell {
             Some(GroundTerm::Triple(t)) => {
                 let GroundTriple {
@@ -178,7 +201,7 @@ pub(super) fn decompose_column(
             Some(_) => unreachable!("the mixed-shape check above already rejected this"),
         }
     }
-    out.push((info.s_var.clone(), s_cells));
-    out.push((info.p_var.clone(), p_cells));
-    decompose_column(info.o_var.clone(), o_cells, n, out, env)
+    out.push((info.s_var, s_cells));
+    out.push((info.p_var, p_cells));
+    decompose_column(info.o_var, o_cells, n, out, env)
 }

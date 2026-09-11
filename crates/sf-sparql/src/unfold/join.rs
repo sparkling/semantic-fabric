@@ -347,6 +347,7 @@ mod tests {
         .unwrap();
         let prefix = crate::iq::lower::scope_test_support::entry_work(&normalized).0;
         let prerequisites = key_work
+            + crate::star::rewrite_work(query)
             + build_work
             + normalize_control.consumed(QueryCharge::CompilerWork)
             + prefix

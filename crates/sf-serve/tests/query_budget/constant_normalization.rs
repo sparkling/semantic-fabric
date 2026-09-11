@@ -25,7 +25,7 @@ async fn constant_row_rules_reject_unpaid_work_then_recover_and_reuse_warm_plans
                 config(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX))
             });
             let input = query.len() as u64;
-            let prerequisites = input + key_work(query) + build_work(query);
+            let prerequisites = input + key_work(query) + rewrite_work(query) + build_work(query);
             let exact = input + constant_compile_work(query);
             assert!(exact > prerequisites, "normalization is independently paid");
             for work in [prerequisites, exact - 1] {

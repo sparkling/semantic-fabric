@@ -42,6 +42,23 @@ pub(crate) fn key_work(source: &str) -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Isolate only the initial rewrite, never measure/subtract a later operation.
+/// Ordinary prerequisite fixtures must not change their AST or compose variables.
+#[allow(dead_code)]
+pub(crate) fn rewrite_work(source: &str) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let query = spargebra::SparqlParser::new().parse_query(source).unwrap();
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let (rewritten, env) =
+        sf_sparql::star::rewrite_query_with_work_control(&query, &control).unwrap();
+    assert_eq!(
+        rewritten, query,
+        "ordinary prerequisite fixture must be unchanged"
+    );
+    assert!(env.is_empty());
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 /// Isolate structural BUILD, so a later-stage test pays this new prerequisite
 /// without calibrating away the expansion/mapping work that it actually checks.
 /// Only ordinary SELECT fixtures: this does not model RDF-star/DESCRIBE rewrites.

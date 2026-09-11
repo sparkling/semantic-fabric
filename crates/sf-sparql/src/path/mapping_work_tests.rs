@@ -255,13 +255,14 @@ fn failed_path_expansion_cannot_cache_and_paid_hits_share_the_plan() {
     let build_control = budget(u64::MAX);
     crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
     let build_work = build_control.consumed(QueryCharge::CompilerWork);
-    let short = budget(key_work + build_work);
+    let rewrite_work = crate::star::rewrite_work(query);
+    let short = budget(key_work + rewrite_work + build_work);
     assert!(binding
         .compile_shared_with_work_control(query, &short)
         .is_err());
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        key_work + build_work
+        key_work + rewrite_work + build_work
     );
     assert_eq!(binding.cache_len(), 0);
     let paid = budget(100_000);

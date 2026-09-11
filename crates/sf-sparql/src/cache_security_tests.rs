@@ -332,13 +332,18 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
     let build_control = control(u64::MAX);
     crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
     let build_work = build_control.consumed(QueryCharge::CompilerWork);
+    let rewrite_work = crate::star::rewrite_work(query);
     assert!(compiler
-        .compile_shared_with_work_control(&alice, query, &control(key_work + build_work))
+        .compile_shared_with_work_control(
+            &alice,
+            query,
+            &control(key_work + rewrite_work + build_work)
+        )
         .is_err());
     assert_eq!(
         cache.access_counts(),
         (1, 0),
-        "later compiler-work refusal follows paid key lookup and structural BUILD"
+        "later compiler-work refusal follows paid key lookup, initial rewrite and structural BUILD"
     );
     assert_eq!(cache.len(), 0);
     let paid = control(u64::MAX);

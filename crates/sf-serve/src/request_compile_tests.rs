@@ -11,8 +11,8 @@ const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 #[path = "../tests/support/compiler_key.rs"]
 mod compiler_key;
 use compiler_key::{
-    build_work, key_work, normalization_work, source_free_entry_work, source_free_join_seed_work,
-    source_free_values_work,
+    build_work, key_work, normalization_work, rewrite_work, source_free_entry_work,
+    source_free_join_seed_work, source_free_values_work,
 };
 
 #[path = "request_normalize_tests.rs"]
@@ -20,6 +20,9 @@ mod structural_normalization;
 
 #[path = "request_describe_tests.rs"]
 mod describe_work;
+
+#[path = "request_star_tests.rs"]
+mod star_work;
 
 #[path = "request_optional_tests.rs"]
 mod optional_work;
@@ -57,18 +60,20 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     let build = build_work(QUERY) + normalization_work(QUERY, &[]) + prefix + tail + 1;
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
-    let exact = 2 * input + key + 2 * build;
+    let rewrite = rewrite_work(QUERY);
+    let pass = rewrite + build;
+    let exact = 2 * input + key + 2 * pass;
     let canonical = spargebra::SparqlParser::new()
         .parse_query(QUERY)
         .unwrap()
         .to_string()
         .len() as u64;
     for (work, succeeds, consumed) in [
-        (2 * input + build - 1, false, input + build),
+        (2 * input + pass - 1, false, input + pass),
         (
-            2 * input + build + key - 1,
+            2 * input + pass + key - 1,
             false,
-            2 * input + build + key - canonical,
+            2 * input + pass + key - canonical,
         ),
         (exact, true, exact),
     ] {
@@ -78,7 +83,7 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
         let reservation = preflight(cfg.clone(), snapshot.clone(), QUERY.into(), budget.clone())
             .await
             .unwrap();
-        assert_eq!(budget.consumed(QueryCharge::CompilerWork), input + build);
+        assert_eq!(budget.consumed(QueryCharge::CompilerWork), input + pass);
         let result = compile(
             cfg.clone(),
             snapshot,
@@ -229,7 +234,8 @@ async fn compiler_expansion_work_rejects_before_source_admission() {
         } else {
             0
         };
-        let preflight_work = query.len() as u64 + build_work(query) + normalization + extra;
+        let preflight_work =
+            query.len() as u64 + rewrite_work(query) + build_work(query) + normalization + extra;
         let (mut cfg, pool) = config_with_mapping(preflight_work + key_work(query), maps);
         Arc::get_mut(&mut cfg)
             .unwrap()
@@ -367,7 +373,11 @@ async fn structural_build_failure_precedes_source_while_completed_hits_skip_buil
     use http_body_util::BodyExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     for secured in [false, true] {
-        for (warm, extra) in [(false, 0), (false, build_work(QUERY) - 1), (true, 0)] {
+        for (warm, extra) in [
+            (false, 0),
+            (false, rewrite_work(QUERY) + build_work(QUERY) - 1),
+            (true, 0),
+        ] {
             let (mut cfg, pool) = config(100_000);
             if secured {
                 Arc::get_mut(&mut cfg)
@@ -462,7 +472,8 @@ async fn constant_normalization_failure_never_enters_held_source_admission() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     for query in compiler_key::CONSTANT_QUERIES {
         let exact = query.len() as u64 + compiler_key::constant_compile_work(query);
-        let prerequisite = query.len() as u64 + key_work(query) + build_work(query);
+        let prerequisite =
+            query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
         assert!(exact > prerequisite);
         for secured in [false, true] {
             for work in [prerequisite, exact - 1] {

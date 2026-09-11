@@ -10,6 +10,8 @@
 
 use std::collections::BTreeSet;
 
+use super::control::StarWork;
+use crate::{CompilerWorkMode, Result};
 use spargebra::algebra::GraphPattern;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 
@@ -50,34 +52,53 @@ pub(super) const ERROR_MARKER_IRI: &str = "urn:sf-star:error-marker";
 /// variable is reserved up front, and each generated name is inserted into the
 /// same set before it is returned. One ordinal sequence still spans BGPs,
 /// UNION arms, expressions, VALUES decomposition, and empty markers.
-#[derive(Debug, Default)]
-pub(super) struct FreshVars {
+pub(super) struct FreshVars<'a> {
     next: usize,
-    reserved: BTreeSet<String>,
+    reserved: BTreeSet<Variable>,
+    pub work: StarWork<'a>,
 }
 
-impl FreshVars {
+impl Default for FreshVars<'_> {
+    fn default() -> Self {
+        Self::with_work(
+            BTreeSet::new(),
+            StarWork::new(CompilerWorkMode::Uncontrolled),
+        )
+    }
+}
+
+impl<'a> FreshVars<'a> {
+    #[cfg(test)]
     pub(super) fn new(vars: impl IntoIterator<Item = Variable>) -> Self {
+        Self::with_work(
+            vars.into_iter().collect(),
+            StarWork::new(CompilerWorkMode::Uncontrolled),
+        )
+    }
+
+    pub(super) fn with_work(reserved: BTreeSet<Variable>, work: StarWork<'a>) -> Self {
         Self {
             next: 0,
-            reserved: vars
-                .into_iter()
-                .map(|variable| variable.as_str().to_owned())
-                .collect(),
+            reserved,
+            work,
         }
     }
 
-    fn mint(&mut self, prefix: &str) -> Variable {
+    fn mint(&mut self, prefix: &str) -> Result<Variable> {
         loop {
             let ordinal = self.next;
-            self.next = self
+            let next = self
                 .next
                 .checked_add(1)
-                .expect("a query cannot mint more than usize::MAX generated variables");
-            let candidate = format!("{prefix}{ordinal}");
+                .ok_or_else(|| self.work.overflow())?;
+            self.work.fresh(self.reserved.len(), prefix, ordinal)?;
+            let candidate = Variable::new_unchecked(format!("{prefix}{ordinal}"));
+            self.next = next;
             if self.reserved.insert(candidate.clone()) {
-                return Variable::new_unchecked(candidate);
+                self.work.checkpoint()?;
+                return Ok(candidate);
             }
+            self.work.checkpoint()?;
         }
     }
 
@@ -90,14 +111,14 @@ impl FreshVars {
 /// A fresh whole-query identity variable (`__sf_star_{n}`), minted through
 /// [`FreshVars`] so it cannot capture any variable already present in the
 /// parsed query.
-pub(super) fn fresh_var(fresh: &mut FreshVars) -> TermPattern {
-    TermPattern::Variable(fresh_component_var(fresh))
+pub(super) fn fresh_var(fresh: &mut FreshVars) -> Result<TermPattern> {
+    Ok(TermPattern::Variable(fresh_component_var(fresh)?))
 }
 
 /// Like [`fresh_var`], but returns the bare [`Variable`] (not wrapped in a
 /// `TermPattern`) — for minting [`super::env::ComposedInfo`]'s
 /// `s_var`/`p_var`/`o_var`.
-pub(super) fn fresh_component_var(fresh: &mut FreshVars) -> Variable {
+pub(super) fn fresh_component_var(fresh: &mut FreshVars) -> Result<Variable> {
     fresh.mint("__sf_star_")
 }
 
@@ -106,7 +127,7 @@ pub(super) fn fresh_component_var(fresh: &mut FreshVars) -> Variable {
 /// [`empty_pattern`]) — kept textually distinct from [`fresh_var`]'s identity
 /// variables (which DO bind real terms) purely for readability when a
 /// rewritten query is inspected; both draw from the same whole-query state.
-fn fresh_empty_var(fresh: &mut FreshVars) -> Variable {
+fn fresh_empty_var(fresh: &mut FreshVars) -> Result<Variable> {
     fresh.mint("__sf_star_empty_")
 }
 
@@ -119,11 +140,12 @@ fn fresh_empty_var(fresh: &mut FreshVars) -> Variable {
 /// `iq/normalize.rs` already treats an empty result as the `Join`/`Union`
 /// absorbing/identity element via its own purpose-built `IqNode::Empty`.
 /// Never an error, never a match.
-pub(super) fn empty_pattern(fresh: &mut FreshVars) -> GraphPattern {
-    GraphPattern::Values {
-        variables: vec![fresh_empty_var(fresh)],
+pub(super) fn empty_pattern(fresh: &mut FreshVars) -> Result<GraphPattern> {
+    fresh.work.charge(3)?;
+    Ok(GraphPattern::Values {
+        variables: vec![fresh_empty_var(fresh)?],
         bindings: Vec::new(),
-    }
+    })
 }
 
 /// Whether `pred` is the constant `rdf:reifies` (rule R2's trigger). A
@@ -156,6 +178,58 @@ pub(super) fn has_subject_position_triple_term(tp: &TriplePattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler_control::CompileContext;
+    use crate::Error;
+    use sf_core::query_control::{
+        QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+    };
+
+    #[test]
+    fn paid_mint_reserves_each_collision_and_refuses_overflow() {
+        // Three 11-byte candidates, two already-reserved names per attempt:
+        // K*(C+1) comparisons + 2*C copied bytes + one logical set slot.
+        let exact_work = 3 * (2 * 12 + 2 * 11 + 1);
+        for limit in [exact_work, exact_work - 1] {
+            let control = QueryBudget::new(QueryLimits::new(limit, u64::MAX, u64::MAX, u64::MAX));
+            let work = StarWork::new(CompilerWorkMode::Metered(CompileContext::new(&control)));
+            let mut fresh = FreshVars::with_work(
+                [authored("__sf_star_0"), authored("__sf_star_1")]
+                    .into_iter()
+                    .collect(),
+                work,
+            );
+            if limit == exact_work {
+                assert_eq!(
+                    fresh_component_var(&mut fresh).unwrap().as_str(),
+                    "__sf_star_2"
+                );
+                assert_eq!(control.consumed(QueryCharge::CompilerWork), exact_work);
+            } else {
+                assert!(matches!(
+                    fresh_component_var(&mut fresh),
+                    Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
+                ));
+                assert_eq!(fresh.next_ordinal(), 2);
+                assert_eq!(fresh.reserved.len(), 2);
+            }
+        }
+        let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+        let mut fresh = FreshVars::with_work(
+            BTreeSet::new(),
+            StarWork::new(CompilerWorkMode::Metered(CompileContext::new(&control))),
+        );
+        fresh.next = usize::MAX;
+        assert!(matches!(
+            fresh_component_var(&mut fresh),
+            Err(Error::QueryControl(QueryControlError::AccountingOverflow))
+        ));
+        assert_eq!(
+            control.checkpoint(),
+            Err(QueryControlError::AccountingOverflow)
+        );
+        assert!(fresh.reserved.is_empty());
+        assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
+    }
 
     fn authored(name: &str) -> Variable {
         Variable::new_unchecked(name)
@@ -164,18 +238,24 @@ mod tests {
     #[test]
     fn mint_skips_multiple_consecutive_authored_candidates() {
         let mut fresh = FreshVars::new([authored("__sf_star_0"), authored("__sf_star_1")]);
-        assert_eq!(fresh_component_var(&mut fresh).as_str(), "__sf_star_2");
+        assert_eq!(
+            fresh_component_var(&mut fresh).unwrap().as_str(),
+            "__sf_star_2"
+        );
         assert_eq!(fresh.next_ordinal(), 3);
     }
 
     #[test]
     fn prefixes_share_an_ordinal_without_skipping_collision_checks() {
         let mut fresh = FreshVars::new([authored("__sf_star_1")]);
-        let GraphPattern::Values { variables, .. } = empty_pattern(&mut fresh) else {
+        let GraphPattern::Values { variables, .. } = empty_pattern(&mut fresh).unwrap() else {
             panic!("empty marker must be a VALUES pattern");
         };
         assert_eq!(variables[0].as_str(), "__sf_star_empty_0");
-        assert_eq!(fresh_component_var(&mut fresh).as_str(), "__sf_star_2");
+        assert_eq!(
+            fresh_component_var(&mut fresh).unwrap().as_str(),
+            "__sf_star_2"
+        );
         assert_eq!(fresh.next_ordinal(), 3);
     }
 }

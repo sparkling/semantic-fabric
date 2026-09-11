@@ -60,10 +60,44 @@ mod tests {
 
     use super::*;
 
-    // Both captures temporarily register/drop a Dispatch, changing tracing's
-    // process-wide callsite interest. Keep that test-global state serialized;
-    // product serving installs one persistent subscriber, not these captures.
+    // A module-local lock alone cannot isolate process-wide callsite interest
+    // from other tests registering subscribers. Each capture test runs alone
+    // in a bounded child process; product serving uses a persistent subscriber.
     static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn isolated(test: impl FnOnce()) {
+        const CHILD: &str = "SF_COMPILER_TELEMETRY_TEST_CHILD";
+        const COMPLETED: i32 = 77;
+        let thread = std::thread::current();
+        let name = thread.name().expect("named Rust test thread");
+        if std::env::var(CHILD).as_deref() == Ok(name) {
+            test();
+            std::process::exit(COMPLETED);
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env_clear()
+            .env(CHILD, name)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert_eq!(
+                    status.code(),
+                    Some(COMPLETED),
+                    "child must execute all assertions; zero matching tests cannot pass"
+                );
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("telemetry acceptance child exceeded its bound");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -120,6 +154,10 @@ mod tests {
 
     #[test]
     fn cascade_span_count_does_not_scale_with_union_branches() {
+        isolated(cascade_span_count);
+    }
+
+    fn cascade_span_count() {
         let query = format!(
             "SELECT ?s WHERE {{ {} }}",
             std::iter::repeat_n("{ ?s <http://example.com/p> ?o }", 16)
@@ -138,6 +176,10 @@ mod tests {
 
     #[test]
     fn flat_compiler_reports_its_actual_stages_without_tree_stage_claims() {
+        isolated(flat_compiler_stages);
+    }
+
+    fn flat_compiler_stages() {
         let (_plan, output) = capture(|| {
             crate::parse_and_translate_flat_with(
                 "SELECT ?s WHERE { ?s <http://example.com/p> ?o }",

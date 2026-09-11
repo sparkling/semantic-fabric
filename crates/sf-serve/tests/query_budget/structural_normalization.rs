@@ -25,7 +25,8 @@ async fn structural_rules_reject_before_lowering_then_preserve_results_and_hits(
             } else {
                 config(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX))
             });
-            let prefix = query.len() as u64 + key_work(query) + build_work(query);
+            let prefix =
+                query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
             let normal = normalization_work(query, &[]);
             assert!(normal > 0);
             // Both failures are within NORMALIZE, never a later LOWER copy or

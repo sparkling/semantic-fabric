@@ -80,6 +80,8 @@
 //! surface is unchanged.
 
 mod collect_vars;
+mod control;
+mod control_values;
 mod decompose;
 mod env;
 mod expr;
@@ -88,6 +90,8 @@ mod util;
 mod walk;
 
 pub(crate) use collect_vars::collect_pattern_vars;
+pub use control::rewrite_query_with_work_control;
+pub(crate) use control::rewrite_query_with_work_mode;
 pub(crate) use env::composed_term_def;
 pub use env::{
     all_component_var_names, apply_composed_bindings, expand_projection_for_cascade,
@@ -97,3 +101,20 @@ pub use top_level::rewrite_query;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod control_tests;
+
+#[cfg(test)]
+pub(crate) fn rewrite_work(source: &str) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let query = crate::parse_query(source).unwrap();
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let (rewritten, env) = rewrite_query_with_work_control(&query, &control).unwrap();
+    assert_eq!(
+        rewritten, query,
+        "ordinary prerequisite fixture must be unchanged"
+    );
+    assert!(env.is_empty());
+    control.consumed(QueryCharge::CompilerWork)
+}

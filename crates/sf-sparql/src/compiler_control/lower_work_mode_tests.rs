@@ -379,6 +379,10 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     let build_control = budget(u64::MAX);
     build::build_tree_with_work_control(pattern, None, &build_control).unwrap();
     let build = build_control.consumed(QueryCharge::CompilerWork);
+    let rewrite_control = budget(u64::MAX);
+    let (rewritten, env) = star::rewrite_query_with_work_control(&query, &rewrite_control).unwrap();
+    assert_eq!(rewritten, query);
+    assert!(env.is_empty());
     let normalization_control = budget(u64::MAX);
     let normalized = iq::normalize::normalize_with_work_control(
         build::build_tree(pattern, None).unwrap(),
@@ -386,7 +390,10 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     )
     .unwrap();
     let (prefix, tail) = entry_work(&normalized);
-    let before_clones = build + normalization_control.consumed(QueryCharge::CompilerWork) + prefix;
+    let before_clones = rewrite_control.consumed(QueryCharge::CompilerWork)
+        + build
+        + normalization_control.consumed(QueryCharge::CompilerWork)
+        + prefix;
     // One retained ?x per row pays seven decision/retain units independently.
     let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
         7,

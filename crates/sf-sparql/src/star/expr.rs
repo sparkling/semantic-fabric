@@ -14,6 +14,7 @@
 use spargebra::algebra::{AggregateExpression, Expression, Function, OrderExpression};
 use spargebra::term::{Literal, NamedNode};
 
+use crate::plan_measure::clone_root::CompilerCloneRootV1;
 use crate::{Error, Result};
 
 use super::env::StarEnv;
@@ -32,6 +33,7 @@ pub(super) fn rewrite_expr(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<Expression> {
+    n.work.local(CompilerCloneRootV1::Expression(expr))?;
     use Expression::*;
     Ok(match expr {
         NamedNode(_) | Literal(_) | Variable(_) | Bound(_) => expr.clone(),
@@ -127,6 +129,11 @@ fn rewrite_function_call(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<Expression> {
+    n.work.local(CompilerCloneRootV1::Function(f))?;
+    // Fixed error/boolean replacement (including diagnostic text) and the
+    // argument slots; recursive arguments pay at their actual invocation.
+    n.work.charge(256)?;
+    n.work.charge(args.len())?;
     match (f, args) {
         (Function::Subject, [arg]) => {
             let (_, composed) = rewrite_and_check_composed(arg, n, env)?;
@@ -196,6 +203,9 @@ fn rewrite_equality(
     env: &mut StarEnv,
     same_term: bool,
 ) -> Result<Expression> {
+    n.work.local(CompilerCloneRootV1::Expression(a))?;
+    n.work.local(CompilerCloneRootV1::Expression(b))?;
+    n.work.charge(16 + XSD_BOOLEAN.len())?;
     let (ra, ca) = rewrite_and_check_composed(a, n, env)?;
     let (rb, cb) = rewrite_and_check_composed(b, n, env)?;
     let wrap = |l: Expression, r: Expression| {
@@ -240,11 +250,18 @@ fn rewrite_and_check_composed(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<(Expression, Option<ComposedComponents>)> {
+    n.work.local(CompilerCloneRootV1::Expression(arg))?;
     if let Expression::FunctionCall(Function::Triple, parts) = arg {
         if let [e1, e2, e3] = parts.as_slice() {
             let (r1, _) = rewrite_and_check_composed(e1, n, env)?;
             let (r2, _) = rewrite_and_check_composed(e2, n, env)?;
             let (r3, _) = rewrite_and_check_composed(e3, n, env)?;
+            // These are rewritten results, potentially larger than the input.
+            // Bind each additional copy to its actual result, never arg's size.
+            for result in [&r1, &r2, &r3] {
+                n.work.local(CompilerCloneRootV1::Expression(result))?;
+            }
+            n.work.charge(4)?;
             let rewritten = Expression::FunctionCall(
                 Function::Triple,
                 vec![r1.clone(), r2.clone(), r3.clone()],
@@ -254,11 +271,11 @@ fn rewrite_and_check_composed(
     }
     let rewritten = rewrite_expr(arg, n, env)?;
     let composed = match &rewritten {
-        Expression::Variable(v) => env.get(v).map(|info| {
+        Expression::Variable(v) => n.work.env_get(env, v)?.map(|info| {
             (
-                Expression::Variable(info.s_var.clone()),
-                Expression::Variable(info.p_var.clone()),
-                Expression::Variable(info.o_var.clone()),
+                Expression::Variable(info.s_var),
+                Expression::Variable(info.p_var),
+                Expression::Variable(info.o_var),
             )
         }),
         _ => None,
@@ -336,6 +353,7 @@ pub(super) fn rewrite_order_expr(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<OrderExpression> {
+    n.work.local(CompilerCloneRootV1::OrderExpression(oe))?;
     Ok(match oe {
         OrderExpression::Asc(e) => OrderExpression::Asc(rewrite_expr(e, n, env)?),
         OrderExpression::Desc(e) => OrderExpression::Desc(rewrite_expr(e, n, env)?),
@@ -347,6 +365,7 @@ pub(super) fn rewrite_agg_expr(
     n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<AggregateExpression> {
+    n.work.local(CompilerCloneRootV1::AggregateExpression(ae))?;
     Ok(match ae {
         AggregateExpression::CountSolutions { distinct } => AggregateExpression::CountSolutions {
             distinct: *distinct,
