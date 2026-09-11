@@ -10,6 +10,7 @@ use spargebra::{Query, SparqlParser};
 use super::*;
 use crate::compiler_control::CompileContext;
 use crate::compiler_schema::ColumnTypeUse;
+use crate::iq::lower::scope_test_support::entry_work;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::Scan;
 use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
@@ -68,6 +69,9 @@ fn assert_direct_schedule(
     measurement: u64,
 ) {
     assert!(branch_count >= 3);
+    let (prefix, tail) = entry_work(&source);
+    assert_eq!(tail, 0, "these direct fixtures project no variables");
+    let prior_work = prior_work + prefix;
     let expected = prior_work + clone_work.checked_mul(branch_count - 1).unwrap();
     let retained_before_last_rejection =
         prior_work + clone_work.checked_mul(branch_count - 2).unwrap() + measurement;
@@ -136,11 +140,24 @@ fn nested_branch_count(plan: &Plan) -> usize {
     subplan.plan.branches.len()
 }
 
+fn nested_entry_work(source: &IqNode) -> u64 {
+    let IqNode::Union { children, .. } = source else {
+        panic!()
+    };
+    let [IqNode::True, nested @ IqNode::OrderBy { .. }] = children.as_slice() else {
+        panic!("fixture must enter exactly one modifier SubPlan")
+    };
+    let (outer, outer_tail) = entry_work(source);
+    let (inner, inner_tail) = entry_work(nested);
+    assert_eq!((outer_tail, inner_tail), (0, 0));
+    outer + inner
+}
+
 #[test]
 fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_one() {
     let (body, work, _) = exists_body(81, "owned-final-subplan-exists-body");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
-    let expected = work * 2;
+    let expected = nested_entry_work(&source) + work * 2;
     let control = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -165,7 +182,8 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
 fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
     let (body, work, measurement) = exists_body(82, "first-subplan-exists-boundary");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
-    let control = budget(work - 1);
+    let prefix = nested_entry_work(&source);
+    let control = budget(prefix + work - 1);
 
     assert_control_error(
         lower(
@@ -175,7 +193,10 @@ fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
         .expect_err("N-1 must reject inside the nested SubPlan before its EXISTS clone"),
         QueryControlError::CompilerWorkExceeded,
     );
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), measurement);
+    assert_eq!(
+        control.consumed(QueryCharge::CompilerWork),
+        prefix + measurement
+    );
     assert_eq!(
         control.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
@@ -194,7 +215,8 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
         ],
         3,
     );
-    let control = budget(first_work + second_work - 1);
+    let prefix = nested_entry_work(&source);
+    let control = budget(prefix + first_work + second_work - 1);
 
     assert_control_error(
         lower(
@@ -206,7 +228,7 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
     );
     assert_eq!(
         control.consumed(QueryCharge::CompilerWork),
-        first_work + second_measurement
+        prefix + first_work + second_measurement
     );
     assert_eq!(
         control.checkpoint(),
@@ -309,13 +331,14 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     build::build_tree_with_work_control(pattern, None, &build_control).unwrap();
     let build = build_control.consumed(QueryCharge::CompilerWork);
     let normalization_control = budget(u64::MAX);
-    iq::normalize::normalize_with_work_control(
+    let normalized = iq::normalize::normalize_with_work_control(
         build::build_tree(pattern, None).unwrap(),
         &normalization_control,
     )
     .unwrap();
-    let before_lowering = build + normalization_control.consumed(QueryCharge::CompilerWork);
-    let expected = before_lowering + work * 2;
+    let (prefix, tail) = entry_work(&normalized);
+    let before_clones = build + normalization_control.consumed(QueryCharge::CompilerWork) + prefix;
+    let expected = before_clones + work * 2 + tail;
     let exact = budget(expected);
     let raw = translate_tree(&query, &[], &Tbox::default(), Dialect::Sqlite, &[]).unwrap();
 
@@ -325,7 +348,8 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), expected);
 
-    let short = budget(expected - 1);
+    // Reject the second clone, before final result-variable materialization.
+    let short = budget(expected - tail - 1);
     assert_control_error(
         translate_fixture(&query, &short)
             .expect_err("whole-pipeline N-1 must reject before the second EXISTS clone"),
@@ -333,7 +357,7 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     );
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        before_lowering + work + measurement
+        before_clones + work + measurement
     );
     assert_eq!(
         short.checkpoint(),

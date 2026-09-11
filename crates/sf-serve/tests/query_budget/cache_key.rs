@@ -3,8 +3,8 @@ use super::*;
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
 pub(super) use compiler_key::{
-    build_work, constant_compile_work, key_work, normalization_work, structural_compile_work,
-    CONSTANT_QUERIES, STRUCTURAL_QUERIES,
+    build_work, constant_compile_work, key_work, normalization_work, source_free_entry_work,
+    structural_compile_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
 };
 
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
@@ -72,13 +72,18 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    // No branch product: only input, key, BUILD and structural NORMALIZE work.
+    // No branch product: input, key, BUILD, NORMALIZE and LOWER scope work.
     let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
         .append_pair("query", query)
         .finish();
-    let complete =
-        query.len() as u64 + key_work(query) + build_work(query) + normalization_work(query, &[]);
+    let (prefix, tail) = source_free_entry_work(query);
+    let complete = query.len() as u64
+        + key_work(query)
+        + build_work(query)
+        + normalization_work(query, &[])
+        + prefix
+        + tail;
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -135,7 +140,8 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                 + if warm {
                     0
                 } else {
-                    build_work(&query) + normalization_work(&query, &[])
+                    let (prefix, tail) = source_free_entry_work(&query);
+                    build_work(&query) + normalization_work(&query, &[]) + prefix + tail
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

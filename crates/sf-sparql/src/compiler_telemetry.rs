@@ -60,6 +60,11 @@ mod tests {
 
     use super::*;
 
+    // Both captures temporarily register/drop a Dispatch, changing tracing's
+    // process-wide callsite interest. Keep that test-global state serialized;
+    // product serving installs one persistent subscriber, not these captures.
+    static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
 
@@ -156,6 +161,7 @@ mod tests {
     }
 
     fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
+        let _capture_guard = CAPTURE_LOCK.lock().unwrap();
         let capture = Capture::default();
         let subscriber = tracing_subscriber::fmt()
             .json()

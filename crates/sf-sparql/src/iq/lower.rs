@@ -59,6 +59,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use spargebra::algebra::Expression;
 
+use crate::build::control::BuildWork;
 use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, OrderKey, R2rmlGraphScope, RustAgg,
@@ -78,86 +79,14 @@ use optional::{is_single_subplan_branch, left_join_decomposed, left_join_over_su
 #[path = "lower_optional_tests.rs"]
 mod optional_work_tests;
 
-/// Scan the entire `IqNode` tree to find the maximum scan alias in use.
-/// Used by [`lower`] to initialize a fresh alias counter that never collides
-/// with any scan alias produced by the RESOLVE pass across all subtrees.
-fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
-    match cond {
-        SqlCond::ExpressionError => 0,
-        SqlCond::LiteralCmp(cmp) => cmp.columns().map(|c| c.alias).max().unwrap_or(0),
-        SqlCond::IriCmp(cmp) => cmp.columns().map(|c| c.alias).max().unwrap_or(0),
-        SqlCond::ColEq(left, right)
-        | SqlCond::NativeColEq(left, right)
-        | SqlCond::NullSafeEq(left, right) => left.alias.max(right.alias),
-        SqlCond::Cmp(column, _, _)
-        | SqlCond::NativeCmp(column, _, _)
-        | SqlCond::IsNotNull(column)
-        | SqlCond::DecodedIsNotNull(column)
-        | SqlCond::IsNull(column)
-        | SqlCond::StrMatch { col: column, .. } => column.alias,
-        SqlCond::Not(inner) => max_alias_in_sql_cond(inner),
-        SqlCond::And(parts) | SqlCond::Or(parts) => {
-            parts.iter().map(max_alias_in_sql_cond).max().unwrap_or(0)
-        }
-        SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => scans
-            .iter()
-            .map(|scan| scan.alias)
-            .chain(conds.iter().map(max_alias_in_sql_cond))
-            .max()
-            .unwrap_or(0),
-        SqlCond::PathExists { pc, conds, .. } => conds
-            .iter()
-            .map(max_alias_in_sql_cond)
-            .chain(std::iter::once(pc.alias))
-            .max()
-            .unwrap_or(0),
-        SqlCond::TemplateEq(_, left_alias, _, right_alias, _) => (*left_alias).max(*right_alias),
-    }
-}
-
-fn max_alias_in_cond(cond: &IqCond) -> usize {
-    match cond {
-        IqCond::Sql(sql) => max_alias_in_sql_cond(sql),
-        IqCond::And(parts) | IqCond::Or(parts) => {
-            parts.iter().map(max_alias_in_cond).max().unwrap_or(0)
-        }
-        IqCond::Not(inner) => max_alias_in_cond(inner),
-        IqCond::Exists(inner) | IqCond::NotExists { inner, .. } => max_alias_in_tree(inner),
-        IqCond::Expr(_) => 0,
-    }
-}
-
-fn max_alias_in_conds(conds: &[IqCond]) -> usize {
-    conds.iter().map(max_alias_in_cond).max().unwrap_or(0)
-}
-
-fn max_alias_in_tree(node: &IqNode) -> usize {
-    match node {
-        IqNode::Extensional { scan, .. } => scan.alias,
-        IqNode::InnerJoin { children, cond } => children
-            .iter()
-            .map(max_alias_in_tree)
-            .chain(std::iter::once(max_alias_in_conds(cond)))
-            .max()
-            .unwrap_or(0),
-        IqNode::LeftJoin { left, right, cond } => max_alias_in_tree(left)
-            .max(max_alias_in_tree(right))
-            .max(max_alias_in_conds(cond)),
-        IqNode::Filter { child, cond } => max_alias_in_tree(child).max(max_alias_in_conds(cond)),
-        IqNode::Construction { child, .. }
-        | IqNode::Distinct { child }
-        | IqNode::Aggregation { child, .. }
-        | IqNode::Slice { child, .. }
-        | IqNode::OrderBy { child, .. } => max_alias_in_tree(child),
-        IqNode::Union { children, .. } => children.iter().map(max_alias_in_tree).max().unwrap_or(0),
-        IqNode::Path { closure } => closure.alias,
-        IqNode::Values { .. }
-        | IqNode::Empty { .. }
-        | IqNode::True
-        | IqNode::Intensional { .. }
-        | IqNode::UnresolvedPath { .. } => 0,
-    }
-}
+#[cfg(test)]
+#[path = "lower_scope_tests.rs"]
+mod lower_scope_work_tests;
+#[path = "lower_scope.rs"]
+mod scope;
+#[cfg(test)]
+#[path = "lower_scope_test_support.rs"]
+pub(crate) mod scope_test_support;
 
 /// Lower a NORMALIZED tree to a [`Plan`] (design §5). Peels the query-modifier spine
 /// (`Distinct`/`Slice`/`OrderBy`) and the `Aggregation` strategy choice onto the plan,
@@ -208,8 +137,8 @@ pub fn lower(
 }
 
 /// Lower with the caller's existing request identity. This governs the selected
-/// copy/product boundaries, including OPTIONAL expansion; it does not yet bound
-/// every lowering helper or physical allocation.
+/// copy/product boundaries plus entry alias/scope walks and result variables;
+/// it does not yet bound every operator helper or physical allocation.
 pub fn lower_with_work_control(
     node: IqNode,
     dialect: sf_sql::Dialect,
@@ -229,8 +158,9 @@ pub fn lower_with_work_control(
 /// Internal lowering entry that preserves one request's compiler-work identity
 /// through the complete lowering tree, including recursively materialized SubPlans.
 /// The retained mode governs borrowed-EXISTS clones, INNER products/copies and
-/// OPTIONAL candidate/output/direct-copy admission. Other structural traversal,
-/// semantic helper work and `filter_cond` allocations remain staged work.
+/// OPTIONAL candidate/output/direct-copy admission, entry alias/scope walks and
+/// result variables. Operator internals, other aliases/collections and semantic
+/// helper work remain staged work.
 pub(crate) fn lower_with_work_mode(
     node: IqNode,
     dialect: sf_sql::Dialect,
@@ -238,7 +168,8 @@ pub(crate) fn lower_with_work_mode(
     star_env: &StarEnv,
     work_mode: CompilerWorkMode<'_>,
 ) -> Result<Plan> {
-    let mut next_alias = max_alias_in_tree(&node) + 1;
+    let work = BuildWork::new(work_mode);
+    let mut next_alias = scope::starting_alias(&node, work)?;
     let mut spine = Spine::default();
     let branches = lower_spine(
         node,
@@ -249,10 +180,7 @@ pub(crate) fn lower_with_work_mode(
         star_env,
         work_mode,
     )?;
-    let vars = spine
-        .project
-        .map(|p| p.iter().map(|v| v.to_string()).collect())
-        .unwrap_or_else(|| visible_vars(&branches));
+    let vars = scope::plan_vars(spine.project, &branches, work)?;
     Ok(Plan {
         branches,
         form: PlanForm::Select { vars },
@@ -305,6 +233,9 @@ fn lower_spine(
     star_env: &StarEnv,
     work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
+    // The entry alias walk already checked the complete IQ spine's depth.
+    let work = BuildWork::new(work_mode);
+    work.charge(1)?;
     match node {
         IqNode::Distinct { child } => {
             spine.distinct = true;
@@ -353,7 +284,7 @@ fn lower_spine(
                 | IqNode::OrderBy { .. }
         ) =>
         {
-            spine.project.get_or_insert_with(|| project.clone());
+            scope::record_project(&mut spine.project, &project, work)?;
             // ADR-0025 Tier-2 gap 5: a post-GROUP-BY expression that is NOT a bare-variable
             // rename of an aggregate output (e.g. `?c := COUNT(?x) * 2`) must be evaluated in
             // the Rust executor — the SQL aggregation path cannot compute it (`bind_term_def`
@@ -389,7 +320,7 @@ fn lower_spine(
         // The relational body (a leaf-CQ `Construction`, a `Union` of leaf-CQs, or a bare
         // leaf): the projected scope is its output scope; fold it to branches.
         other => {
-            spine.project.get_or_insert_with(|| other.output_vars());
+            scope::record_output_scope(&mut spine.project, &other, work)?;
             lower_node(
                 other, dialect, false, next_alias, extra_keep, star_env, work_mode,
             )

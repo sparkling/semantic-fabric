@@ -172,10 +172,12 @@ fn optional_work_lower_dispatch_cost_matches_the_independently_selected_helper()
     left_join_over_subplan(vec![Branch::empty(); 3], &right[0], Dialect::Sqlite, mode).unwrap();
     assert!(expected.consumed(QueryCharge::CompilerWork) > preparation);
     let actual = budget(u64::MAX);
-    run(optional(values(3), subplan), &actual).unwrap();
+    let tree = optional(values(3), subplan);
+    let (prefix, tail) = scope_test_support::entry_work(&tree);
+    run(tree, &actual).unwrap();
     assert_eq!(
         actual.consumed(QueryCharge::CompilerWork),
-        expected.consumed(QueryCharge::CompilerWork)
+        expected.consumed(QueryCharge::CompilerWork) + prefix + tail
     );
 }
 

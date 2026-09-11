@@ -79,6 +79,15 @@ fn normalization_work() -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+fn lower_entry_work() -> (u64, u64) {
+    let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
+        panic!()
+    };
+    let normalized =
+        crate::iq::normalize::normalize(crate::build::build_tree(&pattern, None).unwrap()).unwrap();
+    crate::iq::lower::scope_test_support::entry_work(&normalized)
+}
+
 #[test]
 fn canonical_key_cold_and_warm_paths_require_work_before_cache_access() {
     let query = "SELECT ?x WHERE { VALUES ?x { \"café 東京\" } }";
@@ -114,7 +123,8 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let binding = binding();
     let work = clone_work();
     let key = key_work();
-    let build = build_work() + normalization_work();
+    let (prefix, tail) = lower_entry_work();
+    let build = build_work() + normalization_work() + prefix;
     let short = budget(key + build + 2 * work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
@@ -125,13 +135,13 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
         key + build + work + clone_cost().measurement_work
     );
     assert_eq!(binding.cache_len(), 0);
-    let exact = budget(key + build + 2 * work);
+    let exact = budget(key + build + 2 * work + tail);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
         .unwrap();
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
-        key + build + 2 * work
+        key + build + 2 * work + tail
     );
     assert_eq!(binding.cache_len(), 1);
     assert_eq!(
@@ -160,9 +170,11 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
 fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let binding = binding();
     let work = clone_work();
-    let build = build_work() + normalization_work();
-    let total = 2 * build + 4 * work;
-    for allowance in [total - 1, total] {
+    let (prefix, tail) = lower_entry_work();
+    let build = build_work() + normalization_work() + prefix;
+    let total = 2 * (build + tail) + 4 * work;
+    // Fail the final clone in pass two, not its later scope materialization.
+    for allowance in [total - tail - 1, total] {
         let control = budget(allowance);
         binding
             .compile_uncached_shared_with_work_control(QUERY, &control)
@@ -174,7 +186,7 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
             if second.is_ok() {
                 total
             } else {
-                total - clone_cost().deep_clone_work
+                total - tail - clone_cost().deep_clone_work
             }
         );
         assert_eq!(binding.cache_len(), 0);
@@ -205,7 +217,8 @@ impl QueryControl for CancelAfterClone {
 #[test]
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
-    let work = key_work() + build_work() + normalization_work() + clone_work();
+    let work =
+        key_work() + build_work() + normalization_work() + lower_entry_work().0 + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &control),

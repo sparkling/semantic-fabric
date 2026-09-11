@@ -106,7 +106,13 @@ fn actual_multi_mapping_profiles_bind_required_native_and_bounded_executor_evide
 fn accepted_release_contract_excludes_research_and_no_prefix_delivery_not_required_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = capability_catalog::load(&root).unwrap().catalog;
-    for id in ["l-global-operators", "l-stream-error-atomicity"] {
+    for id in [
+        "l-global-operators",
+        "l-stream-error-atomicity",
+        "l-authz",
+        "l-observability",
+        "l-protocol",
+    ] {
         let limit = catalog
             .limitations
             .iter()
@@ -117,7 +123,9 @@ fn accepted_release_contract_excludes_research_and_no_prefix_delivery_not_requir
     }
     for id in [
         "l-query-budget",
-        "l-authz",
+        "l-deadline-cancellation",
+        "l-snapshot",
+        "l-transport-security",
         "l-production-admission",
         "l-release-artifact",
     ] {
@@ -129,6 +137,65 @@ fn accepted_release_contract_excludes_research_and_no_prefix_delivery_not_requir
                 .unwrap()
                 .release_blocking
         );
+    }
+}
+
+#[test]
+fn broad_scope_exclusions_preserve_required_admitted_profile_checks() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = capability_catalog::load(&root).unwrap().catalog;
+    for id in [
+        "authn-authz-generic",
+        "observability-lifecycle-generic",
+        "full-protocol-sqlite",
+        "full-protocol-postgresql",
+        "full-protocol-mysql",
+    ] {
+        let cell = catalog.cells.iter().find(|cell| cell.id == id).unwrap();
+        assert_eq!(cell.status, Status::Planned, "{id}");
+        assert!(!cell.advertisable, "{id}");
+    }
+    for id in [
+        "security-context-cache-contract-generic",
+        "portable-row-equality-authorization-generic",
+        "structured-request-telemetry-generic",
+        "bounded-prometheus-metrics-generic",
+        "health-readiness-probes-generic",
+        "http-transport-sqlite",
+        "native-relational-query-cancellation-generic",
+        "verified-source-tls-generic",
+    ] {
+        let cell = catalog.cells.iter().find(|cell| cell.id == id).unwrap();
+        assert_eq!(cell.status, Status::Implemented, "{id}");
+        assert_eq!(cell.verification, Verification::CiRequired, "{id}");
+        assert!(cell.semantic_exact && cell.bounded, "{id}");
+        let proofs: Vec<_> = catalog
+            .evidence
+            .iter()
+            .filter(|e| cell.evidence_ids.contains(&e.id) && e.required)
+            .collect();
+        assert!(!proofs.is_empty(), "{id} lost its required evidence");
+        for proof in proofs {
+            // A pinned regression receipt is valid only with its required
+            // executable check below; source-only/optional evidence is not.
+            assert!(
+                matches!(
+                    proof.verification,
+                    Verification::CiRequired | Verification::Receipt
+                ),
+                "{}",
+                proof.id
+            );
+            let command = catalog
+                .commands
+                .iter()
+                .find(|c| Some(c.id.as_str()) == proof.command_id.as_deref())
+                .unwrap();
+            assert_eq!(
+                command.mode,
+                sf_conformance::capability_model::CommandMode::Required
+            );
+        }
     }
 }
 

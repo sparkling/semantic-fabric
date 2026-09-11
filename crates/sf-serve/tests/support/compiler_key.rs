@@ -79,17 +79,36 @@ pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap])
 /// Only ordinary SELECT fixtures; the caller proves the actual stage path.
 #[allow(dead_code)] // Shared support is also included by earlier-phase test modules.
 pub(crate) fn lowering_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    let (plan, work) = lowering_plan_and_work(source, maps);
+    assert!(
+        plan.branches.len() > 1
+            || plan
+                .branches
+                .iter()
+                .any(|b| !b.opts.is_empty() || b.subplan_joins.iter().any(|sp| sp.left)),
+        "the fixture must actually lower an OPTIONAL result carrier"
+    );
+    work
+}
+
+#[allow(dead_code)]
+pub(crate) fn lower_scope_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    let (plan, work) = lowering_plan_and_work(source, maps);
+    assert_eq!(plan.branches.len(), 1);
+    let branch = &plan.branches[0];
+    assert_eq!(branch.core.len(), 1);
+    assert!(branch.opts.is_empty() && branch.subplan_joins.is_empty());
+    assert!(matches!(&plan.form, sf_sparql::PlanForm::Select { vars } if !vars.is_empty()));
+    assert!(work > 0, "the plain mapped scope must no longer be unpaid");
+    work
+}
+
+fn lowering_plan_and_work(
+    source: &str,
+    maps: &[sf_core::ir::TriplesMap],
+) -> (sf_sparql::Plan, u64) {
     use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
-    let spargebra::Query::Select { pattern, .. } =
-        spargebra::SparqlParser::new().parse_query(source).unwrap()
-    else {
-        panic!("LOWER calibration requires ordinary SELECT");
-    };
-    let tree = sf_sparql::build::build_tree(&pattern, None).unwrap();
-    let tbox = sf_sparql::Tbox::default();
-    let mut cx = sf_sparql::iq::resolve::ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &[]);
-    let resolved = sf_sparql::iq::resolve::resolve(tree, &mut cx).unwrap();
-    let normalized = sf_sparql::iq::normalize::normalize(resolved).unwrap();
+    let normalized = normalized_tree(source, maps);
     let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
     let plan = sf_sparql::iq::lower::lower_with_work_control(
         normalized,
@@ -99,15 +118,70 @@ pub(crate) fn lowering_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u
         &control,
     )
     .unwrap();
-    assert!(
-        plan.branches.len() > 1
-            || plan
-                .branches
-                .iter()
-                .any(|b| !b.opts.is_empty() || b.subplan_joins.iter().any(|sp| sp.left)),
-        "the fixture must actually lower an OPTIONAL result carrier"
-    );
-    control.consumed(QueryCharge::CompilerWork)
+    (plan, control.consumed(QueryCharge::CompilerWork))
+}
+
+fn normalized_tree(source: &str, maps: &[sf_core::ir::TriplesMap]) -> sf_sparql::iq::node::IqNode {
+    let spargebra::Query::Select { pattern, .. } =
+        spargebra::SparqlParser::new().parse_query(source).unwrap()
+    else {
+        panic!("LOWER calibration requires ordinary SELECT");
+    };
+    let tree = sf_sparql::build::build_tree(&pattern, None).unwrap();
+    let tbox = sf_sparql::Tbox::default();
+    let mut cx = sf_sparql::iq::resolve::ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &[]);
+    let resolved = sf_sparql::iq::resolve::resolve(tree, &mut cx).unwrap();
+    sf_sparql::iq::normalize::normalize(resolved).unwrap()
+}
+
+/// Hand-count only the entry prefix and final projection for these source-free
+/// fixtures. Never execute/subtract LOWER: that could pay away the clone/product
+/// rejection under test. Shape assertions fail if a new operator needs accounting.
+#[allow(dead_code)]
+pub(crate) fn source_free_entry_work(source: &str) -> (u64, u64) {
+    use sf_sparql::iq::node::{IqCond, IqNode, Var};
+    fn visits(node: &IqNode) -> usize {
+        1 + match node {
+            IqNode::Construction { child, subst, .. } => {
+                assert!(subst.is_empty());
+                assert!(matches!(
+                    **child,
+                    IqNode::Values { .. }
+                        | IqNode::Filter { .. }
+                        | IqNode::InnerJoin { .. }
+                        | IqNode::Empty { .. }
+                ));
+                visits(child)
+            }
+            IqNode::Filter { child, cond } => {
+                assert!(matches!(**child, IqNode::Values { .. }));
+                let [IqCond::Exists(inner)] = cond.as_slice() else {
+                    panic!("one EXISTS only")
+                };
+                assert!(matches!(**inner, IqNode::Values { .. }));
+                visits(child) + 1 + 1 + visits(inner) // condition slot + condition node
+            }
+            IqNode::InnerJoin { children, cond } => {
+                assert!(cond.is_empty());
+                assert!(children.iter().all(|c| matches!(c, IqNode::Values { .. })));
+                children.len() + children.iter().map(visits).sum::<usize>()
+            }
+            IqNode::Values { .. } | IqNode::Empty { .. } => 0,
+            _ => panic!("fixture has an uncalibrated LOWER operator"),
+        }
+    }
+    let node = normalized_tree(source, &[]);
+    let vars = match &node {
+        IqNode::Construction { project, .. } => project,
+        IqNode::Values { vars, .. } | IqNode::Empty { vars } => vars,
+        _ => panic!("fixture must have a direct, non-modifier output scope"),
+    };
+    let payload = vars.iter().map(|v| 1 + v.len()).sum::<usize>();
+    // Alias visits + successor, one spine dispatch, output-scope visit, then its
+    // logical Var vector and payload. Final String vector/payload are a tail.
+    let prefix = visits(&node) + 3 + vars.len() * (1 + std::mem::size_of::<Var>()) + payload;
+    let tail = vars.len() * (1 + std::mem::size_of::<String>()) + payload;
+    (prefix as u64, tail as u64)
 }
 
 pub(crate) const CONSTANT_QUERIES: [&str; 3] = [

@@ -10,7 +10,7 @@ const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
 #[path = "../tests/support/compiler_key.rs"]
 mod compiler_key;
-use compiler_key::{build_work, key_work, normalization_work};
+use compiler_key::{build_work, key_work, normalization_work, source_free_entry_work};
 
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
@@ -46,7 +46,8 @@ fn config_with_mapping(
 
 #[tokio::test]
 async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
-    let build = build_work(QUERY) + normalization_work(QUERY, &[]);
+    let (prefix, tail) = source_free_entry_work(QUERY);
+    let build = build_work(QUERY) + normalization_work(QUERY, &[]) + prefix + tail;
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
     let exact = 2 * input + key + 2 * build;
@@ -91,6 +92,16 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
             assert_eq!(budget.consumed(QueryCharge::CompilerWork), consumed);
             assert!(budget.checkpoint().is_err());
         }
+        // A sticky terminal wakes the waiter before the owned blocking worker
+        // necessarily drops its permit. Require bounded actual cleanup.
+        let recovered = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            cfg.compiler_permits().acquire_many_owned(4),
+        )
+        .await
+        .expect("both compiler passes must finish cleanup")
+        .unwrap();
+        drop(recovered);
         assert_eq!(cfg.compiler_permits().available_permits(), 4);
     }
 }
@@ -195,7 +206,7 @@ async fn compiler_expansion_work_rejects_before_source_admission() {
         // Source-free fixtures target LOWER; mapped fixtures still target earlier
         // RESOLVE. Do not move their existing rejection boundary to NORMALIZE.
         let normalization = if maps.is_empty() {
-            normalization_work(query, &[])
+            normalization_work(query, &[]) + source_free_entry_work(query).0
         } else {
             0
         };

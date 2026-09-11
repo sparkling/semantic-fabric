@@ -9,6 +9,12 @@ const QUERIES: [&str; 4] = [
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { { SELECT DISTINCT ?item ?optional WHERE { ?item <http://example.test/b> ?optional } } } }",
 ];
 
+const SCOPE_QUERIES: [&str; 3] = [
+    "SELECT ?value WHERE { ?item <http://example.test/a> ?value }",
+    "SELECT (?value AS ?renamed) WHERE { ?item <http://example.test/a> ?value }",
+    "SELECT ?item (?value AS ?renamed) WHERE { ?item <http://example.test/a> ?value }",
+];
+
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     sf_mapping::parse_r2rml(
         r#"
@@ -25,7 +31,7 @@ fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     .unwrap()
 }
 
-fn mapped_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
+fn mapped_work(query: &str, maps: &[sf_core::ir::TriplesMap], scope_only: bool) -> (u64, u64, u64) {
     use sf_core::query_control::QueryBudget;
     use std::sync::Mutex;
     use tracing::{
@@ -112,7 +118,12 @@ fn mapped_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64)
     // cold-total subtraction that could absorb later LOWER/cascade work.
     let (start, end, visits) = *bounds.lock().unwrap();
     assert_eq!(visits, 1);
-    assert_eq!(end - start, compiler_key::lowering_work(query, maps));
+    let independently_lowered = if scope_only {
+        compiler_key::lower_scope_work(query, maps)
+    } else {
+        compiler_key::lowering_work(query, maps)
+    };
+    assert_eq!(end - start, independently_lowered);
     let prefix = query.len() as u64 + start;
     assert!(prefix > query.len() as u64 + key_work(query) + build_work(query));
     (prefix, query.len() as u64 + end, complete)
@@ -134,14 +145,30 @@ async fn change_work(cfg: &mut Arc<ServeConfig>, work: u64) {
 
 #[test]
 fn mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary() {
+    mapped_process(
+        "request_compile::tests::optional_work::mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary",
+        false,
+    );
+}
+
+#[test]
+fn mapped_lower_scope_work_refusal_and_projection_recovery() {
+    mapped_process(
+        "request_compile::tests::optional_work::mapped_lower_scope_work_refusal_and_projection_recovery",
+        true,
+    );
+}
+
+fn mapped_process(selector: &str, scope_only: bool) {
     const CHILD: &str = "SF_OPTIONAL_TEST_PROCESS";
     const COMPLETED: i32 = 61;
-    if std::env::var_os(CHILD).is_some() {
+    if let Some(actual) = std::env::var_os(CHILD) {
+        assert_eq!(actual, selector, "the exact intended child must execute");
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(mapped_admission_cases());
+            .block_on(mapped_admission_cases(scope_only));
         // Only successful execution of every case emits this witness. An exact
         // libtest selector matching zero tests exits 0 and must not pass here.
         std::process::exit(COMPLETED);
@@ -149,13 +176,9 @@ fn mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary() {
     // Compiler spans have process-wide callsite interest. Keep the calibration
     // independent of parallel tests registering/using that same callsite.
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "request_compile::tests::optional_work::mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary",
-            "--nocapture",
-        ])
+        .args(["--exact", selector, "--nocapture"])
         .env_clear()
-        .env(CHILD, "1")
+        .env(CHILD, selector)
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -177,10 +200,15 @@ fn mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary() {
     }
 }
 
-async fn mapped_admission_cases() {
+async fn mapped_admission_cases(scope_only: bool) {
     let maps = mapped_fixture();
-    for (variant, query) in QUERIES.into_iter().enumerate() {
-        let (prefix, normalized, exact) = mapped_work(query, &maps);
+    let queries = if scope_only {
+        SCOPE_QUERIES.as_slice()
+    } else {
+        QUERIES.as_slice()
+    };
+    for (variant, query) in queries.iter().copied().enumerate() {
+        let (prefix, normalized, exact) = mapped_work(query, &maps, scope_only);
         let cached = query.len() as u64 + key_work(query);
         assert!(cached < prefix);
         for secured in [false, true] {
@@ -273,20 +301,61 @@ async fn mapped_admission_cases() {
                 assert_eq!(response.status(), StatusCode::OK);
                 let bytes = response.into_body().collect().await.unwrap().to_bytes();
                 let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let field = if scope_only && variant > 0 {
+                    "renamed"
+                } else {
+                    "value"
+                };
+                let head = if scope_only {
+                    if variant == 2 {
+                        vec!["item", "renamed"]
+                    } else {
+                        vec![field]
+                    }
+                } else {
+                    vec!["value", "optional"]
+                };
+                assert_eq!(result["head"]["vars"], serde_json::json!(head));
+                if scope_only && variant == 2 {
+                    let mut items: Vec<_> = result["results"]["bindings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| {
+                            (
+                                row["item"]["value"].as_str().unwrap(),
+                                row[field]["value"].as_str().unwrap(),
+                            )
+                        })
+                        .collect();
+                    items.sort();
+                    assert_eq!(
+                        items,
+                        vec![
+                            ("http://example.test/item/1", "one"),
+                            ("http://example.test/item/2", "one"),
+                            ("http://example.test/item/3", "two")
+                        ]
+                    );
+                }
                 let mut values: Vec<_> = result["results"]["bindings"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .map(|row| {
                         (
-                            row["value"]["value"].as_str().unwrap(),
+                            row[field]["value"].as_str().unwrap(),
                             row.get("optional").map(|v| v["value"].as_str().unwrap()),
                         )
                     })
                     .collect();
                 values.sort();
-                let mut expected = vec![("one", Some("x")), ("one", None), ("two", Some("y"))];
-                if variant == 1 {
+                let mut expected = if scope_only {
+                    vec![("one", None), ("one", None), ("two", None)]
+                } else {
+                    vec![("one", Some("x")), ("one", None), ("two", Some("y"))]
+                };
+                if !scope_only && variant == 1 {
                     expected.extend([("one", Some("x")), ("two", Some("y"))]);
                 }
                 expected.sort();

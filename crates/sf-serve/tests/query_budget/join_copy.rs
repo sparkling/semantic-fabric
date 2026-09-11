@@ -14,6 +14,7 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
             + key_work(&query)
             + build_work(&query)
             + normalization_work(&query, &[])
+            + source_free_entry_work(&query).0
             + 512,
     ));
     assert_budget_problem(

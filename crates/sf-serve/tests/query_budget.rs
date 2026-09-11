@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 #[path = "query_budget/cache_key.rs"]
 mod cache_key;
-use cache_key::{build_work, key_work, normalization_work};
+use cache_key::{build_work, key_work, normalization_work, source_free_entry_work};
 
 #[path = "query_budget/constant_normalization.rs"]
 mod constant_normalization;
@@ -301,7 +301,11 @@ async fn zero_compiler_work_is_a_pre_response_429() {
 async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
     let query = CLONING;
     let response = router(Arc::new(protected(
-        query.len() as u64 + key_work(query) + build_work(query) + normalization_work(query, &[]),
+        query.len() as u64
+            + key_work(query)
+            + build_work(query)
+            + normalization_work(query, &[])
+            + source_free_entry_work(query).0,
     )))
     .oneshot(authenticated(query))
     .await
@@ -315,7 +319,8 @@ async fn compiler_products_cannot_spend_only_their_input_allowance() {
         PRODUCTS.len() as u64
             + key_work(PRODUCTS)
             + build_work(PRODUCTS)
-            + normalization_work(PRODUCTS, &[]),
+            + normalization_work(PRODUCTS, &[])
+            + source_free_entry_work(PRODUCTS).0,
     )))
     .oneshot(authenticated(PRODUCTS))
     .await

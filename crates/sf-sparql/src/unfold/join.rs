@@ -340,14 +340,16 @@ mod tests {
         crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
         let build_work = build_control.consumed(QueryCharge::CompilerWork);
         let normalize_control = budget(u64::MAX);
-        crate::iq::normalize::normalize_with_work_control(
+        let normalized = crate::iq::normalize::normalize_with_work_control(
             crate::build::build_tree(&pattern, None).unwrap(),
             &normalize_control,
         )
         .unwrap();
+        let prefix = crate::iq::lower::scope_test_support::entry_work(&normalized).0;
         let prerequisites =
-            key_work + build_work + normalize_control.consumed(QueryCharge::CompilerWork);
-        // Reach the unpaid first 1×4 product after independent BUILD/NORMALIZE.
+            key_work + build_work + normalize_control.consumed(QueryCharge::CompilerWork) + prefix;
+        // Reach the unpaid first 1×4 product after independent BUILD/NORMALIZE
+        // and LOWER entry/scope preparation, never a whole-LOWER estimate.
         let short = budget(prerequisites + 3);
         assert!(binding
             .compile_shared_with_work_control(query, &short)
