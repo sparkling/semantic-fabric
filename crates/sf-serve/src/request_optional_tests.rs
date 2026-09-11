@@ -1,7 +1,8 @@
 use super::*;
 use http_body_util::BodyExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
+#[path = "request_bind_tests.rs"]
+mod bind;
 #[path = "request_cache_identity_tests.rs"]
 mod cache_identity;
 #[path = "request_condition_tests.rs"]
@@ -14,27 +15,23 @@ mod preparation;
 mod shape;
 #[path = "request_optional_unification_tests.rs"]
 mod unification;
-
 const QUERIES: [&str; 4] = [
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional } }",
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { { ?item <http://example.test/b> ?optional } UNION { ?item <http://example.test/b> ?optional } } }",
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional OPTIONAL { ?item <http://example.test/b> ?nested } } }",
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { { SELECT DISTINCT ?item ?optional WHERE { ?item <http://example.test/b> ?optional } } } }",
 ];
-
 const SCOPE_QUERIES: [&str; 3] = [
     "SELECT ?value WHERE { ?item <http://example.test/a> ?value }",
     "SELECT (?value AS ?renamed) WHERE { ?item <http://example.test/a> ?value }",
     "SELECT ?item (?value AS ?renamed) WHERE { ?item <http://example.test/a> ?value }",
 ];
-
 const ALIAS_QUERIES: [&str; 2] = [
     // Keep alias-reservation accounting independent of parser-generated COUNT
     // names. Separate cache_identity tests prove the COUNT cold/warm public path.
     "SELECT ?value WHERE { ?item <http://example.test/a> ?value } GROUP BY ?value",
     "SELECT ?value WHERE { { ?item <http://example.test/a> ?value } UNION { ?item <http://example.test/a> ?value } } GROUP BY ?value",
 ];
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MappedProfile {
     Optional,
@@ -47,6 +44,7 @@ enum MappedProfile {
     Shape,
     Materialization,
     Condition,
+    Bind,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -175,6 +173,7 @@ fn mapped_work(
         | MappedProfile::Shape
         | MappedProfile::Materialization
         | MappedProfile::Condition
+        | MappedProfile::Bind
         | MappedProfile::Filter => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
@@ -242,6 +241,8 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
                     cache_identity::cases().await;
                 } else if profile == MappedProfile::Condition {
                     condition::cases().await;
+                } else if profile == MappedProfile::Bind {
+                    bind::cases().await;
                 } else {
                     mapped_admission_cases(profile).await;
                 }
@@ -290,7 +291,8 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Identity
         | MappedProfile::Preparation
         | MappedProfile::Materialization
-        | MappedProfile::Condition => {
+        | MappedProfile::Condition
+        | MappedProfile::Bind => {
             unreachable!("separate helper acceptance")
         }
     };

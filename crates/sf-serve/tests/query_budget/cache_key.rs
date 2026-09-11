@@ -72,7 +72,8 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    // No branch product: input, key, BUILD, NORMALIZE and LOWER scope work.
+    // No branch product: input, key, BUILD, NORMALIZE, LOWER scope and the
+    // two empty-substitution visits (one for each independently retained row).
     let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
         .append_pair("query", query)
@@ -83,7 +84,8 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         + build_work(query)
         + normalization_work(query, &[])
         + prefix
-        + tail;
+        + tail
+        + 2;
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -141,7 +143,9 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                     0
                 } else {
                     let (prefix, tail) = source_free_entry_work(&query);
-                    build_work(&query) + normalization_work(&query, &[]) + prefix + tail
+                    // Two retained VALUES rows each pay one empty fold; warm
+                    // requests still pay only the unchanged input/key work.
+                    build_work(&query) + normalization_work(&query, &[]) + prefix + tail + 2
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

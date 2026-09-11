@@ -65,15 +65,22 @@ use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, OrderKey, R2rmlGraphScope, RustAgg,
     RustGroup, Scan, SqlCond, SubPlanJoin, TermDef,
 };
-use crate::leftjoin::{
-    def_is_nullable, left_join_branches_with_work_mode as left_join_branches, null_safe,
-};
+use crate::leftjoin::left_join_branches_with_work_mode as left_join_branches;
 use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches_with_work_mode, single_column_of};
 use crate::unify::{bind_term_def, filter_branch as filter_cond, unify, Unify};
 use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 #[path = "lower_conditions.rs"]
 mod conditions;
+#[path = "lower_substitution.rs"]
+mod substitution;
+use substitution::fold_subst;
+#[cfg(test)]
+#[path = "lower_substitution_join_tests.rs"]
+mod substitution_join_work_tests;
+#[cfg(test)]
+#[path = "lower_substitution_tests.rs"]
+mod substitution_work_tests;
 use conditions::{apply_conds, apply_conds_to_branches, apply_owned_conds, peel_filters};
 #[cfg(test)]
 #[path = "lower_condition_ownership_tests.rs"]
@@ -306,7 +313,7 @@ fn lower_spine(
                 matches!(d, BindDef::Expr(e)
                     if !matches!(e.as_ref(), Expression::Variable(_)) && is_arith_over_agg(e.as_ref()))
             });
-            let mut branches = lower_spine(
+            let branches = lower_spine(
                 *child, dialect, spine, next_alias, extra_keep, star_env, work_mode,
             )?;
             // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
@@ -321,13 +328,17 @@ fn lower_spine(
                 rename_rust_group_outputs(&subst, rg)?;
                 return Ok(branches);
             }
-            for b in &mut branches {
-                fold_subst(&subst, b)?;
+            let mut out = work.vector(branches.len())?;
+            for mut b in branches {
+                if !fold_subst(&subst, &mut b, work_mode)? {
+                    continue;
+                }
                 b.bindings.retain(|k, _| {
                     project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
                 });
+                out.push(b);
             }
-            Ok(branches)
+            Ok(out)
         }
         // The relational body (a leaf-CQ `Construction`, a `Union` of leaf-CQs, or a bare
         // leaf): the projected scope is its output scope; fold it to branches.
@@ -521,7 +532,7 @@ fn lower_node(
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
                 // (provably disjoint constants) — drop it, mirroring the flat `merge`
                 // `None` prune (§5 / R4), never a silent wrong row.
-                if !fold_subst(&subst, &mut b)? {
+                if !fold_subst(&subst, &mut b, work_mode)? {
                     continue;
                 }
                 for cond in &filters {
@@ -537,7 +548,7 @@ fn lower_node(
                 out.push(b);
             }
             if let Some(mut b) = last {
-                if fold_subst(&subst, &mut b)? {
+                if fold_subst(&subst, &mut b, work_mode)? {
                     for cond in filters {
                         apply_owned_conds(cond, &mut b, dialect, work_mode)?;
                     }
@@ -629,176 +640,6 @@ pub(crate) fn convert_path_branches(
     }
     *next_alias = end;
     Ok(())
-}
-
-/// Fold a `Construction` substitution into one branch's bindings (design §5
-/// Construction). `Resolved(td)` inserts straight; `Expr(e)` resolves via the flat
-/// [`bind_term_def`] against the now-known per-branch bindings (R4: the same fn the live
-/// `Extend` arm calls, here per resulting branch). Resolved entries are folded first so a
-/// `BIND` can reference a triple-resolved variable; symbolic entries then resolve in
-/// dependency order (a multi-pass fixpoint so `BIND(?y:=?x) . BIND(?z:=?y)` resolves
-/// regardless of the `BTreeMap` order — a still-unresolvable entry stays a sound 501).
-/// Fold a `Construction`'s `subst` into one branch's bindings (design §5 Construction).
-/// Returns `Ok(false)` when the fold proved the branch **unsatisfiable** (a shared-var
-/// unify yielded `Empty`) so the caller drops it — mirroring the flat `merge` `None`
-/// prune (`unfold.rs:1194`).
-///
-/// A variable the branch ALREADY binds (e.g. it joined a `Values` leaf that bound it
-/// per-row, or two leaf-CQs share a constructed var) is NOT overwritten: the incoming
-/// definition is **unified** against the existing one via the proven [`unify`] oracle —
-/// `Sat` conds append to `where_conds` (the natural-join equality), `Empty` drops the
-/// branch, `Unsupported` is a tracked sound-501. This is the same variable-by-variable
-/// rule the flat [`merge`](crate::unfold) applies (`unfold.rs:1190-1201`); without it a
-/// `Join(BGP, VALUES)` (or any pre-bound shared var) degenerates to a cartesian product.
-fn fold_subst(subst: &BTreeMap<Var, BindDef>, b: &mut Branch) -> Result<bool> {
-    let mut pending: Vec<(&Var, &Expression)> = Vec::new();
-    for (v, def) in subst {
-        match def {
-            BindDef::Resolved(td) => {
-                if insert_or_unify(b, v, td.clone())? {
-                    return Ok(false); // provably disjoint ⇒ drop the branch
-                }
-            }
-            BindDef::Expr(e) => pending.push((v, e)),
-        }
-    }
-    while !pending.is_empty() {
-        let mut next: Vec<(&Var, &Expression)> = Vec::new();
-        let mut last_err: Option<String> = None;
-        let progressed_before = pending.len();
-        for (v, e) in pending {
-            match bind_term_def(e, &b.bindings) {
-                Ok(td) => {
-                    if insert_or_unify(b, v, td)? {
-                        return Ok(false);
-                    }
-                }
-                Err(why) => {
-                    last_err = Some(why);
-                    next.push((v, e));
-                }
-            }
-        }
-        if next.len() == progressed_before {
-            // A whole pass resolved nothing — the remaining entries are genuinely
-            // unsupported / unbound (never silently dropped, design §5.1 R4).
-            return Err(Error::Unsupported(last_err.unwrap_or_else(|| {
-                "BIND expression could not be resolved at LOWER → 501".to_owned()
-            })));
-        }
-        pending = next;
-    }
-    Ok(true)
-}
-
-/// Insert `td` as the branch's binding for `v`, or — when `v` is already bound —
-/// **unify** the existing and incoming definitions (the flat `merge` rule, keeping the
-/// existing binding and appending the equality conds). Returns `Ok(true)` iff the two
-/// are provably disjoint (`Unify::Empty`), signalling the branch is unsatisfiable.
-fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
-    match b.bindings.get(v.as_ref()) {
-        None => {
-            b.bindings.insert(v.to_string(), td);
-            Ok(false)
-        }
-        Some(existing) => {
-            // Clone so we can consult `b` (nullable-alias set, subplan joins) and then
-            // mutate its bindings/conds below without a borrow conflict.
-            let existing = existing.clone();
-            // A shared variable may be UNBOUND when its EXISTING or incoming definition
-            // reads a nullable (LEFT-JOINed) alias — a prior OPTIONAL's scan OR a
-            // LEFT-JOINed SubPlan derived table (`Branch::nullable_aliases`). The plain
-            // equality `unify` below then treats the unbound side as SQL NULL and DROPS the
-            // row, but SPARQL compatible-merge (§18.5) KEEPS it and binds the variable from
-            // the OTHER, mandatory side. This is the InnerJoin / BGP-merge entry point
-            // (`IqNode::InnerJoin` folds the join's shared-var equality through the
-            // `Construction` subst → here).
-            let opt_aliases = b.nullable_aliases();
-            let existing_nullable = def_is_nullable(&existing, &opt_aliases);
-            let td_nullable = def_is_nullable(&td, &opt_aliases);
-            let nullable = existing_nullable || td_nullable;
-            // A nullable SubPlan derived-table alias (`subplan_joins` with `left == true`,
-            // ADR-0023 Item 1d) is emitted differently and the R1/R2 machinery below is NOT
-            // verified for a subplan alias — keep the established sound 501 for that shape
-            // (every OPTIONAL-decomposition / FILTER-EXISTS path already 501s it too).
-            let subplan_nullable = reads_left_subplan(b, &existing) || reads_left_subplan(b, &td);
-            match unify(&existing, &td) {
-                Unify::Sat(conds) => {
-                    if conds.is_empty() {
-                        // Identical defs (no correlating equality) — drops nothing, untouched.
-                        return Ok(false);
-                    }
-                    if subplan_nullable {
-                        return Err(Error::Unsupported(
-                            "INNER JOIN correlating on a variable bound by a LEFT-JOINed \
-                             SubPlan derived table (a modifier sub-SELECT attached as an \
-                             OPTIONAL's right operand) is not yet supported → 501 (ADR-0023 \
-                             Item 1d boundary — the plain-equality merge cannot null-safely \
-                             compatible-merge it)"
-                                .to_owned(),
-                        ));
-                    }
-                    if nullable {
-                        // ADR-0025 Tier-1 (opts-nullability): a nullable (OPTIONAL-bound)
-                        // shared var. BOTH sides nullable ⇒ the merged value genuinely
-                        // depends per-row on which side is bound, needing a non-injective
-                        // `COALESCE` that SQL-level DISTINCT/dedup cannot collapse (it dedups
-                        // raw columns before term reconstruction). Sound 501 (ADR-0007;
-                        // adversarial-review Bug B, both-nullable residual) rather than a wrong
-                        // answer under DISTINCT/GROUP. Exactly-one-nullable is the common,
-                        // safe case handled below.
-                        if existing_nullable && td_nullable {
-                            return Err(Error::Unsupported(
-                                "INNER JOIN correlating on a variable bound by TWO OPTIONALs \
-                                 (both sides nullable) is not yet supported → 501 (the \
-                                 compatible-merge value needs a non-injective COALESCE that \
-                                 SQL-level DISTINCT/dedup cannot collapse — ADR-0025)"
-                                    .to_owned(),
-                            ));
-                        }
-                        // R1 — `null_safe` equality (`NullSafeEq` = `a=b OR a IS NULL OR b IS
-                        // NULL`) so an unbound (NULL) side is vacuously compatible, row KEPT.
-                        for c in conds {
-                            b.where_conds.push(null_safe(c, true));
-                        }
-                        // R2 — the row survives only where the two agree (R1), so the value
-                        // equals the MANDATORY (non-nullable) side's raw def; use it directly
-                        // — no COALESCE, so DISTINCT stays correct on the injective raw column.
-                        let merged = if existing_nullable { td } else { existing };
-                        b.bindings.insert(v.to_string(), merged);
-                    } else {
-                        b.where_conds.extend(conds);
-                    }
-                    Ok(false)
-                }
-                // A nullable side that is provably disjoint on VALUES can still be UNBOUND
-                // (compatible) — dropping the whole branch would lose those unbound rows, and
-                // the plain-equality fold cannot express "keep only the unbound-compatible
-                // rows" from an `Empty` unify → sound 501 (ADR-0007) rather than silently
-                // wrong. (A nullable side is a column, so `Empty` here is a rare edge.)
-                Unify::Empty if nullable => Err(Error::Unsupported(
-                    "INNER JOIN correlating on an OPTIONAL-bound (nullable) variable whose \
-                     definitions are provably disjoint is not yet supported → 501 \
-                     (compatible-merge must keep the unbound-compatible rows)"
-                        .to_owned(),
-                )),
-                Unify::Empty => Ok(true),
-                Unify::Unsupported(why) => Err(Error::Unsupported(why)),
-            }
-        }
-    }
-}
-
-/// Whether `def` reads a LEFT-JOINed SubPlan derived-table alias of `b` (`subplan_joins`
-/// with `left == true`) — i.e. a value that may be UNBOUND when the derived-table LEFT
-/// JOIN finds no match. `TermDef::columns` recurses through `Coalesce`/`Concat`, so a
-/// composite binding over such an alias is caught too. Empty (a no-op) whenever `b`
-/// carries no `left == true` SubPlan — the flat path and every non-subplan branch.
-fn reads_left_subplan(b: &Branch, def: &TermDef) -> bool {
-    let cols = def.columns();
-    b.subplan_joins
-        .iter()
-        .any(|sp| sp.left && cols.iter().any(|c| c.alias == sp.alias))
 }
 
 /// `EXISTS { P }` / `NOT EXISTS { P }` (and `MINUS`) → a correlated semi/anti-join

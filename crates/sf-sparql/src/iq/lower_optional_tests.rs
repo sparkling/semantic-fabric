@@ -144,9 +144,17 @@ fn optional_work_lower_dispatch_cost_matches_the_independently_selected_helper()
         )
         .unwrap();
         assert_eq!(format!("{branches:?}"), format!("{expected_branches:?}"));
+        // The data(2) Construction establishes exactly one borrowed binding:
+        // fold1 + entry1 + copy + lookup1 + map carrier + key string(1+5).
+        let copied = crate::plan_measure::clone_root::measure_copy_root(
+            crate::plan_measure::clone_root::CompilerCloneRootV1::TermDef(&right.bindings["value"]),
+        )
+        .unwrap()
+        .total_work;
+        let construction = 9 + copied + std::mem::size_of::<(String, TermDef)>() as u64;
         assert_eq!(
             actual.consumed(QueryCharge::CompilerWork),
-            expected.consumed(QueryCharge::CompilerWork)
+            expected.consumed(QueryCharge::CompilerWork) + construction
         );
         assert!(actual.consumed(QueryCharge::CompilerWork) > 0);
     }

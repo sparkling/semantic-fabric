@@ -13,7 +13,8 @@ use sf_sql::Dialect;
 pub(crate) fn construction_exists_condition_work() -> (u64, u64, u64) {
     let group = 2 + std::mem::size_of::<Vec<IqCond>>() as u64;
     let append = 1 + std::mem::size_of::<SqlCond>() as u64;
-    (group + 2, append + 2, 2 * append + 2)
+    // Each of the three branches now also pays its empty substitution visit.
+    (group + 3, append + 3, 2 * append + 3)
 }
 
 fn mode(control: &dyn QueryControl) -> CompilerWorkMode<'_> {
