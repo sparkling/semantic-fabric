@@ -52,7 +52,7 @@ use crate::iq::{
 /// LOST to the plain linear scan in a criterion bench (the same finding as
 /// `exec_core::ColIndex`) — a sorted `Vec` avoids both the allocation and the
 /// hashing while still beating an O(n) scan at the largest mappings.
-type SchemaMap<'a> = Vec<(&'a str, &'a TableSchema)>;
+pub(crate) type SchemaMap<'a> = Vec<(&'a str, &'a TableSchema)>;
 
 /// Build a [`SchemaMap`] over `schema` (see its doc comment).
 fn build_schema_map(schema: &[TableSchema]) -> SchemaMap<'_> {
@@ -74,8 +74,16 @@ mod joinelim;
 mod optional_prune;
 pub(crate) mod rendered_distinct;
 use optional_prune::distinct_prune_unused_opts;
+mod d1_work;
 #[cfg(test)]
 mod pool_source_authority_tests;
+mod resolve_schema;
+mod resolve_work;
+pub(crate) use resolve_schema::{build as build_resolve_schema, force_distinct_with_schema};
+pub(crate) use resolve_work::{
+    can_fallback as group_can_fallback_with_work, narrow as narrow_group_with_work,
+    needs_resolved_iri as group_needs_resolved_iri_with_work,
+};
 mod sameterm;
 #[cfg(test)]
 mod tests;
@@ -1405,6 +1413,17 @@ pub(crate) fn force_distinct_for_dup_safety(
 ///   of which alias tripped it, so wrapping the eligible scans first never
 ///   costs correctness even when a sibling scan still needs the fallback.
 fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect) {
+    d1_work::apply(
+        b,
+        schema,
+        dialect,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled D1 rewrite")
+}
+
+#[cfg(test)]
+fn apply_dup_safety_raw(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect) {
     let uncovered: Vec<usize> = b
         .core
         .iter()
@@ -1709,6 +1728,14 @@ struct PoolSourceAuthorityEntry {
 }
 
 impl PoolSourceAuthority {
+    pub(crate) fn capture_with_work(
+        branch: &Branch,
+        work: crate::build::control::BuildWork<'_>,
+    ) -> crate::Result<Self> {
+        resolve_work::capture(branch, work)
+    }
+
+    #[cfg(test)]
     pub(crate) fn capture(branch: &Branch) -> Self {
         let core_count = branch
             .core
@@ -1778,6 +1805,67 @@ fn pool_physical_source<'a>(
     }
 }
 
+fn pool_core_source_with_work<'a>(
+    branch: &'a Branch,
+    authority: Option<&'a PoolSourceAuthority>,
+    alias: usize,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<Option<&'a LogicalSource>> {
+    if matches!(work.mode, crate::CompilerWorkMode::Uncontrolled) {
+        return Ok(pool_core_source(branch, authority, alias));
+    }
+    work.checkpoint()?;
+    if let Some(authority) = authority {
+        for entry in &authority.sources {
+            work.charge(1)?;
+            if entry.alias == alias && entry.is_core {
+                return Ok(Some(&entry.source));
+            }
+        }
+    } else {
+        for scan in &branch.core {
+            work.charge(1)?;
+            if scan.alias == alias {
+                return Ok(scan.source.logical());
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn pool_physical_source_with_work<'a>(
+    branch: &'a Branch,
+    authority: Option<&'a PoolSourceAuthority>,
+    alias: usize,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<Option<std::borrow::Cow<'a, LogicalSource>>> {
+    use std::borrow::Cow;
+    work.checkpoint()?;
+    if let Some(authority) = authority {
+        for entry in &authority.sources {
+            work.charge(1)?;
+            if entry.alias == alias {
+                return Ok(Some(Cow::Borrowed(&entry.source)));
+            }
+        }
+        return Ok(None);
+    }
+    if matches!(work.mode, crate::CompilerWorkMode::Uncontrolled) {
+        return Ok(pool_physical_source(branch, None, alias).map(Cow::Borrowed));
+    }
+    // Governed RESOLVE normally supplies the pre-D1 authority. Other internal
+    // controlled callers use the same paid capture/first-alias rules rather
+    // than falling through to an uncharged alias_sources allocation.
+    let authority = resolve_work::capture(branch, work)?;
+    for entry in authority.sources {
+        work.charge(1)?;
+        if entry.alias == alias {
+            return Ok(Some(Cow::Owned(entry.source)));
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) fn group_pool_type_safety(
     members: &[&Branch],
     schema: &[TableSchema],
@@ -1790,6 +1878,7 @@ pub(crate) fn group_pool_type_safety(
 /// Evaluate the current branch bindings against source identities captured
 /// before D1. `members` and `source_authorities` are parallel, branch-indexed
 /// slices; a broken alignment fails closed.
+#[cfg(test)]
 pub(crate) fn group_pool_type_safety_with_source_authority(
     members: &[&Branch],
     source_authorities: &[&PoolSourceAuthority],
@@ -1813,110 +1902,256 @@ fn group_pool_type_safety_impl(
     dialect: sf_sql::Dialect,
     column_type_use: crate::compiler_schema::ColumnTypeUse,
 ) -> PoolTypeSafety {
+    group_pool_type_safety_with_work(
+        members,
+        source_authorities,
+        schema,
+        dialect,
+        column_type_use,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled pooling analysis is infallible")
+}
+
+fn pool_raw_origin<'a>(
+    branch: &'a Branch,
+    column: &'a ColRef,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<Option<(&'a LogicalSource, &'a str)>> {
+    if matches!(work.mode, crate::CompilerWorkMode::Uncontrolled) {
+        return Ok(crate::iq::scan::ref_atom::raw_origin(branch, column));
+    }
+    let Some(scan) = resolve_work::relation_scan(branch, column.alias, work)? else {
+        return Ok(None);
+    };
+    pool_raw_column_origin(&scan.source, &column.column, work)
+}
+
+fn pool_raw_column_origin<'a>(
+    source: &'a crate::iq::ScanSource,
+    name: &'a str,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<Option<(&'a LogicalSource, &'a str)>> {
+    let work = work.enter()?;
+    match source {
+        crate::iq::ScanSource::Logical(source) => Ok(Some((source, name))),
+        crate::iq::ScanSource::RefAtom { input, columns } => {
+            // The old lookup compared against format!("c{index}") for each
+            // index. Parse that exact canonical spelling without allocating.
+            work.charge(name.len())?;
+            let Some(digits) = name.strip_prefix('c') else {
+                return Ok(None);
+            };
+            work.charge(digits.len())?;
+            if digits.is_empty()
+                || (digits.len() > 1 && digits.starts_with('0'))
+                || !digits.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Ok(None);
+            }
+            work.charge(digits.len())?;
+            let Ok(index) = digits.parse::<usize>() else {
+                return Ok(None);
+            };
+            let Some(column) = columns.get(index) else {
+                return Ok(None);
+            };
+            for scan in &input.core {
+                work.charge(1)?;
+                if scan.alias == column.alias {
+                    return pool_raw_column_origin(&scan.source, &column.column, work);
+                }
+            }
+            Ok(None)
+        }
+        crate::iq::ScanSource::Path { .. } | crate::iq::ScanSource::Projection { .. } => Ok(None),
+    }
+}
+
+pub(crate) fn group_pool_type_safety_with_work(
+    members: &[&Branch],
+    source_authorities: Option<&[&PoolSourceAuthority]>,
+    schema: &[TableSchema],
+    dialect: sf_sql::Dialect,
+    column_type_use: crate::compiler_schema::ColumnTypeUse,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<PoolTypeSafety> {
+    work.checkpoint()?;
     if matches!(source_authorities, Some(authorities) if authorities.len() != members.len()) {
-        return PoolTypeSafety::Unproven;
+        return Ok(PoolTypeSafety::Unproven);
     }
     if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
-        return PoolTypeSafety::ProvenSafe;
+        return Ok(PoolTypeSafety::ProvenSafe);
     }
-    let schema_map = build_schema_map(schema);
-    let col_type = |index: usize, branch: &Branch, c: &ColRef| -> Option<&str> {
-        let authority = source_authorities.map(|authorities| authorities[index]);
-        let (source, column) = branch
-            .core
-            .iter()
-            .find(|scan| scan.alias == c.alias)
-            .and_then(|scan| scan.source.raw_column_origin(&c.column))
-            .or_else(|| {
-                pool_core_source(branch, authority, c.alias).map(|s| (s, c.column.as_ref()))
-            })?;
-        let LogicalSource::Table(t) = source else {
-            return None;
-        };
-        schema_map_get(&schema_map, t)?
-            .column(column)
-            .map(|col| col.sql_type.as_str())
+    // Serving observations cannot authorize cross-column pooling: that path
+    // returns Unproven before col_type is called. Do not sort/allocate an
+    // unused catalogue (or make work depend on irrelevant observations).
+    let schema_map = if column_type_use == crate::compiler_schema::ColumnTypeUse::Unverified {
+        Vec::new()
+    } else if matches!(work.mode, crate::CompilerWorkMode::Metered(_)) {
+        resolve_schema::build(schema, work)?
+    } else {
+        build_schema_map(schema)
     };
-    let same_physical_col =
-        |i: usize, bi: &Branch, ci: &ColRef, j: usize, bj: &Branch, cj: &ColRef| {
-            let origin = crate::iq::scan::ref_atom::raw_origin;
-            if let (Some(left), Some(right)) = (origin(bi, ci), origin(bj, cj)) {
-                return left.1 == right.1
-                    && matches!((left.0, right.0),
-                    (LogicalSource::Table(a), LogicalSource::Table(b))
-                    | (LogicalSource::Query(a), LogicalSource::Query(b)) if a == b);
+    group_pool_type_safety_with_schema(
+        members,
+        source_authorities,
+        &schema_map,
+        dialect,
+        column_type_use,
+        work,
+    )
+}
+
+pub(crate) fn group_pool_type_safety_with_schema(
+    members: &[&Branch],
+    source_authorities: Option<&[&PoolSourceAuthority]>,
+    schema_map: &SchemaMap<'_>,
+    dialect: sf_sql::Dialect,
+    column_type_use: crate::compiler_schema::ColumnTypeUse,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<PoolTypeSafety> {
+    work.checkpoint()?;
+    if matches!(source_authorities, Some(authorities) if authorities.len() != members.len()) {
+        return Ok(PoolTypeSafety::Unproven);
+    }
+    if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
+        return Ok(PoolTypeSafety::ProvenSafe);
+    }
+    let col_type = |index: usize, branch: &Branch, c: &ColRef| -> crate::Result<Option<&str>> {
+        let authority = source_authorities.map(|authorities| authorities[index]);
+        let mut origin = None;
+        for scan in &branch.core {
+            work.charge(1)?;
+            if scan.alias == c.alias {
+                origin = pool_raw_column_origin(&scan.source, &c.column, work)?;
+                break;
             }
-            if ci.column != cj.column {
-                return false;
-            }
-            matches!(
-                (
-                    pool_physical_source(
-                        bi,
-                        source_authorities.map(|authorities| authorities[i]),
-                        ci.alias,
-                    ),
-                    pool_physical_source(
-                        bj,
-                        source_authorities.map(|authorities| authorities[j]),
-                        cj.alias,
-                    )
-                ),
-                (Some(LogicalSource::Table(a)), Some(LogicalSource::Table(b))) if a == b
-            ) || matches!(
-                (
-                    pool_physical_source(
-                        bi,
-                        source_authorities.map(|authorities| authorities[i]),
-                        ci.alias,
-                    ),
-                    pool_physical_source(
-                        bj,
-                        source_authorities.map(|authorities| authorities[j]),
-                        cj.alias,
-                    )
-                ),
-                (Some(LogicalSource::Query(a)), Some(LogicalSource::Query(b))) if a == b
-            )
+        }
+        let origin = match origin {
+            Some(origin) => Some(origin),
+            None => pool_core_source_with_work(branch, authority, c.alias, work)?
+                .map(|source| (source, c.column.as_ref())),
         };
-    let is_float = |ty: &str| {
-        let ty = ty.to_ascii_lowercase();
-        ty == "real" || ty.contains("float") || ty.contains("double")
+        let Some((source, column)) = origin else {
+            return Ok(None);
+        };
+        let LogicalSource::Table(t) = source else {
+            return Ok(None);
+        };
+        let Some(table) = resolve_schema::lookup(schema_map, t, work)? else {
+            return Ok(None);
+        };
+        for candidate in &table.columns {
+            work.charge(1)?;
+            work.charge(candidate.name.len().min(column.len()))?;
+            if candidate.name == column {
+                return Ok(Some(candidate.sql_type.as_str()));
+            }
+        }
+        Ok(None)
+    };
+    let same_physical_col = |i: usize,
+                             bi: &Branch,
+                             ci: &ColRef,
+                             j: usize,
+                             bj: &Branch,
+                             cj: &ColRef|
+     -> crate::Result<bool> {
+        if let (Some(left), Some(right)) = (
+            pool_raw_origin(bi, ci, work)?,
+            pool_raw_origin(bj, cj, work)?,
+        ) {
+            work.charge(left.1.len().min(right.1.len()))?;
+            if let (LogicalSource::Table(a), LogicalSource::Table(b))
+            | (LogicalSource::Query(a), LogicalSource::Query(b)) = (left.0, right.0)
+            {
+                work.charge(a.len().min(b.len()))?;
+            }
+            return Ok(left.1 == right.1
+                && matches!((left.0, right.0),
+                    (LogicalSource::Table(a), LogicalSource::Table(b))
+                    | (LogicalSource::Query(a), LogicalSource::Query(b)) if a == b));
+        }
+        work.charge(ci.column.len().min(cj.column.len()))?;
+        if ci.column != cj.column {
+            return Ok(false);
+        }
+        let left = pool_physical_source_with_work(
+            bi,
+            source_authorities.map(|authorities| authorities[i]),
+            ci.alias,
+            work,
+        )?;
+        let right = pool_physical_source_with_work(
+            bj,
+            source_authorities.map(|authorities| authorities[j]),
+            cj.alias,
+            work,
+        )?;
+        match (left.as_deref(), right.as_deref()) {
+            (Some(LogicalSource::Table(a)), Some(LogicalSource::Table(b)))
+            | (Some(LogicalSource::Query(a)), Some(LogicalSource::Query(b))) => {
+                work.charge(a.len().min(b.len()))?;
+                Ok(a == b)
+            }
+            _ => Ok(false),
+        }
     };
     for (i, bi) in members.iter().enumerate() {
+        work.charge(1)?;
         for (j, bj) in members.iter().enumerate().skip(i + 1) {
+            work.charge(1)?;
             for (var, def_i) in &bi.bindings {
+                work.charge(1)?;
+                for key in bj.bindings.keys() {
+                    work.charge(1)?;
+                    work.charge(var.len().min(key.len()))?;
+                }
                 let Some(def_j) = bj.bindings.get(var) else {
                     continue;
                 };
-                let (cols_i, cols_j) = (def_i.columns(), def_j.columns());
+                let owned_columns = |def: &TermDef| -> crate::Result<Vec<ColRef>> {
+                    if matches!(work.mode, crate::CompilerWorkMode::Uncontrolled) {
+                        return Ok(def.columns());
+                    }
+                    let borrowed = resolve_work::columns(def, work)?;
+                    let mut out = work.vector(borrowed.len())?;
+                    for (alias, name) in borrowed {
+                        out.push(ColRef::new(alias, work.variable(name)?));
+                    }
+                    Ok(out)
+                };
+                let (cols_i, cols_j) = (owned_columns(def_i)?, owned_columns(def_j)?);
                 if cols_i.len() != cols_j.len() {
                     continue;
                 }
                 for (ci, cj) in cols_i.iter().zip(&cols_j) {
-                    if same_physical_col(i, bi, ci, j, bj, cj) {
+                    work.charge(1)?;
+                    if same_physical_col(i, bi, ci, j, bj, cj)? {
                         continue;
                     }
                     if column_type_use == crate::compiler_schema::ColumnTypeUse::Unverified {
-                        return PoolTypeSafety::Unproven;
+                        return Ok(PoolTypeSafety::Unproven);
                     }
-                    let (Some(ti), Some(tj)) = (col_type(i, bi, ci), col_type(j, bj, cj)) else {
-                        return PoolTypeSafety::Unproven;
+                    let (Some(ti), Some(tj)) = (col_type(i, bi, ci)?, col_type(j, bj, cj)?) else {
+                        return Ok(PoolTypeSafety::Unproven);
                     };
-                    if !ti.eq_ignore_ascii_case(tj) && (is_float(ti) || is_float(tj)) {
-                        return PoolTypeSafety::Unproven;
+                    if resolve_work::incompatible_sql_types(ti, tj, work)? {
+                        return Ok(PoolTypeSafety::Unproven);
                     }
                 }
             }
         }
     }
-    PoolTypeSafety::ProvenSafe
+    Ok(PoolTypeSafety::ProvenSafe)
 }
 
 /// Whether `scan`'s table is covered by a declared PK/UNIQUE key over
 /// `bindings` ([`table_key_covered_by_bindings`]). An `rr:sqlQuery` view scan
 /// (no `TableSchema` entry to prove anything from) is conservatively treated as
 /// never covered — the same conservatism `distinct_removal`'s own scans apply.
+#[cfg(test)]
 fn scan_key_covered(
     scan: &Scan,
     schema: &SchemaMap,
@@ -1953,7 +2188,18 @@ fn scan_key_covered(
 /// later-added correlation needs was necessarily already read by a binding
 /// that exists right now, so the wrap this builds from today's bindings stays
 /// valid however `where_conds` grows afterward.
+#[cfg(test)]
 fn alias_used_columns(b: &Branch, alias: usize) -> Vec<Box<str>> {
+    d1_work::used_columns(
+        b,
+        alias,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled used columns")
+}
+
+#[cfg(test)]
+fn alias_used_columns_raw(b: &Branch, alias: usize) -> Vec<Box<str>> {
     let mut cols: Vec<Box<str>> = Vec::new();
     let push = |c: &ColRef, cols: &mut Vec<Box<str>>| {
         if c.alias == alias && !cols.contains(&c.column) {
@@ -1984,7 +2230,18 @@ fn alias_used_columns(b: &Branch, alias: usize) -> Vec<Box<str>> {
 /// Whether every binding reading `alias`'s columns is [`binding_is_injective`]
 /// — the per-scan wrap's soundness precondition (see [`apply_dup_safety`]'s
 /// doc comment for why a non-injective binding disqualifies the wrap).
+#[cfg(test)]
 fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
+    d1_work::bindings_injective(
+        b,
+        alias,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled binding injectivity")
+}
+
+#[cfg(test)]
+fn alias_bindings_injective_raw(b: &Branch, alias: usize) -> bool {
     let keys = distinct_scan::lexical_keys(b, alias);
     let term_safe = |map: &TermMap, owner: usize| {
         owner != alias
@@ -2034,7 +2291,24 @@ fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
 /// so it can only parse as a column reference) — found via the W3C
 /// R2RMLTC0002c regression (a deliberately undefined `rr:column`, which the
 /// engine must reject, silently produced a bogus triple instead).
+#[cfg(test)]
 fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], _dialect: sf_sql::Dialect) {
+    d1_work::wrap_scan(
+        b,
+        alias,
+        cols,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled scan projection")
+}
+
+#[cfg(test)]
+fn wrap_scan_distinct_raw(
+    b: &mut Branch,
+    alias: usize,
+    cols: &[Box<str>],
+    _dialect: sf_sql::Dialect,
+) {
     let native_keys = distinct_scan::native_keys(b, alias);
     let lexical_keys = distinct_scan::lexical_keys(b, alias);
     let scan = b
@@ -2128,7 +2402,23 @@ pub(crate) fn col_is_unquoted_alias(sql: &str, col: &str) -> bool {
 /// the same physical row (`table_key_covered_by_bindings`'s test coverage:
 /// `om_mid`-shaped composite-key-split-across-variables fixture, ADR-0034/C0
 /// follow-up).
+#[cfg(test)]
 fn table_key_covered_by_bindings(
+    ts: &TableSchema,
+    alias: usize,
+    bindings: &std::collections::BTreeMap<String, TermDef>,
+) -> bool {
+    d1_work::key_covered(
+        ts,
+        alias,
+        bindings,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled key coverage")
+}
+
+#[cfg(test)]
+fn table_key_covered_by_bindings_raw(
     ts: &TableSchema,
     alias: usize,
     bindings: &std::collections::BTreeMap<String, TermDef>,

@@ -3,6 +3,11 @@
 use super::*;
 use crate::iq::ScanSource;
 
+#[path = "rendered_distinct_work.rs"]
+mod work;
+pub(super) use work::guard as guard_with_work;
+pub(super) use work::wrap_with_work;
+
 pub(crate) fn seal_late(branch: &mut Branch, dialect: sf_sql::Dialect) -> crate::Result<()> {
     if branch
         .where_conds
@@ -18,6 +23,16 @@ pub(crate) fn seal_late(branch: &mut Branch, dialect: sf_sql::Dialect) -> crate:
 }
 
 pub(super) fn wrap(branch: &mut Branch, dialect: sf_sql::Dialect) -> bool {
+    wrap_with_work(
+        branch,
+        dialect,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled rendered distinct")
+}
+
+#[cfg(test)]
+fn wrap_raw(branch: &mut Branch, dialect: sf_sql::Dialect) -> bool {
     if dialect != sf_sql::Dialect::Sqlite
         || branch.core.len() != 1
         || !branch.opts.is_empty()

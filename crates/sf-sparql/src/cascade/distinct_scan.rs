@@ -9,6 +9,11 @@ enum Consumer {
 }
 type Modes = std::collections::BTreeMap<Box<str>, Option<BTreeSet<Consumer>>>;
 
+#[path = "distinct_scan_work.rs"]
+mod work;
+pub(super) use work::condition_columns;
+pub(super) use work::native_keys_with_work;
+
 /// Capture original consumer semantics before D1 replaces them with synthetic
 /// raw Column recipes. IRI templates and explicit column literals preserve the
 /// decoded lexical value. Literal conditions own identity/value roles separately;
@@ -22,187 +27,147 @@ pub(crate) fn binding_lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::
 }
 
 fn keys(branch: &Branch, alias: usize, with_conditions: bool) -> Vec<crate::iq::LexicalKey> {
-    fn term(map: &TermMap, owner: usize, alias: usize, modes: &mut Modes) {
-        if owner != alias {
-            return;
-        }
-        let mode = match map {
-            TermMap::Template(_, spec) => {
-                (spec.term_type == sf_core::ir::TermType::Iri).then_some(LexicalMode::Decoded)
-            }
-            TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::Iri => {
-                Some(LexicalMode::Iri {
-                    base: spec.base.clone(),
-                })
-            }
-            TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::BlankNode => {
-                Some(LexicalMode::Decoded)
-            }
-            TermMap::Column(_, spec) if spec.language.is_some() => Some(LexicalMode::Decoded),
-            TermMap::Column(_, spec) => spec.datatype.clone().map(|datatype| LexicalMode::TypedLiteral { datatype }),
-            TermMap::Constant(_) => return,
-        }.map(Consumer::Lexical).or_else(|| {
-            matches!(map, TermMap::Column(_, spec) if spec.term_type == sf_core::ir::TermType::Literal
-                && spec.datatype.is_none() && spec.language.is_none()).then_some(Consumer::Natural)
-        });
-        let mut record = |column: &str| {
-            modes
-                .entry(column.into())
-                .and_modify(|value| match (value.as_mut(), mode.as_ref()) {
-                    (Some(modes), Some(mode)) => {
-                        modes.insert(mode.clone());
-                    }
-                    _ => *value = None,
-                })
-                .or_insert_with(|| mode.clone().map(|mode| BTreeSet::from([mode])));
-        };
-        match map {
-            TermMap::Column(column, _) => record(column),
-            TermMap::Template(template, _) => {
-                for segment in template.segments() {
-                    if let sf_core::ir::Segment::Column(column) = segment {
-                        record(column);
-                    }
-                }
-            }
-            TermMap::Constant(_) => {}
-        }
-    }
-    let mut modes = std::collections::BTreeMap::new();
-    for def in branch.bindings.values() {
-        match def {
-            TermDef::Const(_) => {}
+    keys_with_work(
+        branch,
+        alias,
+        with_conditions,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled lexical-key inventory is infallible")
+}
+
+pub(super) fn keys_with_work(
+    branch: &Branch,
+    alias: usize,
+    with_conditions: bool,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<Vec<crate::iq::LexicalKey>> {
+    work.checkpoint()?;
+    let mut modes = Modes::new();
+    for definition in branch.bindings.values() {
+        work.charge(1)?;
+        match definition {
+            TermDef::Const(_) => (),
             TermDef::Derived {
                 term_map,
                 alias: owner,
-            } => term(term_map, *owner, alias, &mut modes),
+            } => work::term(term_map, *owner, alias, &mut modes, work)?,
             TermDef::R2rmlBlank {
                 term_map,
                 alias: owner,
                 graph,
             } => {
-                term(term_map, *owner, alias, &mut modes);
+                work::term(term_map, *owner, alias, &mut modes, work)?;
                 if let R2rmlGraphScope::Mapped {
                     term_map,
                     alias: owner,
                 } = graph
                 {
-                    term(term_map, *owner, alias, &mut modes);
+                    work::term(term_map, *owner, alias, &mut modes, work)?;
                 }
             }
             _ => {
-                for column in def
-                    .columns()
-                    .into_iter()
-                    .filter(|column| column.alias == alias)
-                {
-                    modes.insert(column.column, None);
+                for (owner, name) in super::resolve_work::columns(definition, work)? {
+                    work.charge(1)?;
+                    if owner == alias {
+                        work::record(name, None, &mut modes, work)?;
+                    }
                 }
             }
         }
     }
-    fn condition(cond: &SqlCond, alias: usize, modes: &mut Modes) {
+    fn condition(
+        cond: &SqlCond,
+        alias: usize,
+        modes: &mut Modes,
+        work: crate::build::control::BuildWork<'_>,
+    ) -> crate::Result<()> {
+        let work = work.enter()?;
         match cond {
             SqlCond::IriCmp(cmp) => {
                 for operand in [&cmp.left, &cmp.right] {
-                    if let crate::iq::iri_cmp::IriOperand::Column { column, base } = operand {
-                        let mut spec = sf_core::ir::TermSpec::iri();
-                        spec.base = base.clone();
-                        term(
-                            &TermMap::Column(column.column.clone(), spec),
-                            column.alias,
-                            alias,
-                            modes,
-                        );
-                    }
-                    if let crate::iq::iri_cmp::IriOperand::Template { .. } = operand {
-                        for column in operand.columns().filter(|c| c.alias == alias) {
-                            modes
-                                .entry(column.column.clone())
-                                .and_modify(|value| {
-                                    if let Some(modes) = value {
-                                        modes.insert(Consumer::Lexical(LexicalMode::Decoded));
-                                    }
-                                })
-                                .or_insert_with(|| {
-                                    Some(BTreeSet::from([Consumer::Lexical(LexicalMode::Decoded)]))
+                    work.charge(1)?;
+                    match operand {
+                        crate::iq::iri_cmp::IriOperand::Column { column, base } => {
+                            if column.alias == alias {
+                                let mode = Consumer::Lexical(LexicalMode::Iri {
+                                    base: base
+                                        .as_deref()
+                                        .map(|value| work.variable(value))
+                                        .transpose()?,
                                 });
+                                work::record(&column.column, Some(&mode), modes, work)?;
+                            }
                         }
+                        crate::iq::iri_cmp::IriOperand::Template { parts, .. } => {
+                            work.charge(parts.len())?;
+                            for column in operand.columns() {
+                                work.charge(1)?;
+                                if column.alias == alias {
+                                    work::record(
+                                        &column.column,
+                                        Some(&Consumer::Lexical(LexicalMode::Decoded)),
+                                        modes,
+                                        work,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::iq::iri_cmp::IriOperand::Constant(_) => (),
                     }
                 }
             }
             SqlCond::LiteralCmp(cmp) => {
                 for operand in [&cmp.left, &cmp.right] {
+                    work.charge(1)?;
                     if let crate::iq::literal_cmp::LiteralOperand::Column { column, spec } = operand
                     {
-                        term(
-                            &TermMap::Column(column.column.clone(), spec.clone()),
-                            column.alias,
-                            alias,
-                            modes,
-                        );
+                        if column.alias == alias {
+                            let mode = work::column_mode(spec, work)?;
+                            work::record(&column.column, mode.as_ref(), modes, work)?;
+                        }
                     }
                 }
             }
-            SqlCond::And(cs)
-            | SqlCond::Or(cs)
-            | SqlCond::Exists { conds: cs, .. }
-            | SqlCond::NotExists { conds: cs, .. }
-            | SqlCond::PathExists { conds: cs, .. } => {
-                for c in cs {
-                    condition(c, alias, modes);
+            SqlCond::And(conds)
+            | SqlCond::Or(conds)
+            | SqlCond::Exists { conds, .. }
+            | SqlCond::NotExists { conds, .. }
+            | SqlCond::PathExists { conds, .. } => {
+                for cond in conds {
+                    condition(cond, alias, modes, work)?;
                 }
             }
-            SqlCond::Not(c) => condition(c, alias, modes),
-            _ => {}
+            SqlCond::Not(cond) => condition(cond, alias, modes, work)?,
+            _ => (),
         }
+        Ok(())
     }
-    for cond in branch
-        .where_conds
-        .iter()
-        .chain(branch.opts.iter().flat_map(|o| o.on.iter().chain(&o.extra)))
-    {
-        if with_conditions {
-            condition(cond, alias, &mut modes);
-        }
-    }
-    modes
-        .into_iter()
-        .flat_map(|(column, modes)| {
-            let modes = modes.unwrap_or_default();
-            let natural = modes.contains(&Consumer::Natural);
-            // A natural consumer must not erase a separate resolved-IRI key.
-            // Keep the previous veto for that unqualified mixed combination.
-            let veto = natural
-                && modes
-                    .iter()
-                    .any(|m| matches!(m, Consumer::Lexical(LexicalMode::Iri { .. })));
-            let natural_only = modes.len() == 1 && natural;
-            let modes_have_typed = modes
+    if with_conditions {
+        for cond in branch.where_conds.iter().chain(
+            branch
+                .opts
                 .iter()
-                .any(|m| matches!(m, Consumer::Lexical(LexicalMode::TypedLiteral { .. })));
-            modes
-                .into_iter()
-                .filter_map(move |consumer| match consumer {
-                    Consumer::Natural if natural_only || modes_have_typed => {
-                        Some(LexicalMode::Natural)
-                    }
-                    Consumer::Natural => None,
-                    Consumer::Lexical(_) if veto => None,
-                    Consumer::Lexical(LexicalMode::Decoded) if natural => {
-                        Some(LexicalMode::DecodedWithNatural)
-                    }
-                    Consumer::Lexical(mode) => Some(mode),
-                })
-                .map(move |mode| crate::iq::LexicalKey {
-                    column: column.clone(),
-                    mode,
-                })
-        })
-        .collect()
+                .flat_map(|opt| opt.on.iter().chain(&opt.extra)),
+        ) {
+            condition(cond, alias, &mut modes, work)?;
+        }
+    }
+    work::finish(modes, work)
 }
 
+#[cfg(test)]
 pub(super) fn native_keys(branch: &Branch, alias: usize) -> Vec<(Box<str>, bool)> {
+    native_keys_with_work(
+        branch,
+        alias,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled native-key inventory is infallible")
+}
+
+#[cfg(test)]
+fn native_keys_raw(branch: &Branch, alias: usize) -> Vec<(Box<str>, bool)> {
     fn visit(
         cond: &SqlCond,
         alias: usize,

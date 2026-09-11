@@ -1,6 +1,7 @@
 use super::*;
 use crate::compiler_control::CompileContext;
 use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
+use crate::{iq::TermDef, Error};
 use sf_core::ir::{ObjectMap, RefObjectMap, SubjectMap};
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
@@ -45,6 +46,69 @@ fn pattern(predicate: Option<&str>) -> TriplePattern {
 
 fn budget(work: u64) -> QueryBudget {
     QueryBudget::new(QueryLimits::new(work, u64::MAX, u64::MAX, u64::MAX))
+}
+
+#[test]
+fn dedup_marker_publishes_complete_pattern_key_only_after_paid_copy() {
+    let tbox = crate::Tbox::default();
+    let mut branch = Branch::empty();
+    branch.bindings.insert(
+        "key".into(),
+        TermDef::Derived {
+            alias: 0,
+            term_map: iri("s"),
+        },
+    );
+    branch.bindings.insert(
+        "unrelated".into(),
+        TermDef::Derived {
+            alias: 0,
+            term_map: iri("o"),
+        },
+    );
+    let keys = std::collections::HashSet::from(["key".to_owned()]);
+    let run = |units| {
+        let control = budget(units);
+        let mut uf = Unfolder::new(&[], &tbox, sf_sql::Dialect::Sqlite, &[])
+            .with_work_mode(CompilerWorkMode::Metered(CompileContext::new(&control)));
+        let result = uf.tag_dedup_group(0, 7, &branch, &keys);
+        (
+            result,
+            uf.dedup_groups().clone(),
+            control.consumed(QueryCharge::CompilerWork),
+        )
+    };
+    let (result, markers, used) = run(u64::MAX);
+    result.unwrap();
+    assert_eq!(markers[&0].group_id, 7);
+    assert_eq!(
+        markers[&0]
+            .key_bindings
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["key"]
+    );
+    assert!(run(used).0.is_ok());
+    for units in 0..used {
+        let (result, markers, _) = run(units);
+        assert!(matches!(
+            result,
+            Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
+        ));
+        assert!(markers.is_empty());
+    }
+    let mut uf = Unfolder::new(&[], &tbox, sf_sql::Dialect::Sqlite, &[]);
+    assert!(matches!(
+        uf.tag_dedup_group(
+            0,
+            7,
+            &branch,
+            &std::collections::HashSet::from(["missing".to_owned()])
+        ),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(uf.dedup_groups().is_empty());
 }
 
 fn expand(
@@ -300,4 +364,136 @@ fn empty_products_have_no_candidates_and_cancelled_empty_input_stays_terminal() 
         expand(&[], &pattern(None), None, &stopped),
         Err(crate::Error::QueryControl(QueryControlError::Cancelled))
     ));
+}
+
+#[test]
+fn controlled_disjoint_groups_preserve_transitive_partition_and_exact_boundary() {
+    let branch = |value: Option<&str>| {
+        let mut branch = Branch::empty();
+        if let Some(value) = value {
+            branch.bindings.insert(
+                "s".into(),
+                crate::iq::TermDef::Const(
+                    sf_core::NamedNode::new_unchecked(format!("http://example.test/{value}"))
+                        .into(),
+                ),
+            );
+        }
+        branch
+    };
+    // The unbound arm joins otherwise-disjoint constants into one component.
+    for arms in [
+        vec![],
+        vec![branch(Some("a"))],
+        vec![branch(Some("a")), branch(Some("b")), branch(Some("a"))],
+        vec![branch(Some("a")), branch(None), branch(Some("b"))],
+    ] {
+        let raw = super::super::disjoint_groups(&arms);
+        let run = |control: &QueryBudget| {
+            disjoint_groups_with_work(
+                &arms,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+            )
+        };
+        let measured = budget(u64::MAX);
+        assert_eq!(run(&measured).unwrap(), raw);
+        let units = measured.consumed(QueryCharge::CompilerWork);
+        assert_eq!(run(&budget(units)).unwrap(), raw);
+        if units > 0 {
+            assert!(matches!(
+                run(&budget(units - 1)),
+                Err(crate::Error::QueryControl(
+                    QueryControlError::CompilerWorkExceeded
+                ))
+            ));
+        }
+        let paid = budget(u64::MAX);
+        assert_eq!(
+            all_pairwise_disjoint_with_work(
+                &arms,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(&paid)))
+            )
+            .unwrap(),
+            super::super::all_pairwise_disjoint(&arms)
+        );
+        let stopped = budget(u64::MAX);
+        stopped.terminate(QueryControlError::Cancelled);
+        assert!(all_pairwise_disjoint_with_work(
+            &arms,
+            BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(&stopped)))
+        )
+        .is_err());
+        assert!(run(&stopped).is_err());
+    }
+}
+
+#[test]
+fn controlled_disjoint_templates_and_specs_match_raw_proofs() {
+    use sf_core::ir::{Template, TermSpec};
+    let branch = |text: &str, spec: TermSpec| {
+        let mut branch = Branch::empty();
+        branch.bindings.insert(
+            "s".into(),
+            crate::iq::TermDef::Derived {
+                alias: 1,
+                term_map: TermMap::Template(Template::parse(text).unwrap(), spec),
+            },
+        );
+        branch
+    };
+    let long = format!("http://example.test/{}", "x".repeat(4096));
+    let mut english = TermSpec::plain_literal();
+    english.language = Some("en".into());
+    let mut spanish = english.clone();
+    spanish.language = Some("es".into());
+    let mut explicit_string = TermSpec::plain_literal();
+    explicit_string.datatype = Some(sf_core::NamedNode::new_unchecked(
+        "http://www.w3.org/2001/XMLSchema#string",
+    ));
+    for (left, right, expected) in [
+        (
+            branch(&format!("{long}a/{{id}}"), TermSpec::iri()),
+            branch(&format!("{long}b/{{id}}"), TermSpec::iri()),
+            true,
+        ),
+        (
+            branch("http://example.test/{id}", TermSpec::iri()),
+            branch("http://example.test/long/{id}", TermSpec::iri()),
+            false,
+        ),
+        (
+            branch("http://example.test/{id}", english),
+            branch("http://example.test/{id}", spanish),
+            true,
+        ),
+        (
+            branch("http://example.test/{id}", TermSpec::plain_literal()),
+            branch("http://example.test/{id}", explicit_string),
+            false,
+        ),
+    ] {
+        let arms = [left, right];
+        assert_eq!(super::super::all_pairwise_disjoint(&arms), expected);
+        let run = |control: &dyn QueryControl| {
+            all_pairwise_disjoint_with_work(
+                &arms,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+            )
+        };
+        let measured = budget(u64::MAX);
+        assert_eq!(run(&measured).unwrap(), expected);
+        let units = measured.consumed(QueryCharge::CompilerWork);
+        assert_eq!(run(&budget(units)).unwrap(), expected);
+        assert!(matches!(
+            run(&budget(units - 1)),
+            Err(crate::Error::QueryControl(
+                QueryControlError::CompilerWorkExceeded
+            ))
+        ));
+        let stopped = CancelAt(budget(u64::MAX), units / 2);
+        assert!(matches!(
+            run(&stopped),
+            Err(crate::Error::QueryControl(QueryControlError::Cancelled))
+        ));
+    }
 }

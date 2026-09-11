@@ -25,20 +25,21 @@ implements: []
 
 ## Status boundary
 
-**DESCRIBE accounting correction (2026-09-11):** parser output now gives isolated
-constant-target binders deterministic fresh names before compiler work accounting.
-The isolated worker normalizes in place before QueryV1 encoding; direct parsing
-uses the same helper, without a second walk in the governed parent. This is
-semantic alpha-renaming, not source-spelling provenance: an authored isolated
-constant BIND is indistinguishable and may be renamed too. Observable/ambiguous
-variables and aggregate binders are preserved. Existing parser containment and
-post-parse envelopes remain required; this does not claim metered parser CPU or
-physical heap allocation. Raw direct parsing retains oversized ASTs unchanged
-when pre-mutation validation refuses; governed compilation and isolated workers
-still reject them. Separate parser/cache naming preserves parsed/string cache reuse.
-Forced 1–32-character binder tests and owned production
-worker/direct cold/warm exact-budget parity cover the correction. Request defaults
-and supported DESCRIBE shapes do not expand; remaining G1 work is still open.
+**RESOLVE schema authority (2026-09-11, implementation awaiting final slice verification):**
+the tree RESOLVE D1/D2 path constructs one interruptible, uniquely named schema
+map before duplicate-elimination mutation and shares it across pooling groups.
+Duplicate table names now return an explicit ambiguous-schema error, including
+identical duplicates: an arbitrary unstable-sort winner must not grant key or
+column-type authority. This tightens tree compilation validation; it is not a
+claim that historical raw optimizer helpers already rejected ambiguous input.
+Unique-name profiles, PK/UNIQUE/nullability rules and physical-source authority
+remain unchanged. The programme ledger records verification and remaining work;
+this decision neither closes G1 nor activates `GovernedV1`.
+
+**DESCRIBE accounting correction (2026-09-11):** isolated constant-target binders receive deterministic fresh names before work accounting and QueryV1 transfer.
+Direct parsing uses the same helper; the governed parent does not walk again. This is alpha-renaming, not authored-spelling provenance: indistinguishable authored isolated constant BINDs may also be renamed; observable/ambiguous and aggregate binders remain intact.
+Containment/post-parse envelopes remain required. Raw parsing retains oversized ASTs on validation refusal; governed compilation/workers reject. Separate parser/cache names preserve parsed/string reuse.
+Forced 1–32-character names and worker/direct cold/warm exact-budget tests cover this correction, not parser CPU/heap governance. Defaults, DESCRIBE scope and remaining G1 obligations are unchanged.
 
 **Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable equality-row authorization, safe layered configuration and verified remote-source TLS close narrow product boundaries, not general ABAC or operability. A standalone serving-only Cargo build excludes conformance/benchmark crates and extra backend features while preserving SQLite/PostgreSQL/MySQL and all serving controls. Opt-in authored reload now validates and publishes complete generations off-path, immediately fences detected drift, preserves request leases and fixed caller policies, and cannot heal shutdown/worker panic. Required real-CLI evidence covers SQLite and encrypted PostgreSQL/MySQL single/mixed-source reload and invalid-input recovery. Backend DDL leases, policy/configuration hot reload, product completion and the exact release bundle remain open.
 
@@ -48,37 +49,18 @@ This decision is **accepted**. It replaces ADR-0038 as the controlling definitio
 
 **2026-09-10 protected authored PostgreSQL:** `--require-verified-generation` plus nonzero reload adds the ADR-0050 lease to one authored PostgreSQL 16.9/16.15 public-base-table/read-all profile, without imposing Direct Mapping's PK requirement. No source row policies, raw SQL or companion source are admitted to this explicit profile; existing modes remain unchanged. Legacy compiler tables and rich lease facts come from the same locked snapshot. Required owned-TLS public checks cover exact authenticated forms, DDL conflict, schema/file drift and repair, complete old responses across successor activation, disconnect/deadline/forced-shutdown cleanup, unrelated public-schema coupling and invalid-profile/budget refusal. The common lease, independent control pool, exact origin/source/mapping binding and serialized shutdown-aware reload are reused. Other backend/policy generation guarantees and exact-release qualification remain open; this is not whole-application completion or expanded v1 scope.
 
-**Lineage update (2026-09-08):** ADR-0017 now has a public opt-in, compiler-proved
-constant mapping/source SELECT and CONSTRUCT profiles with per-solution PROV-O,
-native graph reification, pinned snapshot/logical-plan/policy identifiers and bounded
-fail-terminal streaming. Graph metadata stays in named bundles outside the product
-graph, preserving response-wide blank-node identity. Its required
-SQLite HTTP, isolation, reload and failure tests plus owned pinned PostgreSQL
-16.15/MySQL 8.4.11 serving-only CLI lineage/portable-policy checks are incremental
-results, not full lineage, all native-profile or exact-release qualification, or
-application completion. Native evidence parses the actual returned metadata and reification, observes encrypted sessions and rejects unsupported lineage while
-a source-table lock remains held; those constant-origin cases do not establish lineage-specific reload/cancellation.
-An additional bounded multi-mapping profile now propagates actual origins through positive RDF-matched BGP/JOIN/UNION and root projection/dedup/slice, merging late
-duplicate witnesses before output. Its finite witness buffer fails on overflow; it is not an unbounded graph materialization or a candidate-map list. Broader
-operators, federation, authorized row keys and native/release qualification remain open. The capability catalog separately retains that incomplete release gate;
-ADR-0017 records the precise additional profile and required commands. Twelve required pinned native multi-map SELECT/CONSTRUCT cases now prove exact-target
-TLS/native stop under deadline/disconnect/forced SIGTERM, held-lock and unrelated sibling isolation, cap-one recovery and fail-terminal completion. This does not
-qualify lineage UNION/JOIN cancellation, source-RLS, reload or every operator. The separate bounded two-source UNION lineage profile now binds actual origins to
-their source under shared snapshot/security/budget and native cleanup owners. Required HTTP and owned TLS CLI checks cover its bags, entailed source affinity,
-source-scoped blank nodes, portable callers, pinned activation, limits and native deadline/disconnect/forced-shutdown failures. ADR-0017 records the exact profile;
-the following join slice adds coverage; row-key authority and broader qualification remain separate.
-The existing bounded two-source join now emits actual origins for both mandatory contributors, using compiler-sealed source/map pairs and its existing capped
-pre-200 executor. Explicit map-to-source links disambiguate identical authored IDs; hidden keys, filtered rows and empty joins acquire no inferred row provenance.
-Required HTTP tests cover bags, limits, policy, activation and recovery; the pinned TLS CLI aggregate adds both-order exact bags and twelve join-lineage native
-deadline/disconnect/forced-shutdown cases. The required owned TLS aggregate now also qualifies authored lineage reload: constant/multi-map SELECT/CONSTRUCT,
-mixed UNION and nonempty both-order join results carry changed actual mapping documents; invalid input fences new queries while native-held requests complete
-with pre-invalid results/provenance, and repaired input restores readiness. Held-query cases are multi-map SELECT on both providers and mixed UNION/forward
-join on PostgreSQL, not every graph/operator/order. This closes that reload evidence slice. Required owned PostgreSQL public-router tests now also qualify source-RLS
-lineage: exact A/B/A constant/multi-map SELECT/CONSTRUCT and federated UNION/join,
-actual source/map proof, empty results, concurrent caller isolation and clean cap-one
-pool reuse. Constant-lineage body-drop, policy-error and deadline cases fail terminally
-and recover with isolated caller state. ADR-0017/0018 retain the precise scope;
-these are not every failure permutation, full historical lineage or exact-release gates.
+**Lineage qualification (2026-09-08, consolidated 2026-09-11):** authoritative
+[ADR-0017 profiles and required commands](ADR-0017-provenance-lineage.md) cover opt-in
+constant/multi-map SELECT/CONSTRUCT and bounded two-source UNION/join actual-origin
+lineage, with pinned snapshot/plan/policy identifiers, finite fail-terminal output,
+separate graph metadata and response-wide blank-node identity. Mapping candidates,
+hidden keys, filtered rows and empty joins do not acquire invented provenance.
+Required SQLite HTTP and pinned PostgreSQL 16.15/MySQL 8.4.11 TLS CLI evidence covers
+the declared bags, policy, limits, source affinity, stop/sibling isolation, recovery
+and authored reload profiles; held-query coverage is not every graph/operator/order.
+[ADR-0018](ADR-0018-security-edge.md) retains source-RLS A/B/A caller isolation,
+cap-one reuse and constant-lineage body-drop/policy-error/deadline evidence.
+These records replace the incremental lineage diary here, not its tests or scope.
 The aggregate gate concerns coverage of declared v1 paths, not every historical
 ADR-0017 combination. Row-key transport is conditional on explicitly declared or
 verified authority: ADR-0017 permits mapping/source-only lineage when no authorized

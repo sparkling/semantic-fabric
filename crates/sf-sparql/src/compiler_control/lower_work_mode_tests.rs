@@ -383,15 +383,23 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     let (rewritten, env) = star::rewrite_query_with_work_control(&query, &rewrite_control).unwrap();
     assert_eq!(rewritten, query);
     assert!(env.is_empty());
+    // Measure the prerequisite RESOLVE phase independently; the exact LOWER
+    // clone boundary below must not absorb newly controlled earlier work.
+    let resolve_control = budget(u64::MAX);
+    let tbox = Tbox::default();
+    let mut resolve_cx = iq::resolve::ResolveCx::new(&[], &tbox, Dialect::Sqlite, &[])
+        .with_work_mode(CompilerWorkMode::Metered(CompileContext::new(
+            &resolve_control,
+        )));
+    let resolved =
+        iq::resolve::resolve(build::build_tree(pattern, None).unwrap(), &mut resolve_cx).unwrap();
     let normalization_control = budget(u64::MAX);
-    let normalized = iq::normalize::normalize_with_work_control(
-        build::build_tree(pattern, None).unwrap(),
-        &normalization_control,
-    )
-    .unwrap();
+    let normalized =
+        iq::normalize::normalize_with_work_control(resolved, &normalization_control).unwrap();
     let (prefix, tail) = entry_work(&normalized);
     let before_clones = rewrite_control.consumed(QueryCharge::CompilerWork)
         + build
+        + resolve_control.consumed(QueryCharge::CompilerWork)
         + normalization_control.consumed(QueryCharge::CompilerWork)
         + prefix;
     // One retained ?x per row pays seven decision/retain units independently.

@@ -92,6 +92,23 @@ pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap])
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Isolate RESOLVE so cumulative-input tests retain their input/key boundary.
+pub(crate) fn resolve_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let spargebra::Query::Select { pattern, .. } =
+        spargebra::SparqlParser::new().parse_query(source).unwrap()
+    else {
+        panic!("RESOLVE calibration requires ordinary SELECT");
+    };
+    let tree = sf_sparql::build::build_tree(&pattern, None).unwrap();
+    let tbox = sf_sparql::Tbox::default();
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let mut cx = sf_sparql::iq::resolve::ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &[])
+        .with_work_control(&control);
+    sf_sparql::iq::resolve::resolve(tree, &mut cx).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 /// Test-only cost of one fully bound VALUES column, independently counted from
 /// its entry, output slots/carriers, rows, cells and binding key/map insertions.
 /// Terms move; this never measures/pays later branch copies or products.

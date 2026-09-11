@@ -18,6 +18,9 @@ use compiler_key::{
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
 
+#[path = "request_resolve_tests.rs"]
+mod resolve_work;
+
 #[path = "request_describe_tests.rs"]
 mod describe_work;
 
@@ -56,8 +59,13 @@ fn config_with_mapping(
 #[tokio::test]
 async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     let (prefix, tail) = source_free_entry_work(QUERY);
-    // Resolution leaves Empty: its one leaf visit is not entry/scope work.
-    let build = build_work(QUERY) + normalization_work(QUERY, &[]) + prefix + tail + 1;
+    // Pay RESOLVE independently; this test still targets cumulative input/key work.
+    let build = build_work(QUERY)
+        + normalization_work(QUERY, &[])
+        + prefix
+        + tail
+        + compiler_key::resolve_work(QUERY, &[])
+        + 1; // LOWER dispatches the resolved Empty leaf after entry/scope work.
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
     let rewrite = rewrite_work(QUERY);

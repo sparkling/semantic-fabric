@@ -339,22 +339,33 @@ mod tests {
         let build_control = budget(u64::MAX);
         crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
         let build_work = build_control.consumed(QueryCharge::CompilerWork);
-        let normalize_control = budget(u64::MAX);
-        let normalized = crate::iq::normalize::normalize_with_work_control(
+        let resolve_control = budget(u64::MAX);
+        let tbox = Tbox::default();
+        let mut resolve_cx =
+            crate::iq::resolve::ResolveCx::new(&[], &tbox, sf_sql::Dialect::Sqlite, &[])
+                .with_work_mode(crate::CompilerWorkMode::Metered(CompileContext::new(
+                    &resolve_control,
+                )));
+        let resolved = crate::iq::resolve::resolve(
             crate::build::build_tree(&pattern, None).unwrap(),
-            &normalize_control,
+            &mut resolve_cx,
         )
         .unwrap();
+        let normalize_control = budget(u64::MAX);
+        let normalized =
+            crate::iq::normalize::normalize_with_work_control(resolved, &normalize_control)
+                .unwrap();
         let prefix = crate::iq::lower::scope_test_support::entry_work(&normalized).0;
         let prerequisites = key_work
             + crate::star::rewrite_work(query)
             + build_work
+            + resolve_control.consumed(QueryCharge::CompilerWork)
             + normalize_control.consumed(QueryCharge::CompilerWork)
             + prefix
             + crate::iq::lower::base_work_tests::singleton_work()
             + 1
             + crate::iq::lower::base_work_tests::one_column_rows_work(4, "a");
-        // Reach the unpaid first 1×4 product after independent BUILD/NORMALIZE
+        // Reach the unpaid first 1×4 product after independent BUILD/RESOLVE/NORMALIZE
         // and LOWER scope/seed/first-child VALUES, never a whole-LOWER estimate.
         let short = budget(prerequisites + 3);
         assert!(binding

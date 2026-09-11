@@ -19,7 +19,7 @@ fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     .unwrap()
 }
 
-fn mapped_work(maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
+fn mapped_work(maps: &[sf_core::ir::TriplesMap], phase: &'static str) -> (u64, u64, u64) {
     use sf_core::query_control::QueryBudget;
     use std::sync::Mutex;
     use tracing::{
@@ -28,24 +28,24 @@ fn mapped_work(maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
     };
     use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
 
-    #[derive(Default)]
-    struct NormalizationSpan(bool);
+    struct NormalizationSpan(bool, &'static str);
     impl tracing::field::Visit for NormalizationSpan {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             if field.name() == "stage" {
-                self.0 = value == "normalize";
+                self.0 = value == self.1;
             }
         }
         fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
     }
     struct Observe {
+        phase: &'static str,
         control: Arc<QueryBudget>,
         bounds: Arc<Mutex<(u64, u64, usize)>>,
     }
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observe {
         fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
             if attrs.metadata().name() == "sf.compiler.stage" {
-                let mut marker = NormalizationSpan::default();
+                let mut marker = NormalizationSpan(false, self.phase);
                 attrs.record(&mut marker);
                 if marker.0 {
                     ctx.span(id).unwrap().extensions_mut().insert(marker);
@@ -93,6 +93,7 @@ fn mapped_work(maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
     )));
     let bounds = Arc::new(Mutex::new((0, 0, 0)));
     let observer = tracing_subscriber::registry().with(Observe {
+        phase,
         control: control.clone(),
         bounds: bounds.clone(),
     });
@@ -106,7 +107,10 @@ fn mapped_work(maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
     // cold-total subtraction that could absorb later LOWER/cascade work.
     let (start, end, visits) = *bounds.lock().unwrap();
     assert_eq!(visits, 1);
-    assert_eq!(end - start, normalization_work(MAPPED_QUERY, maps));
+    if phase == "normalize" {
+        assert_eq!(end - start, normalization_work(MAPPED_QUERY, maps));
+    }
+    assert!(end > start, "selected phase must perform paid work");
     let prefix = MAPPED_QUERY.len() as u64 + start;
     assert!(prefix > MAPPED_QUERY.len() as u64 + key_work(MAPPED_QUERY) + build_work(MAPPED_QUERY));
     (prefix, MAPPED_QUERY.len() as u64 + end, complete)
@@ -128,6 +132,10 @@ async fn change_work(cfg: &mut Arc<ServeConfig>, work: u64) {
 
 #[test]
 fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
+    mapped_process("request_compile::tests::structural_normalization::mapped_normalization_refusal_precedes_a_proven_source_admission_boundary", "normalize");
+}
+
+pub(super) fn mapped_process(selector: &str, phase: &'static str) {
     const CHILD: &str = "SF_NORMALIZATION_TEST_PROCESS";
     const COMPLETED: i32 = 61;
     if std::env::var_os(CHILD).is_some() {
@@ -135,7 +143,7 @@ fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(mapped_admission_cases());
+            .block_on(mapped_admission_cases(phase));
         // Only successful execution of every case emits this witness. An exact
         // libtest selector matching zero tests exits 0 and must not pass here.
         std::process::exit(COMPLETED);
@@ -143,11 +151,7 @@ fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
     // Compiler spans have process-wide callsite interest. Keep the calibration
     // independent of parallel tests registering/using that same callsite.
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "request_compile::tests::structural_normalization::mapped_normalization_refusal_precedes_a_proven_source_admission_boundary",
-            "--nocapture",
-        ])
+        .args(["--exact", selector, "--nocapture"])
         .env_clear()
         .env(CHILD, "1")
         .spawn()
@@ -171,9 +175,9 @@ fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
     }
 }
 
-async fn mapped_admission_cases() {
+async fn mapped_admission_cases(phase: &'static str) {
     let maps = mapped_fixture();
-    let (prefix, normalized, exact) = mapped_work(&maps);
+    let (prefix, normalized, exact) = mapped_work(&maps, phase);
     let cached = MAPPED_QUERY.len() as u64 + key_work(MAPPED_QUERY);
     assert!(cached < prefix);
     for secured in [false, true] {

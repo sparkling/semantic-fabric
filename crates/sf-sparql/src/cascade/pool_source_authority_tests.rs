@@ -18,6 +18,71 @@ fn bind_column(branch: &mut Branch, variable: &str, alias: usize, column: &str) 
     );
 }
 
+#[test]
+fn controlled_capture_preserves_first_source_order_and_exact_budget() {
+    use crate::build::control::BuildWork;
+    use crate::compiler_control::CompileContext;
+    use crate::CompilerWorkMode;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    let mut branch = core_branch(7, LogicalSource::Table("first".into()));
+    branch
+        .core
+        .extend(core_branch(7, LogicalSource::Query("ignored".into())).core);
+    branch.opts = optional_branch(8, LogicalSource::Table("optional".into())).opts;
+    branch.where_conds = vec![SqlCond::And(vec![SqlCond::Exists {
+        scans: vec![
+            Scan {
+                alias: 7,
+                source: LogicalSource::Table("duplicate".into()).into(),
+            },
+            Scan {
+                alias: 9,
+                source: LogicalSource::Query("nested".into()).into(),
+            },
+        ],
+        conds: vec![SqlCond::Not(Box::new(SqlCond::Exists {
+            scans: vec![Scan {
+                alias: 10,
+                source: LogicalSource::Table("deep".into()).into(),
+            }],
+            conds: vec![],
+        }))],
+    }])];
+    let snapshot = |authority: PoolSourceAuthority| {
+        authority
+            .sources
+            .into_iter()
+            .map(|source| (source.alias, format!("{:?}", source.source), source.is_core))
+            .collect::<Vec<_>>()
+    };
+    let expected = snapshot(PoolSourceAuthority::capture(&branch));
+    assert_eq!(
+        expected
+            .iter()
+            .map(|(alias, _, core)| (*alias, *core))
+            .collect::<Vec<_>>(),
+        vec![(7, true), (8, false), (9, false), (10, false)]
+    );
+    let budget = |limit| QueryBudget::new(QueryLimits::new(limit, u64::MAX, u64::MAX, u64::MAX));
+    let paid = budget(u64::MAX);
+    let capture = |control: &QueryBudget| {
+        PoolSourceAuthority::capture_with_work(
+            &branch,
+            BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+        )
+    };
+    assert_eq!(snapshot(capture(&paid).unwrap()), expected);
+    let total = paid.consumed(QueryCharge::CompilerWork);
+    assert!(total > 0);
+    assert_eq!(snapshot(capture(&budget(total)).unwrap()), expected);
+    assert!(matches!(
+        capture(&budget(total - 1)),
+        Err(crate::Error::QueryControl(
+            QueryControlError::CompilerWorkExceeded
+        ))
+    ));
+}
+
 fn core_branch(alias: usize, source: LogicalSource) -> Branch {
     let mut branch = Branch::single(Scan {
         alias,
@@ -262,4 +327,107 @@ fn pre_d1_authority_ignores_generated_wrapper_text_and_reads_current_bindings() 
         PoolTypeSafety::Unproven,
         "a broken branch-to-authority alignment must fail closed"
     );
+}
+
+#[test]
+fn controlled_reference_origin_preserves_canonical_names_and_budget_boundary() {
+    use crate::build::control::BuildWork;
+    use crate::compiler_control::CompileContext;
+    use crate::CompilerWorkMode;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    let source = crate::iq::ScanSource::RefAtom {
+        input: Box::new(Branch::single(Scan {
+            alias: 7,
+            source: LogicalSource::Table("items".into()).into(),
+        })),
+        columns: vec![crate::iq::ColRef::new(7, "value")],
+    };
+    let budget = |units| QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX));
+    for name in [
+        "c0",
+        "c00",
+        "c+0",
+        "c1",
+        "C0",
+        "",
+        "c",
+        "c١",
+        "c184467440737095516160",
+    ] {
+        let snapshot = |origin: Option<(&LogicalSource, &str)>| {
+            origin.map(|(source, name)| (format!("{source:?}"), name.to_owned()))
+        };
+        let expected = snapshot(source.raw_column_origin(name));
+        let run = |control: &QueryBudget| {
+            super::pool_raw_column_origin(
+                &source,
+                name,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+            )
+        };
+        let measured = budget(u64::MAX);
+        assert_eq!(snapshot(run(&measured).unwrap()), expected, "{name:?}");
+        let units = measured.consumed(QueryCharge::CompilerWork);
+        assert_eq!(snapshot(run(&budget(units)).unwrap()), expected);
+        assert!(matches!(
+            run(&budget(units - 1)),
+            Err(crate::Error::QueryControl(
+                QueryControlError::CompilerWorkExceeded
+            ))
+        ));
+        let stopped = budget(u64::MAX);
+        stopped.terminate(QueryControlError::Cancelled);
+        assert!(run(&stopped).is_err());
+    }
+}
+
+#[test]
+fn controlled_physical_fallback_preserves_first_match_with_or_without_capture() {
+    use crate::build::control::BuildWork;
+    use crate::compiler_control::CompileContext;
+    use crate::CompilerWorkMode;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    let mut branch = core_branch(7, LogicalSource::Table("first".into()));
+    branch
+        .core
+        .extend(core_branch(7, LogicalSource::Table("duplicate".into())).core);
+    branch.opts = optional_branch(9, LogicalSource::Table("optional".into())).opts;
+    branch.where_conds = vec![SqlCond::Exists {
+        scans: core_branch(11, LogicalSource::Query("nested".into())).core,
+        conds: vec![],
+    }];
+    let captured = PoolSourceAuthority::capture(&branch);
+    let budget = |units| QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX));
+    for authority in [None, Some(&captured)] {
+        for alias in [7, 9, 11, 999] {
+            let expected = format!(
+                "{:?}",
+                super::pool_physical_source(&branch, authority, alias)
+            );
+            let run = |control: &QueryBudget| {
+                super::pool_physical_source_with_work(
+                    &branch,
+                    authority,
+                    alias,
+                    BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+                )
+            };
+            let measured = budget(u64::MAX);
+            assert_eq!(
+                format!("{:?}", run(&measured).unwrap().as_deref()),
+                expected
+            );
+            let units = measured.consumed(QueryCharge::CompilerWork);
+            assert_eq!(
+                format!("{:?}", run(&budget(units)).unwrap().as_deref()),
+                expected
+            );
+            assert!(matches!(
+                run(&budget(units - 1)),
+                Err(crate::Error::QueryControl(
+                    QueryControlError::CompilerWorkExceeded
+                ))
+            ));
+        }
+    }
 }

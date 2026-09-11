@@ -82,6 +82,23 @@ fn normalization_work() -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+fn resolve_work() -> u64 {
+    let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
+        panic!()
+    };
+    let built = crate::build::build_tree(&pattern, None).unwrap();
+    let control = budget(u64::MAX);
+    let tbox = Tbox::default();
+    let mut cx = crate::iq::resolve::ResolveCx::new(&[], &tbox, Dialect::Sqlite, &[])
+        .with_work_mode(crate::CompilerWorkMode::Metered(
+            crate::compiler_control::CompileContext::new(&control),
+        ));
+    // Even a VALUES-only tree visits RESOLVE before NORMALIZE and LOWER.
+    // Account that prerequisite separately from the clone schedule under test.
+    crate::iq::resolve::resolve(built, &mut cx).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 fn lower_entry_work() -> (u64, u64) {
     let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
         panic!()
@@ -127,7 +144,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let work = clone_work();
     let key = key_work();
     let (prefix, tail) = lower_entry_work();
-    let build = build_work() + normalization_work() + prefix;
+    let build = build_work() + resolve_work() + normalization_work() + prefix;
     // One retained ?x: entry1, bool slot/byte2, key visit1, comparison2, retain1.
     let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
         7,
@@ -182,7 +199,7 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let binding = binding();
     let work = clone_work();
     let (prefix, tail) = lower_entry_work();
-    let build = build_work() + normalization_work() + prefix;
+    let build = build_work() + resolve_work() + normalization_work() + prefix;
     let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
         7,
         one_column_rows_work(3, "x"),
@@ -238,6 +255,7 @@ fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let work = key_work()
         + rewrite_work(QUERY)
         + build_work()
+        + resolve_work()
         + normalization_work()
         + lower_entry_work().0
         + construction_exists_condition_work(

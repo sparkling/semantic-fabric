@@ -63,7 +63,10 @@ async fn changing_budget_waits_for_the_existing_configuration_owner() {
 
 #[tokio::test]
 async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
-    let mut cfg = Arc::new(protected(10_000));
+    let maps = sf_mapping::parse_r2rml(MAPPING).unwrap();
+    let mut cfg = Arc::new(protected(
+        10_000 + compiler_key::resolve_work(SELECT, &maps),
+    ));
     // The same immutable runtime/cache survives all requests and limit changes.
     for warm in [false, true] {
         if warm {
@@ -101,6 +104,7 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         + key_work(query)
         + rewrite_work(query)
         + build_work(query)
+        + compiler_key::resolve_work(query, &[])
         + normalization_work(query, &[])
         + prefix
         + tail
@@ -166,6 +170,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                     // Warm requests still pay only unchanged input/key work.
                     rewrite_work(&query)
                         + build_work(&query)
+                        + compiler_key::resolve_work(&query, &[])
                         + normalization_work(&query, &[])
                         + prefix
                         + tail

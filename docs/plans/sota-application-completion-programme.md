@@ -41,6 +41,17 @@ Group compatible work under that outcome; do not turn each next unmetered helper
 into a new completion prerequisite or require `GovernedV1` merely as a label.
 This inventory is not proof of closure, and known failures are not scope exclusions.
 
+**G1b RESOLVE slice (2026-09-11, implemented/uncommitted):** the active
+`controlled-resolve-finalize-20260911` delivery task covers recursive traversal,
+bridge/output inventories, D1/D2 and shared-dedup markers. D1/D2 now share one
+controlled unique schema map; ADR-0055 records the explicit duplicate-name
+validation tightening. Focused ordinary/bearer HTTP tests observe the actual
+RESOLVE span and prove pre-source refusal, exact duplicate-preserving cold and
+key-only warm bags, and compiler/source capacity recovery. Direct schema tests
+cover exact/N-1, comparison/relocation cancellation and deadline, and retained
+source-type authority through D1/D2. Final source-bound checks, independent
+native review, catalogue refresh and commit remain pending; no G1 closure is claimed.
+
 **Execution correction:** after G1a's source-bound verification/commit, take G1b's
 one-time missing-phase/proof inventory and the smallest unblocked gate
 outcome above. Audit prerequisite tests before freezing each harness scope; preserve

@@ -33,6 +33,7 @@ mod graph_inventory;
 mod join;
 mod mapping_work;
 pub(crate) use join::join_branches_with_work_mode;
+pub(crate) use mapping_work::{all_pairwise_disjoint_with_work, disjoint_groups_with_work};
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -227,17 +228,50 @@ impl<'a> Unfolder<'a> {
         branch: &Branch,
         key_vars: &std::collections::HashSet<String>,
     ) -> Result<()> {
-        let key_bindings = branch
-            .bindings
-            .iter()
-            .filter(|(variable, _)| key_vars.contains(variable.as_str()))
-            .map(|(variable, definition)| (variable.clone(), definition.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        if key_bindings.len() != key_vars.len() {
-            return Err(Error::Unsupported(
-                "D2 shared term-dedup arm does not bind its complete pattern key → 501".to_owned(),
-            ));
+        let work = crate::build::control::BuildWork::new(self.work_mode);
+        let mut key_bindings: std::collections::BTreeMap<String, TermDef> =
+            std::collections::BTreeMap::new();
+        for (variable, definition) in &branch.bindings {
+            work.charge(1)?;
+            work.charge(variable.len())?; // hashing the candidate name
+            for key in key_vars {
+                work.charge(1)?;
+                work.charge(variable.len().min(key.len()))?;
+            }
+            if !key_vars.contains(variable.as_str()) {
+                continue;
+            }
+            for key in key_bindings.keys() {
+                work.charge(1)?;
+                work.charge(variable.len().min(key.len()))?;
+            }
+            work.charge(std::mem::size_of::<(String, TermDef)>())?;
+            let name = work.string(variable)?;
+            if let crate::CompilerWorkMode::Metered(cx) = self.work_mode {
+                cx.reserve_ast_copy(
+                    crate::plan_measure::clone_root::CompilerCloneRootV1::TermDef(definition),
+                )?;
+            }
+            let definition = definition.clone();
+            work.checkpoint()?;
+            key_bindings.insert(name, definition);
+            work.checkpoint()?;
         }
+        if key_bindings.len() != key_vars.len() {
+            return Err(Error::Unsupported(work.string(
+                "D2 shared term-dedup arm does not bind its complete pattern key → 501",
+            )?));
+        }
+        // Integer hash/probes and logical carrier growth/relocation are paid
+        // before publication. Physical allocator overgrant is not claimed.
+        work.charge(self.dedup_groups.len())?;
+        work.charge(1)?;
+        self.reserve_product(&[
+            self.dedup_groups.len(),
+            3,
+            std::mem::size_of::<(usize, DedupMarker)>(),
+        ])?;
+        self.reserve_product(&[2, std::mem::size_of::<(usize, DedupMarker)>()])?;
         self.dedup_groups.insert(
             alias,
             DedupMarker {
@@ -245,6 +279,7 @@ impl<'a> Unfolder<'a> {
                 key_bindings,
             },
         );
+        work.checkpoint()?;
         Ok(())
     }
 

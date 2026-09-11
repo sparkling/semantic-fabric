@@ -63,14 +63,20 @@ use std::collections::BTreeMap;
 
 use sf_core::ir::TriplesMap;
 
+use crate::build::control::BuildWork;
 use crate::compiler_schema::ColumnTypeUse;
-use crate::iq::node::{
-    graph_pattern_var, path_pattern_vars, triple_pattern_vars, BindDef, IqCond, IqNode,
-};
+use crate::iq::node::{BindDef, IqCond, IqNode};
 use crate::iq::Branch;
 use crate::saturate::Tbox;
-use crate::unfold::{all_pairwise_disjoint, Unfolder};
+use crate::unfold::{all_pairwise_disjoint_with_work, Unfolder};
 use crate::{Error, Result};
+
+#[path = "resolve_control.rs"]
+mod control;
+
+#[cfg(test)]
+#[path = "resolve_control_tests.rs"]
+mod control_tests;
 
 /// The resolution context (M3 design §3): the T-mappings, the T-Box, the SQL
 /// dialect, and a **monotone alias counter** shared across the whole tree.
@@ -83,11 +89,21 @@ use crate::{Error, Result};
 /// `current_graph` that [`Unfolder::resolve_pattern`] saves/restores per leaf.
 pub struct ResolveCx<'a> {
     unfolder: Unfolder<'a>,
+    work: BuildWork<'a>,
 }
 
 impl<'a> ResolveCx<'a> {
+    /// Apply caller-owned work/cancellation control to this RESOLVE context.
+    /// This controls RESOLVE, not other compiler phases or source execution.
+    pub fn with_work_control(self, control: &'a dyn sf_core::query_control::QueryControl) -> Self {
+        self.with_work_mode(crate::CompilerWorkMode::Metered(
+            crate::compiler_control::CompileContext::new(control),
+        ))
+    }
+
     pub(crate) fn with_work_mode(mut self, work: crate::CompilerWorkMode<'a>) -> Self {
         self.unfolder = self.unfolder.with_work_mode(work);
+        self.work = BuildWork::new(work);
         self
     }
 
@@ -119,6 +135,7 @@ impl<'a> ResolveCx<'a> {
         column_type_use: ColumnTypeUse,
     ) -> Self {
         Self {
+            work: BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
             unfolder: Unfolder::new_with_column_type_use(
                 maps,
                 tbox,
@@ -151,258 +168,17 @@ impl<'a> ResolveCx<'a> {
 /// descends into those subtrees too — the "ZERO Intensional" invariant is over the
 /// *entire* tree, including condition-embedded patterns.
 pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
-    match node {
-        // ---- the one resolving case ---------------------------------------------
-        IqNode::Intensional { pattern, graph } => {
-            // ADR-0035: a `GRAPH ?v` context contributes `v` to this leaf's own scope,
-            // exactly as `IqNode::output_vars` already computes for the UNRESOLVED leaf
-            // (`graph_pattern_var`) — needed here too since RESOLVE builds the arms'
-            // `Empty`/`Union` wrapper directly, not via a later `output_vars()` call.
-            let mut vars = triple_pattern_vars(&pattern);
-            if let Some(v) = graph_pattern_var(graph.as_ref()) {
-                if !vars.contains(&v) {
-                    vars.push(v);
-                }
-            }
-            let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
-            // D1 may wrap a base Table scan in a compiler-generated Query to
-            // enforce duplicate safety. Capture only each branch's pre-wrap
-            // alias→source authority for the later D2 pooling gate; current
-            // bindings continue to come from `branches`. The two vectors stay
-            // index-aligned, and the wrapper changes SQL shape, not physical
-            // source identity or column type.
-            let source_authorities = branches
-                .iter()
-                .map(crate::cascade::PoolSourceAuthority::capture)
-                .collect::<Vec<_>>();
-            // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
-            // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
-            // for the SPARQL semantics that make this sound (an existence / anti-join
-            // check is unaffected by within-body duplicate rows or duplicate-map
-            // triples) and for why it also sidesteps a real, unrelated SubPlan-in-
-            // correlated-subquery 501 boundary this would otherwise trip.
-            if !cx.unfolder.in_existential {
-                // ADR-0034 D1: checked HERE, on this pattern's own just-resolved arms —
-                // their bindings are still the pattern's own complete variable set, not
-                // yet narrowed by anything downstream. `iq::lower`'s own Construction-arm
-                // `project` restriction (which runs during LOWER, well before
-                // `cascade::run`'s later, defensive D1 pass ever sees the branch) can
-                // strip a key-covering variable the outer query does not project — see
-                // `unfold::bgp`'s identical note (the flat engine's mirror of this same
-                // per-pattern timing fix) for the `r5_i_duplicate_union_arms` /
-                // `r5_iii_non_unique_self_join` regression this closes. `bridge_branch`
-                // below reads each branch's (possibly now `true`) `distinct` flag and
-                // wraps accordingly — never silently dropped.
-                crate::cascade::force_distinct_for_dup_safety(
-                    &mut branches,
-                    cx.unfolder.schema,
-                    cx.unfolder.dialect,
-                );
-            }
-            // ADR-0034 D2: when this pattern's own candidate-map arms are not ALL
-            // provably disjoint (the SAME elision check the flat engine's
-            // `unfold::pool_pattern_relation` applies), `unfold::disjoint_groups`
-            // partitions them into maximal not-provably-disjoint groups — only a
-            // group whose members can't all be told apart needs deduping together;
-            // an arm disjoint from every other arm stays a plain bag-union
-            // alternative even when SOME OTHER pair in this pattern is not disjoint
-            // (see that function's own doc comment, and W3C R2RMLTC0004a). `IqNode`
-            // has no representation for a pre-pooled `Branch` (RESOLVE/NORMALIZE
-            // never see anything but algebra nodes), so instead of pooling here
-            // directly, each group of size ≥2 gets its arms wrapped in
-            // `IqNode::Distinct` — the tree's established "must become its own
-            // derived table" modifier boundary (`iq::lower::lower_node`'s
-            // `Aggregation|Distinct|Slice|OrderBy => lower_as_subplan` arm) — which
-            // routes them through THAT function's existing multi-branch pooling
-            // (ADR-0025 Tier-2 gap 2: narrow-to-vars, injectivity gate, cross-arm
-            // reconstruction-agreement gate, `UNION`-vs-`UNION ALL` via
-            // `emit_subplan_sql`) unmodified. This reuses the identical pooling
-            // algorithm the flat engine's own `pool_group` runs (via the shared
-            // `remap_termdef`/`remap_colref` helpers), so the two engines stay
-            // `=_bag`-identical by construction — the elision check and grouping are
-            // duplicated (`unfold::all_pairwise_disjoint`/`unfold::disjoint_groups`,
-            // pure boolean/partition tests), the pooling mechanism is not.
-            //
-            // Each pooled group is wrapped in a condition-free `IqNode::Filter`
-            // around its `Distinct`: `iq::lower::lower_spine` special-cases a
-            // `Distinct`/`Aggregation`/`Slice`/`OrderBy` node it reaches DIRECTLY (or
-            // immediately under a `Construction` whose OWN child is exactly one of
-            // those four shapes) as the outer query-modifier SPINE — peeling it
-            // straight into `Plan::distinct` instead of routing it through
-            // `lower_node`'s `lower_as_subplan` arm. That peeling is correct for a
-            // REAL top-level SPARQL DISTINCT, but this `Distinct` is an internal D2
-            // pooling marker, not a user modifier — when a SINGLE group spans the
-            // pattern's entire arm set (so there is no enclosing `Union` over
-            // multiple groups) and this triple pattern happens to BE the entire
-            // WHERE clause (no sibling pattern to force an enclosing `InnerJoin`
-            // either, the only other thing that routes a child through `lower_node`
-            // instead of `lower_spine`), the bare `Distinct` reaches the spine
-            // directly and gets silently un-pooled (found via `differential_tree.rs`'s
-            // `r5_ii_overlapping_maps_same_predicate`'s CONSTRUCT-form assertion —
-            // flat/tree diverged: flat deduped via `unfold::pool_pattern_relation`,
-            // tree did not). Two earlier attempts at this fix failed: a plain
-            // `Construction` wrapper still has the `Distinct` as its DIRECT child, so
-            // the SAME guard matches; a one-child condition-free `InnerJoin` wrapper
-            // is torn back down to its bare child by `iq::normalize`'s OWN
-            // InnerJoin-identity pruning (`children.len() == 1 && cond.is_empty()`)
-            // before LOWER ever sees it. `Filter` has no such identity-unwrap for an
-            // unrecognized child shape (`normalize_filter`'s `other => Filter{child,
-            // cond}` arm keeps the wrapper), and `lower_spine` never special-cases
-            // `Filter` at all — it always falls to the "other" arm, which delegates
-            // the whole subtree to `lower_node`, whose own `Filter` arm then calls
-            // `lower_node` on `child` again, reaching the `Distinct =>
-            // lower_as_subplan` arm correctly regardless of tree position (including
-            // as one of several children under an enclosing `Union` over multiple
-            // groups, the ordinary "nested" case this mechanism already handles). An
-            // empty `cond` is a true no-op (`apply_conds` over zero conditions), so
-            // this adds no semantic content.
-            if !cx.unfolder.in_existential
-                && branches.len() >= 2
-                && !all_pairwise_disjoint(&branches)
-            {
-                let groups = crate::unfold::disjoint_groups(&branches);
-                let mut branches: Vec<Option<Branch>> = branches.into_iter().map(Some).collect();
-                let mut children: Vec<IqNode> = Vec::with_capacity(groups.len());
-                for group in groups {
-                    if group.len() == 1 {
-                        children.push(bridge_branch(
-                            branches[group[0]].take().expect("each index visited once"),
-                        ));
-                        continue;
-                    }
-                    let mut members: Vec<Branch> = group
-                        .iter()
-                        .map(|&i| branches[i].take().expect("each index visited once"))
-                        .collect();
-                    // ADR-0025 (sound-pooling shape): a positional pool this group's arms
-                    // would otherwise need can hit PostgreSQL's own `UNION` type-resolver
-                    // (a raw SQL error) or, if aligned via a `CAST`, silently drift a
-                    // floating-point column's lexical form, and mutable startup type
-                    // observations cannot prove different physical columns remain
-                    // compatible — see `cascade::group_pool_type_safety`.
-                    let member_refs = members.iter().collect::<Vec<_>>();
-                    let source_authority_refs = group
-                        .iter()
-                        .map(|&index| &source_authorities[index])
-                        .collect::<Vec<_>>();
-                    if crate::cascade::group_pool_type_safety_with_source_authority(
-                        &member_refs,
-                        &source_authority_refs,
-                        cx.unfolder.schema,
-                        cx.unfolder.dialect,
-                        cx.unfolder.column_type_use,
-                    ) == crate::cascade::PoolTypeSafety::Unproven
-                        || crate::cascade::group_needs_resolved_iri_dedup(
-                            &members,
-                            &vars.iter().map(|v| v.to_string()).collect(),
-                        )
-                    {
-                        // Type-independent correctness fallback (mirrors
-                        // `unfold::pool_pattern_relation`): when every member is
-                        // standalone and its projected RDF terms can be deduplicated
-                        // after reconstruction, skip SQL pooling — bridge each member
-                        // SEPARATELY
-                        // (exactly the `group.len() == 1` arm above, just for N members),
-                        // tagged via `cx.unfolder`'s `dedup_groups` so `run_branches`
-                        // shares ONE Rust-side term-dedup seen-set across them instead of
-                        // a `Filter{Distinct{Union}}` SQL pool — no `UNION`, so the PG
-                        // float-vs-text type-alignment wall never applies.
-                        let keep: std::collections::HashSet<String> =
-                            vars.iter().map(|v| v.to_string()).collect();
-                        if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep)
-                        {
-                            crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
-                            let gid = cx.unfolder.alias()?;
-                            for b in &members {
-                                let mut aliases = b
-                                    .core
-                                    .iter()
-                                    .chain(b.opts.iter().map(|opt| &opt.scan))
-                                    .map(|scan| scan.alias);
-                                let Some(alias) = aliases.next() else {
-                                    return Err(Error::Unsupported(
-                                        "D2 shared term-dedup arm has no representative source → 501"
-                                            .to_owned(),
-                                    ));
-                                };
-                                if aliases.next().is_some() {
-                                    return Err(Error::Unsupported(
-                                        "D2 shared term-dedup arm has multiple representative sources → 501"
-                                            .to_owned(),
-                                    ));
-                                }
-                                cx.unfolder.tag_dedup_group(alias, gid, b, &keep)?;
-                            }
-                            children.extend(members.into_iter().map(bridge_branch));
-                            continue;
-                        }
-                        return Err(Error::Unsupported(
-                            "D2 pool: PostgreSQL column-type compatibility is not proven → 501 \
-                             (a positional UNION could fail or drift lexically — ADR-0025)"
-                                .to_owned(),
-                        ));
-                    }
-                    let arms: Vec<IqNode> = members.into_iter().map(bridge_branch).collect();
-                    children.push(IqNode::Filter {
-                        child: Box::new(IqNode::Distinct {
-                            child: Box::new(IqNode::Union {
-                                children: arms,
-                                project: vars.clone(),
-                            }),
-                        }),
-                        cond: Vec::new(),
-                    });
-                }
-                return Ok(match children.len() {
-                    1 => children.pop().expect("checked len == 1"),
-                    _ => IqNode::Union {
-                        children,
-                        project: vars,
-                    },
-                });
-            }
-            let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
-            Ok(match arms.len() {
-                0 => IqNode::Empty { vars },
-                1 => arms.pop().expect("len checked == 1"),
-                _ => IqNode::Union {
-                    children: arms,
-                    project: vars,
-                },
-            })
-        }
+    let previous = cx.work;
+    cx.work = previous.enter()?;
+    let result = resolve_inner(node, cx);
+    cx.work = previous;
+    result
+}
 
-        // ---- the property-path resolving case (M5 Wave 1; ADR-0035 for GRAPH ?v) --
-        // Reuse the flat `path_branch` VERBATIM via `resolve_path` (pinning the
-        // constant active graph exactly as the flat `GRAPH <g> { ?s PATH ?o }` path
-        // does; a *variable* graph instead unions over the mapping's declared constant
-        // named graphs — `Unfolder::path_branches_for_graph_var`, `path.rs`), then
-        // bridge each resulting `Branch` (carrying `path = Some(PathClosure)`) to an
-        // `IqNode::Path` UNDER its `Construction` bindings via the SAME `bridge_branch`
-        // the triple case uses — the identical 0/1/N arm-count bridging `Intensional`
-        // above already applies (`resolve_path` returns `Vec<Branch>` uniformly now: a
-        // constant/no-GRAPH path is always exactly one arm, matching the old
-        // single-`Branch` contract; `GRAPH ?v` may be several, or none). ZERO
-        // `UnresolvedPath` survives — `bridge_branch` produces no `UnresolvedPath`.
-        IqNode::UnresolvedPath {
-            subject,
-            path,
-            object,
-            graph,
-        } => {
-            let vars = path_pattern_vars(&subject, &object, graph.as_ref());
-            let branches = cx
-                .unfolder
-                .resolve_path(&subject, &path, &object, graph.as_ref())?;
-            let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
-            Ok(match arms.len() {
-                0 => IqNode::Empty { vars },
-                1 => arms.pop().expect("len checked == 1"),
-                _ => IqNode::Union {
-                    children: arms,
-                    project: vars,
-                },
-            })
+fn resolve_inner(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
+    match node {
+        leaf @ (IqNode::Intensional { .. } | IqNode::UnresolvedPath { .. }) => {
+            control::resolve_leaf(leaf, cx)
         }
 
         // ---- recurse into children, structure unchanged -------------------------
@@ -411,12 +187,12 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             subst,
             project,
         } => Ok(IqNode::Construction {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
             subst,
             project,
         }),
         IqNode::Filter { child, cond } => Ok(IqNode::Filter {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
             cond: resolve_conds(cond, cx)?,
         }),
         IqNode::InnerJoin { children, cond } => Ok(IqNode::InnerJoin {
@@ -424,8 +200,8 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             cond: resolve_conds(cond, cx)?,
         }),
         IqNode::LeftJoin { left, right, cond } => Ok(IqNode::LeftJoin {
-            left: Box::new(resolve(*left, cx)?),
-            right: Box::new(resolve(*right, cx)?),
+            left: cx.work.boxed(resolve(*left, cx)?)?,
+            right: cx.work.boxed(resolve(*right, cx)?)?,
             cond: resolve_conds(cond, cx)?,
         }),
         IqNode::Union { children, project } => Ok(IqNode::Union {
@@ -437,24 +213,24 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             grouping,
             aggs,
         } => Ok(IqNode::Aggregation {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
             grouping,
             aggs,
         }),
         IqNode::Distinct { child } => Ok(IqNode::Distinct {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
         }),
         IqNode::Slice {
             child,
             offset,
             limit,
         } => Ok(IqNode::Slice {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
             offset,
             limit,
         }),
         IqNode::OrderBy { child, keys } => Ok(IqNode::OrderBy {
-            child: Box::new(resolve(*child, cx)?),
+            child: cx.work.boxed(resolve(*child, cx)?)?,
             keys,
         }),
 
@@ -469,7 +245,11 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
 
 /// Resolve each child of an n-ary node (every `Intensional` inside is replaced).
 fn resolve_children(children: Vec<IqNode>, cx: &mut ResolveCx) -> Result<Vec<IqNode>> {
-    children.into_iter().map(|c| resolve(c, cx)).collect()
+    let mut out = cx.work.vector(children.len())?;
+    for child in children {
+        out.push(resolve(child, cx)?);
+    }
+    Ok(out)
 }
 
 /// Resolve a conjunction of [`IqCond`]s: the symbolic `Expr`/`Sql` leaves are left
@@ -477,22 +257,34 @@ fn resolve_children(children: Vec<IqNode>, cx: &mut ResolveCx) -> Result<Vec<IqN
 /// subtrees recurse, so an `Intensional` embedded in a FILTER is resolved like any
 /// other.
 fn resolve_conds(conds: Vec<IqCond>, cx: &mut ResolveCx) -> Result<Vec<IqCond>> {
-    conds.into_iter().map(|c| resolve_cond(c, cx)).collect()
+    let mut out = cx.work.vector(conds.len())?;
+    for cond in conds {
+        out.push(resolve_cond(cond, cx)?);
+    }
+    Ok(out)
 }
 
 /// Resolve one [`IqCond`] (design §3, recursion clause). `Expr`/`Sql` are symbolic
 /// FILTER/ON leaves — passed through verbatim; `Exists`/`NotExists` recurse into their
 /// built subtrees.
 fn resolve_cond(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
+    let previous = cx.work;
+    cx.work = previous.enter()?;
+    let result = resolve_cond_inner(cond, cx);
+    cx.work = previous;
+    result
+}
+
+fn resolve_cond_inner(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
     match cond {
         IqCond::Expr(e) => Ok(IqCond::Expr(e)),
         IqCond::Sql(s) => Ok(IqCond::Sql(s)),
         IqCond::And(cs) => Ok(IqCond::And(resolve_conds(cs, cx)?)),
         IqCond::Or(cs) => Ok(IqCond::Or(resolve_conds(cs, cx)?)),
-        IqCond::Not(c) => Ok(IqCond::Not(Box::new(resolve_cond(*c, cx)?))),
-        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(resolve_existential(*n, cx)?))),
+        IqCond::Not(c) => Ok(IqCond::Not(cx.work.boxed(resolve_cond(*c, cx)?)?)),
+        IqCond::Exists(n) => Ok(IqCond::Exists(cx.work.boxed(resolve_existential(*n, cx)?)?)),
         IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
-            inner: Box::new(resolve_existential(*inner, cx)?),
+            inner: cx.work.boxed(resolve_existential(*inner, cx)?)?,
             is_minus,
         }),
     }
@@ -534,7 +326,8 @@ fn resolve_existential(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
 /// reaches `iq::lower::lower_node`'s `Distinct => lower_as_subplan` arm (a `Union`'s
 /// children are never processed via `lower_spine`'s peeling) — either way the SAME
 /// mechanism ADR-0034 D2 already relies on for pooling.
-fn bridge_branch(branch: Branch) -> IqNode {
+fn bridge_branch(branch: Branch, work: BuildWork<'_>) -> Result<IqNode> {
+    work.charge(1)?;
     let Branch {
         core,
         bindings,
@@ -544,7 +337,8 @@ fn bridge_branch(branch: Branch) -> IqNode {
         ..
     } = branch;
 
-    let conds: Vec<IqCond> = where_conds.into_iter().map(IqCond::Sql).collect();
+    let mut conds = work.vector(where_conds.len())?;
+    conds.extend(where_conds.into_iter().map(IqCond::Sql));
 
     let child = match path {
         // ---- property-path closure arm (M5 Wave 1) ------------------------------
@@ -558,7 +352,7 @@ fn bridge_branch(branch: Branch) -> IqNode {
                 leaf
             } else {
                 IqNode::Filter {
-                    child: Box::new(leaf),
+                    child: work.boxed(leaf)?,
                     cond: conds,
                 }
             }
@@ -568,13 +362,11 @@ fn bridge_branch(branch: Branch) -> IqNode {
         // (`Extensional.bind` left empty — all join logic is carried by the explicit
         // `IqCond::Sql` conds, exactly mirroring the flat lowering).
         None => {
-            let scans: Vec<IqNode> = core
-                .into_iter()
-                .map(|scan| IqNode::Extensional {
-                    scan,
-                    bind: BTreeMap::new(),
-                })
-                .collect();
+            let mut scans = work.vector(core.len())?;
+            scans.extend(core.into_iter().map(|scan| IqNode::Extensional {
+                scan,
+                bind: BTreeMap::new(),
+            }));
             if scans.len() == 1 && conds.is_empty() {
                 scans.into_iter().next().expect("len checked == 1")
             } else {
@@ -588,23 +380,33 @@ fn bridge_branch(branch: Branch) -> IqNode {
 
     // The var → resolved-term scope (design §3.2): each flat binding becomes a
     // `BindDef::Resolved(TermDef)`; the arm projects exactly its bound variables.
-    let project = bindings.keys().map(|v| v.as_str().into()).collect();
-    let subst = bindings
-        .into_iter()
-        .map(|(v, td)| (v.into(), BindDef::Resolved(td)))
-        .collect();
+    let project = work.variables(bindings.keys().map(String::as_str))?;
+    let mut subst: BTreeMap<crate::iq::node::Var, BindDef> = BTreeMap::new();
+    for (variable, definition) in bindings {
+        // An insertion visits no more existing keys than the map contains.
+        // Pay a deterministic worst-case byte comparison bound, not an
+        // allocator-dependent BTree node layout or a clone of the moved term.
+        for key in subst.keys() {
+            work.charge(1)?;
+            work.charge(key.len().min(variable.len()))?;
+        }
+        work.charge(std::mem::size_of::<(crate::iq::node::Var, BindDef)>())?;
+        work.charge(variable.len())?; // String -> Box<str> may shrink its buffer.
+        subst.insert(variable.into(), BindDef::Resolved(definition));
+        work.checkpoint()?;
+    }
 
     let construction = IqNode::Construction {
-        child: Box::new(child),
+        child: work.boxed(child)?,
         subst,
         project,
     };
     if distinct {
-        IqNode::Distinct {
-            child: Box::new(construction),
-        }
+        Ok(IqNode::Distinct {
+            child: work.boxed(construction)?,
+        })
     } else {
-        construction
+        Ok(construction)
     }
 }
 
