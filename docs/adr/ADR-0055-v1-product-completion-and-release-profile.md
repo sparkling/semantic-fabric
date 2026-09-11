@@ -25,7 +25,7 @@ implements: []
 
 ## Status boundary
 
-**RESOLVE schema authority (2026-09-11, implementation awaiting final slice verification):**
+**RESOLVE schema authority (2026-09-11, verified in `308d75b`):**
 the tree RESOLVE D1/D2 path constructs one interruptible, uniquely named schema
 map before duplicate-elimination mutation and shares it across pooling groups.
 Duplicate table names now return an explicit ambiguous-schema error, including
