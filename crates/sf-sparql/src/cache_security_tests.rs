@@ -19,6 +19,9 @@ use crate::{CompilerBinding, CompilerSchema, Tbox};
 
 const QUERY: &str = "SELECT * WHERE { ?s ?p ?o }";
 
+#[path = "cache_security_identity_tests.rs"]
+mod identity;
+
 fn digest(value: u8) -> [u8; 32] {
     [value; 32]
 }

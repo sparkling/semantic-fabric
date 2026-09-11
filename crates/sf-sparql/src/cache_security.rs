@@ -50,7 +50,7 @@ impl SecurityPlanKey {
         profile: CompileProfileId,
         security_identity: SecurityCacheIdentity,
     ) -> Self {
-        let canonical = query.to_string();
+        let canonical = super::canonical::raw(query).to_string();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         canonical.hash(&mut hasher);
         Self::from_canonical_with_hash(

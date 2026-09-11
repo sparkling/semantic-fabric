@@ -2,6 +2,9 @@ use super::*;
 use http_body_util::BodyExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "request_cache_identity_tests.rs"]
+mod cache_identity;
+
 const QUERIES: [&str; 4] = [
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional } }",
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { { ?item <http://example.test/b> ?optional } UNION { ?item <http://example.test/b> ?optional } } }",
@@ -16,9 +19,8 @@ const SCOPE_QUERIES: [&str; 3] = [
 ];
 
 const ALIAS_QUERIES: [&str; 2] = [
-    // GROUP exercises the same SQL aggregate/subplan alias reservations without
-    // a parser-generated aggregate variable. COUNT's independently reproduced
-    // random-variable cache miss is a separate open identity defect, not a hit.
+    // Keep alias-reservation accounting independent of parser-generated COUNT
+    // names. Separate cache_identity tests prove the COUNT cold/warm public path.
     "SELECT ?value WHERE { ?item <http://example.test/a> ?value } GROUP BY ?value",
     "SELECT ?value WHERE { { ?item <http://example.test/a> ?value } UNION { ?item <http://example.test/a> ?value } } GROUP BY ?value",
 ];
@@ -28,6 +30,7 @@ enum MappedProfile {
     Optional,
     Scope,
     Alias,
+    Identity,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -141,6 +144,9 @@ fn mapped_work(
         MappedProfile::Scope => compiler_key::lower_scope_work(query, maps),
         MappedProfile::Optional => compiler_key::lowering_work(query, maps),
         MappedProfile::Alias => compiler_key::lower_alias_work(query, maps),
+        MappedProfile::Identity => {
+            unreachable!("identity uses stage observation, not LOWER calibration")
+        }
     };
     assert_eq!(end - start, independently_lowered);
     let prefix = query.len() as u64 + start;
@@ -195,7 +201,13 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(mapped_admission_cases(profile));
+            .block_on(async {
+                if profile == MappedProfile::Identity {
+                    cache_identity::cases().await;
+                } else {
+                    mapped_admission_cases(profile).await;
+                }
+            });
         // Only successful execution of every case emits this witness. An exact
         // libtest selector matching zero tests exits 0 and must not pass here.
         std::process::exit(COMPLETED);
@@ -234,6 +246,7 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Scope => SCOPE_QUERIES.as_slice(),
         MappedProfile::Optional => QUERIES.as_slice(),
         MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
+        MappedProfile::Identity => unreachable!("separate cache-identity acceptance"),
     };
     for (variant, query) in queries.iter().copied().enumerate() {
         let (prefix, normalized, exact) = mapped_work(query, &maps, profile);

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-09
+updated: 2026-09-11
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -134,6 +134,8 @@ Graph inventory/reflexive eligibility, shape construction and total compiler/sou
 work remain open under ADR-0010; no supported shape or cache authority changes.
 
 **Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, compiler-safe schema, constraint authority, column-type authority and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope (including both authorities), dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding/policy reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability/policy digests and atomic generation changes.
+
+**Cache identity correction (2026-09-11).** Independently parsed aggregates and isolated constant DESCRIBE targets now share stable keys. A cache-only query copy normalizes structurally identified, non-exposed binders using a fresh bijection; all constants, authored binding sites, projection/template names and scope/profile/security partitions remain exact. Unique aggregate definitions with no competing binding or projection escape qualify; DESCRIBE targets require exactly one root projection and one constant-IRI Extend, with no other use. Ambiguous roles and implicit SELECT-star output names remain unchanged. No random-looking-name heuristic, raw-source key, parser fork or executable-query mutation is used. This contract assumes the current API supplies no external initial variable bindings. Request control prospectively pays whole-query clone measurement/copy, classification/comparison, temporary growth and renaming before bounded formatting/hash. Independent parse, collision, exact/N-1 and every-charge interruption checks plus ordinary/authenticated mapped COUNT HTTP tests cover reuse, exact groups and source/compiler capacity recovery. The HTTP warm witness observes parsing without BUILD/RESOLVE/LOWER; random parser name lengths can still change work totals. This is not universal alpha-equivalence, physical heap/drop qualification, governed-cache activation or release completion (ADR-0010/0055).
 
 **Implemented serving quarantine (`24a0e20`; hardened 2026-09-02).** `sf-serve` converts every startup observation
 to `CompilerSchema::from_unverified_observation`. Both fresh and cached plans see

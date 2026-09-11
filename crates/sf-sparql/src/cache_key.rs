@@ -42,6 +42,12 @@ pub(crate) fn plan_key_with_work_control(
     control.consume(QueryCharge::CompilerWork, 1)?;
     control.checkpoint()?;
     let envelope = AlgebraEnvelopeV1::validate_with_control(query, control)?;
+    let query = super::canonical::controlled(query, &envelope, control)?;
+    let envelope = if matches!(query, std::borrow::Cow::Owned(_)) {
+        AlgebraEnvelopeV1::validate_with_control(&query, control)?
+    } else {
+        envelope
+    };
     envelope.charge_canonical_preparation(control)?;
     control.checkpoint()?;
     let mut writer = BoundedWriter::new(usize::MAX, |output: &mut String, additional| {
@@ -87,7 +93,7 @@ pub(crate) fn plan_key_for_profile(
     profile: CompileProfileId,
     maximum_bytes: usize,
 ) -> Result<PlanKey, BoundedCacheKeyError> {
-    let canonical = render_bounded(query, maximum_bytes)?;
+    let canonical = render_bounded(&super::canonical::raw(query), maximum_bytes)?;
     Ok(PlanKey::from_canonical(scope, profile, canonical))
 }
 

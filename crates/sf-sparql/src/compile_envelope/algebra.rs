@@ -37,6 +37,7 @@ pub(crate) struct AlgebraEnvelopeV1 {
     extend_nodes: usize,
     project_slots: usize,
     max_variable_bytes: usize,
+    pub(crate) cache_internal_binders: bool,
 }
 
 impl AlgebraEnvelopeV1 {

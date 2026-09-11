@@ -87,6 +87,7 @@ impl<'query> Validator<'query, '_> {
     }
 
     fn query(&mut self, query: &'query Query, depth: usize) -> Result<(), WalkError> {
+        self.envelope.cache_internal_binders |= matches!(query, Query::Describe { .. });
         let (dataset, pattern, base_iri) = match query {
             Query::Select {
                 dataset,
@@ -219,6 +220,7 @@ impl<'query> Validator<'query, '_> {
                 variables,
                 aggregates,
             } => {
+                self.envelope.cache_internal_binders |= !aggregates.is_empty();
                 self.collection(variables.len())?;
                 self.collection(aggregates.len())?;
                 for (variable, aggregate) in aggregates.iter().rev() {

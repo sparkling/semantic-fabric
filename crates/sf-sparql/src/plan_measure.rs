@@ -136,6 +136,7 @@ struct Pending<'a> {
 
 #[derive(Clone, Copy)]
 enum Work<'a> {
+    Query(&'a ::spargebra::Query),
     Plan(&'a Plan),
     PlanForm(&'a PlanForm),
     DedupScope(&'a DedupScope),
@@ -232,6 +233,7 @@ impl<'a> Walker<'a> {
             let Pending { work, depth } = self.stack.pop().expect("nonempty work stack");
             self.record_node()?;
             match work {
+                Work::Query(value) => clone_root::visit_query(&mut self, value, depth)?,
                 Work::Plan(value) => plan::visit_plan(&mut self, value, depth)?,
                 Work::PlanForm(value) => plan::visit_plan_form(&mut self, value, depth)?,
                 Work::DedupScope(value) => plan::visit_dedup_scope(&mut self, value, depth)?,

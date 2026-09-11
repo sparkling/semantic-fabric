@@ -137,6 +137,53 @@ fn dataset_and_mapping_roots_have_hand_calculated_schedules() {
 }
 
 #[test]
+fn cache_identity_whole_query_clone_includes_dataset_template_and_base() {
+    use ::spargebra::Query;
+    let base = Some(oxiri::Iri::parse("urn:base".to_owned()).unwrap());
+    let dataset = Some(QueryDataset {
+        default: vec![iri("urn:g")],
+        named: Some(vec![]),
+    });
+    let pattern = GraphPattern::Bgp { patterns: vec![] };
+    for query in [
+        Query::Select {
+            dataset: dataset.clone(),
+            pattern: pattern.clone(),
+            base_iri: base.clone(),
+        },
+        Query::Ask {
+            dataset: dataset.clone(),
+            pattern: pattern.clone(),
+            base_iri: base.clone(),
+        },
+        Query::Describe {
+            dataset: dataset.clone(),
+            pattern: pattern.clone(),
+            base_iri: base.clone(),
+        },
+    ] {
+        let measured = measure_compiler_clone_root_v1(CompilerCloneRootV1::Query(&query)).unwrap();
+        assert_eq!(measured, expected(4, 1, 13, 3, 2));
+    }
+    let query = Query::Construct {
+        dataset,
+        pattern,
+        base_iri: base,
+        template: vec![TriplePattern {
+            subject: var_term("s"),
+            predicate: variable("p").into(),
+            object: var_term("o"),
+        }],
+    };
+    let measured = measure_compiler_clone_root_v1(CompilerCloneRootV1::Query(&query)).unwrap();
+    assert_eq!(measured, expected(11, 2, 16, 4, 3));
+}
+
+fn var_term(name: &str) -> TermPattern {
+    variable(name).into()
+}
+
+#[test]
 fn mapping_root_walks_every_owned_variant() {
     let triples_map = TriplesMap {
         id: "m".to_owned(),

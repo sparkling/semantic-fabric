@@ -421,13 +421,16 @@ pub(crate) fn plan_key_for_profile(
     scope: CompileScope,
     profile: CompileProfileId,
 ) -> PlanKey {
-    let canonical = query.to_string();
+    let canonical = canonical::raw(query).to_string();
     PlanKey::from_canonical(scope, profile, canonical)
 }
 
 #[allow(dead_code)] // Dormant until the controlled compiler path is activated.
 #[path = "cache_key.rs"]
 pub(crate) mod bounded_key;
+
+#[path = "cache_canonical.rs"]
+mod canonical;
 
 /// A bounded plan cache. Generic over the cached plan type `P` so the cache does
 /// not couple to the (large) plan struct. Entry capacity is not a total heap bound
@@ -484,3 +487,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cache_contention_tests.rs"]
 mod contention_tests;
+
+#[cfg(test)]
+#[path = "cache_identity_tests.rs"]
+mod identity_tests;

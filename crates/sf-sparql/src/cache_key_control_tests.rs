@@ -30,6 +30,8 @@ fn canonical_identity_and_exact_hash_budget_match_all_query_forms() {
         "CONSTRUCT { ?s <http://example.test/p> ?o } WHERE { ?s <http://example.test/p> ?o }",
         "DESCRIBE ?s WHERE { ?s a <http://example.test/Thing> }",
         "SELECT (?x+1 AS ?a) (?a+2 AS ?b) WHERE { VALUES ?x { 1 2 } }",
+        "SELECT (COUNT(*) AS ?n) WHERE { VALUES ?x { 1 2 } }",
+        "DESCRIBE <urn:a> <urn:b>",
     ] {
         let query = spargebra::SparqlParser::new().parse_query(source).unwrap();
         let work = query_work(&query);

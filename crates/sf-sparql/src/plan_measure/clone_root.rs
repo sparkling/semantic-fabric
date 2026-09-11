@@ -35,6 +35,7 @@ use crate::{DedupScope, Plan, PlanForm};
 #[allow(dead_code)] // Dormant until exact precharges are wired at clone sites.
 #[derive(Clone, Copy)]
 pub(crate) enum CompilerCloneRootV1<'a> {
+    Query(&'a ::spargebra::Query),
     Plan(&'a Plan),
     PlanForm(&'a PlanForm),
     DedupScope(&'a DedupScope),
@@ -226,6 +227,7 @@ fn measure_collection<'a>(
 impl<'a> CompilerCloneRootV1<'a> {
     fn into_work(self) -> Work<'a> {
         match self {
+            Self::Query(value) => Work::Query(value),
             Self::Plan(value) => Work::Plan(value),
             Self::PlanForm(value) => Work::PlanForm(value),
             Self::DedupScope(value) => Work::DedupScope(value),
@@ -285,6 +287,52 @@ impl<'a> CompilerCloneRootV1<'a> {
             Self::IqBindDef(value) => Work::IqBindDef(value),
         }
     }
+}
+
+/// The whole query owns its dataset, template and base as well as its graph.
+pub(super) fn visit_query<'a>(
+    walker: &mut Walker<'a>,
+    query: &'a ::spargebra::Query,
+    depth: usize,
+) -> Result<(), PlanMeasureError> {
+    use ::spargebra::Query;
+    let (dataset, pattern, base_iri) = match query {
+        Query::Select {
+            dataset,
+            pattern,
+            base_iri,
+        }
+        | Query::Ask {
+            dataset,
+            pattern,
+            base_iri,
+        }
+        | Query::Describe {
+            dataset,
+            pattern,
+            base_iri,
+        } => (dataset, pattern, base_iri),
+        Query::Construct {
+            template,
+            dataset,
+            pattern,
+            base_iri,
+        } => {
+            walker.collection(template.len())?;
+            for triple in template {
+                walker.push(depth, Work::TriplePattern(triple))?;
+            }
+            (dataset, pattern, base_iri)
+        }
+    };
+    if let Some(base) = base_iri {
+        walker.payload(base.as_str().len())?;
+    }
+    walker.push(depth, Work::GraphPattern(pattern))?;
+    if let Some(dataset) = dataset {
+        walker.push(depth, Work::QueryDataset(dataset))?;
+    }
+    Ok(())
 }
 
 fn push_roots<'a, T>(

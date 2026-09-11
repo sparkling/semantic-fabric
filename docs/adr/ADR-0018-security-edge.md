@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-08
+updated: 2026-09-11
 tags: [security, authorization, row-level-security, abac, multi-tenancy, sensitivity, data-sensitivity]
 supersedes: []
 depends-on:
@@ -13,7 +13,7 @@ implements:
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-09-08): accepted, partially implemented.**
+> **Implementation status (2026-09-11): accepted, partially implemented.**
 > `6d91fa6` adds fixed-width, provider-neutral policy/subject/request-attribute
 > identities with explicit construction, redacted diagnostics and no default or
 > anonymous context. `a2c25ff` adds a separate plan-cache seam requiring
@@ -36,6 +36,8 @@ implements:
 > deliberately narrow ABAC subset. External identity issuers, ontology-backed
 > resource attributes, sensitivity enforcement, policy-aware hot reload and
 > paired access-decision metrics remain open; this ADR remains incomplete.
+
+**Cache identity delta (2026-09-11):** ordinary and security-scoped raw/controlled caches use the same conservative cache-only normalization for internal aggregate and isolated constant-DESCRIBE binders (ADR-0007). Independent parses now reuse the same `Arc<Plan>` within a partition; full canonical equality and scope/profile/policy/subject/attribute isolation remain mandatory. Policy mismatch still precedes parsing/cache access, and warm hits still pay bounded key construction. Required fixed-AST exact/N-1 and no-publication tests, independent-parse secured reuse/forced-collision tests and mapped bearer COUNT HTTP refusal/recovery tests cover this change. The public warm witness observes no post-parse compilation stages; it does not assume parser-random name lengths have identical numeric cost. No new identity provider, authorization breadth or release authority is introduced.
 
 ### Implemented reference admission profile (2026-09-07)
 
