@@ -3,6 +3,15 @@ use super::ColRef;
 use sf_core::ir::{Segment, TermMap, TermType};
 use sf_core::NamedNode;
 
+#[path = "filter_projection.rs"]
+mod filter_projection;
+#[path = "iri_cmp_work.rs"]
+mod work;
+pub(crate) use work::validate_filter_source_with_work_mode;
+#[cfg(test)]
+#[path = "filter_source_tests.rs"]
+mod optional_filter_source_tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IriPart {
     Literal(Box<str>),

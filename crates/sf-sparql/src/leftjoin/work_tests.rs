@@ -157,7 +157,21 @@ fn optional_work_anti_match_copies_left_only_when_filter_needs_it() {
         Some(Expression::Bound(Variable::new("left").unwrap())),
     ] {
         // One paid empty preparation; no right bindings to look up afterward.
-        let expected = 1 + copy_work(&right) + if expr.is_some() { copy_work(&left) } else { 0 };
+        let mut expected =
+            1 + copy_work(&right) + if expr.is_some() { copy_work(&left) } else { 0 };
+        if let Some(e) = &expr {
+            let filter = budget(u64::MAX);
+            let condition = work::filter_scopes(
+                mode(&filter),
+                e,
+                &left.bindings,
+                Dialect::Sqlite,
+                &[&left, &right],
+            )
+            .unwrap();
+            work::push_owned(BuildWork::new(mode(&filter)), &mut vec![], condition).unwrap();
+            expected += filter.consumed(QueryCharge::CompilerWork);
+        }
         let exact = budget(expected);
         let got = not_exists_cond_for_with_work_mode(
             &left,

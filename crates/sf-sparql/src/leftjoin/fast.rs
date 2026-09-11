@@ -100,10 +100,11 @@ pub(super) fn build_left_join(
         }
         // Combined bindings for the inner FILTER (R5: it goes in the ON, not WHERE).
         if let Some(e) = expr {
-            extra.push(
-                filter_scopes(e, &left.bindings, dialect, &[&left, right])
-                    .map_err(Error::Unsupported)?,
-            );
+            work::push_owned(
+                BuildWork::new(mode),
+                &mut extra,
+                work::filter_scopes(mode, e, &left.bindings, dialect, &[&left, right])?,
+            )?;
         }
         for (var, rdef) in nullable_shared.into_inner() {
             let (var, ldef) = left

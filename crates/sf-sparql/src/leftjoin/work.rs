@@ -1,9 +1,55 @@
 //! Operation-local OPTIONAL admission, sharing the request's existing control.
 //! These reservations cover candidate visits, output vectors and direct field
-//! copies and measured-input unification, not FILTER work or physical heap bytes.
+//! copies, measured-input unification and FILTER work, not physical heap bytes.
 
 use crate::build::control::{BuildVec, BuildWork};
 use crate::{iq::Branch, CompilerWorkMode, Result};
+
+pub(crate) fn filter_scopes(
+    mode: CompilerWorkMode<'_>,
+    expression: &spargebra::algebra::Expression,
+    bindings: &std::collections::BTreeMap<String, crate::iq::TermDef>,
+    dialect: sf_sql::Dialect,
+    scopes: &[&Branch],
+) -> Result<crate::iq::SqlCond> {
+    let CompilerWorkMode::Metered(cx) = mode else {
+        return crate::unify::filter_scopes(expression, bindings, dialect, scopes)
+            .map_err(crate::Error::Unsupported);
+    };
+    let condition = {
+        let _span = tracing::debug_span!("sf.compiler.optional_filter_construct").entered();
+        cx.filter_condition(expression, bindings, dialect)?
+    };
+    {
+        let _span = tracing::debug_span!("sf.compiler.optional_filter_validate").entered();
+        for branch in scopes {
+            BuildWork::new(mode).charge(1)?;
+            crate::iq::iri_cmp::validate_filter_source_with_work_mode(
+                &condition, branch, dialect, mode,
+            )?;
+        }
+    }
+    Ok(condition)
+}
+
+/// Pay the anti-FILTER map's entry search and logical carrier. Branch-copy
+/// admission already covered the actual key/definition payload copies.
+pub(crate) fn filter_binding_entry(
+    mode: CompilerWorkMode<'_>,
+    bindings: &std::collections::BTreeMap<String, crate::iq::TermDef>,
+    key: &str,
+) -> Result<()> {
+    if matches!(mode, CompilerWorkMode::Uncontrolled) {
+        return Ok(());
+    }
+    let work = BuildWork::new(mode);
+    work.charge(std::mem::size_of::<(String, crate::iq::TermDef)>())?;
+    for existing in bindings.keys() {
+        work.charge(1)?;
+        work.charge(key.len().min(existing.len()))?;
+    }
+    Ok(())
+}
 
 /// Reuse the compiler's measured-input admission and conservative logical
 /// allowance without changing the raw unifier's decisions. This fixed span

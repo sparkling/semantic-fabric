@@ -15,11 +15,14 @@ use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
 use crate::{Error, Result};
 
 mod alias;
+mod filter_work;
 mod optional_work;
 mod unification_work;
 
 #[cfg(test)]
 mod alias_tests;
+#[cfg(test)]
+mod filter_work_tests;
 #[cfg(test)]
 mod unification_work_tests;
 

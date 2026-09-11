@@ -14,7 +14,7 @@ use sf_core::ir::Segment;
 
 use crate::build::control::{BuildVec, BuildWork};
 use crate::iq::{Branch, CmpOp, ColRef, OptJoin, SqlCond, TermDef};
-use crate::unify::{filter_scopes, Unify};
+use crate::unify::Unify;
 use crate::{CompilerWorkMode, Error, Result};
 pub(crate) mod conditions;
 mod decomposition;
@@ -28,6 +28,9 @@ use fast::build_left_join;
 #[cfg(test)]
 #[path = "leftjoin/condition_work_tests.rs"]
 mod optional_condition_work_tests;
+#[cfg(test)]
+#[path = "leftjoin/filter_work_tests.rs"]
+mod optional_filter_work_tests;
 #[cfg(test)]
 #[path = "leftjoin/preparation_tests.rs"]
 mod optional_preparation_tests;

@@ -94,9 +94,11 @@ pub(crate) fn inner_join_one_with_work_mode(
 
         // FILTER inside the OPTIONAL goes in the inner-join WHERE (R5 analogue).
         if let Some(e) = expr {
-            where_conds.push(
-                filter_scopes(e, &bindings, dialect, &[left, right]).map_err(Error::Unsupported)?,
-            );
+            work::push_owned(
+                BuildWork::new(mode),
+                &mut where_conds,
+                work::filter_scopes(mode, e, &bindings, dialect, &[left, right])?,
+            )?;
         }
 
         for (var, rdef) in nullable_shared.into_inner() {
@@ -240,11 +242,14 @@ pub(crate) fn not_exists_cond_for_with_work_mode(
         if let Some(e) = expr {
             let mut combined = left.bindings.clone();
             for (v, d) in &right.bindings {
+                work::filter_binding_entry(mode, &combined, v)?;
                 combined.entry(v.clone()).or_insert_with(|| d.clone());
             }
-            conds.push(
-                filter_scopes(e, &combined, dialect, &[left, right]).map_err(Error::Unsupported)?,
-            );
+            work::push_owned(
+                BuildWork::new(mode),
+                &mut conds,
+                work::filter_scopes(mode, e, &combined, dialect, &[left, right])?,
+            )?;
         }
 
         Ok(Some(SqlCond::NotExists {

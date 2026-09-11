@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "request_cache_identity_tests.rs"]
 mod cache_identity;
+#[path = "request_optional_filter_tests.rs"]
+mod filter;
 #[path = "request_optional_preparation_tests.rs"]
 mod preparation;
 #[path = "request_optional_unification_tests.rs"]
@@ -37,6 +39,7 @@ enum MappedProfile {
     Identity,
     Preparation,
     Unification,
+    Filter,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -60,6 +63,9 @@ fn mapped_work(
     maps: &[sf_core::ir::TriplesMap],
     profile: MappedProfile,
 ) -> (u64, u64, u64) {
+    if profile == MappedProfile::Filter {
+        return filter::helper_work(query, maps);
+    }
     if profile == MappedProfile::Unification {
         return unification::helper_work(query, maps);
     }
@@ -153,7 +159,10 @@ fn mapped_work(
         MappedProfile::Scope => compiler_key::lower_scope_work(query, maps),
         MappedProfile::Optional => compiler_key::lowering_work(query, maps),
         MappedProfile::Alias => compiler_key::lower_alias_work(query, maps),
-        MappedProfile::Identity | MappedProfile::Preparation | MappedProfile::Unification => {
+        MappedProfile::Identity
+        | MappedProfile::Preparation
+        | MappedProfile::Unification
+        | MappedProfile::Filter => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
     };
@@ -258,13 +267,19 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Optional => QUERIES.as_slice(),
         MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
         MappedProfile::Unification => unification::QUERIES.as_slice(),
+        MappedProfile::Filter => filter::QUERIES.as_slice(),
         MappedProfile::Identity | MappedProfile::Preparation => {
             unreachable!("separate helper acceptance")
         }
     };
     for (variant, query) in queries.iter().copied().enumerate() {
         let (prefix, normalized, exact) = mapped_work(query, &maps, profile);
-        let cached = query.len() as u64 + key_work(query);
+        let cached = query.len() as u64
+            + if profile == MappedProfile::Filter {
+                filter::key_work(query, &maps)
+            } else {
+                key_work(query)
+            };
         assert!(cached < prefix);
         for secured in [false, true] {
             let (mut cfg, pool) = config_with_mapping(prefix, maps.clone());
@@ -421,13 +436,18 @@ async fn mapped_admission_cases(profile: MappedProfile) {
                         })
                         .collect();
                     values.sort();
-                    let mut expected = if scope_only {
+                    let mut expected = if profile == MappedProfile::Filter {
+                        vec![("one", Some("x")), ("one", None), ("two", None)]
+                    } else if scope_only {
                         vec![("one", None), ("one", None), ("two", None)]
                     } else {
                         vec![("one", Some("x")), ("one", None), ("two", Some("y"))]
                     };
                     if !scope_only && variant == 1 {
-                        expected.extend([("one", Some("x")), ("two", Some("y"))]);
+                        expected.push(("one", Some("x")));
+                        if profile != MappedProfile::Filter {
+                            expected.push(("two", Some("y")));
+                        }
                     }
                     expected.sort();
                     assert_eq!(values, expected, "variant {variant}");
