@@ -19,7 +19,9 @@ use crate::{CompilerWorkMode, Error, Result};
 pub(crate) mod conditions;
 mod decomposition;
 mod fast;
+pub(crate) mod materialization;
 pub(crate) mod preparation;
+pub(crate) mod shape;
 pub(crate) mod work;
 #[cfg(test)]
 pub(crate) use decomposition::{inner_join_one, not_exists_cond_for};
@@ -32,8 +34,14 @@ mod optional_condition_work_tests;
 #[path = "leftjoin/filter_work_tests.rs"]
 mod optional_filter_work_tests;
 #[cfg(test)]
+#[path = "leftjoin/materialization_tests.rs"]
+mod optional_materialization_tests;
+#[cfg(test)]
 #[path = "leftjoin/preparation_tests.rs"]
 mod optional_preparation_tests;
+#[cfg(test)]
+#[path = "leftjoin/shape_tests.rs"]
+mod optional_shape_tests;
 #[cfg(test)]
 #[path = "leftjoin/unification_work_tests.rs"]
 mod optional_unification_work_tests;
@@ -78,36 +86,7 @@ pub(crate) fn left_join_branches_with_work_mode(
         return Ok(left);
     }
 
-    // All right branches must be opt-free (nested OPTIONAL inside OPTIONAL
-    // right is not yet supported).  Multi-scan right (core.len() > 1) is sound
-    // via the decomposition below: (P ⋈ R) ∪ (P - R).
-    for r in &right {
-        if !r.opts.is_empty() {
-            return Err(Error::Unsupported(
-                "nested OPTIONAL inside an OPTIONAL right side is deferred → 501 (ADR-0007)"
-                    .to_owned(),
-            ));
-        }
-    }
-
-    // Single-branch, single-scan right: SQL LEFT JOIN (the common case).
-    // A sealed Ref still represents the former two-scan native relation. Keep
-    // its decomposition path: making it an OptJoin here can strand nested
-    // OPTIONALs in `opts` and diverge from the tree lowerer's decomposition.
-    if right.len() == 1
-        && right[0].core.len() == 1
-        // A newly introduced mapping constant still becomes UNBOUND when the
-        // optional row is absent. Const has no nullable source witness: use the
-        // existing match/no-match decomposition rather than invent a value.
-        && !right[0].bindings.iter().any(|(var, def)| {
-            matches!(def, TermDef::Const(_))
-                && left.iter().any(|branch| !matches!(branch.bindings.get(var), Some(TermDef::Const(_))))
-        })
-        && !matches!(
-            right[0].core[0].source,
-            crate::iq::ScanSource::RefAtom { .. }
-        )
-    {
+    if shape::select_fast(&left, &right, mode)? {
         let r = &right[0];
         work::candidates(mode, left.len(), 1, false)?;
         let mut out = BuildVec::new(Vec::new());

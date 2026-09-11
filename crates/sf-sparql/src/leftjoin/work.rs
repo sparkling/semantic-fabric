@@ -32,9 +32,9 @@ pub(crate) fn filter_scopes(
     Ok(condition)
 }
 
-/// Pay the anti-FILTER map's entry search and logical carrier. Branch-copy
+/// Pay a binding map's entry search and logical carrier. Branch-copy
 /// admission already covered the actual key/definition payload copies.
-pub(crate) fn filter_binding_entry(
+pub(crate) fn binding_edit(
     mode: CompilerWorkMode<'_>,
     bindings: &std::collections::BTreeMap<String, crate::iq::TermDef>,
     key: &str,

@@ -84,7 +84,8 @@ fn optional_work_all_candidates_are_paid_even_when_unification_prunes() {
         "x".into(),
         TermDef::Const(sf_core::Literal::from("right").into()),
     );
-    let control = budget(11); // Three left x two right already needs twelve pair visits.
+    // Shape dispatch + two right opts visits + constant-time shape check = 4.
+    let control = budget(4 + 11); // Three left x two right needs twelve pair visits.
     assert!(matches!(
         left_join_branches_with_work_mode(
             vec![left; 3],
@@ -95,7 +96,7 @@ fn optional_work_all_candidates_are_paid_even_when_unification_prunes() {
         ),
         Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
     ));
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(control.consumed(QueryCharge::CompilerWork), 4);
 }
 
 #[test]
@@ -122,7 +123,12 @@ fn optional_work_direct_match_copies_exact_left_and_right_fields() {
     // Empty alias preparation costs one. The two post-copy lookups each
     // pay dispatch + one comparison + min(len("left"), len("right")) bytes.
     let prefix = 1;
-    let expected = prefix + copies + 2 * (1 + 1 + 4);
+    // One right-only map insertion and two one-to-two vector growth/relocations
+    // (WHERE and core); the empty SubPlan extension allocates nothing.
+    let entry = std::mem::size_of::<(String, TermDef)>() as u64 + 1 + 4;
+    let growth =
+        2 + 3 * (std::mem::size_of::<SqlCond>() + std::mem::size_of::<crate::iq::Scan>()) as u64;
+    let expected = prefix + copies + 2 * (1 + 1 + 4) + entry + growth;
     let exact = budget(expected);
     let got =
         inner_join_one_with_work_mode(&left, &right, None, Dialect::Sqlite, mode(&exact)).unwrap();

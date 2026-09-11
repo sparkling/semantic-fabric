@@ -94,7 +94,7 @@ pub(super) fn build_left_join(
                 }
                 Some(_) => {}
                 None => {
-                    left.bindings.insert(var.clone(), rdef.clone());
+                    materialization::insert_copied(&mut left.bindings, var, rdef, mode)?;
                 }
             }
         }
@@ -107,14 +107,7 @@ pub(super) fn build_left_join(
             )?;
         }
         for (var, rdef) in nullable_shared.into_inner() {
-            let (var, ldef) = left
-                .bindings
-                .remove_entry(var)
-                .expect("nullable shared binding came from the left branch");
-            left.bindings.insert(
-                var,
-                TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
-            );
+            materialization::coalesce_owned(&mut left.bindings, var, rdef, mode)?;
         }
         work::push_owned(
             BuildWork::new(mode),

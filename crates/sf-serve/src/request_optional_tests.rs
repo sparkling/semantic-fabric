@@ -8,6 +8,8 @@ mod cache_identity;
 mod filter;
 #[path = "request_optional_preparation_tests.rs"]
 mod preparation;
+#[path = "request_optional_shape_tests.rs"]
+mod shape;
 #[path = "request_optional_unification_tests.rs"]
 mod unification;
 
@@ -40,6 +42,8 @@ enum MappedProfile {
     Preparation,
     Unification,
     Filter,
+    Shape,
+    Materialization,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -63,6 +67,9 @@ fn mapped_work(
     maps: &[sf_core::ir::TriplesMap],
     profile: MappedProfile,
 ) -> (u64, u64, u64) {
+    if profile == MappedProfile::Shape {
+        return shape::helper_work(query, maps);
+    }
     if profile == MappedProfile::Filter {
         return filter::helper_work(query, maps);
     }
@@ -162,6 +169,8 @@ fn mapped_work(
         MappedProfile::Identity
         | MappedProfile::Preparation
         | MappedProfile::Unification
+        | MappedProfile::Shape
+        | MappedProfile::Materialization
         | MappedProfile::Filter => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
@@ -220,8 +229,11 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
             .build()
             .unwrap()
             .block_on(async {
-                if profile == MappedProfile::Preparation {
-                    preparation::cases().await;
+                if matches!(
+                    profile,
+                    MappedProfile::Preparation | MappedProfile::Materialization
+                ) {
+                    preparation::cases(profile).await;
                 } else if profile == MappedProfile::Identity {
                     cache_identity::cases().await;
                 } else {
@@ -268,7 +280,8 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
         MappedProfile::Unification => unification::QUERIES.as_slice(),
         MappedProfile::Filter => filter::QUERIES.as_slice(),
-        MappedProfile::Identity | MappedProfile::Preparation => {
+        MappedProfile::Shape => &QUERIES[..2],
+        MappedProfile::Identity | MappedProfile::Preparation | MappedProfile::Materialization => {
             unreachable!("separate helper acceptance")
         }
     };

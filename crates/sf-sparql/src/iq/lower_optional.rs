@@ -2,8 +2,8 @@
 use super::*;
 use crate::build::control::{BuildVec, BuildWork};
 use crate::leftjoin::{
-    conditions, inner_join_one_with_work_mode as inner_join_one,
-    not_exists_cond_for_with_work_mode as not_exists_cond_for, preparation, work,
+    conditions, inner_join_one_with_work_mode as inner_join_one, materialization,
+    not_exists_cond_for_with_work_mode as not_exists_cond_for, preparation, shape, work,
 };
 
 /// The OPTS-FREE form of `left OPT right` — the ISWC-2018 `(P⋈R)∪(P−R)` decomposition,
@@ -32,7 +32,7 @@ pub(super) fn left_join_decomposed(
     // every right branch fed here is opts-free (only `build_left_join`, gated on
     // `decompose == false`, ever sets `opts`). `left_join_as_subplan` is a dead-code
     // boundary kept only so this match stays total (see its doc comment).
-    if right.iter().any(|r| !r.opts.is_empty()) {
+    if shape::right_has_options(&right, mode)? {
         return left_join_as_subplan(left, right, expr, dialect, mode);
     }
     // (P ⋈ Ri) for each right branch, plus one no-match branch (P − R): NOT EXISTS Ri
@@ -177,22 +177,11 @@ pub(super) fn left_join_over_subplan(
             for (var, rdef) in &right.bindings {
                 match prep.lookup(&l.bindings, var)? {
                     Some(ldef) if prep.nullable(ldef)? => {
-                        l.bindings.insert(
-                            var.clone(),
-                            TermDef::Coalesce(
-                                Box::new(match mode {
-                                    CompilerWorkMode::Uncontrolled => ldef.clone(),
-                                    CompilerWorkMode::Metered(cx) => {
-                                        cx.clone_optional_term_def(ldef)?
-                                    }
-                                }),
-                                Box::new(rdef.clone()),
-                            ),
-                        );
+                        materialization::coalesce_copied(&mut l.bindings, var, rdef, mode)?;
                     }
                     Some(_) => {} // mandatory-left shared var — value equals right by the ON
                     None => {
-                        l.bindings.insert(var.clone(), rdef.clone());
+                        materialization::insert_copied(&mut l.bindings, var, rdef, mode)?;
                     }
                 }
             }

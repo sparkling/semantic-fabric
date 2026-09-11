@@ -9,16 +9,17 @@ const CHAINED: [&str; 2] = [
     "SELECT ?value ?optional ?matched WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional } OPTIONAL { { SELECT DISTINCT ?matched ?optional WHERE { ?matched <http://example.test/b> ?optional } } } }",
 ];
 
-fn helper_work(query: &str) -> (u64, u64, u64) {
+fn helper_work(query: &str, profile: MappedProfile) -> (u64, u64, u64) {
     use sf_core::query_control::QueryBudget;
     struct Marker;
     struct Observe {
+        span_name: &'static str,
         budget: Arc<QueryBudget>,
         bounds: Arc<Mutex<Vec<(u64, u64)>>>,
     }
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observe {
         fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-            if attrs.metadata().name() == "sf.compiler.optional" {
+            if attrs.metadata().name() == self.span_name {
                 ctx.span(id).unwrap().extensions_mut().insert(Marker);
             }
         }
@@ -52,6 +53,11 @@ fn helper_work(query: &str) -> (u64, u64, u64) {
     );
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(Observe {
+            span_name: if profile == MappedProfile::Preparation {
+                "sf.compiler.optional"
+            } else {
+                "sf.compiler.optional_bindings"
+            },
             budget: budget.clone(),
             bounds: bounds.clone(),
         }),
@@ -62,8 +68,17 @@ fn helper_work(query: &str) -> (u64, u64, u64) {
         },
     );
     let bounds = bounds.lock().unwrap();
-    assert_eq!(bounds.len(), 2, "both actual OPTIONAL preparations execute");
-    let (start, end) = bounds[1];
+    let expected = if profile == MappedProfile::Preparation {
+        2
+    } else {
+        3
+    };
+    assert_eq!(
+        bounds.len(),
+        expected,
+        "actual OPTIONAL helper callers execute"
+    );
+    let (start, end) = *bounds.last().unwrap();
     assert!(
         end > start + 1,
         "second helper pays a prior nullable alias, not only entry"
@@ -82,9 +97,15 @@ fn mapped_nullable_optional_helper_refuses_before_source_and_recovers() {
         MappedProfile::Preparation);
 }
 
-pub(super) async fn cases() {
+#[test]
+fn mapped_optional_binding_construction_refuses_before_source_and_recovers() {
+    mapped_process("request_compile::tests::optional_work::preparation::mapped_optional_binding_construction_refuses_before_source_and_recovers",
+        MappedProfile::Materialization);
+}
+
+pub(super) async fn cases(profile: MappedProfile) {
     for query in CHAINED {
-        let (prefix, helper_end, complete) = helper_work(query);
+        let (prefix, helper_end, complete) = helper_work(query, profile);
         let cached = query.len() as u64 + key_work(query);
         assert!(cached < prefix && prefix < helper_end && helper_end < complete);
         for secured in [false, true] {

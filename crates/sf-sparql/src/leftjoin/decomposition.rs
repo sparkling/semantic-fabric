@@ -74,7 +74,7 @@ pub(crate) fn inner_join_one_with_work_mode(
         }
 
         // Right-side own conditions.
-        where_conds.extend(right.where_conds.iter().cloned());
+        materialization::extend_copied(&mut where_conds, &right.where_conds, mode)?;
 
         // Prepare the combined FILTER view in the output map itself. Shared vars
         // retain their original left definition until after FILTER lowering; the
@@ -87,7 +87,7 @@ pub(crate) fn inner_join_one_with_work_mode(
                 }
                 Some(_) => {} // non-nullable left — value equals right by join condition
                 None => {
-                    bindings.insert(var.clone(), rdef.clone());
+                    materialization::insert_copied(&mut bindings, var, rdef, mode)?;
                 }
             }
         }
@@ -102,18 +102,12 @@ pub(crate) fn inner_join_one_with_work_mode(
         }
 
         for (var, rdef) in nullable_shared.into_inner() {
-            let (var, ldef) = bindings
-                .remove_entry(var)
-                .expect("nullable shared binding came from the left branch");
-            bindings.insert(
-                var,
-                TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
-            );
+            materialization::coalesce_owned(&mut bindings, var, rdef, mode)?;
         }
 
         // Merge scans: left core + all right scans.
         let mut core = left.core.clone();
-        core.extend(right.core.iter().cloned());
+        materialization::extend_copied(&mut core, &right.core, mode)?;
 
         // SubPlan joins from both sides survive the merge (mirrors `unfold::merge`'s
         // InnerJoin idiom) — an OPTIONAL whose LEFT operand is a derived-table subquery
@@ -121,7 +115,7 @@ pub(crate) fn inner_join_one_with_work_mode(
         // was unconditionally zeroed, dropping `left`'s subplan join and producing SQL
         // that references a FROM alias never introduced (ADR-0007).
         let mut subplan_joins = left.subplan_joins.clone();
-        subplan_joins.extend(right.subplan_joins.iter().cloned());
+        materialization::extend_copied(&mut subplan_joins, &right.subplan_joins, mode)?;
 
         Ok(Some(Branch {
             core,
@@ -242,7 +236,7 @@ pub(crate) fn not_exists_cond_for_with_work_mode(
         if let Some(e) = expr {
             let mut combined = left.bindings.clone();
             for (v, d) in &right.bindings {
-                work::filter_binding_entry(mode, &combined, v)?;
+                work::binding_edit(mode, &combined, v)?;
                 combined.entry(v.clone()).or_insert_with(|| d.clone());
             }
             work::push_owned(
