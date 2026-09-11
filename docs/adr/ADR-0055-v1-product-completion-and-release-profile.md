@@ -198,11 +198,10 @@ The application programme mixed three different outcomes:
 
 Treating all three as one serial completion gate delayed product integration
 without making incomplete runtime features safer. The code already contains
-substantial exact-query, mapping, snapshot, lifecycle, tracing, and narrow
-federation foundations. It is not complete: public authorization, general
-reload and drift handling, the remaining runtime controls, useful bounded
-cross-source execution, product packaging, backend admission, and release
-evidence remain open.
+substantial public exact-query, authorization, snapshot/lifecycle and bounded
+federation behavior. The finite [G1–G6 completion ledger](../plans/sota-application-completion-programme.md#remaining-release-gates-2026-09-11)
+records remaining admitted-profile guarantees and candidate evidence; neither
+historical foundation lists nor proposed ADRs independently expand that scope.
 
 V1 therefore needs one explicit product profile, one short integration path,
 proportionate verification during development, and full evidence at integration
@@ -417,15 +416,16 @@ Distinct model/effort configurations need distinct candidate IDs when used. Nati
 ### Six-hour course correction
 
 The [scheduled prompt](../plans/programme-six-hour-review-prompt.md) compares
-promised requirement-level outcomes and the previous correction with actual
-`main` evidence, then changes execution and continues one primary outcome.
-No progress in an active interval triggers integration/public-path work instead
-of further decomposition, optional research or harness expansion. A missed
-outcome requires an execution change, not an unsupported replacement deadline.
-React to immediate blockers without waiting for the timer. The launcher uses
-native `codex queue` for the pinned conversation, never a competing resume;
-queue failure propagates with no execution fallback. Ruflo MCP memory is
-optional and individually updated; malformed/failed recall cannot block delivery.
+the finite gate ledger and previous correction with actual public acceptance on
+`main`. **2026-09-11 correction:** group compatible work by whole phase/public
+outcome, audit prerequisite tests before scope freeze, and update only affected
+decisions/status plus required source-bound evidence. A correction has not worked
+merely because another helper/receipt passed. Preserve checked amplification/copy/
+growth bounds; a replacement phase envelope requires finite-input/full-work proof,
+bounded checkpoints and unchanged default-corpus acceptance, not timeout alone.
+Stalls require an execution change, not a new arbitrary ETA or harness programme.
+React immediately to blockers. Native `codex queue` targets the pinned conversation
+with no competing resume/fallback; Ruflo MCP recall remains optional, never a gate.
 
 ## Current implementation status
 

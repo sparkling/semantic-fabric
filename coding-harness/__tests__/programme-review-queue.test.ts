@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -38,6 +38,40 @@ function fixture() {
 }
 
 describe('six-hour review delivery', () => {
+  it('keeps the finite completion ledger aligned with accepted scope and executable selectors', () => {
+    const paths = ['AGENTS.md', 'docs/adr/ADR-0055-v1-product-completion-and-release-profile.md',
+      'docs/plans/sota-application-completion-programme.md', 'docs/plans/programme-six-hour-review-prompt.md'];
+    const texts = paths.map(path => readFileSync(resolve('..', path), 'utf8'));
+    const [agents, adr, programme, prompt] = texts;
+    expect(adr).toMatch(/^status: accepted$/m);
+    const ledger = programme.split(/## Remaining release gates \([^\n]+\)/)[1]
+      ?.split('## Historical implementation evidence')[0];
+    expect(ledger).toBeDefined();
+    const catalog = JSON.parse(readFileSync(resolve('../tests/capabilities/catalog-v1.json'), 'utf8')) as {
+      limitations: { id: string; releaseBlocking: boolean }[]; commands: { id: string }[];
+    };
+    const blockers = catalog.limitations.filter(item => item.releaseBlocking).map(item => item.id).sort();
+    const recorded = [...ledger!.matchAll(/`(l-[a-z0-9-]+)`/g)].map(match => match[1]).sort();
+    expect(recorded).toEqual(blockers); // Each blocking label exactly once, not just a count.
+    const commands = new Set(catalog.commands.map(item => item.id));
+    for (const match of ledger!.matchAll(/`(cmd-[a-z0-9-]+)`/g)) expect(commands.has(match[1])).toBe(true);
+    for (const text of [programme, adr, prompt]) expect(text).toMatch(/finite.*gate/i);
+    expect(programme).not.toContain('atomic no-prefix failure remain required');
+    expect(programme).not.toContain('add general ABAC/sensitivity');
+    expect(programme).not.toContain('add missing adapter spans and\n  pinned OpenTelemetry export');
+    expect(prompt).toMatch(/do not mark.*correction.*worked/i);
+    expect(agents).toMatch(/audit.*test.*before.*scope/i);
+    for (let index = 0; index < paths.length; index++) {
+      expect(texts[index].trimEnd().split('\n').length).toBeLessThan(500);
+      for (const match of texts[index].matchAll(/\]\(([^\s)]+)\)/g)) {
+        const target = match[1].split('#')[0];
+        if (target && !/^[a-z]+:|^\//i.test(target)) {
+          expect(existsSync(resolve('..', dirname(paths[index]), target)), `${paths[index]}: ${target}`).toBe(true);
+        }
+      }
+    }
+  });
+
   it('queues the exact prompt once into the pinned native conversation without changing model', () => {
     const f = fixture();
     expect(f.run().status).toBe(0);

@@ -20,6 +20,9 @@ This target never truncates necessary implementation or correctness checks.
    release checks. Cross-check capability-catalog release-blocking flags and
    acceptance commands against this contract; stale metadata must not put
    explicitly deferred research back on the critical path.
+   Use the finite G1–G6 ledger in docs/plans/sota-application-completion-programme.md;
+   its overlapping flags are not equal-sized tasks. Reconcile new concrete defects
+   with the existing gate before adding work; a proposed strategy is not a gate.
    Do not remove a backend/feature, redefine completion as demo
    readiness, or treat a proposed ADR or readiness score as scope authority.
 
@@ -48,6 +51,8 @@ This target never truncates necessary implementation or correctness checks.
    Commit/test counts, model reviews, plans, receipts, private foundations and
    harness scores alone are not evidence of application completion. Integration
    and evidence that actually close a required release gate do count.
+   Name which finite gate obligation was removed and which remain. Do not infer
+   whole-programme convergence from another compiler helper or passing receipt.
 
 5. Test whether the PREVIOUS correction worked. Name the largest delay using
    evidence: integration backlog, unfinished public wiring, repeated checks,
@@ -58,12 +63,18 @@ This target never truncates necessary implementation or correctness checks.
    or the smallest end-to-end closure on the critical path. Do not repeat an
    unchanged failed correction. React to blocked work immediately, not only
    every six hours. Never weaken required security or correctness to show progress.
+   Explicitly do not mark the prior correction worked on slice integration alone:
+   require a smaller named missing-evidence inventory or its demonstrated public
+   closure. Separate measured check time, implementation/review and unknown downtime.
 
 6. Choose one primary implementation outcome and at most two independent
    supporting outcomes. State owner, dependency, next action, observable
    acceptance test and what is intentionally outside that slice. Native Codex
    and Claude subscription agents execute through the mandatory main-only
    delivery harness (coding-harness/README.md); Ruflo MCP coordinates and records.
+   Audit prerequisite test callsites before freezing scope. Group compatible work
+   by whole phase/public outcome, not one task per helper. Preserve precise negative
+   cutpoints and unchanged default-admitted queries; no weakened controls for speed.
    Parallelize read-only investigation/review or compatible tests only when it
    shortens delivery without shared-write or resource contention. A closed
    candidate experiment is optional, never the default build loop or per-commit
@@ -90,7 +101,9 @@ This target never truncates necessary implementation or correctness checks.
    complete required release qualification on the release candidate. Repeat or
    broaden checks only for new changes, failures or unresolved risk. Do not
    refresh historical evidence merely to accumulate green receipts. Update
-   affected living ADRs and docs with actual status/date in the same slice.
+   the authoritative gate row and only affected ADR decisions/status/date in the
+   same slice; avoid duplicating implementation diaries across ADRs. Required
+   source-bound catalogue hashes remain current without unrelated historical reruns.
    Commit verified, in-scope changes promptly on main; do not absorb unrelated
    work. Do not push, publish, tag or deploy without current authorization.
 
