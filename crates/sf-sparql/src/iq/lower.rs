@@ -1198,16 +1198,20 @@ fn lower_as_subplan(
     // Falls back to the arm's raw (pre-composition) binding when `v` is not composed, or
     // its components are not (yet) available in this arm (e.g. a UNION arm that never
     // reified this variable at all — an ordinary, branch-local absence).
-    let term_def_for = |v: &str, arm: &Branch| -> Option<TermDef> {
-        let var = spargebra::term::Variable::new_unchecked(v);
-        star::composed_term_def(&var, star_env, &arm.bindings)
-            .or_else(|| arm.bindings.get(v).cloned())
+    let term_def_for = |v: &str, arm: &Branch| -> Result<Option<TermDef>> {
+        let var = spargebra::term::Variable::new_unchecked(
+            crate::build::control::BuildWork::new(work_mode).string(v)?,
+        );
+        match star::composed_term_def_with_work_mode(&var, star_env, &arm.bindings, work_mode)? {
+            Some(def) => Ok(Some(def)),
+            None => star::binding_copy(v, &arm.bindings, work_mode),
+        }
     };
     let mut outer_bindings = std::collections::BTreeMap::new();
     for (i, v) in vars.iter().enumerate() {
         let mut agreed: Option<TermDef> = None;
         for (arm, proj) in prepared.iter().zip(&arm_projections) {
-            let remapped = match term_def_for(v, arm) {
+            let remapped = match term_def_for(v, arm)? {
                 Some(def) => {
                     remap_termdef(&def, proj, sp_alias).unwrap_or_else(|_| positional_col(i))
                 }

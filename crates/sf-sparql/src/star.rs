@@ -85,6 +85,8 @@ mod control_values;
 mod decompose;
 mod env;
 mod expr;
+mod realization;
+mod realization_bindings;
 mod top_level;
 mod util;
 mod walk;
@@ -92,10 +94,13 @@ mod walk;
 pub(crate) use collect_vars::collect_pattern_vars;
 pub use control::rewrite_query_with_work_control;
 pub(crate) use control::rewrite_query_with_work_mode;
-pub(crate) use env::composed_term_def;
 pub use env::{
     all_component_var_names, apply_composed_bindings, expand_projection_for_cascade,
     substitute_construct_template, ComposedInfo, StarEnv,
+};
+pub(crate) use realization::*;
+pub(crate) use realization_bindings::{
+    apply_composed_bindings_with_work_mode, binding_copy, composed_term_def_with_work_mode,
 };
 pub use top_level::rewrite_query;
 
@@ -104,6 +109,9 @@ mod tests;
 
 #[cfg(test)]
 mod control_tests;
+
+#[cfg(test)]
+mod realization_tests;
 
 #[cfg(test)]
 pub(crate) fn rewrite_work(source: &str) -> u64 {

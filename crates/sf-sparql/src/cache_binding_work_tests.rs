@@ -145,7 +145,10 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
         before_second + clone_cost().measurement_work
     );
     assert_eq!(binding.cache_len(), 0);
-    let expected = before_second + work + condition_tail + tail;
+    // Realization copies one ?x (slot + String carrier + visit/name) and visits
+    // three root branches. Earlier clone-failure cuts remain unchanged.
+    let realization = 1 + std::mem::size_of::<String>() as u64 + 2 + 3;
+    let expected = before_second + work + condition_tail + tail + realization;
     let exact = budget(expected);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
@@ -185,7 +188,8 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
         one_column_rows_work(3, "x"),
         one_column_rows_work(1, "inside"),
     );
-    let tail = tail + condition_tail;
+    let realization = 1 + std::mem::size_of::<String>() as u64 + 2 + 3;
+    let tail = tail + condition_tail + realization;
     let total = 2 * (rewrite_work(QUERY) + build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
     for allowance in [total - tail - 1, total] {

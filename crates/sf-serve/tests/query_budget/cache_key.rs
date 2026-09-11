@@ -19,6 +19,12 @@ fn two_value_rows_construction_work() -> u64 {
     values + output + 2 * (1 + 1 + 2 + 1 + 1 + 5 + 1)
 }
 
+fn two_value_rows_realization_work() -> u64 {
+    // One copied ?value: vector slot/carrier, visit and five UTF-8 bytes;
+    // two root binding-realization visits. No composed environment/subplans.
+    1 + std::mem::size_of::<String>() as u64 + 1 + 5 + 2
+}
+
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
     // Terminal failure wakes the response before the blocking compiler closure
     // necessarily drops its configuration. Preserve the same runtime/cache and
@@ -98,7 +104,8 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         + normalization_work(query, &[])
         + prefix
         + tail
-        + two_value_rows_construction_work();
+        + two_value_rows_construction_work()
+        + two_value_rows_realization_work();
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -163,6 +170,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                         + prefix
                         + tail
                         + two_value_rows_construction_work()
+                        + two_value_rows_realization_work()
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

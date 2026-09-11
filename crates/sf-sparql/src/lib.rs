@@ -637,7 +637,7 @@ fn translate_tree_with_column_type_use(
         column_type_use,
     )
     .with_work_mode(work_mode);
-    let extra_keep = star::all_component_var_names(&star_env);
+    let extra_keep = star::all_component_var_names_with_work_mode(&star_env, work_mode)?;
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
     // (e.g. DESCRIBE's outgoing-triple join) keeps disjoint aliases across them.
@@ -669,7 +669,8 @@ fn translate_tree_with_column_type_use(
             template, pattern, ..
         } => {
             // ADR-0032 D2 — see the identical note in `translate_inner_flat`.
-            let template = star::substitute_construct_template(template, &star_env);
+            let template =
+                star::substitute_construct_template_with_work_mode(template, &star_env, work_mode)?;
             let mut plan = compile(pattern)?;
             plan.form = PlanForm::Construct { template };
             plan
@@ -708,7 +709,9 @@ fn translate_tree_with_column_type_use(
         None
     } else {
         match &plan.form {
-            PlanForm::Select { vars } => Some(star::expand_projection_for_cascade(vars, &star_env)),
+            PlanForm::Select { vars } => Some(star::expand_projection_for_cascade_with_work_mode(
+                vars, &star_env, work_mode,
+            )?),
             _ => None,
         }
     };
@@ -760,7 +763,7 @@ fn translate_tree_with_column_type_use(
     }
     // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
     // identical note in `translate_inner_flat`).
-    star::apply_composed_bindings(&mut plan.branches, &star_env);
+    star::apply_composed_bindings_with_work_mode(&mut plan.branches, &star_env, work_mode)?;
     // ADR-0034 C0e restoration: normalize resolve's leaf-alias markers only
     // AFTER both root and recursive cascades. Nested Plans emit as SQL, so only
     // a proven pure unary wrapper chain may lift a group onto a root executor

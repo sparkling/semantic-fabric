@@ -348,7 +348,10 @@ fn composed_binding_updates(branch: &Branch, env: &StarEnv) -> Vec<(String, Term
 /// Keep the non-binding contribution in sync with [`Branch::projection`]. The
 /// focused overlay tests cover sorted insertion/replacement, alias identity,
 /// exact column order, DISTINCT, and rejection without mutation.
-fn projection_with_binding_updates(branch: &Branch, updates: &[(String, TermDef)]) -> Vec<ColRef> {
+pub(super) fn projection_with_binding_updates(
+    branch: &Branch,
+    updates: &[(String, TermDef)],
+) -> Vec<ColRef> {
     let mut cols = Vec::new();
     let push = |col: ColRef, cols: &mut Vec<ColRef>| {
         if !cols.contains(&col) {

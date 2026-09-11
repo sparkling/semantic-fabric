@@ -1,4 +1,4 @@
-//! Paid initial RDF-star rewriting through ordinary and authenticated HTTP paths.
+//! Paid RDF-star rewrite/realization through ordinary and authenticated HTTP paths.
 use super::*;
 use http_body_util::BodyExt;
 use sf_core::query_control::QueryBudget;
@@ -13,6 +13,12 @@ const QUERIES: [&str; 3] = [
     "SELECT ?s WHERE { ?s <http://example.test/a> ?o FILTER(isTRIPLE(TRIPLE(<urn:a>, <urn:p>, ?o))) }",
     "SELECT ?s WHERE { ?s <http://example.test/a> ?o VALUES ?t { <<( <urn:a> <urn:p> <urn:b> )>> <<( <urn:a> <urn:p> <urn:b> )>> } }",
     "SELECT ?s WHERE { { ?s <http://example.test/a> ?o BIND(TRIPLE(<urn:a>, <urn:p>, ?o) AS ?t) } UNION { ?s <http://example.test/a> ?o BIND(?o AS ?t) } FILTER(isTRIPLE(?t)) }",
+];
+
+const REALIZATION: [&str; 3] = [
+    "SELECT ?t WHERE { ?s <http://example.test/a> ?o BIND(TRIPLE(<urn:a>, <urn:p>, TRIPLE(<urn:b>, <urn:q>, ?o)) AS ?t) }",
+    "CONSTRUCT { <urn:result> <urn:quoted> ?t } WHERE { ?s <http://example.test/a> ?o BIND(TRIPLE(<urn:a>, <urn:p>, TRIPLE(<urn:b>, <urn:q>, ?o)) AS ?t) }",
+    "SELECT ?t WHERE { ?s <http://example.test/a> ?o . { SELECT DISTINCT ?t WHERE { ?x <http://example.test/a> ?y BIND(TRIPLE(<urn:a>, <urn:p>, TRIPLE(<urn:b>, <urn:q>, ?y)) AS ?t) } } }",
 ];
 
 fn mapping() -> Vec<sf_core::ir::TriplesMap> {
@@ -45,10 +51,16 @@ impl tracing::field::Visit for RewriteSpan {
 struct Observe {
     control: Arc<QueryBudget>,
     bounds: Arc<Mutex<Vec<(u64, u64)>>>,
+    realization: bool,
 }
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observe {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        if attrs.metadata().name() == "sf.compiler.stage" {
+        if self.realization && attrs.metadata().name() == "sf.compiler.star_realization" {
+            ctx.span(id).unwrap().extensions_mut().insert(RewriteSpan {
+                relevant: true,
+                index: 0,
+            });
+        } else if !self.realization && attrs.metadata().name() == "sf.compiler.stage" {
             let mut marker = RewriteSpan::default();
             attrs.record(&mut marker);
             if marker.relevant {
@@ -76,7 +88,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observe {
     }
 }
 
-fn work(query: &str) -> (u64, u64, u64, u64) {
+fn work(query: &str, realization: bool) -> (u64, u64, u64, u64) {
     let binding = sf_sparql::CompilerBinding::from_unverified_observation(
         SourceMapping::new(SourceId::new(0).unwrap(), mapping()),
         sf_sql::Dialect::Sqlite,
@@ -96,6 +108,7 @@ fn work(query: &str) -> (u64, u64, u64, u64) {
         tracing_subscriber::registry().with(Observe {
             control: control.clone(),
             bounds: bounds.clone(),
+            realization,
         }),
         || {
             binding
@@ -110,10 +123,10 @@ fn work(query: &str) -> (u64, u64, u64, u64) {
         assert_eq!(
             spans.len(),
             1,
-            "SELECT has one initial RDF-star rewrite span"
+            "one root realization or initial rewrite span"
         );
         let (start, end) = spans[0];
-        assert!(end > start + 1, "actual initial RDF-star work is paid");
+        assert!(end > start + 1, "actual RDF-star phase work is paid");
         (input + start, input + end)
     };
     bounds.lock().unwrap().clear();
@@ -127,6 +140,7 @@ fn work(query: &str) -> (u64, u64, u64, u64) {
         tracing_subscriber::registry().with(Observe {
             control: warm.clone(),
             bounds: bounds.clone(),
+            realization,
         }),
         || {
             binding
@@ -166,6 +180,15 @@ async fn set_work(cfg: &mut Arc<ServeConfig>, work: u64) {
 
 #[test]
 fn star_rewrite_refuses_before_source_and_recovers_exact_cold_and_warm_bags() {
+    isolated(false);
+}
+
+#[test]
+fn star_realization_refuses_before_source_and_recovers_exact_graph_bags_and_subplans() {
+    isolated(true);
+}
+
+fn isolated(realization: bool) {
     const CHILD: &str = "SF_STAR_WORK_TEST_PROCESS";
     const COMPLETED: i32 = 67;
     if std::env::var_os(CHILD).is_some() {
@@ -173,13 +196,18 @@ fn star_rewrite_refuses_before_source_and_recovers_exact_cold_and_warm_bags() {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(cases());
+            .block_on(cases(realization));
         std::process::exit(COMPLETED);
     }
     // Isolate tracing's global callsite interest from parallel subscriber tests.
+    let thread = std::thread::current();
+    let name = thread.name().expect("named test");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "request_compile::tests::star_work::star_rewrite_refuses_before_source_and_recovers_exact_cold_and_warm_bags", "--nocapture"])
-        .env_clear().env(CHILD, "1").spawn().unwrap();
+        .args(["--exact", name, "--nocapture"])
+        .env_clear()
+        .env(CHILD, "1")
+        .spawn()
+        .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -199,10 +227,19 @@ fn star_rewrite_refuses_before_source_and_recovers_exact_cold_and_warm_bags() {
     }
 }
 
-async fn cases() {
-    for (case, query) in QUERIES.into_iter().enumerate() {
-        let (start, end, total, warm) = work(query);
-        assert!(warm <= start && start < end && end < total);
+async fn cases(realization: bool) {
+    for (case, query) in (if realization { REALIZATION } else { QUERIES })
+        .into_iter()
+        .enumerate()
+    {
+        let (start, end, total, warm) = work(query, realization);
+        // Bindings realization is the final paid translation phase for these
+        // fixtures, so its end may equal the cold compilation total.
+        assert!(warm <= start && start < end && end <= total,
+            "case={case} realization={realization}: warm={warm} start={start} end={end} total={total}");
+        if !realization {
+            assert!(end < total);
+        }
         assert!(
             total <= 1_000_000,
             "unchanged default admits the declared RDF-star corpus"
@@ -225,7 +262,14 @@ async fn cases() {
             let request = || {
                 Request::post("/sparql")
                     .header("content-type", "application/sparql-query")
-                    .header("accept", "application/sparql-results+json")
+                    .header(
+                        "accept",
+                        if realization && case == 1 {
+                            "text/turtle"
+                        } else {
+                            "application/sparql-results+json"
+                        },
+                    )
                     .header("authorization", "Bearer test-only-star-credential-123456")
                     .body(Body::from(query))
                     .unwrap()
@@ -278,27 +322,31 @@ async fn cases() {
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
                 let bytes = response.into_body().collect().await.unwrap().to_bytes();
-                let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                let mut actual: Vec<_> = json["results"]["bindings"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| {
-                        assert_eq!(row["s"]["type"], "uri");
-                        row["s"]["value"].as_str().unwrap().to_owned()
-                    })
-                    .collect();
-                let repetitions = if case == 1 { 2 } else { 1 };
-                let mut expected: Vec<_> = (0..repetitions)
-                    .flat_map(|_| [1, 1, 2])
-                    .map(|id| format!("http://example.test/item/{id}"))
-                    .collect();
-                actual.sort();
-                expected.sort();
-                assert_eq!(
-                    actual, expected,
-                    "source and VALUES duplicates retain exact bags"
-                );
+                if realization {
+                    assert_realization(case, &bytes);
+                } else {
+                    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let mut actual: Vec<_> = json["results"]["bindings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| {
+                            assert_eq!(row["s"]["type"], "uri");
+                            row["s"]["value"].as_str().unwrap().to_owned()
+                        })
+                        .collect();
+                    let repetitions = if case == 1 { 2 } else { 1 };
+                    let mut expected: Vec<_> = (0..repetitions)
+                        .flat_map(|_| [1, 1, 2])
+                        .map(|id| format!("http://example.test/item/{id}"))
+                        .collect();
+                    actual.sort();
+                    expected.sort();
+                    assert_eq!(
+                        actual, expected,
+                        "source and VALUES duplicates retain exact bags"
+                    );
+                }
                 drop(
                     tokio::time::timeout(
                         std::time::Duration::from_secs(2),
@@ -319,5 +367,58 @@ async fn cases() {
                 );
             }
         }
+    }
+}
+
+fn assert_realization(case: usize, bytes: &[u8]) {
+    if case == 1 {
+        let mut actual: Vec<_> = oxttl::TurtleParser::new()
+            .for_slice(bytes)
+            .map(|t| t.unwrap().to_string())
+            .collect();
+        let expected = ["one", "another", "two"].map(|value| format!(
+            "<urn:result> <urn:quoted> <<( <urn:a> <urn:p> <<( <urn:b> <urn:q> \"{value}\" )>> )>> ."
+        )).join("\n");
+        let mut expected: Vec<_> = oxttl::TurtleParser::new()
+            .for_slice(expected.as_bytes())
+            .map(|t| t.unwrap().to_string())
+            .collect();
+        actual.sort();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "CONSTRUCT realizes the exact nested triple graph"
+        );
+    } else {
+        let json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        let mut actual: Vec<_> = json["results"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let t = &row["t"];
+                assert_eq!(t["type"], "triple");
+                assert_eq!(t["value"]["subject"]["value"], "urn:a");
+                assert_eq!(t["value"]["predicate"]["value"], "urn:p");
+                let inner = &t["value"]["object"];
+                assert_eq!(inner["type"], "triple");
+                assert_eq!(inner["value"]["subject"]["value"], "urn:b");
+                assert_eq!(inner["value"]["predicate"]["value"], "urn:q");
+                assert_eq!(inner["value"]["object"]["type"], "literal");
+                inner["value"]["object"]["value"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        let mut expected: Vec<_> = (0..if case == 2 { 3 } else { 1 })
+            .flat_map(|_| ["one".to_owned(), "another".to_owned(), "two".to_owned()])
+            .collect();
+        actual.sort();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "nested DISTINCT remap preserves the exact outer bag"
+        );
     }
 }

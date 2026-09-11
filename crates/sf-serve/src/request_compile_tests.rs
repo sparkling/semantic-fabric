@@ -61,7 +61,10 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
     let rewrite = rewrite_work(QUERY);
-    let pass = rewrite + build;
+    // Empty plan still copies its one projected ?s at realization: one vector
+    // slot, String carrier, visit and one-byte name; no root branches to visit.
+    let realization = 1 + std::mem::size_of::<String>() as u64 + 2;
+    let pass = rewrite + build + realization;
     let exact = 2 * input + key + 2 * pass;
     let canonical = spargebra::SparqlParser::new()
         .parse_query(QUERY)

@@ -401,7 +401,10 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
         one_column_rows_work(1, "inside"),
     );
     let before_second = before_clones + condition_prefix + work + between;
-    let expected = before_second + work + condition_tail + tail;
+    // One copied ?x projection and three root realization visits, all after
+    // the second-clone failure boundary asserted below.
+    let realization = 1 + std::mem::size_of::<String>() as u64 + 2 + 3;
+    let expected = before_second + work + condition_tail + tail + realization;
     let exact = budget(expected);
     let raw = translate_tree(&query, &[], &Tbox::default(), Dialect::Sqlite, &[]).unwrap();
 

@@ -164,3 +164,62 @@ fn alias_identity_is_part_of_the_guarded_projection_footprint() {
 
     assert_eq!(format!("{root:#?}"), before);
 }
+
+#[test]
+fn controlled_realization_preserves_every_guard_and_nested_distinct_at_every_stop() {
+    use super::super::{realization_bindings, realization_tests::prove};
+    use crate::build::control::BuildWork;
+    use crate::compiler_control::CompileContext;
+    use crate::CompilerWorkMode;
+    for (outer, inner, alias) in [
+        ("urn:{s}:{o}", "urn:{s}:{o}", 7),
+        ("urn:{s}:{o}", "urn:{o}:{s}", 7),
+        ("urn:{o}:{s}", "urn:{s}:{o}", 7),
+        ("urn:{s}:{o}", "urn:{s}:{o}", 12),
+    ] {
+        let env = env();
+        let mut fixture = branch(7, alias, outer);
+        fixture
+            .subplan_joins
+            .push(wrapped_child(branch(12, 12, inner), true));
+        // Both root policy and guarded nested policy must retain exact behavior.
+        for guarded in [false, true] {
+            let mut raw = fixture.clone();
+            if guarded {
+                apply_composed_bindings_checked(&mut raw, &env)
+            } else {
+                apply_composed_bindings(std::slice::from_mut(&mut raw), &env)
+            }
+            prove(format!("{raw:?}"), |control| {
+                let mut actual = fixture.clone();
+                realization_bindings::apply(
+                    &mut actual,
+                    &env,
+                    BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+                    guarded,
+                )?;
+                Ok(format!("{actual:?}"))
+            });
+        }
+    }
+}
+
+#[test]
+fn controlled_empty_environment_still_propagates_nested_distinct() {
+    let mut root = Branch::empty();
+    root.subplan_joins
+        .push(wrapped_child(Branch::empty(), true));
+    let mut raw = root.clone();
+    apply_composed_bindings(std::slice::from_mut(&mut raw), &StarEnv::new());
+    let control = sf_core::query_control::QueryBudget::new(
+        sf_core::query_control::QueryLimits::new(1_000_000, u64::MAX, u64::MAX, u64::MAX),
+    );
+    super::super::apply_composed_bindings_with_work_mode(
+        std::slice::from_mut(&mut root),
+        &StarEnv::new(),
+        crate::CompilerWorkMode::Metered(crate::compiler_control::CompileContext::new(&control)),
+    )
+    .unwrap();
+    assert_eq!(format!("{root:?}"), format!("{raw:?}"));
+    assert!(root.subplan_joins[0].plan.branches[0].distinct);
+}
