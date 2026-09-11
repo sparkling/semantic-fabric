@@ -75,6 +75,14 @@ mod conditions;
 #[path = "lower_substitution.rs"]
 mod substitution;
 use substitution::fold_subst;
+#[path = "lower_projection.rs"]
+mod projection;
+#[cfg(test)]
+#[path = "lower_projection_output_tests.rs"]
+mod projection_output_work_tests;
+#[cfg(test)]
+#[path = "lower_projection_tests.rs"]
+mod projection_work_tests;
 #[cfg(test)]
 #[path = "lower_substitution_join_tests.rs"]
 mod substitution_join_work_tests;
@@ -328,14 +336,12 @@ fn lower_spine(
                 rename_rust_group_outputs(&subst, rg)?;
                 return Ok(branches);
             }
-            let mut out = work.vector(branches.len())?;
+            let mut out = projection::construction_output(branches.len(), work)?;
             for mut b in branches {
                 if !fold_subst(&subst, &mut b, work_mode)? {
                     continue;
                 }
-                b.bindings.retain(|k, _| {
-                    project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
-                });
+                projection::retain_bindings(&mut b.bindings, &project, extra_keep, work)?;
                 out.push(b);
             }
             Ok(out)
@@ -369,6 +375,7 @@ fn lower_node(
     star_env: &StarEnv,
     work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
+    let work = BuildWork::new(work_mode);
     match node {
         // ---- leaves --------------------------------------------------------------
         IqNode::Extensional { scan, bind } => {
@@ -502,13 +509,15 @@ fn lower_node(
 
         // ---- bag union (§5.2, R3): one branch per arm, own bindings, absent unbound -
         IqNode::Union { children, .. } => {
-            let mut out = Vec::new();
+            let mut out = crate::build::control::BuildVec::new(Vec::new());
             for c in children {
-                out.extend(lower_node(
+                work.charge(1)?;
+                let branches = lower_node(
                     c, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
-                )?);
+                )?;
+                projection::append_union(&mut out, branches, work)?;
             }
-            Ok(out)
+            Ok(out.into_inner())
         }
 
         // ---- substitution carrier: fold subst into each branch, restrict to project -
@@ -526,7 +535,7 @@ fn lower_node(
             let mut branches = lower_node(
                 body, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
             )?;
-            let mut out = Vec::with_capacity(branches.len());
+            let mut out = projection::construction_output(branches.len(), work)?;
             let last = branches.pop();
             for mut b in branches {
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
@@ -542,9 +551,7 @@ fn lower_node(
                 // composed variable's component vars survive to the later projection
                 // seam even when nothing else in this leaf-CQ references them — see
                 // `lower`'s doc comment on the parameter.
-                b.bindings.retain(|k, _| {
-                    project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
-                });
+                projection::retain_bindings(&mut b.bindings, &project, extra_keep, work)?;
                 out.push(b);
             }
             if let Some(mut b) = last {
@@ -552,9 +559,7 @@ fn lower_node(
                     for cond in filters {
                         apply_owned_conds(cond, &mut b, dialect, work_mode)?;
                     }
-                    b.bindings.retain(|k, _| {
-                        project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
-                    });
+                    projection::retain_bindings(&mut b.bindings, &project, extra_keep, work)?;
                     out.push(b);
                 }
             }

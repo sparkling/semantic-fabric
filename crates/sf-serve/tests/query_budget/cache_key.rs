@@ -7,6 +7,13 @@ pub(super) use compiler_key::{
     structural_compile_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
 };
 
+fn two_value_rows_construction_work() -> u64 {
+    let output = 2 * (1 + std::mem::size_of::<sf_sparql::iq::Branch>() as u64);
+    // Per row: fold1, retention entry1, bool slot/byte2, binding visit1,
+    // ?value comparison (visit1+five bytes), retained-entry visit1.
+    output + 2 * (1 + 1 + 2 + 1 + 1 + 5 + 1)
+}
+
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
     // Terminal failure wakes the response before the blocking compiler closure
     // necessarily drops its configuration. Preserve the same runtime/cache and
@@ -73,7 +80,7 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
     // No branch product: input, key, BUILD, NORMALIZE, LOWER scope and the
-    // two empty-substitution visits (one for each independently retained row).
+    // independently counted two-row Construction output/fold/retention work.
     let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
         .append_pair("query", query)
@@ -85,7 +92,7 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         + normalization_work(query, &[])
         + prefix
         + tail
-        + 2;
+        + two_value_rows_construction_work();
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -143,9 +150,12 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                     0
                 } else {
                     let (prefix, tail) = source_free_entry_work(&query);
-                    // Two retained VALUES rows each pay one empty fold; warm
-                    // requests still pay only the unchanged input/key work.
-                    build_work(&query) + normalization_work(&query, &[]) + prefix + tail + 2
+                    // Warm requests still pay only unchanged input/key work.
+                    build_work(&query)
+                        + normalization_work(&query, &[])
+                        + prefix
+                        + tail
+                        + two_value_rows_construction_work()
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

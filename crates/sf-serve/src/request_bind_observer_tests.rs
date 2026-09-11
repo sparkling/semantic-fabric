@@ -1,10 +1,25 @@
-//! Observe the actual substitution phases, including nested span exits.
+//! Observe actual substitution/projection/output phases, including nested exits.
 use super::*;
 use std::sync::Mutex;
 use tracing::{span::Attributes, Id, Subscriber};
 use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
 
 pub(super) fn work(query: &str) -> (Vec<u64>, u64) {
+    phase_work(query, &[0, 1, 2])
+}
+
+pub(super) fn projection_work(query: &str) -> (Vec<u64>, u64) {
+    phase_work(
+        query,
+        if query.contains("UNION") {
+            &[3, 4, 5]
+        } else {
+            &[3, 4]
+        },
+    )
+}
+
+fn phase_work(query: &str, kinds: &[usize]) -> (Vec<u64>, u64) {
     use sf_core::query_control::QueryBudget;
     struct Marker {
         kind: usize,
@@ -20,6 +35,9 @@ pub(super) fn work(query: &str) -> (Vec<u64>, u64) {
                 "sf.compiler.substitution" => 0,
                 "sf.compiler.substitution_expression" => 1,
                 "sf.compiler.substitution_binding" => 2,
+                "sf.compiler.projection_retention" => 3,
+                "sf.compiler.construction_output" => 4,
+                "sf.compiler.union_output" => 5,
                 _ => return,
             };
             ctx.span(id).unwrap().extensions_mut().insert(Marker {
@@ -74,14 +92,14 @@ pub(super) fn work(query: &str) -> (Vec<u64>, u64) {
     );
     let bounds = bounds.lock().unwrap();
     let input = query.len() as u64;
-    let cuts = [0, 1, 2]
-        .into_iter()
-        .map(|kind| {
+    let cuts = kinds
+        .iter()
+        .map(|&kind| {
             let (_, start, end) = *bounds
                 .iter()
                 .rev()
                 .find(|b| b.0 == kind)
-                .expect("substitution, expression and binding all execute");
+                .expect("every required actual phase executes");
             assert!(end > start + 1, "actual phase pays work");
             input + end - 1
         })

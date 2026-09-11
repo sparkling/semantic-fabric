@@ -45,6 +45,7 @@ enum MappedProfile {
     Materialization,
     Condition,
     Bind,
+    Projection,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -174,6 +175,7 @@ fn mapped_work(
         | MappedProfile::Materialization
         | MappedProfile::Condition
         | MappedProfile::Bind
+        | MappedProfile::Projection
         | MappedProfile::Filter => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
@@ -232,19 +234,14 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
             .build()
             .unwrap()
             .block_on(async {
-                if matches!(
-                    profile,
-                    MappedProfile::Preparation | MappedProfile::Materialization
-                ) {
-                    preparation::cases(profile).await;
-                } else if profile == MappedProfile::Identity {
-                    cache_identity::cases().await;
-                } else if profile == MappedProfile::Condition {
-                    condition::cases().await;
-                } else if profile == MappedProfile::Bind {
-                    bind::cases().await;
-                } else {
-                    mapped_admission_cases(profile).await;
+                match profile {
+                    MappedProfile::Preparation | MappedProfile::Materialization => {
+                        preparation::cases(profile).await
+                    }
+                    MappedProfile::Identity => cache_identity::cases().await,
+                    MappedProfile::Condition => condition::cases().await,
+                    MappedProfile::Bind | MappedProfile::Projection => bind::cases(profile).await,
+                    _ => mapped_admission_cases(profile).await,
                 }
             });
         // Only successful execution of every case emits this witness. An exact
@@ -292,7 +289,8 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         | MappedProfile::Preparation
         | MappedProfile::Materialization
         | MappedProfile::Condition
-        | MappedProfile::Bind => {
+        | MappedProfile::Bind
+        | MappedProfile::Projection => {
             unreachable!("separate helper acceptance")
         }
     };

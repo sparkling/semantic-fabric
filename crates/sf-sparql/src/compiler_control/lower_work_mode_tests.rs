@@ -78,7 +78,8 @@ fn assert_direct_schedule(
     let (first, between, added) = match &source {
         IqNode::Construction { .. } => {
             assert_eq!(branch_count, 3);
-            let (first, between, tail) = construction_exists_condition_work();
+            // Empty branch bindings pay only the retention helper's entry.
+            let (first, between, tail) = construction_exists_condition_work(1);
             (first, between, first + between + tail)
         }
         IqNode::Filter { .. } => {
@@ -175,7 +176,9 @@ fn nested_entry_work(source: &IqNode) -> u64 {
     let (outer, outer_tail) = entry_work(source);
     let (inner, inner_tail) = entry_work(nested);
     assert_eq!((outer_tail, inner_tail), (0, 0));
-    outer + inner
+    // UNION visits first child, appends its singleton (call+push+carrier),
+    // then visits the second child before entering the nested SubPlan.
+    outer + inner + 4 + std::mem::size_of::<Branch>() as u64
 }
 
 #[test]
@@ -184,7 +187,10 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
     // One SubPlan alias follows both clones; do not add it to rejection prefixes.
     let append = 1 + std::mem::size_of::<crate::iq::SqlCond>() as u64;
-    let expected = nested_entry_work(&source) + work * 2 + 1 + 2 + 3 * (2 + append);
+    // The second child then moves one SubPlan branch: call1 + push1 and
+    // growth 1→2 (two new logical carriers plus one relocation).
+    let union_tail = 2 + 3 * std::mem::size_of::<Branch>() as u64;
+    let expected = nested_entry_work(&source) + work * 2 + 1 + 2 + 3 * (2 + append) + union_tail;
     let control = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -367,7 +373,8 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     .unwrap();
     let (prefix, tail) = entry_work(&normalized);
     let before_clones = build + normalization_control.consumed(QueryCharge::CompilerWork) + prefix;
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    // One retained ?x per row pays seven decision/retain units independently.
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
     let before_second = before_clones + condition_prefix + work + between;
     let expected = before_second + work + condition_tail + tail;
     let exact = budget(expected);

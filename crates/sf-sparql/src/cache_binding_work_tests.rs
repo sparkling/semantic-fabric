@@ -126,7 +126,8 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let key = key_work();
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    // One retained ?x: entry1, bool slot/byte2, key visit1, comparison2, retain1.
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
     let before_second = key + build + condition_prefix + work + between;
     let short = budget(before_second + work - 1);
     assert!(matches!(
@@ -173,7 +174,7 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let work = clone_work();
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
     let tail = tail + condition_tail;
     let total = 2 * (build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
@@ -224,7 +225,7 @@ fn cancellation_between_clone_operations_prevents_cache_insertion() {
         + build_work()
         + normalization_work()
         + lower_entry_work().0
-        + construction_exists_condition_work().0
+        + construction_exists_condition_work(7).0
         + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(

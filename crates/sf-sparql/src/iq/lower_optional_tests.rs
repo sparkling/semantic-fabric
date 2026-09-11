@@ -151,7 +151,11 @@ fn optional_work_lower_dispatch_cost_matches_the_independently_selected_helper()
         )
         .unwrap()
         .total_work;
-        let construction = 9 + copied + std::mem::size_of::<(String, TermDef)>() as u64;
+        // One output slot/carrier plus retention entry1, bool slot/byte2,
+        // key visit1, ?value comparison6 and retain visit1.
+        let projection = 1 + std::mem::size_of::<Branch>() as u64 + 11;
+        let construction =
+            9 + copied + std::mem::size_of::<(String, TermDef)>() as u64 + projection;
         assert_eq!(
             actual.consumed(QueryCharge::CompilerWork),
             expected.consumed(QueryCharge::CompilerWork) + construction

@@ -1,12 +1,13 @@
-//! BIND substitution work refusal at actual phases, with positive source controls.
+//! BIND and projection/output work refusal, with shared positive source controls.
 use super::*;
 #[path = "request_bind_observer_tests.rs"]
 mod observer;
 
-const QUERIES: [&str; 3] = [
+const QUERIES: [&str; 4] = [
     "SELECT ?label WHERE { ?item <http://example.test/a> ?value BIND(?value AS ?z) BIND(CONCAT(?z, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
     "SELECT ?label WHERE { { ?item <http://example.test/a> ?value } UNION { ?item <http://example.test/a> ?value } BIND(?value AS ?z) BIND(CONCAT(?z, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
     "SELECT ?label WHERE { ?item <http://example.test/a> ?value OPTIONAL { { ?item <http://example.test/b> ?optional } UNION { ?item <http://example.test/b> ?optional } } BIND(?value AS ?z) BIND(CONCAT(?z, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
+    "SELECT DISTINCT ?label WHERE { ?item <http://example.test/a> ?value BIND(?value AS ?z) BIND(CONCAT(?z, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
 ];
 
 #[test]
@@ -14,9 +15,24 @@ fn mapped_bind_phases_refuse_before_source_and_recover_exact_bags() {
     mapped_process("request_compile::tests::optional_work::bind::mapped_bind_phases_refuse_before_source_and_recover_exact_bags", MappedProfile::Bind);
 }
 
-pub(super) async fn cases() {
-    for (variant, query) in QUERIES.iter().copied().enumerate() {
-        let (cuts, complete) = observer::work(query);
+#[test]
+fn mapped_projection_phases_refuse_before_source_and_recover_exact_bags() {
+    mapped_process("request_compile::tests::optional_work::bind::mapped_projection_phases_refuse_before_source_and_recover_exact_bags", MappedProfile::Projection);
+}
+
+pub(super) async fn cases(profile: MappedProfile) {
+    let projection = profile == MappedProfile::Projection;
+    let queries = if projection {
+        &QUERIES[..]
+    } else {
+        &QUERIES[..3]
+    };
+    for (variant, query) in queries.iter().copied().enumerate() {
+        let (cuts, complete) = if projection {
+            observer::projection_work(query)
+        } else {
+            observer::work(query)
+        };
         assert!(
             complete <= 1_000_000,
             "existing default admits supported BIND"
@@ -99,7 +115,7 @@ pub(super) async fn cases() {
                 let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(result["head"]["vars"], serde_json::json!(["label"]));
                 let rows = result["results"]["bindings"].as_array().unwrap();
-                assert_eq!(rows.len(), if variant == 0 { 1 } else { 2 });
+                assert_eq!(rows.len(), if matches!(variant, 0 | 3) { 1 } else { 2 });
                 for row in rows {
                     assert_eq!(
                         row,
