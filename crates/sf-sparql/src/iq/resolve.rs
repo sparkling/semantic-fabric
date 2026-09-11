@@ -312,7 +312,7 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                         if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep)
                         {
                             crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
-                            let gid = cx.unfolder.alias();
+                            let gid = cx.unfolder.alias()?;
                             for b in &members {
                                 let mut aliases = b
                                     .core

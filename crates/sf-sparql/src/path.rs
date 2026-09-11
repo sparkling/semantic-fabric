@@ -162,7 +162,7 @@ impl<'a> Unfolder<'a> {
             }
         }
 
-        let alias = self.alias();
+        let alias = self.alias()?;
         let graph_scope = match self.current_graph.as_ref() {
             None => R2rmlGraphScope::Default,
             Some(graph) => R2rmlGraphScope::Mapped {

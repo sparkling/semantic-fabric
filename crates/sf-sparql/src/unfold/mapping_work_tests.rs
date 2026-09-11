@@ -87,7 +87,8 @@ fn rejected_candidates_have_an_inclusive_prospective_boundary() {
 fn source_copies_are_exact_and_preserve_raw_branch_order() {
     let maps = fixture();
     let copy = source_work(&maps[0].source);
-    let exact = budget(8 + 6 * copy);
+    // Six admitted atoms each reserve one alias before copying their source.
+    let exact = budget(8 + 6 * (1 + copy));
     let tp = pattern(None);
     let metered = expand(&maps, &tp, None, &exact).unwrap();
     let tbox = crate::Tbox::default();
@@ -96,13 +97,16 @@ fn source_copies_are_exact_and_preserve_raw_branch_order() {
         .unwrap();
     assert_eq!(metered.len(), 6);
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
-    assert_eq!(exact.consumed(QueryCharge::CompilerWork), 8 + 6 * copy);
-    let short = budget(8 + 6 * copy - 1);
+    assert_eq!(
+        exact.consumed(QueryCharge::CompilerWork),
+        8 + 6 * (1 + copy)
+    );
+    let short = budget(8 + 6 * (1 + copy) - 1);
     assert!(expand(&maps, &tp, None, &short).is_err());
     let measured = measure_copy_root(CompilerCloneRootV1::LogicalSource(&maps[0].source)).unwrap();
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        8 + 5 * copy + measured.measurement_work
+        8 + 6 + 5 * copy + measured.measurement_work
     );
 }
 
@@ -173,7 +177,8 @@ fn parent_reference_borrows_map_and_charges_only_actual_sources() {
         joins: vec![],
     })];
     maps.push(parent);
-    let expected = 2 + 1 + 1 + 2 + source_work(&maps[0].source) + source_work(&maps[1].source);
+    // Map/POM/candidate/parent lookup work plus child and parent alias reservations.
+    let expected = 2 + 1 + 1 + 2 + 2 + source_work(&maps[0].source) + source_work(&maps[1].source);
     let control = budget(expected);
     let branches = expand(
         &maps,
@@ -254,7 +259,7 @@ fn class_candidates_charge_before_rejection_and_preserve_duplicates() {
     assert!(expand(&maps, &tp, None, &exact).unwrap().is_empty());
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), 3);
     tp.object = Variable::new_unchecked("o").into();
-    let exact = budget(3 + 2 * source_work(&maps[0].source));
+    let exact = budget(3 + 2 * (1 + source_work(&maps[0].source)));
     assert_eq!(expand(&maps, &tp, None, &exact).unwrap().len(), 2);
     assert_eq!(
         exact.consumed(QueryCharge::CompilerWork),
@@ -268,8 +273,8 @@ fn fixed_graph_filter_attempts_are_charged_independently_of_atom_candidates() {
     maps[0].subject.graphs = vec![iri("g")];
     let tp = pattern(Some("http://example.test/a"));
     // Map + POM + graph visit + six candidates, then three source copies and
-    // three graph-filter candidates. Other three atoms reject before any copy.
-    let expected = 9 + 3 * (source_work(&maps[0].source) + 1);
+    // three aliases and graph-filter candidates. Other three atoms reject before either.
+    let expected = 9 + 3 * (1 + source_work(&maps[0].source) + 1);
     let exact = budget(expected);
     let graph =
         NamedNodePattern::NamedNode(sf_core::NamedNode::new_unchecked("http://example.test/g"));

@@ -80,6 +80,9 @@ use optional::{is_single_subplan_branch, left_join_decomposed, left_join_over_su
 mod optional_work_tests;
 
 #[cfg(test)]
+#[path = "lower_alias_tests.rs"]
+mod alias_work_tests;
+#[cfg(test)]
 #[path = "lower_scope_tests.rs"]
 mod lower_scope_work_tests;
 #[path = "lower_scope.rs"]
@@ -397,7 +400,7 @@ fn lower_node(
                 // 501) ever sees it — safe unconditionally here, since NORMALIZE collapses
                 // 1-child joins, so a standalone path never reaches an `InnerJoin` with only
                 // itself as a child (it stays the fast top-level-`WITH` shape untouched).
-                convert_path_branches(&mut cbr, dialect, next_alias)?;
+                convert_path_branches(&mut cbr, dialect, next_alias, work_mode)?;
                 acc = join_branches_with_work_mode(acc, cbr, work_mode)?;
                 if acc.is_empty() {
                     break;
@@ -418,7 +421,7 @@ fn lower_node(
             // ADR-0033: convert a path-carrying LEFT operand to an ordinary derived-table
             // Scan — without this, `build_left_join`'s `left.path.is_some()` guard 501s the
             // moment an OPTIONAL's OWN preceding pattern is a property path.
-            convert_path_branches(&mut l, dialect, next_alias)?;
+            convert_path_branches(&mut l, dialect, next_alias, work_mode)?;
             // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
             // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
             // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
@@ -435,7 +438,7 @@ fn lower_node(
             // to paths) — a filter directly on the path's OWN endpoint variable (always
             // `TermMap::Template`-typed, an IRI) still 501s on that separate, generic ground;
             // a filter on some OTHER plain-column var bound alongside the path is unaffected.
-            convert_path_branches(&mut r, dialect, next_alias)?;
+            convert_path_branches(&mut r, dialect, next_alias, work_mode)?;
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
@@ -594,7 +597,11 @@ pub(crate) fn convert_path_branches(
     branches: &mut [Branch],
     _dialect: sf_sql::Dialect,
     next_alias: &mut usize,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<()> {
+    let count = branches.iter().filter(|b| b.path.is_some()).count();
+    let mut aliases = work_mode.alias_range(*next_alias, count)?;
+    let end = aliases.end;
     for b in branches.iter_mut() {
         let Some(pc) = b.path.take() else { continue };
         // ADR-0034: mark NPS's own protected bag multiplicity BEFORE it is
@@ -602,8 +609,7 @@ pub(crate) fn convert_path_branches(
         if matches!(pc.hop, HopExpr::Nps(_)) {
             b.nps = true;
         }
-        let cte_alias = *next_alias;
-        *next_alias += 1;
+        let cte_alias = aliases.next().expect("one reserved alias per path");
         b.core.push(Scan {
             alias: pc.alias,
             source: crate::iq::ScanSource::Path {
@@ -612,6 +618,7 @@ pub(crate) fn convert_path_branches(
             },
         });
     }
+    *next_alias = end;
     Ok(())
 }
 
@@ -1377,7 +1384,8 @@ fn lower_as_subplan(
             "SubPlan: empty inner plan → 501".to_owned(),
         ));
     }
-    let sp_alias = *next_alias;
+    let aliases = work_mode.alias_range(*next_alias, 1)?;
+    let sp_alias = aliases.start;
     // Use each arm's ACTUAL emission projection (the order `emit_branch` assigns to c0,c1,…)
     // rather than `Branch::projection()` (BTreeMap order): for agg branches the emitter
     // places GROUP BY key columns before aggregate columns. Mismatching would remap a var
@@ -1491,7 +1499,7 @@ fn lower_as_subplan(
         }
         outer_bindings.insert(v.clone(), agreed.expect("at least one arm"));
     }
-    *next_alias += 1;
+    *next_alias = aliases.end;
     let mut outer = Branch::empty();
     // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path, `cascade::eligible_for_
     // term_dedup`'s own doc comment): propagate term-dedup eligibility to the OUTER
@@ -2097,7 +2105,7 @@ fn lower_aggregation(
         }
         // The aggregate result columns share one reserved synthetic alias (computed in
         // SQL, never read from a base scan).
-        let agg_alias = branch_next_alias(&branch);
+        let agg_alias = branch_next_alias(&branch, work_mode)?;
         let mut agg_cols = Vec::with_capacity(aggs.len());
         for def in &aggs {
             let (kind, arg, distinct, fixed_type) = lower_agg_col(def, &branch.bindings)?;
@@ -2129,7 +2137,7 @@ fn lower_aggregation(
     } else if let Some(branch) = if spine.force_rust_group {
         None
     } else {
-        try_sql_group_over_union(&mut inner, &grouping, &aggs, dialect, next_alias)
+        try_sql_group_over_union(&mut inner, &grouping, &aggs, dialect, next_alias, work_mode)?
     } {
         // SQL pushdown (ADR-0023 optimizer-residue, q9 agg-pushdown wave): the union
         // arms pool into ONE derived-table `UNION ALL` and the DB does the GROUP BY —
@@ -2164,9 +2172,10 @@ fn lower_aggregation(
 /// SQL emission verbatim — pooling the arms under one `Aggregation` branch needs no
 /// new emission code, only this construction.
 ///
-/// Returns `None` (never `Err`) when NOT provably `=_bag`-safe to pool — the caller
+/// Returns `Ok(None)` when NOT provably `=_bag`-safe to pool — the caller
 /// falls back to [`RustGroup`] (the correctness oracle), so an inapplicable shape is
-/// silently as correct as before, never silently wrong.
+/// silently as correct as before, never silently wrong. Resource refusal is an
+/// `Err`, never an eligibility miss; both aliases are reserved before arm transfer.
 ///
 /// **Applicability (the four correctness concerns, each resolved conservatively):**
 /// 1. *Cross-arm type unification.* Every grouping-key / aggregate-argument variable
@@ -2195,12 +2204,13 @@ fn try_sql_group_over_union(
     aggs: &[AggDef],
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
-) -> Option<Branch> {
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<Option<Branch>> {
     use sf_core::ir::{Segment, Template, TermMap, TermSpec};
     use std::collections::BTreeSet;
 
     if inner.len() < 2 || inner.iter().any(|b| b.path.is_some() || b.agg.is_some()) {
-        return None;
+        return Ok(None);
     }
 
     // How a needed var's raw column(s) reconstruct its term — shared identically
@@ -2290,8 +2300,8 @@ fn try_sql_group_over_union(
                 needed.insert(v.to_string());
                 agg_arg_vars.insert(v.to_string());
             }
-            Some(AggArg::Expr(_)) => return None,
-            None if def.distinct => return None,
+            Some(AggArg::Expr(_)) => return Ok(None),
+            None if def.distinct => return Ok(None),
             None => {}
         }
     }
@@ -2307,12 +2317,16 @@ fn try_sql_group_over_union(
     for v in &sorted_vars {
         let mut common: Option<KeyShape> = None;
         for arm in inner.iter() {
-            let def = arm.bindings.get(v.as_str())?;
-            let shape = key_shape(def)?;
+            let Some(def) = arm.bindings.get(v.as_str()) else {
+                return Ok(None);
+            };
+            let Some(shape) = key_shape(def) else {
+                return Ok(None);
+            };
             match &common {
                 None => common = Some(shape),
                 Some(c) if shape_eq(c, &shape) => {}
-                Some(_) => return None, // cross-arm shape/type mismatch — bail to Rust path
+                Some(_) => return Ok(None), // cross-arm shape/type mismatch — bail to Rust path
             }
         }
         shapes.push(common.expect("inner.len() >= 2 checked above"));
@@ -2323,9 +2337,11 @@ fn try_sql_group_over_union(
     // (grouped positions stay in SQL, the term is only rebuilt at reconstruction)
     // but not as an aggregate argument.
     for v in &agg_arg_vars {
-        let i = sorted_vars.iter().position(|x| x == v)?;
+        let Some(i) = sorted_vars.iter().position(|x| x == v) else {
+            return Ok(None);
+        };
         if col_count(&shapes[i]) != 1 {
-            return None;
+            return Ok(None);
         }
     }
     // Run 4 B-repair FIX 4 — the AVG/SUM pushdown numeric gate: pushing AVG/SUM
@@ -2344,12 +2360,14 @@ fn try_sql_group_over_union(
             continue;
         }
         if let Some(AggArg::Var(v)) = &def.arg {
-            let i = sorted_vars.iter().position(|x| x.as_str() == v.as_ref())?;
+            let Some(i) = sorted_vars.iter().position(|x| x.as_str() == v.as_ref()) else {
+                return Ok(None);
+            };
             let spec = match &shapes[i] {
                 KeyShape::Column(spec) | KeyShape::Template(_, spec) => spec,
             };
             if !agg_operand_is_exact_numeric(spec) {
-                return None;
+                return Ok(None);
             }
         }
     }
@@ -2429,7 +2447,7 @@ fn try_sql_group_over_union(
         match proj_len {
             None => proj_len = Some(len),
             Some(expected) if expected == len => {}
-            Some(_) => return None,
+            Some(_) => return Ok(None),
         }
     }
     // Degenerate-shape guard: `offsets` above assumes each `sorted_vars[i]`'s columns
@@ -2454,12 +2472,15 @@ fn try_sql_group_over_union(
         true
     };
     if !inner.iter().all(needed_cols_distinct) {
-        return None;
+        return Ok(None);
     }
 
     // No fallback remains beyond this point. Transfer the complete branches and
     // mutate only the fields the old struct-update expression replaced, avoiding
     // deep clones of scans, conditions, OPTIONALs, and nested subplans.
+    let aliases = work_mode.alias_range(*next_alias, 2)?;
+    let sp_alias = aliases.start;
+    let agg_alias = sp_alias + 1; // Checked together by the two-alias range.
     let mut pooled_arms = std::mem::take(inner);
     for arm in &mut pooled_arms {
         arm.bindings
@@ -2470,8 +2491,6 @@ fn try_sql_group_over_union(
         arm.order.clear();
     }
 
-    let sp_alias = *next_alias;
-    *next_alias += 1;
     let nested_plan = Plan {
         branches: pooled_arms,
         form: PlanForm::Select {
@@ -2549,8 +2568,6 @@ fn try_sql_group_over_union(
         });
     }
 
-    let agg_alias = *next_alias;
-    *next_alias += 1;
     let mut agg_cols = Vec::with_capacity(aggs.len());
     for def in aggs {
         let arg = match &def.arg {
@@ -2583,7 +2600,8 @@ fn try_sql_group_over_union(
         keys,
         aggs: agg_cols,
     });
-    Some(outer)
+    *next_alias = aliases.end;
+    Ok(Some(outer))
 }
 
 /// Map one [`AggDef`] to a single-branch SQL [`AggCol`] tuple `(kind, arg col, distinct,
@@ -2747,27 +2765,24 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
 /// A fresh scan alias for the aggregate result columns: one past the max alias used
 /// anywhere in `b` (the flat `group` draws this from the `Unfolder` counter; here we
 /// derive it from the branch so the synthetic alias never collides with a base scan).
-fn branch_next_alias(b: &Branch) -> usize {
-    let mut aliases: Vec<usize> = Vec::new();
-    aliases.extend(b.core.iter().map(|scan| scan.alias));
-    aliases.extend(b.opts.iter().map(|join| join.scan.alias));
-    for scan in b.relation_scans() {
-        aliases.push(scan.alias);
-    }
+fn branch_next_alias(b: &Branch, work_mode: CompilerWorkMode<'_>) -> Result<usize> {
+    let mut maximum = b.relation_scans().iter().map(|scan| scan.alias).max();
+    let mut visit = |alias| maximum = Some(maximum.map_or(alias, |m| m.max(alias)));
     for def in b.bindings.values() {
         for c in def.columns() {
-            aliases.push(c.alias);
+            visit(c.alias);
         }
     }
     for cond in &b.where_conds {
-        crate::iq::collect_cond_cols(cond, &mut |c| aliases.push(c.alias));
+        crate::iq::collect_cond_cols(cond, &mut |c| visit(c.alias));
     }
     for opt in &b.opts {
         for cond in opt.on.iter().chain(opt.extra.iter()) {
-            crate::iq::collect_cond_cols(cond, &mut |c| aliases.push(c.alias));
+            crate::iq::collect_cond_cols(cond, &mut |c| visit(c.alias));
         }
     }
-    aliases.into_iter().max().map_or(0, |m| m + 1)
+    let aliases = work_mode.alias_range(maximum.unwrap_or(0), 1)?;
+    Ok(maximum.map_or(0, |_| aliases.end))
 }
 
 /// All variables bound anywhere in `branches` (the `SELECT *` fallback projection), in a
@@ -3437,7 +3452,9 @@ mod tests {
             &aggs,
             sf_sql::Dialect::Sqlite,
             &mut next_alias,
+            CompilerWorkMode::Uncontrolled,
         )
+        .unwrap()
         .expect("compatible arms pool");
 
         assert!(
@@ -3493,7 +3510,9 @@ mod tests {
             &[],
             sf_sql::Dialect::Sqlite,
             &mut next_alias,
-        );
+            CompilerWorkMode::Uncontrolled,
+        )
+        .unwrap();
 
         assert!(
             pooled.is_none(),
@@ -3543,7 +3562,9 @@ mod tests {
             &aggs,
             sf_sql::Dialect::Sqlite,
             &mut next_alias,
-        );
+            CompilerWorkMode::Uncontrolled,
+        )
+        .unwrap();
 
         assert!(
             pooled.is_none(),

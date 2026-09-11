@@ -157,7 +157,8 @@ fn nested_entry_work(source: &IqNode) -> u64 {
 fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_one() {
     let (body, work, _) = exists_body(81, "owned-final-subplan-exists-body");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
-    let expected = nested_entry_work(&source) + work * 2;
+    // One SubPlan alias follows both clones; do not add it to rejection prefixes.
+    let expected = nested_entry_work(&source) + work * 2 + 1;
     let control = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),

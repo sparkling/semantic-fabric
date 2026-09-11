@@ -103,6 +103,27 @@ pub(crate) fn lower_scope_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -
     work
 }
 
+#[allow(dead_code)]
+pub(crate) fn lower_alias_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    let (plan, work) = lowering_plan_and_work(source, maps);
+    assert_eq!(plan.branches.len(), 1);
+    assert!(
+        plan.rust_group.is_none(),
+        "must exercise SQL alias allocation, not Rust fallback"
+    );
+    let branch = &plan.branches[0];
+    assert!(branch.agg.is_some());
+    if source.contains("UNION") {
+        assert_eq!(branch.subplan_joins.len(), 1);
+        assert_eq!(branch.subplan_joins[0].plan.branches.len(), 2);
+    } else {
+        assert_eq!(branch.core.len(), 1);
+        assert!(branch.subplan_joins.is_empty());
+    }
+    assert!(work > 0);
+    work
+}
+
 fn lowering_plan_and_work(
     source: &str,
     maps: &[sf_core::ir::TriplesMap],

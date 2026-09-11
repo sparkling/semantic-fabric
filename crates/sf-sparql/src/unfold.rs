@@ -27,6 +27,8 @@ use crate::saturate::Tbox;
 use crate::unify::{filter_branch as filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
 
+#[cfg(test)]
+mod alias_tests;
 mod graph_inventory;
 mod join;
 mod mapping_work;
@@ -207,10 +209,10 @@ impl<'a> Unfolder<'a> {
         }
     }
 
-    pub(crate) fn alias(&mut self) -> usize {
-        let a = self.next_alias;
-        self.next_alias += 1;
-        a
+    pub(crate) fn alias(&mut self) -> Result<usize> {
+        let aliases = self.work_mode.alias_range(self.next_alias, 1)?;
+        self.next_alias = aliases.end;
+        Ok(aliases.start)
     }
 
     /// Tag `alias` (a group member's own representative scan/opt/subplan alias)
@@ -296,8 +298,18 @@ impl<'a> Unfolder<'a> {
                 // arm already applies (`iq/lower.rs`), reused verbatim so both engines
                 // share one conversion, not two. A path-free branch passes through
                 // untouched (the common case).
-                convert_path_branches(&mut l.branches, self.dialect, &mut self.next_alias)?;
-                convert_path_branches(&mut r.branches, self.dialect, &mut self.next_alias)?;
+                convert_path_branches(
+                    &mut l.branches,
+                    self.dialect,
+                    &mut self.next_alias,
+                    self.work_mode,
+                )?;
+                convert_path_branches(
+                    &mut r.branches,
+                    self.dialect,
+                    &mut self.next_alias,
+                    self.work_mode,
+                )?;
                 Ok(TransPattern::plain(join_branches(l.branches, r.branches)?))
             }
             GraphPattern::LeftJoin {
@@ -552,7 +564,7 @@ impl<'a> Unfolder<'a> {
 
         // The aggregate result columns share one reserved synthetic alias (they are
         // computed in SQL, never read from a base scan).
-        let agg_alias = self.alias();
+        let agg_alias = self.alias()?;
         let mut aggs = Vec::with_capacity(aggregates.len());
         for (out_var, expr) in aggregates {
             let (kind, arg, distinct, fixed_type) = lower_aggregate(expr, &branch.bindings)?;
@@ -638,6 +650,7 @@ impl<'a> Unfolder<'a> {
                 self.schema,
                 self.column_type_use,
                 &mut self.dedup_groups,
+                self.work_mode,
             )?;
             crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
             acc = join_branches(acc, alts)?;
@@ -751,7 +764,7 @@ impl<'a> Unfolder<'a> {
             }
         }
 
-        let alias = self.alias();
+        let alias = self.alias()?;
         let mut branch = Branch::single(Scan {
             alias,
             source: (self.copy_source(&tm.source)?).into(),
@@ -800,7 +813,7 @@ impl<'a> Unfolder<'a> {
                 let parent = self.map_by_id(&r.parent_triples_map)?.ok_or_else(|| {
                     Error::Mapping(format!("unknown parent map {}", r.parent_triples_map))
                 })?;
-                let palias = self.alias();
+                let palias = self.alias()?;
                 branch.core.push(Scan {
                     alias: palias,
                     source: (self.copy_source(&parent.source)?).into(),
@@ -905,7 +918,7 @@ impl<'a> Unfolder<'a> {
                     continue;
                 }
             }
-            let alias = self.alias();
+            let alias = self.alias()?;
             let mut branch = Branch::single(Scan {
                 alias,
                 source: (self.copy_source(&tm.source)?).into(),
@@ -1660,6 +1673,7 @@ fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
 /// sidestepping the type-alignment wall entirely (W3C R2RMLTC0011a/0012e). The
 /// resource profile rejects this source-sized fallback on serving paths. Other
 /// groups remain a sound 501; proven-compatible groups still use SQL pooling.
+#[allow(clippy::too_many_arguments)]
 fn pool_pattern_relation(
     arms: Vec<Branch>,
     vars: &[String],
@@ -1668,6 +1682,7 @@ fn pool_pattern_relation(
     schema: &[sf_sql::TableSchema],
     column_type_use: ColumnTypeUse,
     dedup_groups: &mut std::collections::HashMap<usize, DedupMarker>,
+    work_mode: crate::CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
     if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
         return Ok(arms);
@@ -1699,8 +1714,8 @@ fn pool_pattern_relation(
             let keep: std::collections::HashSet<String> = vars.iter().cloned().collect();
             if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep) {
                 crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
-                let gid = *next_alias;
-                *next_alias += 1;
+                let aliases = work_mode.alias_range(*next_alias, 1)?;
+                let gid = aliases.start;
                 for b in &members {
                     let mut aliases = b
                         .core
@@ -1739,6 +1754,7 @@ fn pool_pattern_relation(
                         },
                     );
                 }
+                *next_alias = aliases.end;
                 out.extend(members);
                 continue;
             }
@@ -1748,7 +1764,7 @@ fn pool_pattern_relation(
                     .to_owned(),
             ));
         }
-        out.push(pool_group(members, vars, dialect, next_alias)?);
+        out.push(pool_group(members, vars, dialect, next_alias, work_mode)?);
     }
     Ok(out)
 }
@@ -1763,6 +1779,7 @@ fn pool_group(
     vars: &[String],
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
+    work_mode: crate::CompilerWorkMode<'_>,
 ) -> Result<Branch> {
     // Run 4 Wave C0d (tree-engine mirror: `iq::lower::lower_as_subplan`'s identical
     // gate; `cascade::group_eligible_for_term_dedup`'s own doc comment has the full
@@ -1792,7 +1809,8 @@ fn pool_group(
         b.bindings.retain(|k, _| vars.iter().any(|v| v == k));
         b.distinct = true;
     }
-    let sp_alias = *next_alias;
+    let aliases = work_mode.alias_range(*next_alias, 1)?;
+    let sp_alias = aliases.start;
     let mut arm_projections: Vec<Vec<ColRef>> = narrowed
         .iter()
         .map(|b| crate::emit::projection_layout(b, dialect))
@@ -1867,7 +1885,7 @@ fn pool_group(
         }
         outer_bindings.insert(v.clone(), agreed.expect("at least one arm"));
     }
-    *next_alias += 1;
+    *next_alias = aliases.end;
     let nested_plan = Plan {
         branches: narrowed,
         form: PlanForm::Select {

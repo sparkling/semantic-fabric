@@ -15,6 +15,21 @@ const SCOPE_QUERIES: [&str; 3] = [
     "SELECT ?item (?value AS ?renamed) WHERE { ?item <http://example.test/a> ?value }",
 ];
 
+const ALIAS_QUERIES: [&str; 2] = [
+    // GROUP exercises the same SQL aggregate/subplan alias reservations without
+    // a parser-generated aggregate variable. COUNT's independently reproduced
+    // random-variable cache miss is a separate open identity defect, not a hit.
+    "SELECT ?value WHERE { ?item <http://example.test/a> ?value } GROUP BY ?value",
+    "SELECT ?value WHERE { { ?item <http://example.test/a> ?value } UNION { ?item <http://example.test/a> ?value } } GROUP BY ?value",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MappedProfile {
+    Optional,
+    Scope,
+    Alias,
+}
+
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     sf_mapping::parse_r2rml(
         r#"
@@ -31,7 +46,11 @@ fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     .unwrap()
 }
 
-fn mapped_work(query: &str, maps: &[sf_core::ir::TriplesMap], scope_only: bool) -> (u64, u64, u64) {
+fn mapped_work(
+    query: &str,
+    maps: &[sf_core::ir::TriplesMap],
+    profile: MappedProfile,
+) -> (u64, u64, u64) {
     use sf_core::query_control::QueryBudget;
     use std::sync::Mutex;
     use tracing::{
@@ -118,10 +137,10 @@ fn mapped_work(query: &str, maps: &[sf_core::ir::TriplesMap], scope_only: bool) 
     // cold-total subtraction that could absorb later LOWER/cascade work.
     let (start, end, visits) = *bounds.lock().unwrap();
     assert_eq!(visits, 1);
-    let independently_lowered = if scope_only {
-        compiler_key::lower_scope_work(query, maps)
-    } else {
-        compiler_key::lowering_work(query, maps)
+    let independently_lowered = match profile {
+        MappedProfile::Scope => compiler_key::lower_scope_work(query, maps),
+        MappedProfile::Optional => compiler_key::lowering_work(query, maps),
+        MappedProfile::Alias => compiler_key::lower_alias_work(query, maps),
     };
     assert_eq!(end - start, independently_lowered);
     let prefix = query.len() as u64 + start;
@@ -147,7 +166,7 @@ async fn change_work(cfg: &mut Arc<ServeConfig>, work: u64) {
 fn mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary() {
     mapped_process(
         "request_compile::tests::optional_work::mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary",
-        false,
+        MappedProfile::Optional,
     );
 }
 
@@ -155,11 +174,19 @@ fn mapped_optional_work_refusal_precedes_a_proven_source_admission_boundary() {
 fn mapped_lower_scope_work_refusal_and_projection_recovery() {
     mapped_process(
         "request_compile::tests::optional_work::mapped_lower_scope_work_refusal_and_projection_recovery",
-        true,
+        MappedProfile::Scope,
     );
 }
 
-fn mapped_process(selector: &str, scope_only: bool) {
+#[test]
+fn mapped_alias_work_sql_group_and_pool_refusal_recovery() {
+    mapped_process(
+        "request_compile::tests::optional_work::mapped_alias_work_sql_group_and_pool_refusal_recovery",
+        MappedProfile::Alias,
+    );
+}
+
+fn mapped_process(selector: &str, profile: MappedProfile) {
     const CHILD: &str = "SF_OPTIONAL_TEST_PROCESS";
     const COMPLETED: i32 = 61;
     if let Some(actual) = std::env::var_os(CHILD) {
@@ -168,7 +195,7 @@ fn mapped_process(selector: &str, scope_only: bool) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(mapped_admission_cases(scope_only));
+            .block_on(mapped_admission_cases(profile));
         // Only successful execution of every case emits this witness. An exact
         // libtest selector matching zero tests exits 0 and must not pass here.
         std::process::exit(COMPLETED);
@@ -200,15 +227,16 @@ fn mapped_process(selector: &str, scope_only: bool) {
     }
 }
 
-async fn mapped_admission_cases(scope_only: bool) {
+async fn mapped_admission_cases(profile: MappedProfile) {
     let maps = mapped_fixture();
-    let queries = if scope_only {
-        SCOPE_QUERIES.as_slice()
-    } else {
-        QUERIES.as_slice()
+    let scope_only = profile == MappedProfile::Scope;
+    let queries = match profile {
+        MappedProfile::Scope => SCOPE_QUERIES.as_slice(),
+        MappedProfile::Optional => QUERIES.as_slice(),
+        MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
     };
     for (variant, query) in queries.iter().copied().enumerate() {
-        let (prefix, normalized, exact) = mapped_work(query, &maps, scope_only);
+        let (prefix, normalized, exact) = mapped_work(query, &maps, profile);
         let cached = query.len() as u64 + key_work(query);
         assert!(cached < prefix);
         for secured in [false, true] {
@@ -301,65 +329,82 @@ async fn mapped_admission_cases(scope_only: bool) {
                 assert_eq!(response.status(), StatusCode::OK);
                 let bytes = response.into_body().collect().await.unwrap().to_bytes();
                 let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                let field = if scope_only && variant > 0 {
-                    "renamed"
+                if profile == MappedProfile::Alias {
+                    assert_eq!(result["head"]["vars"], serde_json::json!(["value"]));
+                    let rows = result["results"]["bindings"].as_array().unwrap();
+                    let mut values: Vec<_> = rows
+                        .iter()
+                        .map(|row| {
+                            // SPARQL JSON omits xsd:string for a simple literal.
+                            assert_eq!(row["value"]["type"], "literal");
+                            assert!(row["value"].get("datatype").is_none());
+                            assert!(row["value"].get("xml:lang").is_none());
+                            row["value"]["value"].as_str().unwrap()
+                        })
+                        .collect();
+                    values.sort();
+                    assert_eq!(values, ["one", "two"]);
                 } else {
-                    "value"
-                };
-                let head = if scope_only {
-                    if variant == 2 {
-                        vec!["item", "renamed"]
+                    let field = if scope_only && variant > 0 {
+                        "renamed"
                     } else {
-                        vec![field]
+                        "value"
+                    };
+                    let head = if scope_only {
+                        if variant == 2 {
+                            vec!["item", "renamed"]
+                        } else {
+                            vec![field]
+                        }
+                    } else {
+                        vec!["value", "optional"]
+                    };
+                    assert_eq!(result["head"]["vars"], serde_json::json!(head));
+                    if scope_only && variant == 2 {
+                        let mut items: Vec<_> = result["results"]["bindings"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|row| {
+                                (
+                                    row["item"]["value"].as_str().unwrap(),
+                                    row[field]["value"].as_str().unwrap(),
+                                )
+                            })
+                            .collect();
+                        items.sort();
+                        assert_eq!(
+                            items,
+                            vec![
+                                ("http://example.test/item/1", "one"),
+                                ("http://example.test/item/2", "one"),
+                                ("http://example.test/item/3", "two")
+                            ]
+                        );
                     }
-                } else {
-                    vec!["value", "optional"]
-                };
-                assert_eq!(result["head"]["vars"], serde_json::json!(head));
-                if scope_only && variant == 2 {
-                    let mut items: Vec<_> = result["results"]["bindings"]
+                    let mut values: Vec<_> = result["results"]["bindings"]
                         .as_array()
                         .unwrap()
                         .iter()
                         .map(|row| {
                             (
-                                row["item"]["value"].as_str().unwrap(),
                                 row[field]["value"].as_str().unwrap(),
+                                row.get("optional").map(|v| v["value"].as_str().unwrap()),
                             )
                         })
                         .collect();
-                    items.sort();
-                    assert_eq!(
-                        items,
-                        vec![
-                            ("http://example.test/item/1", "one"),
-                            ("http://example.test/item/2", "one"),
-                            ("http://example.test/item/3", "two")
-                        ]
-                    );
+                    values.sort();
+                    let mut expected = if scope_only {
+                        vec![("one", None), ("one", None), ("two", None)]
+                    } else {
+                        vec![("one", Some("x")), ("one", None), ("two", Some("y"))]
+                    };
+                    if !scope_only && variant == 1 {
+                        expected.extend([("one", Some("x")), ("two", Some("y"))]);
+                    }
+                    expected.sort();
+                    assert_eq!(values, expected, "variant {variant}");
                 }
-                let mut values: Vec<_> = result["results"]["bindings"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| {
-                        (
-                            row[field]["value"].as_str().unwrap(),
-                            row.get("optional").map(|v| v["value"].as_str().unwrap()),
-                        )
-                    })
-                    .collect();
-                values.sort();
-                let mut expected = if scope_only {
-                    vec![("one", None), ("one", None), ("two", None)]
-                } else {
-                    vec![("one", Some("x")), ("one", None), ("two", Some("y"))]
-                };
-                if !scope_only && variant == 1 {
-                    expected.extend([("one", Some("x")), ("two", Some("y"))]);
-                }
-                expected.sort();
-                assert_eq!(values, expected, "variant {variant}");
                 let recovered = tokio::time::timeout(
                     std::time::Duration::from_secs(2),
                     cfg.compiler_permits().acquire_many_owned(4),
