@@ -108,7 +108,7 @@ fn emit_normal_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure>
 }
 
 fn emit_parser_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure> {
-    let query = match spargebra::SparqlParser::new().parse_query(request.source()) {
+    let mut query = match spargebra::SparqlParser::new().parse_query(request.source()) {
         Ok(query) => query,
         Err(_) => {
             let rejection =
@@ -117,6 +117,16 @@ fn emit_parser_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure>
         }
     };
 
+    if let Err(error) = crate::cache::normalize_describe_parse(&mut query) {
+        let cause = match error {
+            crate::Error::QueryControl(
+                sf_core::query_control::QueryControlError::CompilerEnvelopeExceeded,
+            ) => ParseRejectionV1::QueryEnvelope,
+            _ => ParseRejectionV1::ResourceExhausted,
+        };
+        let rejection = ParseResultV1::encode_fixed_rejection_for(request, cause);
+        return write_all(libc::STDOUT_FILENO, &rejection);
+    }
     let payload = match query_v1::encode(&query) {
         Ok(payload) => payload,
         Err(QueryWireError::AllocationFailed) => {

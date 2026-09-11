@@ -886,9 +886,20 @@ fn parse_query(sparql: &str) -> Result<Query> {
         if let Some(result) = parser_isolation::runtime::parse_in_scope(sparql) {
             return result;
         }
-        spargebra::SparqlParser::new()
+        let mut query = spargebra::SparqlParser::new()
             .parse_query(sparql)
-            .map_err(|error| Error::Parse(error.to_string()))
+            .map_err(|error| Error::Parse(error.to_string()))?;
+        match cache::normalize_describe_parse(&mut query) {
+            // Raw parsing historically accepts ASTs outside the governed
+            // envelope. Validation fails before mutation; preserve that raw
+            // contract. Controlled compilation still rejects the envelope,
+            // and isolated workers never take this compatibility fallback.
+            Err(Error::QueryControl(
+                sf_core::query_control::QueryControlError::CompilerEnvelopeExceeded,
+            )) => (),
+            result => result?,
+        }
+        Ok(query)
     })
 }
 

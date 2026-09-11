@@ -431,6 +431,7 @@ pub(crate) mod bounded_key;
 
 #[path = "cache_canonical.rs"]
 mod canonical;
+pub(crate) use canonical::normalize_describe_parse;
 
 /// A bounded plan cache. Generic over the cached plan type `P` so the cache does
 /// not couple to the (large) plan struct. Entry capacity is not a total heap bound

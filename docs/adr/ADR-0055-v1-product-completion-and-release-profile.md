@@ -25,6 +25,21 @@ implements: []
 
 ## Status boundary
 
+**DESCRIBE accounting correction (2026-09-11):** parser output now gives isolated
+constant-target binders deterministic fresh names before compiler work accounting.
+The isolated worker normalizes in place before QueryV1 encoding; direct parsing
+uses the same helper, without a second walk in the governed parent. This is
+semantic alpha-renaming, not source-spelling provenance: an authored isolated
+constant BIND is indistinguishable and may be renamed too. Observable/ambiguous
+variables and aggregate binders are preserved. Existing parser containment and
+post-parse envelopes remain required; this does not claim metered parser CPU or
+physical heap allocation. Raw direct parsing retains oversized ASTs unchanged
+when pre-mutation validation refuses; governed compilation and isolated workers
+still reject them. Separate parser/cache naming preserves parsed/string cache reuse.
+Forced 1–32-character binder tests and owned production
+worker/direct cold/warm exact-budget parity cover the correction. Request defaults
+and supported DESCRIBE shapes do not expand; remaining G1 work is still open.
+
 **Updated 2026-09-07:** implement the delivery review's main-only integration, native-builder/model-effort, proportional-check and queued course-correction rules. Public portable equality-row authorization, safe layered configuration and verified remote-source TLS close narrow product boundaries, not general ABAC or operability. A standalone serving-only Cargo build excludes conformance/benchmark crates and extra backend features while preserving SQLite/PostgreSQL/MySQL and all serving controls. Opt-in authored reload now validates and publishes complete generations off-path, immediately fences detected drift, preserves request leases and fixed caller policies, and cannot heal shutdown/worker panic. Required real-CLI evidence covers SQLite and encrypted PostgreSQL/MySQL single/mixed-source reload and invalid-input recovery. Backend DDL leases, policy/configuration hot reload, product completion and the exact release bundle remain open.
 
 This decision is **accepted**. It replaces ADR-0038 as the controlling definition of product completion and release work for v1. ADR-0038 remains an auditable record of the broader SOTA programme; its research and advanced-assurance work becomes a labelled post-1.0 backlog.

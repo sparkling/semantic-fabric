@@ -202,6 +202,13 @@ fn describe_form_refuses_before_source_and_recovers_exact_cold_and_warm_graphs()
 async fn cases() {
     for query in QUERIES {
         let (start, end, total, warm) = work(query);
+        for _ in 0..8 {
+            assert_eq!(
+                work(query),
+                (start, end, total, warm),
+                "fresh parser binders cannot change exact HTTP admission budgets"
+            );
+        }
         assert!(warm <= start && start < end && end < total);
         assert!(
             total <= 1_000_000,

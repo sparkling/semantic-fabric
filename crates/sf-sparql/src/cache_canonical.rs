@@ -1,4 +1,4 @@
-//! Cache-only alpha normalization, never a rewrite of the executable query.
+//! Cache alpha normalization and narrow parser-output DESCRIBE normalization.
 //!
 //! A fresh global bijection preserves binding/correlation relationships. Only
 //! unique aggregate definitions with no authored binding or projection escape
@@ -22,6 +22,37 @@ use crate::{CompilerWorkMode, Result};
 mod variables;
 #[path = "cache_canonical/walk.rs"]
 mod walk;
+
+/// Stabilize isolated constant DESCRIBE binders before any metered compilation.
+/// The isolated parser calls this inside its bounded worker, not in the parent.
+/// Direct parsing retains caller-owned execution. This is semantic alpha
+/// renaming, not a spelling heuristic: an authored isolated constant BIND can
+/// have the same AST and qualifies too; observable/ambiguous roles are preserved.
+pub(crate) fn normalize_describe_parse(query: &mut Query) -> Result<()> {
+    if !matches!(query, Query::Describe { .. }) {
+        return Ok(());
+    }
+    use crate::compile_envelope::CompileEnvelopeError;
+    use sf_core::query_control::QueryControlError;
+    AlgebraEnvelopeV1::validate(query).map_err(|error| match error {
+        CompileEnvelopeError::AllocationFailed => QueryControlError::CompilerResourceExhausted,
+        _ => QueryControlError::CompilerEnvelopeExceeded,
+    })?;
+    let work = BuildWork::new(CompilerWorkMode::Uncontrolled);
+    let mut names = variables::Names::new(work);
+    walk::query(query, work, &mut |v, role| {
+        // Parser output normalization must never rewrite aggregate binders.
+        let role = match role {
+            variables::Role::Aggregate => variables::Role::Preserved,
+            other => other,
+        };
+        names.observe(v, role)
+    })?;
+    if names.assign_parser()? {
+        walk::query(query, work, &mut |v, _| names.rename(v))?;
+    }
+    Ok(())
+}
 
 pub(super) fn raw(query: &Query) -> Cow<'_, Query> {
     // Raw callers historically accept arbitrary ASTs. If the bounded optional
@@ -102,6 +133,9 @@ fn explicit_projection(mut pattern: &GraphPattern, work: BuildWork<'_>) -> Resul
 #[cfg(test)]
 #[path = "cache_canonical/control_tests.rs"]
 mod control_tests;
+#[cfg(test)]
+#[path = "cache_canonical/parse_tests.rs"]
+mod parse_tests;
 #[cfg(test)]
 #[path = "cache_canonical/tests.rs"]
 mod tests;

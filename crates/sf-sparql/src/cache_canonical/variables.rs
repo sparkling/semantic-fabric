@@ -76,6 +76,14 @@ impl<'a> Names<'a> {
     }
 
     pub fn assign(&mut self) -> Result<bool> {
+        self.assign_with_prefix(b"__sf_cache")
+    }
+
+    pub fn assign_parser(&mut self) -> Result<bool> {
+        self.assign_with_prefix(b"__sf_parse")
+    }
+
+    fn assign_with_prefix(&mut self, prefix: &[u8; 10]) -> Result<bool> {
         let mut next = 0usize;
         let mut changed = false;
         for index in 0..self.names.values.len() {
@@ -105,8 +113,8 @@ impl<'a> Names<'a> {
                         break;
                     }
                 }
-                cursor -= b"__sf_cache".len();
-                bytes[cursor..cursor + b"__sf_cache".len()].copy_from_slice(b"__sf_cache");
+                cursor -= prefix.len();
+                bytes[cursor..cursor + prefix.len()].copy_from_slice(prefix);
                 let candidate = self
                     .work
                     .string(std::str::from_utf8(&bytes[cursor..]).expect("ASCII name"))?;
