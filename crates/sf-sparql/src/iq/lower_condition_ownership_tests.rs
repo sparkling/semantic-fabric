@@ -10,16 +10,20 @@ use sf_sql::Dialect;
 /// Independent schedule for Construction(Filter(three VALUES rows, one EXISTS)).
 /// No whole-LOWER observation: peeling, per-branch visit and visible WHERE growth.
 /// The returned prefix/between/tail exclude both actual subtree clone charges.
-pub(crate) fn construction_exists_condition_work(retention: u64) -> (u64, u64, u64) {
+pub(crate) fn construction_exists_condition_work(
+    retention: u64,
+    values: u64,
+    body: u64,
+) -> (u64, u64, u64) {
     let group = 2 + std::mem::size_of::<Vec<IqCond>>() as u64;
     let append = 1 + std::mem::size_of::<SqlCond>() as u64;
     // Each branch pays an empty fold. Exact original output capacity precedes
     // the first clone; projection retention follows each branch's condition.
     let output = 3 * (1 + std::mem::size_of::<Branch>() as u64);
     (
-        group + output + 3,
-        append + retention + 3,
-        2 * append + 2 * retention + 3,
+        group + values + output + 3,
+        body + append + retention + 3,
+        2 * body + 2 * append + 2 * retention + 3,
     )
 }
 

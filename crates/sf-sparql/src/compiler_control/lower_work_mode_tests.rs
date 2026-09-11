@@ -10,6 +10,9 @@ use spargebra::{Query, SparqlParser};
 use super::*;
 use crate::compiler_control::CompileContext;
 use crate::compiler_schema::ColumnTypeUse;
+use crate::iq::lower::base_work_tests::{
+    empty_rows_work, one_column_rows_work, scan_work, singleton_work,
+};
 use crate::iq::lower::condition_ownership_tests::construction_exists_condition_work;
 use crate::iq::lower::scope_test_support::entry_work;
 use crate::iq::node::{IqCond, IqNode};
@@ -72,14 +75,14 @@ fn assert_direct_schedule(
     assert!(branch_count >= 3);
     let (prefix, tail) = entry_work(&source);
     assert_eq!(tail, 0, "these direct fixtures project no variables");
-    let prior_work = prior_work + prefix;
+    let prior_work = prior_work + prefix + empty_rows_work(branch_count);
     let size = std::mem::size_of::<crate::iq::SqlCond>() as u64;
     let append = 1 + size;
     let (first, between, added) = match &source {
         IqNode::Construction { .. } => {
             assert_eq!(branch_count, 3);
             // Empty branch bindings pay only the retention helper's entry.
-            let (first, between, tail) = construction_exists_condition_work(1);
+            let (first, between, tail) = construction_exists_condition_work(1, 0, scan_work());
             (first, between, first + between + tail)
         }
         IqNode::Filter { .. } => {
@@ -87,11 +90,15 @@ fn assert_direct_schedule(
             let before = 4 + 2 * (1 + size);
             (
                 2 + before,
-                size + append + 1 + before,
-                2 + branch_count * (1 + before + size + append),
+                scan_work() + size + append + 1 + before,
+                2 + branch_count * (1 + before + size + append + scan_work()),
             )
         }
-        IqNode::InnerJoin { .. } => (3, append + 2, 2 + branch_count * (2 + append)),
+        IqNode::InnerJoin { .. } => (
+            3,
+            append + 2 + scan_work(),
+            2 + branch_count * (2 + append + scan_work()),
+        ),
         _ => panic!("unexpected fixture"),
     };
     let before_last = prior_work
@@ -178,7 +185,7 @@ fn nested_entry_work(source: &IqNode) -> u64 {
     assert_eq!((outer_tail, inner_tail), (0, 0));
     // UNION visits first child, appends its singleton (call+push+carrier),
     // then visits the second child before entering the nested SubPlan.
-    outer + inner + 4 + std::mem::size_of::<Branch>() as u64
+    outer + inner + 4 + std::mem::size_of::<Branch>() as u64 + singleton_work() + empty_rows_work(3)
 }
 
 #[test]
@@ -190,7 +197,8 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
     // The second child then moves one SubPlan branch: call1 + push1 and
     // growth 1→2 (two new logical carriers plus one relocation).
     let union_tail = 2 + 3 * std::mem::size_of::<Branch>() as u64;
-    let expected = nested_entry_work(&source) + work * 2 + 1 + 2 + 3 * (2 + append) + union_tail;
+    let expected =
+        nested_entry_work(&source) + work * 2 + 1 + 2 + 3 * (2 + append + scan_work()) + union_tail;
     let control = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -250,7 +258,7 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
     );
     // pop + first branch/condition visits; append first WHERE then visit second.
     let prefix = nested_entry_work(&source) + 3;
-    let between = 2 + std::mem::size_of::<crate::iq::SqlCond>() as u64;
+    let between = scan_work() + 2 + std::mem::size_of::<crate::iq::SqlCond>() as u64;
     let control = budget(prefix + first_work + between + second_work - 1);
 
     assert_control_error(
@@ -313,7 +321,13 @@ fn inner_join_condition_over_three_branches_uses_the_owned_final_schedule() {
     let empty_copy = measure_copy_root(CompilerCloneRootV1::Branch(&Branch::empty()))
         .unwrap()
         .total_work;
-    assert_direct_schedule(source, 3, work, 6 * (1 + 2 * empty_copy), measurement);
+    assert_direct_schedule(
+        source,
+        3,
+        work,
+        6 * (1 + 2 * empty_copy) + 2 * singleton_work() + 2,
+        measurement,
+    );
 }
 
 fn whole_pipeline_fixture() -> (Query, u64, u64) {
@@ -374,7 +388,11 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     let (prefix, tail) = entry_work(&normalized);
     let before_clones = build + normalization_control.consumed(QueryCharge::CompilerWork) + prefix;
     // One retained ?x per row pays seven decision/retain units independently.
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
+        7,
+        one_column_rows_work(3, "x"),
+        one_column_rows_work(1, "inside"),
+    );
     let before_second = before_clones + condition_prefix + work + between;
     let expected = before_second + work + condition_tail + tail;
     let exact = budget(expected);

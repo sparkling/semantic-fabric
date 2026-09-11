@@ -11,7 +11,10 @@ use tower::ServiceExt;
 
 #[path = "query_budget/cache_key.rs"]
 mod cache_key;
-use cache_key::{build_work, key_work, normalization_work, source_free_entry_work};
+use cache_key::{
+    build_work, key_work, normalization_work, source_free_entry_work, source_free_join_seed_work,
+    source_free_values_work,
+};
 
 #[path = "query_budget/constant_normalization.rs"]
 mod constant_normalization;
@@ -305,7 +308,8 @@ async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
             + key_work(query)
             + build_work(query)
             + normalization_work(query, &[])
-            + source_free_entry_work(query).0,
+            + source_free_entry_work(query).0
+            + source_free_values_work(3, "x"),
     )))
     .oneshot(authenticated(query))
     .await
@@ -320,7 +324,11 @@ async fn compiler_products_cannot_spend_only_their_input_allowance() {
             + key_work(PRODUCTS)
             + build_work(PRODUCTS)
             + normalization_work(PRODUCTS, &[])
-            + source_free_entry_work(PRODUCTS).0,
+            + source_free_entry_work(PRODUCTS).0
+            + source_free_join_seed_work()
+            + 1
+            + source_free_values_work(4, "a")
+            + 3, // Refuse the first 1×4 product after independently paid prerequisites.
     )))
     .oneshot(authenticated(PRODUCTS))
     .await
@@ -354,11 +362,16 @@ async fn compiler_products_preserve_every_exact_public_tuple() {
 
 #[tokio::test]
 async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_replay() {
+    // Retain the old positive fixture's headroom plus only new leaf work:
+    // three outer rows, then one inner VALUES row for each EXISTS branch.
+    // Negative cutpoints and the actual serving defaults are unchanged.
+    let funded =
+        10_000 + source_free_values_work(3, "x") + 3 * source_free_values_work(1, "inside");
     for protected_profile in [false, true] {
         let mut cfg = Arc::new(if protected_profile {
-            protected(10_000)
+            protected(funded)
         } else {
-            config(QueryLimits::new(10_000, u64::MAX, u64::MAX, u64::MAX))
+            config(QueryLimits::new(funded, u64::MAX, u64::MAX, u64::MAX))
         });
         for warm in [false, true] {
             if warm {

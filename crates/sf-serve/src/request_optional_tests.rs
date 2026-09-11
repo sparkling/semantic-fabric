@@ -46,6 +46,7 @@ enum MappedProfile {
     Condition,
     Bind,
     Projection,
+    Base,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -176,9 +177,8 @@ fn mapped_work(
         | MappedProfile::Condition
         | MappedProfile::Bind
         | MappedProfile::Projection
-        | MappedProfile::Filter => {
-            unreachable!("identity uses stage observation, not LOWER calibration")
-        }
+        | MappedProfile::Base
+        | MappedProfile::Filter => unreachable!("profile uses separate phase observation"),
     };
     assert_eq!(end - start, independently_lowered);
     let prefix = query.len() as u64 + start;
@@ -240,7 +240,9 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
                     }
                     MappedProfile::Identity => cache_identity::cases().await,
                     MappedProfile::Condition => condition::cases().await,
-                    MappedProfile::Bind | MappedProfile::Projection => bind::cases(profile).await,
+                    MappedProfile::Bind | MappedProfile::Projection | MappedProfile::Base => {
+                        bind::cases(profile).await
+                    }
                     _ => mapped_admission_cases(profile).await,
                 }
             });
@@ -290,9 +292,8 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         | MappedProfile::Materialization
         | MappedProfile::Condition
         | MappedProfile::Bind
-        | MappedProfile::Projection => {
-            unreachable!("separate helper acceptance")
-        }
+        | MappedProfile::Projection
+        | MappedProfile::Base => unreachable!("separate helper acceptance"),
     };
     for (variant, query) in queries.iter().copied().enumerate() {
         let (prefix, normalized, exact) = mapped_work(query, &maps, profile);

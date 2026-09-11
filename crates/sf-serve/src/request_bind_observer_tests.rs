@@ -19,6 +19,17 @@ pub(super) fn projection_work(query: &str) -> (Vec<u64>, u64) {
     )
 }
 
+pub(super) fn base_work(query: &str) -> (Vec<u64>, u64) {
+    phase_work(
+        query,
+        if query.contains("VALUES") {
+            &[6, 7, 8]
+        } else {
+            &[6]
+        },
+    )
+}
+
 fn phase_work(query: &str, kinds: &[usize]) -> (Vec<u64>, u64) {
     use sf_core::query_control::QueryBudget;
     struct Marker {
@@ -38,6 +49,9 @@ fn phase_work(query: &str, kinds: &[usize]) -> (Vec<u64>, u64) {
                 "sf.compiler.projection_retention" => 3,
                 "sf.compiler.construction_output" => 4,
                 "sf.compiler.union_output" => 5,
+                "sf.compiler.leaf_output" => 6,
+                "sf.compiler.values_materialization" => 7,
+                "sf.compiler.join_seed" => 8,
                 _ => return,
             };
             ctx.span(id).unwrap().extensions_mut().insert(Marker {

@@ -52,8 +52,9 @@ fn lower_scope_work_hand_counted_alias_and_spine_dispatches() {
             };
         }
         // Every alias-tree visit, one checked successor, every actual spine
-        // dispatch and one empty output-scope visit; no payload to materialize.
-        let expected = 2 * depth + 4;
+        // dispatch and one empty output-scope visit, then the True leaf's
+        // independently counted singleton carrier (not scope work).
+        let expected = 2 * depth + 4 + base_work_tests::singleton_work();
         let control = budget(expected);
         let plan = run(tree.clone(), &control).unwrap();
         assert_eq!(format!("{plan:?}"), format!("{:?}", raw(tree.clone())));

@@ -346,10 +346,15 @@ mod tests {
         )
         .unwrap();
         let prefix = crate::iq::lower::scope_test_support::entry_work(&normalized).0;
-        let prerequisites =
-            key_work + build_work + normalize_control.consumed(QueryCharge::CompilerWork) + prefix;
+        let prerequisites = key_work
+            + build_work
+            + normalize_control.consumed(QueryCharge::CompilerWork)
+            + prefix
+            + crate::iq::lower::base_work_tests::singleton_work()
+            + 1
+            + crate::iq::lower::base_work_tests::one_column_rows_work(4, "a");
         // Reach the unpaid first 1×4 product after independent BUILD/NORMALIZE
-        // and LOWER entry/scope preparation, never a whole-LOWER estimate.
+        // and LOWER scope/seed/first-child VALUES, never a whole-LOWER estimate.
         let short = budget(prerequisites + 3);
         assert!(binding
             .compile_shared_with_work_control(query, &short)

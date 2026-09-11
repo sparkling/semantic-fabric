@@ -10,6 +10,17 @@ const QUERIES: [&str; 4] = [
     "SELECT DISTINCT ?label WHERE { ?item <http://example.test/a> ?value BIND(?value AS ?z) BIND(CONCAT(?z, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
 ];
 
+const BASE_QUERIES: [&str; 3] = [
+    QUERIES[0],
+    "SELECT ?label ?tag WHERE { VALUES ?tag { \"a\" UNDEF \"a\" } ?item <http://example.test/a> ?value BIND(CONCAT(?value, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
+    "SELECT ?label ?tag WHERE { ?item <http://example.test/a> ?value VALUES ?tag { \"a\" UNDEF \"a\" } BIND(CONCAT(?value, \"!\") AS ?label) FILTER(?item = <http://example.test/item/1>) }",
+];
+
+#[test]
+fn mapped_base_phases_refuse_before_source_and_recover_exact_bags() {
+    mapped_process("request_compile::tests::optional_work::bind::mapped_base_phases_refuse_before_source_and_recover_exact_bags", MappedProfile::Base);
+}
+
 #[test]
 fn mapped_bind_phases_refuse_before_source_and_recover_exact_bags() {
     mapped_process("request_compile::tests::optional_work::bind::mapped_bind_phases_refuse_before_source_and_recover_exact_bags", MappedProfile::Bind);
@@ -22,13 +33,18 @@ fn mapped_projection_phases_refuse_before_source_and_recover_exact_bags() {
 
 pub(super) async fn cases(profile: MappedProfile) {
     let projection = profile == MappedProfile::Projection;
-    let queries = if projection {
+    let base = profile == MappedProfile::Base;
+    let queries = if base {
+        &BASE_QUERIES[..]
+    } else if projection {
         &QUERIES[..]
     } else {
         &QUERIES[..3]
     };
     for (variant, query) in queries.iter().copied().enumerate() {
-        let (cuts, complete) = if projection {
+        let (cuts, complete) = if base {
+            observer::base_work(query)
+        } else if projection {
             observer::projection_work(query)
         } else {
             observer::work(query)
@@ -113,15 +129,38 @@ pub(super) async fn cases(profile: MappedProfile) {
                 assert_eq!(response.status(), StatusCode::OK);
                 let bytes = response.into_body().collect().await.unwrap().to_bytes();
                 let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                assert_eq!(result["head"]["vars"], serde_json::json!(["label"]));
+                let values = base && variant > 0;
+                assert_eq!(
+                    result["head"]["vars"],
+                    if values {
+                        serde_json::json!(["label", "tag"])
+                    } else {
+                        serde_json::json!(["label"])
+                    }
+                );
                 let rows = result["results"]["bindings"].as_array().unwrap();
-                assert_eq!(rows.len(), if matches!(variant, 0 | 3) { 1 } else { 2 });
+                assert_eq!(
+                    rows.len(),
+                    if values {
+                        3
+                    } else if matches!(variant, 0 | 3) {
+                        1
+                    } else {
+                        2
+                    }
+                );
+                let mut unbound = 0;
                 for row in rows {
-                    assert_eq!(
-                        row,
-                        &serde_json::json!({"label":{"type":"literal","value":"one!"}})
-                    );
+                    let mut expected =
+                        serde_json::json!({"label":{"type":"literal","value":"one!"}});
+                    if values && row.get("tag").is_some() {
+                        expected["tag"] = serde_json::json!({"type":"literal","value":"a"});
+                    } else if values {
+                        unbound += 1;
+                    }
+                    assert_eq!(row, &expected);
                 }
+                assert_eq!(unbound, usize::from(values));
                 drop(
                     tokio::time::timeout(
                         std::time::Duration::from_secs(2),

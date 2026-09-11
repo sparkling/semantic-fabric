@@ -70,6 +70,14 @@ use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches_with_work_mode, single_column_of};
 use crate::unify::{bind_term_def, filter_branch as filter_cond, unify, Unify};
 use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
+#[path = "lower_base.rs"]
+mod base;
+#[cfg(test)]
+#[path = "lower_base_join_tests.rs"]
+mod base_join_work_tests;
+#[cfg(test)]
+#[path = "lower_base_tests.rs"]
+pub(crate) mod base_work_tests;
 #[path = "lower_conditions.rs"]
 mod conditions;
 #[path = "lower_substitution.rs"]
@@ -379,46 +387,45 @@ fn lower_node(
     match node {
         // ---- leaves --------------------------------------------------------------
         IqNode::Extensional { scan, bind } => {
+            work.charge(1)?;
             // The RESOLVE bridge leaves `bind` empty: all join/constant logic rides the
             // enclosing `IqCond::Sql` conds (design §5 Extensional). A populated `bind`
             // would need a separate lowering path we never reach in M3 → sound 501.
             if !bind.is_empty() {
-                return Err(Error::Unsupported(
-                    "Extensional.bind is not populated by the M3 RESOLVE bridge → 501".to_owned(),
-                ));
+                return Err(Error::Unsupported(work.string(
+                    "Extensional.bind is not populated by the M3 RESOLVE bridge → 501",
+                )?));
             }
-            Ok(vec![Branch::single(scan)])
+            base::scan(scan, work)
         }
         IqNode::Values { vars, rows } => {
             // One core-less `Const` branch per row; an UNDEF (`None`) cell leaves the
             // variable absent (design §5 Values — mirrors the flat `Values` arm).
-            let mut branches = Vec::with_capacity(rows.len());
-            for row in rows {
-                let mut b = Branch::empty();
-                for (var, cell) in vars.iter().zip(row) {
-                    if let Some(td) = cell {
-                        b.bindings.insert(var.to_string(), td);
-                    }
-                }
-                branches.push(b);
-            }
-            Ok(branches)
+            base::values(vars, rows, work)
         }
         IqNode::Path { closure } => {
+            work.charge(1)?;
             let mut b = Branch::empty();
             b.path = Some(closure);
-            Ok(vec![b])
+            base::single(b, work)
         }
-        IqNode::Empty { .. } => Ok(Vec::new()),
-        IqNode::True => Ok(vec![Branch::empty()]),
+        IqNode::Empty { .. } => {
+            work.charge(1)?;
+            Ok(Vec::new())
+        }
+        IqNode::True => {
+            work.charge(1)?;
+            base::single(Branch::empty(), work)
+        }
 
         // ---- n-ary inner join ----------------------------------------------------
         IqNode::InnerJoin { children, cond } => {
             // Cross-product+merge the children via the proven flat `join_branches`. The
             // leaf bodies carry no bindings (those ride the outer Construction), so the
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
-            let mut acc = vec![Branch::empty()];
+            let mut acc = base::join_seed(work)?;
             for child in children {
+                work.charge(1)?;
                 let mut cbr = lower_node(
                     child, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
                 )?;

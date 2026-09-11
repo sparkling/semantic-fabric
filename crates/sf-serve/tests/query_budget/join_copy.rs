@@ -8,13 +8,18 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
     let query = format!(
         "SELECT ?a ?b WHERE {{ VALUES ?a {{ 0 1 }} VALUES ?b {{ \"{payload}\" \"{payload}!\" }} }}"
     );
-    // More than input admission alone, but insufficient for the repeated right payload.
+    // Pay only the new seed/child/VALUES prerequisites before the existing
+    // repeated-right-payload cut; never estimate complete LOWER to fund it.
     let mut cfg = Arc::new(protected(
         query.len() as u64
             + key_work(&query)
             + build_work(&query)
             + normalization_work(&query, &[])
             + source_free_entry_work(&query).0
+            + source_free_join_seed_work()
+            + 2
+            + source_free_values_work(2, "a")
+            + source_free_values_work(2, "b")
             + 512,
     ));
     assert_budget_problem(

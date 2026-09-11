@@ -4,14 +4,19 @@ use super::*;
 mod compiler_key;
 pub(super) use compiler_key::{
     build_work, constant_compile_work, key_work, normalization_work, source_free_entry_work,
-    structural_compile_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
+    source_free_join_seed_work, source_free_values_work, structural_compile_work, CONSTANT_QUERIES,
+    STRUCTURAL_QUERIES,
 };
 
 fn two_value_rows_construction_work() -> u64 {
     let output = 2 * (1 + std::mem::size_of::<sf_sparql::iq::Branch>() as u64);
     // Per row: fold1, retention entry1, bool slot/byte2, binding visit1,
     // ?value comparison (visit1+five bytes), retained-entry visit1.
-    output + 2 * (1 + 1 + 2 + 1 + 1 + 5 + 1)
+    // VALUES entry, two output slots/carriers and each row/cell/map/key copy.
+    let values = 1
+        + output
+        + 2 * (1 + 1 + std::mem::size_of::<(String, sf_sparql::iq::TermDef)>() as u64 + 1 + 5);
+    values + output + 2 * (1 + 1 + 2 + 1 + 1 + 5 + 1)
 }
 
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {

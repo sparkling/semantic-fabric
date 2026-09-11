@@ -1,4 +1,5 @@
 use super::*;
+use crate::iq::lower::base_work_tests::one_column_rows_work;
 use crate::iq::lower::condition_ownership_tests::construction_exists_condition_work;
 use crate::iq::node::{IqCond, IqNode};
 use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
@@ -127,7 +128,11 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
     // One retained ?x: entry1, bool slot/byte2, key visit1, comparison2, retain1.
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
+        7,
+        one_column_rows_work(3, "x"),
+        one_column_rows_work(1, "inside"),
+    );
     let before_second = key + build + condition_prefix + work + between;
     let short = budget(before_second + work - 1);
     assert!(matches!(
@@ -174,7 +179,11 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let work = clone_work();
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
-    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(7);
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work(
+        7,
+        one_column_rows_work(3, "x"),
+        one_column_rows_work(1, "inside"),
+    );
     let tail = tail + condition_tail;
     let total = 2 * (build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
@@ -225,7 +234,12 @@ fn cancellation_between_clone_operations_prevents_cache_insertion() {
         + build_work()
         + normalization_work()
         + lower_entry_work().0
-        + construction_exists_condition_work(7).0
+        + construction_exists_condition_work(
+            7,
+            one_column_rows_work(3, "x"),
+            one_column_rows_work(1, "inside"),
+        )
+        .0
         + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(

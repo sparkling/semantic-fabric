@@ -158,7 +158,10 @@ fn optional_work_lower_dispatch_cost_matches_the_independently_selected_helper()
             9 + copied + std::mem::size_of::<(String, TermDef)>() as u64 + projection;
         assert_eq!(
             actual.consumed(QueryCharge::CompilerWork),
-            expected.consumed(QueryCharge::CompilerWork) + construction
+            expected.consumed(QueryCharge::CompilerWork)
+                + construction
+                + super::base_work_tests::empty_rows_work(3)
+                + super::base_work_tests::scan_work()
         );
         assert!(actual.consumed(QueryCharge::CompilerWork) > 0);
     }
@@ -189,7 +192,10 @@ fn optional_work_lower_dispatch_cost_matches_the_independently_selected_helper()
     run(tree, &actual).unwrap();
     assert_eq!(
         actual.consumed(QueryCharge::CompilerWork),
-        expected.consumed(QueryCharge::CompilerWork) + prefix + tail
+        expected.consumed(QueryCharge::CompilerWork)
+            + prefix
+            + tail
+            + super::base_work_tests::empty_rows_work(3)
     );
 }
 

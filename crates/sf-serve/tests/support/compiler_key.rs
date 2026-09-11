@@ -75,6 +75,24 @@ pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap])
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Test-only cost of one fully bound VALUES column, independently counted from
+/// its entry, output slots/carriers, rows, cells and binding key/map insertions.
+/// Terms move; this never measures/pays later branch copies or products.
+#[allow(dead_code)]
+pub(crate) fn source_free_values_work(rows: u64, key: &str) -> u64 {
+    use sf_sparql::iq::{Branch, TermDef};
+    1 + rows
+        * (4 + std::mem::size_of::<Branch>() as u64
+            + std::mem::size_of::<(String, TermDef)>() as u64
+            + key.len() as u64)
+}
+
+/// INNER entry and its single empty branch slot; child visits are separate.
+#[allow(dead_code)]
+pub(crate) fn source_free_join_seed_work() -> u64 {
+    2 + std::mem::size_of::<sf_sparql::iq::Branch>() as u64
+}
+
 /// Independent LOWER cost, without subtracting an end-to-end cold compilation.
 /// Only ordinary SELECT fixtures; the caller proves the actual stage path.
 #[allow(dead_code)] // Shared support is also included by earlier-phase test modules.

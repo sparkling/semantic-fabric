@@ -13,9 +13,9 @@
 
 ## Remaining release gates (2026-09-11)
 
-This is the finite completion ledger under ADR-0055, not a new programme. At
+This is the finite completion ledger under ADR-0055, not a new programme. At the review baseline
 `a09e772a66080002574b92804b3dda4b0e64c62a`, sixteen overlapping catalogue
-limitations map to the six outcomes below; they are not sixteen equal tasks.
+limitations mapped to the six outcomes below; they are not sixteen equal tasks.
 All remain open until their missing evidence is attached. The sole main integrator
 owns each outcome; native read-only Sol/Sonnet review supports it. Command IDs
 resolve to exact commands in [the catalogue](../../tests/capabilities/catalog-v1.json).
@@ -23,15 +23,15 @@ Existing passes qualify their recorded source/profile, not a later release candi
 
 | Gate / required outcome | Existing public evidence | Missing closure / dependency / acceptance |
 |---|---|---|
-| G1 — finite admitted request governance: `l-query-budget`, `l-deadline-cancellation`, `l-sqlite-admission` | Shared deadline/admission, isolated parser, selected compiler controls, public caps, SQLite VM interrupt and native stop/recovery. Projection/UNION integration is at `a09e772`; the preserved base/VALUES patch is not yet verified or committed. | Finish owned compiler/cache and source-work boundaries for admitted shapes, then prove ordinary/authenticated cold/warm exactness, early refusal and full capacity recovery at unchanged defaults. Use `cmd-query-budget-http`, `cmd-compiler-input-admission`, `cmd-sqlite-active-vm-identity`, `cmd-sqlite-connection-admission-backend`, `cmd-sqlite-connection-admission-serving`, `cmd-native-query-controls`. Compiler sub-outcomes are below; no research-grade CPU/allocator claim. |
+| G1 — finite admitted request governance: `l-query-budget`, `l-deadline-cancellation`, `l-sqlite-admission` | Shared deadline/admission, isolated parser, selected compiler controls, public caps, SQLite VM interrupt and native stop/recovery. Projection/UNION integration is at `a09e772`. G1a base/VALUES now has exact/N-1/every-stop and ordinary/bearer phase-refusal, duplicate/UNDEF cold/key-only warm and capacity-recovery evidence; its harness binds the exact resulting commit. | Finish owned compiler/cache and source-work boundaries for admitted shapes, then prove ordinary/authenticated cold/warm exactness, early refusal and full capacity recovery at unchanged defaults. Use `cmd-query-budget-http`, `cmd-compiler-input-admission`, `cmd-sqlite-active-vm-identity`, `cmd-sqlite-connection-admission-backend`, `cmd-sqlite-connection-admission-serving`, `cmd-native-query-controls`. Compiler sub-outcomes are below; no research-grade CPU/allocator claim. |
 | G2 — admitted RDF/query exactness: `l-native-ref-witness-identity`, `l-path-resource`, `l-postgresql-synthetic-row-identity`, `l-describe` | Public SQLite/native numeric, text/CHAR, static-template, path and bounded one-hop DESCRIBE cases have scoped evidence. | Close declared natural/typed-template value construction, arithmetic, mixed-descriptor/pooled and base-resolved IRI cases; resolve the PostgreSQL synthetic/real-rowid boundary for the declared profile. Validate exact bags/NULL/identity and existing unsupported-shape rejection with `cmd-property-path-exact`, `cmd-property-path-key-equality`, `cmd-postgresql-rowid-boundary`, `cmd-describe-compile`, `cmd-describe-sqlite`, `cmd-native-query-profile-live`. Do not add unadvertised DESCRIBE breadth or remove a promised feature. G1 controls must cover these admitted paths. |
 | G3 — coherent generations/semantic admission: `l-metadata-toctou`, `l-schema-lifecycle`, `l-semantic-admission-scope`, `l-snapshot` | Immutable reload leases and protected PostgreSQL Direct/authored generations are public; invalid generations fence readiness/new requests. | Complete required backend/policy generation and DDL-race guarantees, binding M ⋈ T/source validation and cache identity to the same lease. Run `cmd-runtime-snapshot-state`, `cmd-runtime-snapshot-http`, `cmd-runtime-snapshot-body`, `cmd-public-authored-generation-live`, `cmd-public-direct-lifecycle-live`, `cmd-semantic-admission-runtime`, `cmd-semantic-admission-validation`, `cmd-semantic-admission-mapping`. Existing profile exclusions remain explicit; no new general ABAC or policy-hot-reload programme. |
 | G4 — declared cross-source execution: `l-federation` | Two-source UNION and fixed-cap two-pattern join, actual lineage, native stop/sibling isolation/recovery are implemented. | Qualify source consistency, protected generations and every admitted backend combination for those public shapes; depends on G1–G3. Run `cmd-federated-union-sparql`, `cmd-federated-union-serve`, `cmd-federated-union-cli`, `cmd-federated-join-sparql` and their required owned mixed-source TLS cases. No Bloom/spill/global-algebra research prerequisite. |
 | G5 — required native transport/live matrix: `l-transport-security`, `l-live-optional` | Verified remote TLS and native authentication/exactness suites have owned-fixture evidence. | Run the required fail-closed matrix against the immutable candidate after G1–G4; record exact artifact/profile/log digests and resolve candidate-specific failures. Use `cmd-verified-source-tls`, `cmd-verified-source-tls-cli`, `cmd-verified-source-tls-live`, `cmd-native-query-profile-live`. The TLS/authentication selector is not numeric-profile evidence. No new Product Mock/live-database access is implied. |
 | G6 — exact candidate/admission verdict: `l-release-artifact`, `l-production-admission` | Rust-only serving boundary and versioned developmental non-root/read-only image smoke exist. | After G1–G5, one immutable candidate passes the full locked workspace and serving-only checks, backend/profile matrix, clean-machine smoke, licence/advisory review, SBOM, checksums, signature/provenance and independent native Codex/Claude exact-delta review. Use ADR-0055 §3 and M7/Definition of done below; record the actual commands/digests. These are aggregate gates, not two more feature programmes. Publication requires separate current approval. |
 
-G1's finite accounting sub-outcomes are: **G1a**, finish and integrate the preserved
-base/VALUES work with its independent phase-cut tests; **G1b**, close the remaining
+G1's finite accounting sub-outcomes are: **G1a**, base/VALUES controls now have
+independent phase-cut and public exactness/recovery evidence; **G1b**, close the remaining
 admitted compiler phases and acquired-cache operations as one end-to-end controlled
 compilation profile; **G1c**, close source/recursive work and cleanup ownership for
 the admitted SQLite/PostgreSQL/MySQL and two-source paths; **G1d**, run their combined
@@ -41,7 +41,8 @@ Group compatible work under that outcome; do not turn each next unmetered helper
 into a new completion prerequisite or require `GovernedV1` merely as a label.
 This inventory is not proof of closure, and known failures are not scope exclusions.
 
-**Execution correction:** finish G1a first, then use the smallest unblocked gate
+**Execution correction:** after G1a's source-bound verification/commit, take G1b's
+one-time missing-phase/proof inventory and the smallest unblocked gate
 outcome above. Audit prerequisite tests before freezing each harness scope; preserve
 negative tests' intended phase rather than raising defaults or measuring away the
 failure. Keep exact prospective controls at fanout, copy and retained-state growth

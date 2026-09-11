@@ -10,7 +10,10 @@ const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
 #[path = "../tests/support/compiler_key.rs"]
 mod compiler_key;
-use compiler_key::{build_work, key_work, normalization_work, source_free_entry_work};
+use compiler_key::{
+    build_work, key_work, normalization_work, source_free_entry_work, source_free_join_seed_work,
+    source_free_values_work,
+};
 
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
@@ -47,7 +50,8 @@ fn config_with_mapping(
 #[tokio::test]
 async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     let (prefix, tail) = source_free_entry_work(QUERY);
-    let build = build_work(QUERY) + normalization_work(QUERY, &[]) + prefix + tail;
+    // Resolution leaves Empty: its one leaf visit is not entry/scope work.
+    let build = build_work(QUERY) + normalization_work(QUERY, &[]) + prefix + tail + 1;
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
     let exact = 2 * input + key + 2 * build;
@@ -192,9 +196,21 @@ async fn compiler_expansion_work_rejects_before_source_admission() {
     )
     .unwrap();
     for (query, maps, extra) in [
-        (cloning, vec![], 0),
-        (products, vec![], 0),
-        (right_heavy.as_str(), vec![], 512),
+        (cloning, vec![], source_free_values_work(3, "x")),
+        (
+            products,
+            vec![],
+            source_free_join_seed_work() + 1 + source_free_values_work(4, "a") + 3,
+        ), // One short of the first 1×4 product, after seed/first VALUES.
+        (
+            right_heavy.as_str(),
+            vec![],
+            source_free_join_seed_work()
+                + 2
+                + source_free_values_work(2, "a")
+                + source_free_values_work(1, "b")
+                + 512,
+        ), // New seed/leaves only; preserve the old repeated-payload cut.
         (absent, mapping, 5),
         (
             "SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s <http://example.test/a>+ ?o } }",
