@@ -18,6 +18,9 @@ use compiler_key::{
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
 
+#[path = "request_describe_tests.rs"]
+mod describe_work;
+
 #[path = "request_optional_tests.rs"]
 mod optional_work;
 

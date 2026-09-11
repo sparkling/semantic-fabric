@@ -685,7 +685,7 @@ fn translate_tree_with_column_type_use(
         Query::Describe { pattern, .. } => {
             let (description_pattern, template) =
                 compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
-                    describe::rewrite(pattern)
+                    describe::rewrite_with_work_mode(pattern, work_mode)
                 })?;
             let mut plan = compile(&description_pattern)?;
             plan.form = PlanForm::Construct { template };

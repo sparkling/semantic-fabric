@@ -7,6 +7,14 @@ use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 
 use crate::Error;
 
+#[path = "describe_control.rs"]
+mod control;
+pub(crate) use control::rewrite_with_work_mode;
+
+#[cfg(test)]
+#[path = "describe_control_tests.rs"]
+mod control_tests;
+
 /// Lower one DESCRIBE target to its one-hop outgoing-description graph.
 ///
 /// SPARQL leaves DESCRIBE graph construction implementation-defined. This
@@ -16,6 +24,16 @@ use crate::Error;
 /// description. Multiple target expressions remain unsupported until their
 /// union and graph-set dedup have a source-independent memory proof.
 pub(crate) fn rewrite(pattern: &GraphPattern) -> Result<(GraphPattern, Vec<TriplePattern>), Error> {
+    rewrite_inner(
+        pattern,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+}
+
+fn rewrite_inner(
+    pattern: &GraphPattern,
+    work: crate::build::control::BuildWork<'_>,
+) -> Result<(GraphPattern, Vec<TriplePattern>), Error> {
     let (targets, inner) = match pattern {
         GraphPattern::Project { variables, inner } => (variables.clone(), inner.as_ref().clone()),
         other => (Vec::new(), other.clone()),
@@ -36,20 +54,25 @@ pub(crate) fn rewrite(pattern: &GraphPattern) -> Result<(GraphPattern, Vec<Tripl
             }),
         };
     }
-    let mut names = crate::star::collect_pattern_vars(&inner)
-        .into_iter()
-        .map(|variable| variable.as_str().to_owned())
-        .collect::<BTreeSet<_>>();
+    // Keep the already ordered variable inventory instead of copying it into a
+    // second String tree. Variable ordering is the same lexical name ordering.
+    let mut names = crate::star::collect_pattern_vars(&inner);
     if let TermPattern::Variable(variable) = &subject {
-        names.insert(variable.as_str().to_owned());
+        names.insert(variable.clone());
     }
-    let predicate = fresh(&mut names, "predicate");
-    let object = fresh(&mut names, "object");
+    work.checkpoint()?;
+    let predicate = fresh(&mut names, "predicate", work)?;
+    let object = fresh(&mut names, "object", work)?;
     let triple = TriplePattern {
         subject,
         predicate: NamedNodePattern::Variable(predicate),
         object: TermPattern::Variable(object),
     };
+    if let crate::CompilerWorkMode::Metered(cx) = work.mode {
+        cx.reserve_ast_copy(
+            crate::plan_measure::clone_root::CompilerCloneRootV1::TriplePattern(&triple),
+        )?;
+    }
     Ok((
         GraphPattern::Join {
             left: Box::new(inner),
@@ -93,14 +116,23 @@ fn description_subject(
     }
 }
 
-fn fresh(names: &mut BTreeSet<String>, role: &str) -> Variable {
-    for ordinal in 0usize.. {
-        let candidate = format!("__sf_describe_{role}_{ordinal}");
+fn fresh(
+    names: &mut BTreeSet<Variable>,
+    role: &str,
+    work: crate::build::control::BuildWork<'_>,
+) -> Result<Variable, Error> {
+    let mut ordinal = 0usize;
+    loop {
+        control::reserve_fresh(work, names.len(), role.len(), ordinal)?;
+        let candidate = Variable::new_unchecked(format!("__sf_describe_{role}_{ordinal}"));
         if names.insert(candidate.clone()) {
-            return Variable::new_unchecked(candidate);
+            work.checkpoint()?;
+            return Ok(candidate);
         }
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or_else(|| control::overflow(work))?;
     }
-    unreachable!("unbounded ordinal sequence contains a fresh variable")
 }
 
 #[cfg(test)]

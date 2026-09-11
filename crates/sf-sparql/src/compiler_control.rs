@@ -284,6 +284,14 @@ impl<'control> CompileContext<'control> {
         self.checkpoint()
     }
 
+    /// Paid, input-bound measurement for a caller's documented finite phase
+    /// envelope. This measures work; the caller must still reserve the operation.
+    pub(crate) fn measure_ast_work(&self, root: CompilerCloneRootV1<'_>) -> Result<PlanMeasureV1> {
+        self.checkpoint()?;
+        self.measure_root(root)
+            .map_err(|error| self.measurement_error(error))
+    }
+
     pub(crate) fn reject_build_resource(&self, reason: QueryControlError) -> Error {
         self.meter.control.terminate(reason).into()
     }
