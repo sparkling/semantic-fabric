@@ -75,6 +75,41 @@ pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap])
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Independent LOWER cost, without subtracting an end-to-end cold compilation.
+/// Only ordinary SELECT fixtures; the caller proves the actual stage path.
+#[allow(dead_code)] // Shared support is also included by earlier-phase test modules.
+pub(crate) fn lowering_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let spargebra::Query::Select { pattern, .. } =
+        spargebra::SparqlParser::new().parse_query(source).unwrap()
+    else {
+        panic!("LOWER calibration requires ordinary SELECT");
+    };
+    let tree = sf_sparql::build::build_tree(&pattern, None).unwrap();
+    let tbox = sf_sparql::Tbox::default();
+    let mut cx = sf_sparql::iq::resolve::ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &[]);
+    let resolved = sf_sparql::iq::resolve::resolve(tree, &mut cx).unwrap();
+    let normalized = sf_sparql::iq::normalize::normalize(resolved).unwrap();
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let plan = sf_sparql::iq::lower::lower_with_work_control(
+        normalized,
+        sf_sql::Dialect::Sqlite,
+        &Default::default(),
+        &Default::default(),
+        &control,
+    )
+    .unwrap();
+    assert!(
+        plan.branches.len() > 1
+            || plan
+                .branches
+                .iter()
+                .any(|b| !b.opts.is_empty() || b.subplan_joins.iter().any(|sp| sp.left)),
+        "the fixture must actually lower an OPTIONAL result carrier"
+    );
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 pub(crate) const CONSTANT_QUERIES: [&str; 3] = [
     "SELECT DISTINCT ?value WHERE { VALUES ?value { \"one\" \"one\" \"two\" } }",
     "SELECT ?value WHERE { { VALUES ?value { \"one\" } } UNION { VALUES ?value { \"two\" } } }",

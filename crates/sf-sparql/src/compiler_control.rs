@@ -14,6 +14,7 @@ use crate::plan_measure::clone_root::{
 use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
 use crate::{Error, Result};
 
+mod optional_work;
 mod unification_work;
 
 #[cfg(test)]

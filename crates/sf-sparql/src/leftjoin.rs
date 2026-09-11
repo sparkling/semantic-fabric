@@ -12,9 +12,23 @@ use std::collections::HashSet;
 
 use sf_core::ir::Segment;
 
+use crate::build::control::{BuildVec, BuildWork};
 use crate::iq::{Branch, CmpOp, ColRef, OptJoin, SqlCond, TermDef};
 use crate::unify::{filter_scopes, unify, Unify};
-use crate::{Error, Result};
+use crate::{CompilerWorkMode, Error, Result};
+mod decomposition;
+mod fast;
+pub(crate) mod work;
+#[cfg(test)]
+pub(crate) use decomposition::{inner_join_one, not_exists_cond_for};
+pub(crate) use decomposition::{inner_join_one_with_work_mode, not_exists_cond_for_with_work_mode};
+use fast::build_left_join;
+#[cfg(test)]
+#[path = "leftjoin/work_test_support.rs"]
+pub(crate) mod optional_work_test_support;
+#[cfg(test)]
+#[path = "leftjoin/work_tests.rs"]
+mod optional_work_tests;
 
 /// OPTIONAL → NULL-safe branches (ADR-0007 R1–R5).
 ///
@@ -32,6 +46,19 @@ pub fn left_join_branches(
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Vec<Branch>> {
+    left_join_branches_with_work_mode(left, right, expr, dialect, CompilerWorkMode::Uncontrolled)
+}
+
+/// Request-owned OPTIONAL candidate and direct-copy admission.
+pub(crate) fn left_join_branches_with_work_mode(
+    left: Vec<Branch>,
+    right: Vec<Branch>,
+    expr: Option<&spargebra::algebra::Expression>,
+    dialect: sf_sql::Dialect,
+    mode: CompilerWorkMode<'_>,
+) -> Result<Vec<Branch>> {
+    let work = BuildWork::new(mode);
+    work.checkpoint()?;
     // OPTIONAL {} = identity.
     if right.is_empty() {
         return Ok(left);
@@ -68,11 +95,12 @@ pub fn left_join_branches(
         )
     {
         let r = &right[0];
-        let mut out = Vec::new();
+        work::candidates(mode, left.len(), 1, false)?;
+        let mut out = BuildVec::new(Vec::new());
         for l in left {
-            out.push(build_left_join(l, r, expr, dialect)?);
+            work.push(&mut out, build_left_join(l, r, expr, dialect, mode)?)?;
         }
-        return Ok(out);
+        return Ok(out.into_inner());
     }
 
     // Multi-branch or multi-scan right: P OPT R = (P ⋈ R) ∪ (P - R)
@@ -80,363 +108,24 @@ pub fn left_join_branches(
     // OPTIONAL with multiple table scans (JOIN) within one branch.  Each Ri is
     // inner-joined with P; P rows with no Ri match go in the no-match branch.
     // = (P ⋈_NL R1) ∪ (P ⋈_NL R2) ∪ … ∪ P_no_match
-    let mut out = Vec::new();
+    work::candidates(mode, left.len(), right.len(), true)?;
+    let mut out = BuildVec::new(Vec::new());
     for mut l in left {
         // One inner-join branch per right branch.
         for r in &right {
-            if let Some(b) = inner_join_one(&l, r, expr, dialect)? {
-                out.push(b);
+            if let Some(b) = inner_join_one_with_work_mode(&l, r, expr, dialect, mode)? {
+                work.push(&mut out, b)?;
             }
         }
         // No-match branch: L with NOT EXISTS for each Ri that can possibly match.
         for r in &right {
-            if let Some(cond) = not_exists_cond_for(&l, r, expr, dialect)? {
-                l.where_conds.push(cond);
+            if let Some(cond) = not_exists_cond_for_with_work_mode(&l, r, expr, dialect, mode)? {
+                work::push_owned(work, &mut l.where_conds, cond)?;
             }
         }
-        out.push(l);
+        work.push(&mut out, l)?;
     }
-    Ok(out)
-}
-
-/// Inner join of one left branch with one single-scan, opt-free right branch.
-/// Returns `None` when unification proves the join empty (L ∩ R = ∅).
-///
-/// Uses NULL-safe WHERE conditions (`null_safe`) so a left variable that is
-/// unbound (NULL from a prior OPTIONAL) matches any right value — the same
-/// compatibility rule as the LEFT JOIN path.  R2 COALESCE bindings are applied
-/// for nullable left shared variables so their value comes from the right side
-/// when the left was unbound.
-pub(crate) fn inner_join_one(
-    left: &Branch,
-    right: &Branch,
-    expr: Option<&spargebra::algebra::Expression>,
-    dialect: sf_sql::Dialect,
-) -> Result<Option<Branch>> {
-    // A property-path branch on EITHER side has no sound representation in the
-    // merged `Branch` this function builds below: it carries only ONE `path`
-    // field. A `right.path` was previously silently dropped here, producing
-    // bindings that still reference the path's own CTE-only `sf_s`/`sf_o`
-    // columns with `path: None`
-    // on the merged branch, "no such column" at SQL-execution time), and even
-    // adopting `right.path` instead would silently drop `left`'s own scans/
-    // opts/where_conds the moment `emit_branch_with` dispatches on `b.path` to
-    // `emit_path_branch` (which renders ONLY the path's own CTE + projection,
-    // nothing else). Neither side can be merged into the other's shape without
-    // losing data — sound 501 instead of a crash (ADR-0007); see
-    // `not_exists_cond_for`'s matching guard for the `(P − R)` half of this
-    // same `(P ⋈ R) ∪ (P − R)` decomposition.
-    if left.path.is_some() || right.path.is_some() {
-        return Err(Error::Unsupported(
-            "OPTIONAL decomposition where either side is a property-path pattern \
-             is not yet supported → 501"
-                .to_owned(),
-        ));
-    }
-    if shared_reads_left_subplan(left, right) {
-        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
-    }
-    let opt_aliases: HashSet<usize> = left.nullable_aliases();
-    let mut where_conds = left.where_conds.clone();
-    let mut bindings = left.bindings.clone();
-
-    // Shared-variable compatibility → NULL-safe WHERE conditions (R1 analogue).
-    for (var, rdef) in &right.bindings {
-        if let Some(ldef) = left.bindings.get(var) {
-            let left_nullable = def_is_nullable(ldef, &opt_aliases);
-            match unify(ldef, rdef) {
-                Unify::Sat(conds) => {
-                    for c in conds {
-                        where_conds.push(null_safe(c, left_nullable));
-                    }
-                }
-                Unify::Empty => return Ok(None),
-                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-            }
-        }
-    }
-
-    // Right-side own conditions.
-    where_conds.extend(right.where_conds.iter().cloned());
-
-    // Prepare the combined FILTER view in the output map itself. Shared vars
-    // retain their original left definition until after FILTER lowering; the
-    // deferred replacements below then install R2 COALESCE definitions.
-    let mut nullable_shared = Vec::new();
-    for (var, rdef) in &right.bindings {
-        match left.bindings.get(var) {
-            Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
-                nullable_shared.push((var.as_str(), rdef));
-            }
-            Some(_) => {} // non-nullable left — value equals right by join condition
-            None => {
-                bindings.insert(var.clone(), rdef.clone());
-            }
-        }
-    }
-
-    // FILTER inside the OPTIONAL goes in the inner-join WHERE (R5 analogue).
-    if let Some(e) = expr {
-        where_conds.push(
-            filter_scopes(e, &bindings, dialect, &[left, right]).map_err(Error::Unsupported)?,
-        );
-    }
-
-    for (var, rdef) in nullable_shared {
-        let (var, ldef) = bindings
-            .remove_entry(var)
-            .expect("nullable shared binding came from the left branch");
-        bindings.insert(
-            var,
-            TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
-        );
-    }
-
-    // Merge scans: left core + all right scans.
-    let mut core = left.core.clone();
-    core.extend(right.core.iter().cloned());
-
-    // SubPlan joins from both sides survive the merge (mirrors `unfold::merge`'s
-    // InnerJoin idiom) — an OPTIONAL whose LEFT operand is a derived-table subquery
-    // (e.g. `{SELECT … LIMIT n}`) must keep that join alive here; previously this
-    // was unconditionally zeroed, dropping `left`'s subplan join and producing SQL
-    // that references a FROM alias never introduced (ADR-0007).
-    let mut subplan_joins = left.subplan_joins.clone();
-    subplan_joins.extend(right.subplan_joins.iter().cloned());
-
-    Ok(Some(Branch {
-        core,
-        opts: left.opts.clone(),
-        bindings,
-        where_conds,
-        distinct: left.distinct,
-        limit: left.limit,
-        offset: left.offset,
-        order: left.order.clone(),
-        path: None,
-        agg: left.agg.clone(),
-        subplan_joins,
-        nps: left.nps,
-    }))
-}
-
-/// Build the `NOT EXISTS` condition for one right branch in the no-match branch
-/// of a multi-branch OPTIONAL.  Returns `None` when unification proves the join
-/// always empty (NOT EXISTS is trivially true — omit the condition).
-///
-/// The FILTER inside the OPTIONAL (`expr`) must gate the anti-join too — a
-/// right row that EXISTS but FAILS the filter is not a match, so EXISTS must
-/// be false there (⇒ NOT EXISTS true ⇒ left NULL-padded). Mirrors
-/// `inner_join_one`'s combined-bindings filter application (R5 analogue)
-/// exactly. Omitting it (as this function once did) made a left row whose
-/// only right candidate is filtered out vanish from BOTH the match branch
-/// (excluded by the filter) and this no-match branch (NOT EXISTS wrongly
-/// false, since the unfiltered join still exists) — a silent wrong answer
-/// (ADR-0007).
-pub(crate) fn not_exists_cond_for(
-    left: &Branch,
-    right: &Branch,
-    expr: Option<&spargebra::algebra::Expression>,
-    dialect: sf_sql::Dialect,
-) -> Result<Option<SqlCond>> {
-    // A right branch carrying its own SubPlan (e.g. a nested OPTIONAL whose right
-    // side is itself `(SubselectLimit) OPTIONAL (...)`, forcing the inner
-    // decomposition to hand back a SubPlan-carrying branch here) has no
-    // representation in `SqlCond::NotExists::scans` (a plain `Vec<Scan>` — the
-    // subplan's derived-table alias would be referenced in `conds` below but never
-    // introduced anywhere, producing a crash at SQL-execution time rather than a
-    // wrong answer). `left.subplan_joins` is fine (it rides along on the caller's
-    // owned no-match branch, like any other outer-scope column); only a
-    // subplan on the `right` side is unrepresentable here. Sound 501 instead of a
-    // crash (ADR-0007) — an ADR-0023 M5 boundary, not yet a supported shape.
-    if !right.subplan_joins.is_empty() {
-        return Err(Error::Unsupported(
-            "OPTIONAL anti-join whose right side carries its own SubPlan derived \
-             table is not yet supported → 501 (ADR-0023 M5 boundary)"
-                .to_owned(),
-        ));
-    }
-    // A property-path branch (`path: Some(_)`) has NO representation in
-    // `SqlCond::NotExists::scans` either, for the SAME reason as the SubPlan
-    // case just above: its own rows come from a recursive-CTE derived table
-    // (`sf_s`/`sf_o` columns), never `right.core`'s plain scans (which are
-    // empty for a path branch — confirmed live: `right.core.clone()` renders
-    // as `scans: []`, yet `conds` still references the path's own CTE-only
-    // columns, producing "no such column" at SQL-execution time rather than a
-    // wrong answer). A `left` path is equally unrepresentable — the merged
-    // owned `left` branch this condition attaches to is the no-match result at
-    // the call site, so a `left`-side path CTE would need to be preserved on it
-    // too, which nothing here does. Sound 501 instead of a crash (ADR-0007) —
-    // an architectural gap (this is the P/R decomposition model, not a lowering
-    // omission — see `inner_join_one`'s matching guard for the `(P ⋈ R)` half).
-    if left.path.is_some() || right.path.is_some() {
-        return Err(Error::Unsupported(
-            "OPTIONAL anti-join where either side is a property-path pattern is \
-             not yet supported → 501"
-                .to_owned(),
-        ));
-    }
-    if shared_reads_left_subplan(left, right) {
-        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
-    }
-    let opt_aliases: HashSet<usize> = left.nullable_aliases();
-    let mut conds: Vec<SqlCond> = right.where_conds.clone();
-
-    for (var, rdef) in &right.bindings {
-        if let Some(ldef) = left.bindings.get(var) {
-            let left_nullable = def_is_nullable(ldef, &opt_aliases);
-            match unify(ldef, rdef) {
-                Unify::Sat(cond_list) => {
-                    for c in cond_list {
-                        conds.push(null_safe(c, left_nullable));
-                    }
-                }
-                // Unification is impossible → this Ri can never match left →
-                // NOT EXISTS is trivially true; skip.
-                Unify::Empty => return Ok(None),
-                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-            }
-        }
-    }
-
-    // FILTER inside the OPTIONAL goes inside the NOT EXISTS too (R5 analogue):
-    // same combined bindings `inner_join_one` uses for the match branch, so
-    // both branches agree on what counts as "a match" — the tautological
-    // identity `(L⋈R) ∪ (L¬∃R)` this decomposition relies on requires it.
-    if let Some(e) = expr {
-        let mut combined = left.bindings.clone();
-        for (v, d) in &right.bindings {
-            combined.entry(v.clone()).or_insert_with(|| d.clone());
-        }
-        conds.push(
-            filter_scopes(e, &combined, dialect, &[left, right]).map_err(Error::Unsupported)?,
-        );
-    }
-
-    Ok(Some(SqlCond::NotExists {
-        scans: right.core.clone(),
-        conds,
-    }))
-}
-
-/// Consumes and returns `left`, adding an [`OptJoin`] when the shared variables
-/// can match and otherwise leaving the branch unchanged.
-fn build_left_join(
-    mut left: Branch,
-    right: &Branch,
-    expr: Option<&spargebra::algebra::Expression>,
-    dialect: sf_sql::Dialect,
-) -> Result<Branch> {
-    // A property-path `left` (the OPTIONAL's OWN preceding pattern) has no sound
-    // representation once this function pushes `right`'s scan into `left.opts`
-    // below: `left.path` is never touched here (this function only ever ADDS an
-    // `OptJoin` onto whatever `left` already is), so the merged branch ends up
-    // with BOTH `path: Some(_)` AND a non-empty `opts` — a combination
-    // `emit_branch_with`'s dispatch on `b.path` routes to `emit_path_branch`,
-    // which renders ONLY the path's own recursive CTE + projection and has no
-    // concept of `opts` at all, silently dropping the OPTIONAL's own JOIN
-    // clause (confirmed live: `no such column: t1.child` — the OPT's alias is
-    // referenced in the SELECT list but its LEFT JOIN clause is never rendered).
-    // `right` can never be path-shaped here (the caller only reaches this
-    // function when `right.core.len() == 1`, and a path branch always has
-    // `core.len() == 0`). Sound 501 instead of a crash (ADR-0007) — the same
-    // architectural gap as `inner_join_one`'s/`not_exists_cond_for`'s matching
-    // guards, found via a third, independent entry point (the single-scan fast
-    // path, not the multi-branch decomposition).
-    if left.path.is_some() {
-        return Err(Error::Unsupported(
-            "OPTIONAL whose preceding pattern is a property-path is not yet \
-             supported → 501"
-                .to_owned(),
-        ));
-    }
-    // A `right` carrying its OWN SubPlan derived table (e.g. it is itself the product
-    // of a nested subplan-OPTIONAL — `{ ?a p ?nm OPTIONAL { <subSELECT> } }` — which
-    // `left_join_over_subplan` lowered to a core-scan-PLUS-`subplan_joins` branch) has
-    // no representation on this single-scan fast path: it pushes `right.core[0]` as an
-    // `OptJoin` but has NOWHERE to carry `right.subplan_joins` — the derived-table alias
-    // `t{sp}` would stay referenced by the merged bindings (a right-only var maps to
-    // `t{sp}.c{i}`) while no FROM clause ever introduces it ("no such column t{sp}.c{i}"
-    // at SQL-execution time). Merely copying `right.subplan_joins` onto the merged branch
-    // is NOT sound either: the SubPlan's `on` correlation references `right.core[0]` (now
-    // a LEFT-JOINed opt), and a shared variable whose RIGHT def reads the SubPlan alias
-    // would place a `t{sp}` reference into the OptJoin's own ON — a table emitted to its
-    // right. Sound 501 instead of a crash (ADR-0007), mirroring `not_exists_cond_for`'s
-    // matching `!right.subplan_joins.is_empty()` boundary for the `(P − R)` anti-join half.
-    if !right.subplan_joins.is_empty() {
-        return Err(Error::Unsupported(
-            "OPTIONAL whose right side is a nested subplan-OPTIONAL (a branch carrying \
-             its own SubPlan derived table) is not yet supported → 501 \
-             (ADR-0023 Item 1d boundary)"
-                .to_owned(),
-        ));
-    }
-    if shared_reads_left_subplan(&left, right) {
-        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
-    }
-    let mut on = Vec::new();
-    let mut extra = right.where_conds.clone(); // constant-position constraints stay in the ON (R5)
-                                               // Prior-OPTIONAL aliases on the preserved (left) side: a shared var whose left def
-                                               // reads one of these can be UNBOUND, so its ON equality needs the NULL-safe guard.
-    let opt_aliases: HashSet<usize> = left.nullable_aliases();
-    for (var, rdef) in &right.bindings {
-        if let Some(ldef) = left.bindings.get(var) {
-            let left_nullable = def_is_nullable(ldef, &opt_aliases);
-            match unify(ldef, rdef) {
-                Unify::Sat(conds) => {
-                    for c in conds {
-                        on.push(null_safe(c, left_nullable)); // R1: shared-var compat, never plain a = b
-                    }
-                }
-                Unify::Empty => return Ok(left),
-                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-            }
-        }
-    }
-    // Build the FILTER view directly in the owned output map. Right-only
-    // definitions can move into their final location immediately; nullable
-    // shared replacements stay deferred so FILTER lowering sees the same
-    // left-preferred combined bindings as before.
-    let mut nullable_shared = Vec::new();
-    // R2 projection (ADR-0007). Prior-OPTIONAL aliases are nullable. A shared
-    // variable whose preserved (left) side can be NULL (a nested OPTIONAL) becomes
-    // COALESCE(left, right) so the right value survives when left is unbound; a
-    // mandatory-left shared var is never NULL (COALESCE(left,right)=left) so we keep
-    // the simpler left def; a right-only var is the (possibly NULL) right output.
-    for (var, rdef) in &right.bindings {
-        match left.bindings.get(var) {
-            Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
-                nullable_shared.push((var.as_str(), rdef));
-            }
-            Some(_) => {}
-            None => {
-                left.bindings.insert(var.clone(), rdef.clone());
-            }
-        }
-    }
-    // Combined bindings for the inner FILTER (R5: it goes in the ON, not WHERE).
-    if let Some(e) = expr {
-        extra.push(
-            filter_scopes(e, &left.bindings, dialect, &[&left, right])
-                .map_err(Error::Unsupported)?,
-        );
-    }
-    for (var, rdef) in nullable_shared {
-        let (var, ldef) = left
-            .bindings
-            .remove_entry(var)
-            .expect("nullable shared binding came from the left branch");
-        left.bindings.insert(
-            var,
-            TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
-        );
-    }
-    left.opts.push(OptJoin {
-        scan: right.core[0].clone(),
-        on,
-        extra,
-    });
-    Ok(left)
+    Ok(out.into_inner())
 }
 
 /// Turn an inner-join equality into the OPTIONAL NULL-safe form (R1): an unbound

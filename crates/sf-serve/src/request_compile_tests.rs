@@ -15,6 +15,9 @@ use compiler_key::{build_work, key_work, normalization_work};
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
 
+#[path = "request_optional_tests.rs"]
+mod optional_work;
+
 fn config(work: u64) -> (Arc<ServeConfig>, crate::SqlitePool) {
     config_with_mapping(work, vec![])
 }
