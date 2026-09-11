@@ -52,9 +52,9 @@ cover exact/N-1, comparison/relocation cancellation and deadline, and retained
 source-type authority through D1/D2. All ten declared checks and independent native
 Sol review passed; catalogue evidence and the exact commit are harness-verified. G1 remains open.
 
-**G1b finalization slice (2026-09-11, implemented/pending integration):** `controlled-finalization-alias-20260911` covers aggregate wrapper preparation, nested candidate rollback/projection/depth, graph retention and deterministic dedup-scope lifting.
+**G1b finalization slice (2026-09-11, integrated/verified at `87f48a7`):** `controlled-finalization-alias-20260911` covers aggregate wrapper preparation, nested candidate rollback/projection/depth, graph retention and deterministic dedup-scope lifting.
 Focused ordinary/bearer SELECT, aggregate, UNION and CONSTRUCT tests prove phase refusal before held source admission, exact cold/key-only warm results and capacity recovery. Regression tests exposed and corrected random aggregate-parser work and repeated-alias output loss; ADR-0055 records their semantic boundaries.
-Complete declared harness checks and final independent review/commit remain pending. Optimizer pass internals and acquired-cache operations remain open; neither G1b nor G1 is closed by these focused results.
+All ten declared harness checks and independent native Sol review passed; the harness verified the exact integrated commit. Optimizer pass internals and acquired-cache operations remain open; neither G1b nor G1 is closed by these focused results.
 
 **Execution correction:** after G1a's source-bound verification/commit, take G1b's
 one-time missing-phase/proof inventory and the smallest unblocked gate
