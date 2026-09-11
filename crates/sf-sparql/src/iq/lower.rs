@@ -72,6 +72,15 @@ use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches_with_work_mode, single_column_of};
 use crate::unify::{bind_term_def, filter_branch as filter_cond, unify, Unify};
 use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
+#[path = "lower_conditions.rs"]
+mod conditions;
+use conditions::{apply_conds, apply_conds_to_branches, apply_owned_conds, peel_filters};
+#[cfg(test)]
+#[path = "lower_condition_ownership_tests.rs"]
+pub(crate) mod condition_ownership_tests;
+#[cfg(test)]
+#[path = "lower_condition_tests.rs"]
+mod condition_work_tests;
 #[path = "lower_optional.rs"]
 mod optional;
 use optional::{is_single_subplan_branch, left_join_decomposed, left_join_over_subplan};
@@ -502,7 +511,7 @@ fn lower_node(
             // AFTER `subst` establishes the bindings (the flat order: translate the inner
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
-            let (body, filters) = peel_filters(*child);
+            let (body, filters) = peel_filters(*child, work_mode)?;
             let mut branches = lower_node(
                 body, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
             )?;
@@ -790,140 +799,6 @@ fn reads_left_subplan(b: &Branch, def: &TermDef) -> bool {
     b.subplan_joins
         .iter()
         .any(|sp| sp.left && cols.iter().any(|c| c.alias == sp.alias))
-}
-
-/// Peel the leading `Filter` node(s) directly under a `Construction`, returning the
-/// relational body and the peeled condition groups (outermost first). These FILTERs
-/// resolve AFTER the `Construction`'s `subst` establishes the per-branch bindings (R4 /
-/// flat order). A FILTER nested inside an `InnerJoin` as a sub-CQ keeps its own
-/// `Construction` and is handled when that sub-CQ lowers — not peeled here.
-fn peel_filters(mut node: IqNode) -> (IqNode, Vec<Vec<IqCond>>) {
-    let mut filters = Vec::new();
-    loop {
-        match node {
-            IqNode::Filter { child, cond } => {
-                filters.push(cond);
-                node = *child;
-            }
-            other => return (other, filters),
-        }
-    }
-}
-
-/// Resolve a conjunction of [`IqCond`]s against `b` and push each into `b.where_conds`
-/// (design §5 Filter / InnerJoin). Applied PER resulting branch (R4 loop, mirroring the
-/// live `Filter` arm `unfold.rs:136-142`), so each symbolic `Expr`/`Exists` sees the
-/// branch's own single bindings map.
-fn apply_conds_to_branches(
-    conds: Vec<IqCond>,
-    branches: &mut Vec<Branch>,
-    dialect: sf_sql::Dialect,
-    work_mode: CompilerWorkMode<'_>,
-) -> Result<()> {
-    let last = branches.pop();
-    for branch in branches.iter_mut() {
-        apply_conds(&conds, branch, dialect, work_mode)?;
-    }
-    if let Some(mut branch) = last {
-        apply_owned_conds(conds, &mut branch, dialect, work_mode)?;
-        branches.push(branch);
-    }
-    Ok(())
-}
-
-fn apply_conds(
-    conds: &[IqCond],
-    b: &mut Branch,
-    dialect: sf_sql::Dialect,
-    work_mode: CompilerWorkMode<'_>,
-) -> Result<()> {
-    for c in conds {
-        let sql = lower_iq_cond(c, b, dialect, work_mode)?;
-        b.where_conds.push(sql);
-    }
-    Ok(())
-}
-
-fn apply_owned_conds(
-    conds: Vec<IqCond>,
-    b: &mut Branch,
-    dialect: sf_sql::Dialect,
-    work_mode: CompilerWorkMode<'_>,
-) -> Result<()> {
-    for cond in conds {
-        let sql = lower_owned_iq_cond(cond, b, dialect, work_mode)?;
-        b.where_conds.push(sql);
-    }
-    Ok(())
-}
-
-/// Lower one [`IqCond`] to a [`SqlCond`] against the resolving branch `outer` (design §5
-/// Filter, R4). `Sql` passes through; `Expr` resolves via the flat [`filter_cond`] (the
-/// SAME fn the live FILTER path delegates leaves to — a var bound to a constructed term
-/// is opaque to it and defers to a sound 501); the boolean combinators recurse;
-/// `Exists`/`NotExists` build the correlated semi/anti-join via [`lower_iq_exists`].
-fn lower_iq_cond(
-    cond: &IqCond,
-    outer: &Branch,
-    dialect: sf_sql::Dialect,
-    work_mode: CompilerWorkMode<'_>,
-) -> Result<SqlCond> {
-    match cond {
-        IqCond::Sql(s) => Ok(s.clone()),
-        IqCond::Expr(e) => filter_cond(e, outer, dialect).map_err(Error::Unsupported),
-        IqCond::And(cs) => Ok(SqlCond::And(
-            cs.iter()
-                .map(|c| lower_iq_cond(c, outer, dialect, work_mode))
-                .collect::<Result<_>>()?,
-        )),
-        IqCond::Or(cs) => Ok(SqlCond::Or(
-            cs.iter()
-                .map(|c| lower_iq_cond(c, outer, dialect, work_mode))
-                .collect::<Result<_>>()?,
-        )),
-        IqCond::Not(c) => Ok(SqlCond::Not(Box::new(lower_iq_cond(
-            c, outer, dialect, work_mode,
-        )?))),
-        IqCond::Exists(n) => lower_iq_exists(n, outer, false, false, dialect, work_mode),
-        IqCond::NotExists { inner, is_minus } => {
-            lower_iq_exists(inner, outer, true, *is_minus, dialect, work_mode)
-        }
-    }
-}
-
-fn lower_owned_iq_cond(
-    cond: IqCond,
-    outer: &Branch,
-    dialect: sf_sql::Dialect,
-    work_mode: CompilerWorkMode<'_>,
-) -> Result<SqlCond> {
-    match cond {
-        IqCond::Sql(sql) => Ok(sql),
-        IqCond::Expr(expression) => {
-            filter_cond(&expression, outer, dialect).map_err(Error::Unsupported)
-        }
-        IqCond::And(conditions) => Ok(SqlCond::And(
-            conditions
-                .into_iter()
-                .map(|condition| lower_owned_iq_cond(condition, outer, dialect, work_mode))
-                .collect::<Result<_>>()?,
-        )),
-        IqCond::Or(conditions) => Ok(SqlCond::Or(
-            conditions
-                .into_iter()
-                .map(|condition| lower_owned_iq_cond(condition, outer, dialect, work_mode))
-                .collect::<Result<_>>()?,
-        )),
-        IqCond::Not(condition) => Ok(SqlCond::Not(Box::new(lower_owned_iq_cond(
-            *condition, outer, dialect, work_mode,
-        )?))),
-        IqCond::Exists(node) => {
-            lower_owned_iq_exists(*node, outer, false, false, dialect, work_mode)
-        }
-        IqCond::NotExists { inner, is_minus } => {
-            lower_owned_iq_exists(*inner, outer, true, is_minus, dialect, work_mode)
-        }
-    }
 }
 
 /// `EXISTS { P }` / `NOT EXISTS { P }` (and `MINUS`) → a correlated semi/anti-join

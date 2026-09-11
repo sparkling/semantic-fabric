@@ -10,6 +10,7 @@ use spargebra::{Query, SparqlParser};
 use super::*;
 use crate::compiler_control::CompileContext;
 use crate::compiler_schema::ColumnTypeUse;
+use crate::iq::lower::condition_ownership_tests::construction_exists_condition_work;
 use crate::iq::lower::scope_test_support::entry_work;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::Scan;
@@ -72,9 +73,33 @@ fn assert_direct_schedule(
     let (prefix, tail) = entry_work(&source);
     assert_eq!(tail, 0, "these direct fixtures project no variables");
     let prior_work = prior_work + prefix;
-    let expected = prior_work + clone_work.checked_mul(branch_count - 1).unwrap();
-    let retained_before_last_rejection =
-        prior_work + clone_work.checked_mul(branch_count - 2).unwrap() + measurement;
+    let size = std::mem::size_of::<crate::iq::SqlCond>() as u64;
+    let append = 1 + size;
+    let (first, between, added) = match &source {
+        IqNode::Construction { .. } => {
+            assert_eq!(branch_count, 3);
+            let (first, between, tail) = construction_exists_condition_work();
+            (first, between, first + between + tail)
+        }
+        IqNode::Filter { .. } => {
+            // AND/OR/NOT/EXISTS: four visits, two vectors and a post-clone box.
+            let before = 4 + 2 * (1 + size);
+            (
+                2 + before,
+                size + append + 1 + before,
+                2 + branch_count * (1 + before + size + append),
+            )
+        }
+        IqNode::InnerJoin { .. } => (3, append + 2, 2 + branch_count * (2 + append)),
+        _ => panic!("unexpected fixture"),
+    };
+    let before_last = prior_work
+        + first
+        + (clone_work + between)
+            .checked_mul(branch_count - 2)
+            .unwrap();
+    let expected = prior_work + added + clone_work.checked_mul(branch_count - 1).unwrap();
+    let retained_before_last_rejection = before_last + measurement;
     let exact = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -94,7 +119,7 @@ fn assert_direct_schedule(
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), expected);
 
-    let short = budget(expected - 1);
+    let short = budget(before_last + clone_work - 1);
     assert_control_error(
         lower(
             source,
@@ -158,7 +183,8 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
     let (body, work, _) = exists_body(81, "owned-final-subplan-exists-body");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
     // One SubPlan alias follows both clones; do not add it to rejection prefixes.
-    let expected = nested_entry_work(&source) + work * 2 + 1;
+    let append = 1 + std::mem::size_of::<crate::iq::SqlCond>() as u64;
+    let expected = nested_entry_work(&source) + work * 2 + 1 + 2 + 3 * (2 + append);
     let control = budget(expected);
     let raw = iq::lower::lower(
         source.clone(),
@@ -183,7 +209,7 @@ fn metered_lower_retains_mode_inside_three_branch_subplan_and_charges_b_minus_on
 fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
     let (body, work, measurement) = exists_body(82, "first-subplan-exists-boundary");
     let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))], 3);
-    let prefix = nested_entry_work(&source);
+    let prefix = nested_entry_work(&source) + 3; // pop, branch visit, EXISTS visit
     let control = budget(prefix + work - 1);
 
     assert_control_error(
@@ -216,8 +242,10 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
         ],
         3,
     );
-    let prefix = nested_entry_work(&source);
-    let control = budget(prefix + first_work + second_work - 1);
+    // pop + first branch/condition visits; append first WHERE then visit second.
+    let prefix = nested_entry_work(&source) + 3;
+    let between = 2 + std::mem::size_of::<crate::iq::SqlCond>() as u64;
+    let control = budget(prefix + first_work + between + second_work - 1);
 
     assert_control_error(
         lower(
@@ -229,7 +257,7 @@ fn later_nested_exists_failure_retains_the_completed_clone_charge() {
     );
     assert_eq!(
         control.consumed(QueryCharge::CompilerWork),
-        prefix + first_work + second_measurement
+        prefix + first_work + between + second_measurement
     );
     assert_eq!(
         control.checkpoint(),
@@ -339,7 +367,9 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     .unwrap();
     let (prefix, tail) = entry_work(&normalized);
     let before_clones = build + normalization_control.consumed(QueryCharge::CompilerWork) + prefix;
-    let expected = before_clones + work * 2 + tail;
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    let before_second = before_clones + condition_prefix + work + between;
+    let expected = before_second + work + condition_tail + tail;
     let exact = budget(expected);
     let raw = translate_tree(&query, &[], &Tbox::default(), Dialect::Sqlite, &[]).unwrap();
 
@@ -350,7 +380,7 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     assert_eq!(exact.consumed(QueryCharge::CompilerWork), expected);
 
     // Reject the second clone, before final result-variable materialization.
-    let short = budget(expected - tail - 1);
+    let short = budget(before_second + work - 1);
     assert_control_error(
         translate_fixture(&query, &short)
             .expect_err("whole-pipeline N-1 must reject before the second EXISTS clone"),
@@ -358,7 +388,7 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     );
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        before_clones + work + measurement
+        before_second + measurement
     );
     assert_eq!(
         short.checkpoint(),

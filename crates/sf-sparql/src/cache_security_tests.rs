@@ -338,7 +338,7 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
     assert_eq!(
         cache.access_counts(),
         (1, 0),
-        "later clone failure follows paid key lookup and structural BUILD"
+        "later compiler-work refusal follows paid key lookup and structural BUILD"
     );
     assert_eq!(cache.len(), 0);
     let paid = control(u64::MAX);

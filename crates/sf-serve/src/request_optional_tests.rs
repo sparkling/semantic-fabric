@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "request_cache_identity_tests.rs"]
 mod cache_identity;
+#[path = "request_condition_tests.rs"]
+mod condition;
 #[path = "request_optional_filter_tests.rs"]
 mod filter;
 #[path = "request_optional_preparation_tests.rs"]
@@ -44,6 +46,7 @@ enum MappedProfile {
     Filter,
     Shape,
     Materialization,
+    Condition,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -171,6 +174,7 @@ fn mapped_work(
         | MappedProfile::Unification
         | MappedProfile::Shape
         | MappedProfile::Materialization
+        | MappedProfile::Condition
         | MappedProfile::Filter => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
@@ -236,6 +240,8 @@ fn mapped_process(selector: &str, profile: MappedProfile) {
                     preparation::cases(profile).await;
                 } else if profile == MappedProfile::Identity {
                     cache_identity::cases().await;
+                } else if profile == MappedProfile::Condition {
+                    condition::cases().await;
                 } else {
                     mapped_admission_cases(profile).await;
                 }
@@ -281,7 +287,10 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Unification => unification::QUERIES.as_slice(),
         MappedProfile::Filter => filter::QUERIES.as_slice(),
         MappedProfile::Shape => &QUERIES[..2],
-        MappedProfile::Identity | MappedProfile::Preparation | MappedProfile::Materialization => {
+        MappedProfile::Identity
+        | MappedProfile::Preparation
+        | MappedProfile::Materialization
+        | MappedProfile::Condition => {
             unreachable!("separate helper acceptance")
         }
     };

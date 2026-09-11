@@ -1,4 +1,5 @@
 use super::*;
+use crate::iq::lower::condition_ownership_tests::construction_exists_condition_work;
 use crate::iq::node::{IqCond, IqNode};
 use crate::plan_measure::clone_root::{measure_copy_root, CompilerCloneRootV1};
 use sf_core::{
@@ -125,24 +126,24 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let key = key_work();
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
-    let short = budget(key + build + 2 * work - 1);
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    let before_second = key + build + condition_prefix + work + between;
+    let short = budget(before_second + work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
         Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
     ));
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        key + build + work + clone_cost().measurement_work
+        before_second + clone_cost().measurement_work
     );
     assert_eq!(binding.cache_len(), 0);
-    let exact = budget(key + build + 2 * work + tail);
+    let expected = before_second + work + condition_tail + tail;
+    let exact = budget(expected);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
         .unwrap();
-    assert_eq!(
-        exact.consumed(QueryCharge::CompilerWork),
-        key + build + 2 * work + tail
-    );
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), expected);
     assert_eq!(binding.cache_len(), 1);
     assert_eq!(
         format!("{plan:?}"),
@@ -172,7 +173,9 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let work = clone_work();
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + normalization_work() + prefix;
-    let total = 2 * (build + tail) + 4 * work;
+    let (condition_prefix, between, condition_tail) = construction_exists_condition_work();
+    let tail = tail + condition_tail;
+    let total = 2 * (build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
     for allowance in [total - tail - 1, total] {
         let control = budget(allowance);
@@ -217,8 +220,12 @@ impl QueryControl for CancelAfterClone {
 #[test]
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
-    let work =
-        key_work() + build_work() + normalization_work() + lower_entry_work().0 + clone_work();
+    let work = key_work()
+        + build_work()
+        + normalization_work()
+        + lower_entry_work().0
+        + construction_exists_condition_work().0
+        + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &control),
