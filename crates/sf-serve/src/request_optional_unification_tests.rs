@@ -1,0 +1,85 @@
+//! A missing metered OPTIONAL caller fails calibration, not just the budget test.
+use super::*;
+use std::sync::Mutex;
+use tracing::{span::Attributes, Id, Subscriber};
+use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
+
+pub(super) const QUERIES: [&str; 3] = [super::QUERIES[0], super::QUERIES[1], super::QUERIES[3]];
+
+pub(super) fn helper_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64, u64, u64) {
+    use sf_core::query_control::QueryBudget;
+    struct Marker;
+    struct Observe {
+        budget: Arc<QueryBudget>,
+        bounds: Arc<Mutex<Vec<(u64, u64)>>>,
+    }
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observe {
+        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+            if attrs.metadata().name() == "sf.compiler.optional_unification" {
+                ctx.span(id).unwrap().extensions_mut().insert(Marker);
+            }
+        }
+        fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
+            if ctx.span(id).unwrap().extensions().get::<Marker>().is_some() {
+                let work = self.budget.consumed(QueryCharge::CompilerWork);
+                self.bounds.lock().unwrap().push((work, work));
+            }
+        }
+        fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+            if ctx.span(id).unwrap().extensions().get::<Marker>().is_some() {
+                self.bounds.lock().unwrap().last_mut().unwrap().1 =
+                    self.budget.consumed(QueryCharge::CompilerWork);
+            }
+        }
+    }
+    let budget = Arc::new(QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+    )));
+    let bounds = Arc::new(Mutex::new(Vec::new()));
+    let binding = sf_sparql::CompilerBinding::from_unverified_observation(
+        SourceMapping::new(SourceId::new(0).unwrap(), maps.to_vec()),
+        sf_sql::Dialect::Sqlite,
+        Default::default(),
+        vec![],
+        Default::default(),
+        1,
+    );
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(Observe {
+            budget: budget.clone(),
+            bounds: bounds.clone(),
+        }),
+        || {
+            binding
+                .compile_shared_with_work_control(query, budget.as_ref())
+                .unwrap();
+        },
+    );
+    let bounds = bounds.lock().unwrap();
+    let variant = QUERIES.iter().position(|q| *q == query).unwrap();
+    // One fast match; two match + two anti-match calls for UNION; one pure SubPlan.
+    assert_eq!(
+        bounds.len(),
+        [1, 4, 1][variant],
+        "all actual OPTIONAL unifier callers execute"
+    );
+    assert!(bounds.iter().all(|(start, end)| end > &(start + 512)));
+    let (start, end) = *bounds.last().unwrap();
+    let input = query.len() as u64;
+    (
+        input + start,
+        input + end,
+        input + budget.consumed(QueryCharge::CompilerWork),
+    )
+}
+
+#[test]
+fn mapped_optional_unification_refusal_and_exact_recovery() {
+    mapped_process(
+        "request_compile::tests::optional_work::unification::mapped_optional_unification_refusal_and_exact_recovery",
+        MappedProfile::Unification,
+    );
+}

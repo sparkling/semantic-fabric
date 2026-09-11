@@ -153,7 +153,7 @@ pub(super) fn left_join_over_subplan(
             for (var, rdef) in &right.bindings {
                 if let Some(ldef) = prep.lookup(&l.bindings, var)? {
                     let left_nullable = prep.nullable(ldef)?;
-                    match unify(ldef, rdef) {
+                    match work::unify_terms(mode, ldef, rdef)? {
                         Unify::Sat(conds) => {
                             for c in conds {
                                 work.push(&mut on, conditions::null_safe(c, left_nullable, mode)?)?;

@@ -1,9 +1,26 @@
 //! Operation-local OPTIONAL admission, sharing the request's existing control.
 //! These reservations cover candidate visits, output vectors and direct field
-//! copies, not helper-internal unification/FILTER work or physical heap bytes.
+//! copies and measured-input unification, not FILTER work or physical heap bytes.
 
 use crate::build::control::{BuildVec, BuildWork};
 use crate::{iq::Branch, CompilerWorkMode, Result};
+
+/// Reuse the compiler's measured-input admission and conservative logical
+/// allowance without changing the raw unifier's decisions. This fixed span
+/// encloses only this call; it contains no query, term or caller payload.
+pub(crate) fn unify_terms(
+    mode: CompilerWorkMode<'_>,
+    left: &crate::iq::TermDef,
+    right: &crate::iq::TermDef,
+) -> Result<crate::unify::Unify> {
+    match mode {
+        CompilerWorkMode::Uncontrolled => Ok(crate::unify::unify(left, right)),
+        CompilerWorkMode::Metered(cx) => {
+            let _span = tracing::debug_span!("sf.compiler.optional_unification").entered();
+            cx.unify_terms(left, right)
+        }
+    }
+}
 
 /// A fast OPTIONAL visits L candidates. Decomposition visits L*R matches and
 /// L*R anti-matches, then transfers each original L into its no-match tail.

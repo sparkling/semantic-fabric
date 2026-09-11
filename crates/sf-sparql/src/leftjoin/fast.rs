@@ -65,7 +65,7 @@ pub(super) fn build_left_join(
         for (var, rdef) in &right.bindings {
             if let Some(ldef) = prep.lookup(&left.bindings, var)? {
                 let left_nullable = prep.nullable(ldef)?;
-                match unify(ldef, rdef) {
+                match work::unify_terms(mode, ldef, rdef)? {
                     Unify::Sat(conds) => {
                         for c in conds {
                             BuildWork::new(mode)

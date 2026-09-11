@@ -57,7 +57,7 @@ pub(crate) fn inner_join_one_with_work_mode(
         for (var, rdef) in &right.bindings {
             if let Some(ldef) = prep.lookup(&left.bindings, var)? {
                 let left_nullable = prep.nullable(ldef)?;
-                match unify(ldef, rdef) {
+                match work::unify_terms(mode, ldef, rdef)? {
                     Unify::Sat(conds) => {
                         for c in conds {
                             work::push_owned(
@@ -215,7 +215,7 @@ pub(crate) fn not_exists_cond_for_with_work_mode(
         for (var, rdef) in &right.bindings {
             if let Some(ldef) = prep.lookup(&left.bindings, var)? {
                 let left_nullable = prep.nullable(ldef)?;
-                match unify(ldef, rdef) {
+                match work::unify_terms(mode, ldef, rdef)? {
                     Unify::Sat(cond_list) => {
                         for c in cond_list {
                             work::push_owned(

@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 mod cache_identity;
 #[path = "request_optional_preparation_tests.rs"]
 mod preparation;
+#[path = "request_optional_unification_tests.rs"]
+mod unification;
 
 const QUERIES: [&str; 4] = [
     "SELECT ?value ?optional WHERE { ?item <http://example.test/a> ?value OPTIONAL { ?item <http://example.test/b> ?optional } }",
@@ -34,6 +36,7 @@ enum MappedProfile {
     Alias,
     Identity,
     Preparation,
+    Unification,
 }
 
 fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
@@ -57,6 +60,9 @@ fn mapped_work(
     maps: &[sf_core::ir::TriplesMap],
     profile: MappedProfile,
 ) -> (u64, u64, u64) {
+    if profile == MappedProfile::Unification {
+        return unification::helper_work(query, maps);
+    }
     use sf_core::query_control::QueryBudget;
     use std::sync::Mutex;
     use tracing::{
@@ -147,7 +153,7 @@ fn mapped_work(
         MappedProfile::Scope => compiler_key::lower_scope_work(query, maps),
         MappedProfile::Optional => compiler_key::lowering_work(query, maps),
         MappedProfile::Alias => compiler_key::lower_alias_work(query, maps),
-        MappedProfile::Identity | MappedProfile::Preparation => {
+        MappedProfile::Identity | MappedProfile::Preparation | MappedProfile::Unification => {
             unreachable!("identity uses stage observation, not LOWER calibration")
         }
     };
@@ -251,6 +257,7 @@ async fn mapped_admission_cases(profile: MappedProfile) {
         MappedProfile::Scope => SCOPE_QUERIES.as_slice(),
         MappedProfile::Optional => QUERIES.as_slice(),
         MappedProfile::Alias => ALIAS_QUERIES.as_slice(),
+        MappedProfile::Unification => unification::QUERIES.as_slice(),
         MappedProfile::Identity | MappedProfile::Preparation => {
             unreachable!("separate helper acceptance")
         }
