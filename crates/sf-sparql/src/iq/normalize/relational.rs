@@ -118,7 +118,7 @@ pub(super) fn normalize_inner_join(
             children.insert(i, arm);
             out_arms.push(normalize_inner_join(children, cond, work_mode)?);
         }
-        return normalize_union(out_arms, join_vars);
+        return normalize_union(out_arms, join_vars, work_mode);
     }
 
     // (a) no Union child: lift the children's Constructions to one Construction.
@@ -225,7 +225,7 @@ pub(super) fn normalize_filter(
             if let Some(a) = last {
                 out.push(normalize_filter(cond, a, work_mode)?);
             }
-            normalize_union(out, project)
+            normalize_union(out, project, work_mode)
         }
         IqNode::Construction {
             child: body,
@@ -315,7 +315,7 @@ pub(super) fn normalize_left_join(
                 // transfer the original shared right/condition only to the last.
                 out.push(normalize_left_join(a, right, cond, work_mode)?);
             }
-            normalize_union(out, combined_vars)
+            normalize_union(out, combined_vars, work_mode)
         }
         _ => match right {
             IqNode::Empty { .. } => Ok(left),

@@ -7,6 +7,7 @@ use sf_core::query_control::{
 use sf_core::{Literal, Term};
 
 use crate::compiler_control::CompileContext;
+use crate::compiler_control_normalize_join_tests::nonconstant_union_work;
 use crate::iq::node::{BindDef, IqNode, Var};
 use crate::iq::{Scan, TermDef};
 use crate::plan_measure::clone_root::{measure_copy_collection, CompilerCloneCollectionV1};
@@ -209,7 +210,9 @@ fn exact_variable_collection_clone_accepts_n_and_rejects_n_minus_one() {
 #[test]
 fn construction_over_three_arm_union_charges_exact_schedule_and_preserves_owners() {
     let fixture = construction_union_fixture();
-    let expected = 2 * fixture.substitution_work + 3 * fixture.project_work;
+    let (input_union, output_union) = nonconstant_union_work(3);
+    let expected =
+        input_union + 2 * fixture.substitution_work + 3 * fixture.project_work + output_union;
     let control = budget(expected);
     let raw = crate::iq::normalize::normalize(fixture.tree.clone()).unwrap();
 
@@ -253,7 +256,8 @@ fn construction_over_three_arm_union_charges_exact_schedule_and_preserves_owners
 
 fn assert_construction_union_rejection(max_work: u64, expected_consumed: u64) {
     let fixture = construction_union_fixture();
-    let control = budget(max_work);
+    let input_union = nonconstant_union_work(3).0;
+    let control = budget(input_union + max_work);
 
     assert_control_error(
         crate::iq::normalize::normalize_with_work_mode(
@@ -265,7 +269,7 @@ fn assert_construction_union_rejection(max_work: u64, expected_consumed: u64) {
     );
     assert_eq!(
         control.consumed(QueryCharge::CompilerWork),
-        expected_consumed
+        input_union + expected_consumed
     );
     assert_eq!(
         control.checkpoint(),

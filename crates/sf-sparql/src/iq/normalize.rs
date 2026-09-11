@@ -78,6 +78,7 @@
 //! is the `=_bag` (multiset-equivalence to the flat base translation) invariant.
 
 mod construction;
+mod control;
 mod distinct;
 mod relational;
 mod slice;
@@ -145,11 +146,14 @@ pub(crate) fn normalize_with_work_mode(
 
         // ---- bag union: flatten, prune Empty arms (NO arm-merge) ----------------
         IqNode::Union { children, project } => {
-            let children = children
-                .into_iter()
-                .map(|child| normalize_with_work_mode(child, work_mode))
-                .collect::<Result<Vec<_>>>()?;
-            unions::normalize_union(children, project)
+            let work = control::RowWork::new(work_mode);
+            work.charge(1)?;
+            let mut out = work.vector(children.len())?;
+            for child in children {
+                work.charge(1)?;
+                out.push(normalize_with_work_mode(child, work_mode)?);
+            }
+            unions::normalize_union(out, project, work_mode)
         }
 
         // ---- modifier spine: normalize the child, keep the node above the Union --
@@ -164,7 +168,7 @@ pub(crate) fn normalize_with_work_mode(
         }),
         IqNode::Distinct { child } => {
             let child = normalize_with_work_mode(*child, work_mode)?;
-            Ok(distinct::normalize_distinct(child))
+            distinct::normalize_distinct(child, work_mode)
         }
         IqNode::Slice {
             child,
@@ -172,7 +176,7 @@ pub(crate) fn normalize_with_work_mode(
             limit,
         } => {
             let child = normalize_with_work_mode(*child, work_mode)?;
-            Ok(slice::normalize_slice(offset, limit, child))
+            slice::normalize_slice(offset, limit, child, work_mode)
         }
         IqNode::OrderBy { child, keys } => Ok(IqNode::OrderBy {
             child: Box::new(normalize_with_work_mode(*child, work_mode)?),
@@ -195,3 +199,9 @@ pub(crate) fn normalize_with_work_mode(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod control_tests;
+
+#[cfg(test)]
+mod constant_control_tests;

@@ -41,6 +41,41 @@ fn budget(max_compiler_work: u64) -> QueryBudget {
     ))
 }
 
+/// Hand-counted NORMALIZE prerequisite and trailing union pass for A >= 2
+/// nonconstant arms. Keep this separate from the exact owned-copy schedule:
+/// entry + arm/push visits + paid geometric IQ slots/relocation + first decline
+/// + bool slots/probes + adjacent-run scan. The input also visits/collects children.
+pub(crate) fn nonconstant_union_work(arms: usize) -> (u64, u64) {
+    assert!(arms >= 2);
+    let size = std::mem::size_of::<IqNode>();
+    let (mut capacity, mut growth) = (0, 0);
+    for occupied in 0..arms {
+        if occupied == capacity {
+            capacity = (2 * capacity).max(1);
+            growth += (capacity + occupied) * size;
+        }
+    }
+    let local = 1 + 6 * arms + growth;
+    let children = 1 + 2 * arms + arms * size;
+    ((children + local) as u64, local as u64)
+}
+
+#[test]
+fn nonconstant_union_prerequisite_is_hand_counted_independently_of_copy_work() {
+    for arms in [2, 3] {
+        let control = budget(u64::MAX);
+        iq::normalize::normalize_with_work_mode(
+            fanout_union(arms),
+            CompilerWorkMode::Metered(CompileContext::new(&control)),
+        )
+        .unwrap();
+        assert_eq!(
+            control.consumed(QueryCharge::CompilerWork),
+            nonconstant_union_work(arms).0
+        );
+    }
+}
+
 fn assert_control_error(error: Error, expected: QueryControlError) {
     match error {
         Error::QueryControl(actual) => assert_eq!(actual, expected),
@@ -246,7 +281,8 @@ fn exact_scalar_iq_node_clone_does_not_charge_a_fake_collection_slot() {
 fn inner_join_three_arm_fanout_charges_every_copy_and_matches_raw() {
     let fixture = inner_fixture(3);
     let per_arm = fixture.fixed_work + fixture.condition_work;
-    let expected = per_arm * 2;
+    let (input_union, output_union) = nonconstant_union_work(3);
+    let expected = input_union + per_arm * 2 + output_union;
     let budget = budget(expected);
     let raw = iq::normalize::normalize(fixture.tree.clone()).unwrap();
 
@@ -292,7 +328,8 @@ fn inner_join_three_arm_fanout_charges_every_copy_and_matches_raw() {
 fn inner_join_condition_rejection_keeps_the_fixed_collection_charge() {
     let fixture = inner_fixture(3);
     let per_arm = fixture.fixed_work + fixture.condition_work;
-    let budget = budget(per_arm * 2 - 1);
+    let input_union = nonconstant_union_work(3).0;
+    let budget = budget(input_union + per_arm * 2 - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -305,7 +342,7 @@ fn inner_join_condition_rejection_keeps_the_fixed_collection_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        per_arm + fixture.fixed_work + fixture.condition_measurement,
+        input_union + per_arm + fixture.fixed_work + fixture.condition_measurement,
         "the first arm and the second fixed collection clone are not refunded"
     );
 }
@@ -314,7 +351,8 @@ fn inner_join_condition_rejection_keeps_the_fixed_collection_charge() {
 fn left_join_three_arm_fanout_uses_scalar_right_charges_and_matches_raw() {
     let fixture = left_fixture(3);
     let per_arm = fixture.right_work + fixture.condition_work;
-    let expected = per_arm * 2;
+    let (input_union, output_union) = nonconstant_union_work(3);
+    let expected = input_union + per_arm * 2 + output_union;
     let budget = budget(expected);
     let raw = iq::normalize::normalize(fixture.tree.clone()).unwrap();
 
@@ -356,7 +394,8 @@ fn left_join_three_arm_fanout_uses_scalar_right_charges_and_matches_raw() {
 fn left_join_condition_rejection_keeps_the_scalar_right_charge() {
     let fixture = left_fixture(3);
     let per_arm = fixture.right_work + fixture.condition_work;
-    let budget = budget(per_arm * 2 - 1);
+    let input_union = nonconstant_union_work(3).0;
+    let budget = budget(input_union + per_arm * 2 - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -369,7 +408,7 @@ fn left_join_condition_rejection_keeps_the_scalar_right_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        per_arm + fixture.right_work + fixture.condition_measurement,
+        input_union + per_arm + fixture.right_work + fixture.condition_measurement,
         "the first arm and the second scalar clone are not refunded"
     );
     assert_eq!(

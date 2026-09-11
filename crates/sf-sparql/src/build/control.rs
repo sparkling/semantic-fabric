@@ -1,4 +1,6 @@
-//! Operation-local BUILD work, not a whole-compiler or allocator-size proof.
+//! Operation-local compiler work. BUILD and constant-expression materialization
+//! use the depth counter; row loops reuse the allocation/copy primitives alone.
+//! Neither use establishes a whole-compiler or allocator-size proof.
 use sf_core::query_control::QueryControlError;
 use spargebra::algebra::{Expression, PropertyPathExpression};
 use spargebra::term::{
@@ -10,13 +12,13 @@ use crate::plan_measure::clone_root::CompilerCloneRootV1;
 use crate::{CompilerWorkMode, Error, Result};
 
 #[derive(Clone, Copy)]
-pub(super) struct BuildWork<'a> {
+pub(crate) struct BuildWork<'a> {
     pub mode: CompilerWorkMode<'a>,
     depth: usize,
 }
 
 /// Track paid logical slots independently of allocator over-allocation.
-pub(super) struct BuildVec<T> {
+pub(crate) struct BuildVec<T> {
     pub values: Vec<T>,
     requested: usize,
 }
@@ -184,7 +186,7 @@ impl<'a> BuildWork<'a> {
 }
 
 /// Closed typed roots: callers cannot measure one carrier and copy another.
-pub(super) trait CopySource: Clone {
+pub(crate) trait CopySource: Clone {
     fn root(&self) -> CompilerCloneRootV1<'_>;
 }
 macro_rules! copy_source {

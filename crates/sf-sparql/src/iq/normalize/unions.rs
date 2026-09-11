@@ -1,7 +1,8 @@
+use super::control::{RowVec, RowWork};
 use super::values::{constant_row_from_subst, constant_subst_can_form_row, same_var_set};
 use crate::iq::node::{IqNode, Var};
 use crate::iq::TermDef;
-use crate::Result;
+use crate::{CompilerWorkMode, Result};
 
 // ---- (c) union: flatten + prune (NO arm-merge) -----------------------------------
 
@@ -13,28 +14,45 @@ use crate::Result;
 /// (ADR-0023 optimizer-residue Wave C, §4.15) combines arms that are ALL bare
 /// constant tuples into one `Values` leaf, which is bag-preserving (N constant arms
 /// → N rows), not a lossy dedup.
-pub(super) fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
-    let mut arms: Vec<IqNode> = Vec::new();
+pub(super) fn normalize_union(
+    children: Vec<IqNode>,
+    project: Vec<Var>,
+    mode: CompilerWorkMode<'_>,
+) -> Result<IqNode> {
+    let work = RowWork::new(mode);
+    work.charge(1)?;
+    let mut arms = RowVec::new(Vec::new());
     for c in children {
+        work.charge(1)?;
         match c {
             IqNode::Empty { .. } => {} // prune the Union identity (keep the signature)
             IqNode::Union {
                 children: inner, ..
-            } => arms.extend(inner), // flatten (associativity — NOT dedup)
-            other => arms.push(other),
+            } => work.append(&mut arms, inner)?, // flatten (associativity — NOT dedup)
+            other => work.push(&mut arms, other)?,
         }
     }
-    Ok(match arms.len() {
+    let mut arms = arms.into_inner();
+    let result = match arms.len() {
         0 => IqNode::Empty { vars: project },
         1 => arms.pop().expect("len checked == 1"),
-        _ if arms
-            .iter()
-            .all(|arm| constant_arm_is_foldable(arm, &project)) =>
-        {
-            fold_constant_union(arms, project)
+        _ => {
+            let mut all_constant = true;
+            for arm in &arms {
+                if !constant_arm_is_foldable(arm, &project, work)? {
+                    all_constant = false;
+                    break;
+                }
+            }
+            if all_constant {
+                fold_constant_union(arms, project, work)?
+            } else {
+                fold_partial_constant_runs(arms, project, work)?
+            }
         }
-        _ => fold_partial_constant_runs(arms, project),
-    })
+    };
+    work.checkpoint()?;
+    Ok(result)
 }
 
 /// Fold a `Union` of ALL-CONSTANT arms into one `Values` node (Ontop
@@ -62,40 +80,59 @@ pub(super) fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Resul
 /// time (FILTER/BIND resolve per-leaf-CQ at LOWER, not here — confirmed empirically:
 /// `{ BIND("a" AS ?x) } UNION { BIND("b" AS ?x) }` normalizes to `Union[Construction{
 /// subst: {x: Expr(Literal("a"))}, child: True}, …]`, never a pre-`Resolved` constant).
-/// [`crate::unify::bind_term_def`] is reused with an EMPTY bindings map to recognize a genuine
-/// constant without resolving it against any column: it only ever succeeds on a bare
+/// The constant probe mirrors [`crate::unify::bind_term_def`] with EMPTY bindings,
+/// without materializing and discarding its result: it only succeeds on a bare
 /// IRI/literal or a `CONCAT` of recursively-constant parts (`Expression::Variable`
 /// always fails against an empty map), so a successful result is *provably*
 /// column-free — safe to embed directly in a core-less `Values` row.
-fn fold_constant_union(arms: Vec<IqNode>, project: Vec<Var>) -> IqNode {
+fn fold_constant_union(arms: Vec<IqNode>, project: Vec<Var>, work: RowWork<'_>) -> Result<IqNode> {
     debug_assert!(arms.len() >= 2);
-    let mut rows = Vec::with_capacity(arms.len());
+    let mut rows = RowVec::new(Vec::new());
     for arm in arms {
-        rows.extend(
-            into_const_rows(arm, &project).expect("constant_arm_is_foldable checked every arm"),
-        );
+        work.append(
+            &mut rows,
+            into_const_rows(arm, &project, work)?
+                .expect("constant_arm_is_foldable checked every arm"),
+        )?;
     }
-    IqNode::Values {
+    Ok(IqNode::Values {
         vars: project,
-        rows,
-    }
+        rows: rows.into_inner(),
+    })
 }
 
 /// Whether an arm can be consumed into constant rows without retaining the arm.
-fn constant_arm_is_foldable(arm: &IqNode, project: &[Var]) -> bool {
-    match arm {
-        IqNode::Values { vars, .. } => same_var_set(vars, project),
+fn constant_arm_is_foldable(arm: &IqNode, project: &[Var], work: RowWork<'_>) -> Result<bool> {
+    work.charge(1)?;
+    Ok(match arm {
+        IqNode::Values { vars, rows } => {
+            if !same_var_set(vars, project, work)? {
+                return Ok(false);
+            }
+            for row in rows {
+                work.charge(1)?;
+                if row.len() != vars.len() {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
-            constant_subst_can_form_row(subst, project)
+            constant_subst_can_form_row(subst, project, work)?
         }
         IqNode::True => project.is_empty(),
         _ => false,
-    }
+    })
 }
 
 /// Consume the constant row(s) this arm contributes to a folded `Values` leaf.
-fn into_const_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
-    match arm {
+fn into_const_rows(
+    arm: IqNode,
+    project: &[Var],
+    work: RowWork<'_>,
+) -> Result<Option<Vec<Vec<Option<TermDef>>>>> {
+    work.charge(1)?;
+    let result = match arm {
         // `A UNION B UNION C` is left-associative (`(A UNION B) UNION C`): the
         // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
         // rule folds it) *before* the outer Union ever sees it, so an
@@ -105,13 +142,20 @@ fn into_const_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDe
         // (SAME variables, order-independent) is the acceptance test, and
         // `reorder_row` permutes each row by variable NAME to `project`'s order
         // before absorbing it (a no-op permutation when the orders already agree).
-        IqNode::Values { vars, rows } if same_var_set(&vars, project) => Some(
-            rows.into_iter()
-                .map(|row| reorder_row(vars.as_slice(), row, project))
-                .collect(),
-        ),
+        IqNode::Values { vars, rows } if same_var_set(&vars, project, work)? => {
+            let mut out = work.vector(rows.len())?;
+            for row in rows {
+                out.push(reorder_row(&vars, row, project, work)?);
+            }
+            Some(out)
+        }
         IqNode::Construction { child, subst, .. } if matches!(child.as_ref(), IqNode::True) => {
-            Some(vec![constant_row_from_subst(subst, project)?])
+            let Some(row) = constant_row_from_subst(subst, project, work)? else {
+                return Ok(None);
+            };
+            let mut rows = work.vector(1)?;
+            rows.push(row);
+            Some(rows)
         }
         // test25: a bare `True` arm binds nothing, so it can only fold when
         // there is nothing TO bind -- an empty `project` -- contributing one
@@ -130,9 +174,15 @@ fn into_const_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDe
         // Construction outright, leaving a bare `Values` -- an equally
         // `=_bag`-correct but inconsistent shape. Kept for that consistency,
         // not because the fold would otherwise fail.
-        IqNode::True if project.is_empty() => Some(vec![Vec::new()]),
+        IqNode::True if project.is_empty() => {
+            let mut rows = work.vector(1)?;
+            rows.push(Vec::new());
+            Some(rows)
+        }
         _ => None, // a DATA arm (real pattern), or a shape not covered above
-    }
+    };
+    work.checkpoint()?;
+    Ok(result)
 }
 
 /// Partial version of [`fold_constant_union`] (Ontop
@@ -160,45 +210,63 @@ fn into_const_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDe
 /// UNION {{c1}} UNION {{c2}} LIMIT 2` returned the data arm's rows on the flat
 /// side but the folded constants on the tree side, because an earlier version
 /// of this function unconditionally prepended the fold regardless of position).
-fn fold_partial_constant_runs(arms: Vec<IqNode>, project: Vec<Var>) -> IqNode {
-    let foldable: Vec<bool> = arms
-        .iter()
-        .map(|arm| constant_arm_is_foldable(arm, &project))
-        .collect();
-    if !foldable.windows(2).any(|pair| pair[0] && pair[1]) {
-        return IqNode::Union {
+fn fold_partial_constant_runs(
+    arms: Vec<IqNode>,
+    project: Vec<Var>,
+    work: RowWork<'_>,
+) -> Result<IqNode> {
+    let mut foldable = work.vector(arms.len())?;
+    for arm in &arms {
+        foldable.push(constant_arm_is_foldable(arm, &project, work)?);
+    }
+    let mut adjacent = false;
+    for pair in foldable.windows(2) {
+        work.charge(1)?;
+        if pair[0] && pair[1] {
+            adjacent = true;
+            break;
+        }
+    }
+    if !adjacent {
+        return Ok(IqNode::Union {
             children: arms,
             project,
-        };
+        });
     }
 
-    let mut children = Vec::with_capacity(arms.len());
+    let mut children = work.vector(arms.len())?;
     let mut source = arms.into_iter();
     let mut i = 0;
     while i < foldable.len() {
+        work.charge(1)?;
         if !foldable[i] {
             children.push(source.next().expect("foldability mirrors source arms"));
             i += 1;
             continue;
         }
 
-        let run_end = foldable[i..]
-            .iter()
-            .position(|foldable| !foldable)
-            .map_or(foldable.len(), |offset| i + offset);
+        let mut run_end = i;
+        while run_end < foldable.len() {
+            work.charge(1)?;
+            if !foldable[run_end] {
+                break;
+            }
+            run_end += 1;
+        }
         let run_len = run_end - i;
         if run_len >= 2 {
-            let mut run_rows = Vec::new();
+            let mut run_rows = RowVec::new(Vec::new());
             for _ in 0..run_len {
                 let arm = source.next().expect("foldability mirrors source arms");
-                run_rows.extend(
-                    into_const_rows(arm, &project)
+                work.append(
+                    &mut run_rows,
+                    into_const_rows(arm, &project, work)?
                         .expect("constant_arm_is_foldable checked the run"),
-                );
+                )?;
             }
             children.push(IqNode::Values {
-                vars: project.to_vec(),
-                rows: run_rows,
+                vars: work.mode.clone_variables(&project)?,
+                rows: run_rows.into_inner(),
             });
         } else {
             children.push(source.next().expect("foldability mirrors source arms"));
@@ -206,11 +274,11 @@ fn fold_partial_constant_runs(arms: Vec<IqNode>, project: Vec<Var>) -> IqNode {
         i = run_end;
     }
 
-    if children.len() == 1 {
+    Ok(if children.len() == 1 {
         children.pop().expect("len checked == 1")
     } else {
         IqNode::Union { children, project }
-    }
+    })
 }
 
 /// Permute one row's cells from `from_order` to `to_order` by variable NAME (both
@@ -221,18 +289,25 @@ fn reorder_row(
     from_order: &[Var],
     mut row: Vec<Option<TermDef>>,
     to_order: &[Var],
-) -> Vec<Option<TermDef>> {
-    if from_order == to_order {
-        return row;
+    work: RowWork<'_>,
+) -> Result<Vec<Option<TermDef>>> {
+    work.charge(1)?;
+    if work.vars_equal(from_order, to_order)? {
+        return Ok(row);
     }
-    to_order
-        .iter()
-        .map(|v| {
-            let i = from_order
-                .iter()
-                .position(|w| w == v)
-                .expect("same_var_set checked by the caller");
-            std::mem::take(&mut row[i])
-        })
-        .collect()
+    let mut out = work.vector(to_order.len())?;
+    for v in to_order {
+        work.charge(1)?;
+        let mut found = None;
+        for (i, w) in from_order.iter().enumerate() {
+            if work.contains(std::slice::from_ref(w), v)? {
+                found = Some(i);
+                break;
+            }
+        }
+        let i = found.expect("same_var_set checked by the caller");
+        out.push(std::mem::take(&mut row[i]));
+    }
+    work.checkpoint()?;
+    Ok(out)
 }

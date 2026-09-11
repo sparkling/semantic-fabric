@@ -270,6 +270,31 @@ impl<'control> CompileContext<'control> {
         self.meter.control.terminate(reason).into()
     }
 
+    /// Prepay a constant RDF-term comparison using both exact borrowed carriers.
+    /// Measurement pays its own traversal; node/payload units bound the subsequent
+    /// structural equality scan, not another clone or a physical heap estimate.
+    pub(crate) fn constant_terms_equal(
+        &self,
+        left: &crate::iq::TermDef,
+        right: &crate::iq::TermDef,
+    ) -> Result<bool> {
+        let (crate::iq::TermDef::Const(a), crate::iq::TermDef::Const(b)) = (left, right) else {
+            return Ok(false);
+        };
+        self.checkpoint()?;
+        let left = self
+            .measure_root(CompilerCloneRootV1::TermDef(left))
+            .map_err(|error| self.measurement_error(error))?;
+        let right = self
+            .measure_root(CompilerCloneRootV1::TermDef(right))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_checked_sum(&[left.deep_clone_work, right.deep_clone_work])?;
+        self.checkpoint()?;
+        let equal = a == b;
+        self.checkpoint()?;
+        Ok(equal)
+    }
+
     fn measure_root(
         &self,
         root: CompilerCloneRootV1<'_>,

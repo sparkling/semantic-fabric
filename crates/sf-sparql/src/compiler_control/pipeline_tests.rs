@@ -238,7 +238,9 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
 fn metered_filter_over_three_arms_charges_two_exact_nested_condition_clones() {
     let cond = condition_with_nested_exists();
     let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
-    let expected = measure.total_work.checked_mul(2).unwrap();
+    let (input_union, output_union) =
+        crate::compiler_control_normalize_join_tests::nonconstant_union_work(3);
+    let expected = input_union + measure.total_work.checked_mul(2).unwrap() + output_union;
     let budget = budget(expected);
 
     let normalized = iq::normalize::normalize_with_work_mode(
@@ -255,7 +257,8 @@ fn metered_filter_over_three_arms_charges_two_exact_nested_condition_clones() {
 fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
     let cond = condition_with_nested_exists();
     let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
-    let budget = budget(measure.total_work * 2 - 1);
+    let input_union = crate::compiler_control_normalize_join_tests::nonconstant_union_work(3).0;
+    let budget = budget(input_union + measure.total_work * 2 - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -268,7 +271,7 @@ fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.total_work + measure.measurement_work,
+        input_union + measure.total_work + measure.measurement_work,
         "completed operation charges are never refunded"
     );
 }
@@ -278,7 +281,10 @@ fn metered_filter_union_exact_n_matches_the_public_raw_path() {
     let cond = condition_with_nested_exists();
     let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
     let source = filter_over_union(&[31, 32], cond);
-    let budget = budget(measure.total_work);
+    let (input_union, output_union) =
+        crate::compiler_control_normalize_join_tests::nonconstant_union_work(2);
+    let expected = input_union + measure.total_work + output_union;
+    let budget = budget(expected);
 
     let raw = iq::normalize::normalize(source.clone()).unwrap();
     let metered = iq::normalize::normalize_with_work_mode(
@@ -288,17 +294,15 @@ fn metered_filter_union_exact_n_matches_the_public_raw_path() {
     .unwrap();
 
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
-    assert_eq!(
-        budget.consumed(QueryCharge::CompilerWork),
-        measure.total_work
-    );
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), expected);
 }
 
 #[test]
 fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
     let cond = condition_with_nested_exists();
     let measure = measure_copy_collection(CompilerCloneCollectionV1::IqConditions(&cond)).unwrap();
-    let budget = budget(measure.total_work - 1);
+    let input_union = crate::compiler_control_normalize_join_tests::nonconstant_union_work(2).0;
+    let budget = budget(input_union + measure.total_work - 1);
 
     assert_control_error(
         iq::normalize::normalize_with_work_mode(
@@ -311,7 +315,7 @@ fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
 
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.measurement_work
+        input_union + measure.measurement_work
     );
     assert_eq!(
         budget.checkpoint(),

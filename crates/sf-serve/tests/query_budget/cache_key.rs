@@ -2,7 +2,7 @@ use super::*;
 
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
-pub(super) use compiler_key::{build_work, key_work};
+pub(super) use compiler_key::{build_work, constant_compile_work, key_work, CONSTANT_QUERIES};
 
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
     // Terminal failure wakes the response before the blocking compiler closure

@@ -58,7 +58,7 @@ use crate::iq::TermDef;
 use crate::{CompilerWorkMode, Result};
 
 mod aggregate;
-mod control;
+pub(crate) mod control;
 mod filter;
 mod order;
 mod scope;

@@ -13,6 +13,9 @@ use tower::ServiceExt;
 mod cache_key;
 use cache_key::{build_work, key_work};
 
+#[path = "query_budget/constant_normalization.rs"]
+mod constant_normalization;
+
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
 #[path = "query_budget/join_copy.rs"]

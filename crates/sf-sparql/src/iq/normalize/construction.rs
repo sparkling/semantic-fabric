@@ -67,7 +67,7 @@ pub(super) fn lift_construction(
                 let arm_project = work_mode.clone_variables(&project)?;
                 out.push(lift_construction(subst, arm_project, a, work_mode)?);
             }
-            normalize_union(out, project)
+            normalize_union(out, project, work_mode)
         }
 
         // Construction over Empty: ∅ over the projected variables.

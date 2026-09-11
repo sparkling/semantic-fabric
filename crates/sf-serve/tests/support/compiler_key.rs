@@ -55,3 +55,37 @@ pub(crate) fn build_work(source: &str) -> u64 {
     sf_sparql::build::build_tree_with_work_control(pattern, None, &control).unwrap();
     control.consumed(QueryCharge::CompilerWork)
 }
+
+pub(crate) const CONSTANT_QUERIES: [&str; 3] = [
+    "SELECT DISTINCT ?value WHERE { VALUES ?value { \"one\" \"one\" \"two\" } }",
+    "SELECT ?value WHERE { { VALUES ?value { \"one\" } } UNION { VALUES ?value { \"two\" } } }",
+    "SELECT ?value WHERE { VALUES ?value { \"skip\" \"one\" \"two\" \"tail\" } } LIMIT 2 OFFSET 1",
+];
+
+/// End-to-end cold compiler allowance for the three source-free row-rule fixtures.
+/// Unit tests independently pin the new NORMALIZE schedule and copy boundaries.
+/// This excludes serving's decoded-input charge; a warm hit still pays only key work.
+pub(crate) fn constant_compile_work(source: &str) -> u64 {
+    use sf_core::{
+        query_control::{QueryBudget, QueryCharge, QueryLimits},
+        SourceId, SourceMapping,
+    };
+    use sf_sparql::{
+        cache::{CompilerBinding, Epoch},
+        Tbox,
+    };
+    assert!(CONSTANT_QUERIES.contains(&source));
+    let binding = CompilerBinding::from_unverified_observation(
+        SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
+        sf_sql::Dialect::Sqlite,
+        Tbox::default(),
+        vec![],
+        Epoch::default(),
+        1,
+    );
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    binding
+        .compile_shared_with_work_control(source, &control)
+        .unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}

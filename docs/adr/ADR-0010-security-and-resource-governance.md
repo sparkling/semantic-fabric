@@ -417,6 +417,20 @@ retain later-phase targets and public pre-source rejection/cache recovery checks
 Derived Clone/Box/string/map allocation, physical heap/destruction, other compiler
 phases, source/backend and exact-release guarantees remain required and open.
 
+**Constant-row NORMALIZE update (2026-09-11):** VALUES UNION folding/reordering,
+DISTINCT comparison/first-occurrence removal and SLICE planning/row movement now
+share request control. Visits, name/constant comparisons, fixed slots, logical
+growth/relocation and constant-expression probes/materialization are prepaid.
+RDF comparisons pay measurement and payload scanning separately; constant BIND
+probes match the empty-environment unifier without speculative term/error copies.
+Cancellation/resource refusal is terminal, never an optimization decline. Required
+tests preserve bags, UNDEF, projection guards, contiguous runs and residual offsets;
+malformed VALUES headers/rows decline folding safely. Exact/N-1, hand-counted work,
+per-charge cancellation/deadline and default-stack depth checks cover this slice.
+Ordinary/security HTTP tests prove pre-source rejection, capacity recovery, exact
+results and paid-key warm reuse. Other normalization/unification, physical heap/drop,
+source/backend and release gates remain open; no GovernedV1 activation is claimed.
+
 **Mapping-expansion update (2026-09-08):** public resolution and direct lineage
 unfolding now retain that same work mode through nested contexts. Map/POM visits,
 graph-union visits/comparison candidates, named-graph enumeration, fixed graph
