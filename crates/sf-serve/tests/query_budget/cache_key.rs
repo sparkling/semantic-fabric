@@ -25,6 +25,11 @@ fn two_value_rows_realization_work() -> u64 {
     1 + std::mem::size_of::<String>() as u64 + 1 + 5 + 2
 }
 
+fn two_value_rows_finalization_work() -> u64 {
+    // Each root pays one nested traversal entry and one aggregate gate.
+    2 * 2
+}
+
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
     // Terminal failure wakes the response before the blocking compiler closure
     // necessarily drops its configuration. Preserve the same runtime/cache and
@@ -109,7 +114,8 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
         + prefix
         + tail
         + two_value_rows_construction_work()
-        + two_value_rows_realization_work();
+        + two_value_rows_realization_work()
+        + two_value_rows_finalization_work();
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -176,6 +182,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                         + tail
                         + two_value_rows_construction_work()
                         + two_value_rows_realization_work()
+                        + two_value_rows_finalization_work()
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

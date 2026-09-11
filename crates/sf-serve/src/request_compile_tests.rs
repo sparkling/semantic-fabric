@@ -21,6 +21,9 @@ mod structural_normalization;
 #[path = "request_resolve_tests.rs"]
 mod resolve_work;
 
+#[path = "request_finalization_tests.rs"]
+mod finalization_work;
+
 #[path = "request_describe_tests.rs"]
 mod describe_work;
 

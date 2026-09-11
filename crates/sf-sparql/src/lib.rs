@@ -79,6 +79,10 @@ pub mod exec_core;
 pub mod exec_mysql;
 pub mod exec_pg;
 pub mod federation;
+mod finalization;
+mod finalization_aggregate;
+mod finalization_graph;
+mod finalization_remap;
 mod graph_map;
 pub mod iq;
 pub mod leftjoin;
@@ -735,40 +739,60 @@ fn translate_tree_with_column_type_use(
             for b in &mut plan.branches {
                 cascade_subplans(b, schema, work_mode)?;
             }
+            Ok(())
+        },
+    )?;
+    compiler_telemetry::in_stage(
+        compiler_telemetry::CompilerStage::Finalize,
+        || -> Result<()> {
             // ADR-0034: dedup below GROUP BY (see the identical note in
             // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
             // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
             // applies it per pattern, before this tree's own aggregation lowering
             // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
-            cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+            finalization_aggregate::apply(
+                &mut plan.branches,
+                dialect,
+                build::control::BuildWork::new(work_mode),
+            )?;
+            // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
+            // `translate_inner_flat`): MUST run before the `distinct` capture below.
+            if describe_form {
+                plan.construct_drops_some_branch_var = finalization_graph::describe(
+                    &mut plan.branches,
+                    &plan.form,
+                    build::control::BuildWork::new(work_mode),
+                )?;
+            } else if let PlanForm::Construct { template } = &plan.form {
+                plan.construct_drops_some_branch_var = finalization_graph::construct(
+                    &mut plan.branches,
+                    template,
+                    build::control::BuildWork::new(work_mode),
+                )?;
+            }
+            // The single-branch DISTINCT decision is recorded on the branch by pass (6)
+            // — read HERE, AFTER `dedup_before_aggregate`, not before it: see the
+            // identical note in `translate_inner_flat` for why reading it any earlier
+            // captures a stale value `Plan::prepared_branches` would blindly write back
+            // onto the branch at emission, undoing the wrap's own fix.
+            if plan.branches.len() == 1 {
+                plan.distinct = plan.branches[0].distinct;
+            }
+            // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
+            // identical note in `translate_inner_flat`).
+            star::apply_composed_bindings_with_work_mode(&mut plan.branches, &star_env, work_mode)?;
+            // ADR-0034 C0e restoration: normalize resolve's leaf-alias markers only
+            // AFTER both root and recursive cascades. Nested Plans emit as SQL, so only
+            // a proven pure unary wrapper chain may lift a group onto a root executor
+            // branch; every other post-lower shape fails closed here.
+            plan.dedup_scopes = finalization::scope::lift(
+                &plan.branches,
+                cx.dedup_groups(),
+                build::control::BuildWork::new(work_mode),
+            )?;
             Ok(())
         },
     )?;
-    // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
-    // `translate_inner_flat`): MUST run before the `distinct` capture below.
-    if describe_form {
-        plan.construct_drops_some_branch_var =
-            enforce_describe_graph_set(&mut plan.branches, &plan.form)?;
-    } else if let PlanForm::Construct { template } = &plan.form {
-        plan.construct_drops_some_branch_var =
-            dedup_construct_template_projected_vars(&mut plan.branches, template);
-    }
-    // The single-branch DISTINCT decision is recorded on the branch by pass (6)
-    // — read HERE, AFTER `dedup_before_aggregate`, not before it: see the
-    // identical note in `translate_inner_flat` for why reading it any earlier
-    // captures a stale value `Plan::prepared_branches` would blindly write back
-    // onto the branch at emission, undoing the wrap's own fix.
-    if plan.branches.len() == 1 {
-        plan.distinct = plan.branches[0].distinct;
-    }
-    // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
-    // identical note in `translate_inner_flat`).
-    star::apply_composed_bindings_with_work_mode(&mut plan.branches, &star_env, work_mode)?;
-    // ADR-0034 C0e restoration: normalize resolve's leaf-alias markers only
-    // AFTER both root and recursive cascades. Nested Plans emit as SQL, so only
-    // a proven pure unary wrapper chain may lift a group onto a root executor
-    // branch; every other post-lower shape fails closed here.
-    plan.dedup_scopes = exec_core::lift_dedup_scopes(&plan.branches, cx.dedup_groups())?;
     Ok(plan)
 }
 
@@ -795,26 +819,7 @@ fn cascade_subplans(
     schema: &[TableSchema],
     work_mode: CompilerWorkMode<'_>,
 ) -> Result<()> {
-    for sp in &mut b.subplan_joins {
-        let ctx = cascade::CascadeCtx {
-            distinct: false,
-            project: None,
-        };
-        // Cascade one cloned candidate while retaining the exact original as
-        // rollback state. Moving the original out avoids a second recursive
-        // BranchForest clone without weakening the multi-arm safety guard.
-        let candidate = work_mode.clone_branch_forest(&sp.plan.branches)?;
-        let pre = std::mem::take(&mut sp.plan.branches);
-        let post = cascade::run(candidate, schema, &ctx);
-        let post_lens: Vec<usize> = post.iter().map(|br| br.projection().len()).collect();
-        let safe = pre.len() == 1
-            || (post.len() == pre.len() && post_lens.windows(2).all(|w| w[0] == w[1]));
-        sp.plan.branches = if safe { post } else { pre };
-        for inner in &mut sp.plan.branches {
-            cascade_subplans(inner, schema, work_mode)?;
-        }
-    }
-    Ok(())
+    finalization::subplans(b, schema, build::control::BuildWork::new(work_mode))
 }
 
 /// Translate through one immutable [`CompilerBinding`]'s compiled-plan cache

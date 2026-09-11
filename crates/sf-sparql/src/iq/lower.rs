@@ -341,7 +341,7 @@ fn lower_spine(
             // so they keep their full bindings (the grouped result is rebuilt from the keys
             // + renamed agg outputs).
             if let Some(rg) = spine.rust_group.as_mut() {
-                rename_rust_group_outputs(&subst, rg)?;
+                rename_rust_group_outputs(&subst, rg, work)?;
                 return Ok(branches);
             }
             let mut out = projection::construction_output(branches.len(), work)?;
@@ -2447,7 +2447,30 @@ fn is_int_safe_arith(e: &Expression, int_agg_vars: &std::collections::HashSet<St
     }
 }
 
-fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup) -> Result<()> {
+fn rename_rust_group_outputs(
+    subst: &BTreeMap<Var, BindDef>,
+    rg: &mut RustGroup,
+    work: BuildWork<'_>,
+) -> Result<()> {
+    let mut additions = work.vector(subst.len())?;
+    let mut renames = work.vector(subst.len())?;
+    let mut expression_uses = !rg.post_exprs.is_empty();
+    for def in subst.values() {
+        work.charge(1)?;
+        expression_uses |=
+            !matches!(def, BindDef::Expr(e) if matches!(e.as_ref(), Expression::Variable(_)));
+    }
+    let copy = |out_var: &Var, expression: &Expression| -> Result<_> {
+        let name = work.string(out_var)?;
+        if let CompilerWorkMode::Metered(cx) = work.mode {
+            cx.reserve_ast_copy(
+                crate::plan_measure::clone_root::CompilerCloneRootV1::Expression(expression),
+            )?;
+        }
+        let expression = expression.clone();
+        work.checkpoint()?;
+        Ok((name, expression))
+    };
     // Aggregate outputs that are xsd:integer-typed (COUNT). `eval_expr`'s f64 arithmetic is
     // type-exact ONLY over integers; SUM/AVG/MIN/MAX may be xsd:decimal, which it would
     // silently retype/round — so post-group arithmetic is collected only when every operand
@@ -2474,16 +2497,33 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
             // exactly is collected — any other expression (STR, functions, comparisons, …)
             // stays a sound 501 (collecting it would risk an unbound/wrong result).
             if is_int_safe_arith(e.as_ref(), &int_agg_vars) {
-                rg.post_exprs
-                    .push((out_var.to_string(), e.as_ref().clone()));
+                additions.push(copy(out_var, e.as_ref())?);
                 continue;
             }
             return Err(Error::Unsupported(format!(
                 "post-GROUP-BY expression over a UNION aggregate is deferred → 501: {e:?}"
             )));
         };
-        if let Some(agg) = rg.aggs.iter_mut().find(|a| a.out_var == inner.as_str()) {
-            agg.out_var = out_var.to_string();
+        if let Some(index) = rg.aggs.iter().position(|a| a.out_var == inner.as_str()) {
+            // Keep the internal output available to every alias and arithmetic
+            // expression. Destructively renaming it here made a repeated COUNT
+            // fail on its second alias and could unbind later expressions.
+            // Variable evaluation copies the exact RDF term, not a numeric cast.
+            let mut aliases = 0;
+            for candidate in subst.values() {
+                work.charge(1)?;
+                if let BindDef::Expr(candidate) = candidate {
+                    if let Expression::Variable(variable) = candidate.as_ref() {
+                        work.charge(variable.as_str().len().min(inner.as_str().len()))?;
+                        aliases += usize::from(variable == inner);
+                    }
+                }
+            }
+            if aliases == 1 && !expression_uses {
+                renames.push((index, work.string(out_var)?));
+            } else {
+                additions.push(copy(out_var, e.as_ref())?);
+            }
         } else {
             return Err(Error::Unsupported(format!(
                 "post-GROUP-BY substitution references ?{inner}, not a UNION aggregate output \
@@ -2491,6 +2531,23 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
             )));
         }
     }
+    // Publish only after all aliases validate and every copy/move is funded.
+    let mut output = work.vector(
+        rg.post_exprs
+            .len()
+            .checked_add(additions.len())
+            .ok_or_else(|| Error::Unsupported("aggregate alias output size overflow".into()))?,
+    )?;
+    work.charge(rg.post_exprs.len())?;
+    work.charge(additions.len())?;
+    work.charge(renames.len())?;
+    work.checkpoint()?;
+    for (index, name) in renames {
+        rg.aggs[index].out_var = name;
+    }
+    output.append(&mut rg.post_exprs);
+    output.append(&mut additions);
+    rg.post_exprs = output;
     Ok(())
 }
 
@@ -2532,6 +2589,76 @@ fn visible_vars(branches: &[Branch]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aggregate_alias_preparation_is_exact_and_failure_atomic() {
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+        let budget =
+            |units| QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX));
+        let original = RustGroup {
+            keys: Vec::new(),
+            aggs: vec![RustAgg {
+                out_var: "internal".into(),
+                kind: crate::iq::AggKind::Count,
+                arg_var: None,
+                distinct: false,
+                fixed_type: Some(sf_core::datatype::XsdTypeCode::Integer),
+            }],
+            post_exprs: Vec::new(),
+        };
+        let alias = |name| {
+            BindDef::Expr(Box::new(Expression::Variable(
+                spargebra::term::Variable::new(name).unwrap(),
+            )))
+        };
+        let subst = BTreeMap::from([
+            ("a".into(), alias("internal")),
+            ("z".into(), alias("internal")),
+        ]);
+        let run = |group: &mut RustGroup, control: &QueryBudget| {
+            rename_rust_group_outputs(
+                &subst,
+                group,
+                BuildWork::new(CompilerWorkMode::Metered(
+                    crate::compiler_control::CompileContext::new(control),
+                )),
+            )
+        };
+        let measured = budget(u64::MAX);
+        let mut expected = original.clone();
+        run(&mut expected, &measured).unwrap();
+        assert_eq!(expected.aggs.len(), 1, "compute the shared aggregate once");
+        assert_eq!(expected.aggs[0].out_var, "internal");
+        assert_eq!(expected.post_exprs.len(), 2);
+        let units = measured.consumed(QueryCharge::CompilerWork);
+        for allowance in 0..units {
+            let mut group = original.clone();
+            assert!(matches!(
+                run(&mut group, &budget(allowance)),
+                Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
+            ));
+            assert_eq!(
+                format!("{group:?}"),
+                format!("{original:?}"),
+                "published at {allowance}"
+            );
+        }
+        let mut group = original.clone();
+        run(&mut group, &budget(units)).unwrap();
+        assert_eq!(format!("{group:?}"), format!("{expected:?}"));
+        let mut invalid = subst;
+        invalid.insert("zz".into(), alias("missing"));
+        let before = group.clone();
+        assert!(matches!(
+            rename_rust_group_outputs(
+                &invalid,
+                &mut group,
+                BuildWork::new(CompilerWorkMode::Uncontrolled)
+            ),
+            Err(Error::Unsupported(_))
+        ));
+        assert_eq!(format!("{group:?}"), format!("{before:?}"));
+    }
     use crate::build::build_tree;
     use crate::iq::node::IqNode;
     use crate::iq::resolve::{resolve, ResolveCx};

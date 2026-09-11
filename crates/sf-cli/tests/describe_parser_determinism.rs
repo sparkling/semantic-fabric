@@ -30,6 +30,8 @@ fn describe_direct_and_isolated_parser_have_exact_cold_and_warm_work() {
     )))
     .unwrap();
     for source in [
+        "SELECT (COUNT(*) AS ?n) WHERE { VALUES ?x { 1 1 2 } }",
+        "SELECT (COUNT(*) AS ?n) (COUNT(*) AS ?again) (SUM(?x) AS ?sum) WHERE { VALUES ?x { 1 1 2 } }",
         "DESCRIBE <urn:a>",
         "DESCRIBE <urn:a> WHERE { VALUES ?__sf_cache0 { <urn:c> } }",
     ] {

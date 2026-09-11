@@ -19,7 +19,11 @@ fn mapped_fixture() -> Vec<sf_core::ir::TriplesMap> {
     .unwrap()
 }
 
-fn mapped_work(maps: &[sf_core::ir::TriplesMap], phase: &'static str) -> (u64, u64, u64) {
+fn mapped_work(
+    maps: &[sf_core::ir::TriplesMap],
+    phase: &'static str,
+    query: &str,
+) -> (u64, u64, u64) {
     use sf_core::query_control::QueryBudget;
     use std::sync::Mutex;
     use tracing::{
@@ -99,21 +103,24 @@ fn mapped_work(maps: &[sf_core::ir::TriplesMap], phase: &'static str) -> (u64, u
     });
     tracing::subscriber::with_default(observer, || {
         binding
-            .compile_shared_with_work_control(MAPPED_QUERY, control.as_ref())
+            .compile_shared_with_work_control(query, control.as_ref())
             .unwrap();
     });
-    let complete = MAPPED_QUERY.len() as u64 + control.consumed(QueryCharge::CompilerWork);
+    let complete = query.len() as u64 + control.consumed(QueryCharge::CompilerWork);
     // Observe the existing payload-free stage span, not an assumed leaf shape or
     // cold-total subtraction that could absorb later LOWER/cascade work.
     let (start, end, visits) = *bounds.lock().unwrap();
     assert_eq!(visits, 1);
     if phase == "normalize" {
-        assert_eq!(end - start, normalization_work(MAPPED_QUERY, maps));
+        assert_eq!(end - start, normalization_work(query, maps));
     }
     assert!(end > start, "selected phase must perform paid work");
-    let prefix = MAPPED_QUERY.len() as u64 + start;
-    assert!(prefix > MAPPED_QUERY.len() as u64 + key_work(MAPPED_QUERY) + build_work(MAPPED_QUERY));
-    (prefix, MAPPED_QUERY.len() as u64 + end, complete)
+    let prefix = query.len() as u64 + start;
+    assert!(prefix > query.len() as u64 + key_work(query));
+    if query.starts_with("SELECT") {
+        assert!(prefix > query.len() as u64 + key_work(query) + build_work(query));
+    }
+    (prefix, query.len() as u64 + end, complete)
 }
 
 async fn change_work(cfg: &mut Arc<ServeConfig>, work: u64) {
@@ -136,6 +143,16 @@ fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
 }
 
 pub(super) fn mapped_process(selector: &str, phase: &'static str) {
+    mapped_query_process(selector, phase, MAPPED_QUERY, &["one", "one", "two"], None);
+}
+
+pub(super) fn mapped_query_process(
+    selector: &str,
+    phase: &'static str,
+    query: &str,
+    expected: &[&str],
+    counts: Option<&[(&str, &str)]>,
+) {
     const CHILD: &str = "SF_NORMALIZATION_TEST_PROCESS";
     const COMPLETED: i32 = 61;
     if std::env::var_os(CHILD).is_some() {
@@ -143,7 +160,7 @@ pub(super) fn mapped_process(selector: &str, phase: &'static str) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(mapped_admission_cases(phase));
+            .block_on(mapped_admission_cases(phase, query, expected, counts));
         // Only successful execution of every case emits this witness. An exact
         // libtest selector matching zero tests exits 0 and must not pass here.
         std::process::exit(COMPLETED);
@@ -175,10 +192,15 @@ pub(super) fn mapped_process(selector: &str, phase: &'static str) {
     }
 }
 
-async fn mapped_admission_cases(phase: &'static str) {
+async fn mapped_admission_cases(
+    phase: &'static str,
+    query: &str,
+    expected: &[&str],
+    counts: Option<&[(&str, &str)]>,
+) {
     let maps = mapped_fixture();
-    let (prefix, normalized, exact) = mapped_work(&maps, phase);
-    let cached = MAPPED_QUERY.len() as u64 + key_work(MAPPED_QUERY);
+    let (prefix, normalized, exact) = mapped_work(&maps, phase, query);
+    let cached = query.len() as u64 + key_work(query);
     assert!(cached < prefix);
     for secured in [false, true] {
         let (mut cfg, pool) = config_with_mapping(prefix, maps.clone());
@@ -203,12 +225,19 @@ async fn mapped_admission_cases(phase: &'static str) {
         let request = || {
             Request::post("/sparql")
                 .header("content-type", "application/sparql-query")
-                .header("accept", "application/sparql-results+json")
+                .header(
+                    "accept",
+                    if query.starts_with("CONSTRUCT") {
+                        "application/n-triples"
+                    } else {
+                        "application/sparql-results+json"
+                    },
+                )
                 .header(
                     "authorization",
                     "Bearer test-only-mapped-normalization-credential-123456",
                 )
-                .body(Body::from(MAPPED_QUERY))
+                .body(Body::from(query.to_owned()))
                 .unwrap()
         };
         let held = pool.pick_owned().acquire().await.unwrap();
@@ -227,7 +256,7 @@ async fn mapped_admission_cases(phase: &'static str) {
                 crate::router(cfg.clone()).oneshot(request()),
             )
             .await
-            .expect("NORMALIZE rejects before held source")
+            .unwrap_or_else(|_| panic!("{phase} did not reject before held source: secured={secured}, work={work}, prefix={prefix}, end={normalized}, exact={exact}"))
             .unwrap();
             assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
             let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -269,15 +298,45 @@ async fn mapped_admission_cases(phase: &'static str) {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let bytes = response.into_body().collect().await.unwrap().to_bytes();
-            let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            let mut values: Vec<_> = result["results"]["bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| row["value"]["value"].as_str().unwrap())
-                .collect();
-            values.sort();
-            assert_eq!(values, ["one", "one", "two"]);
+            if query.starts_with("CONSTRUCT") {
+                let text = std::str::from_utf8(&bytes).unwrap();
+                let mut triples: Vec<_> = text.lines().filter(|line| !line.is_empty()).collect();
+                triples.sort();
+                assert_eq!(triples, expected);
+            } else {
+                let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let mut values: Vec<_> = result["results"]["bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["value"]["value"].as_str().unwrap())
+                    .collect();
+                values.sort();
+                assert_eq!(values, expected);
+                if let Some(expected) = counts {
+                    let mut counts: Vec<_> = result["results"]["bindings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| {
+                            assert_eq!(
+                                row["count"]["datatype"],
+                                "http://www.w3.org/2001/XMLSchema#integer"
+                            );
+                            assert_eq!(
+                                row["again"], row["count"],
+                                "shared aggregate aliases preserve the exact term"
+                            );
+                            (
+                                row["value"]["value"].as_str().unwrap(),
+                                row["count"]["value"].as_str().unwrap(),
+                            )
+                        })
+                        .collect();
+                    counts.sort();
+                    assert_eq!(counts, expected);
+                }
+            }
             let recovered = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
                 cfg.compiler_permits().acquire_many_owned(4),

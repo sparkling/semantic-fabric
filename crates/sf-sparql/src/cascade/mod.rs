@@ -79,6 +79,21 @@ mod d1_work;
 mod pool_source_authority_tests;
 mod resolve_schema;
 mod resolve_work;
+pub(crate) fn condition_columns_with_work(
+    condition: &SqlCond,
+    work: crate::build::control::BuildWork<'_>,
+    visitor: &mut impl FnMut(usize, &str) -> crate::Result<()>,
+) -> crate::Result<()> {
+    distinct_scan::condition_columns(condition, work, visitor)
+}
+pub(crate) use resolve_work::columns as term_columns_with_work;
+pub(crate) use resolve_work::relation_scan as relation_scan_with_work;
+pub(crate) fn binding_injective_with_work(
+    definition: &TermDef,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<bool> {
+    resolve_work::injective(definition, work)
+}
 pub(crate) use resolve_schema::{build as build_resolve_schema, force_distinct_with_schema};
 pub(crate) use resolve_work::{
     can_fallback as group_can_fallback_with_work, narrow as narrow_group_with_work,

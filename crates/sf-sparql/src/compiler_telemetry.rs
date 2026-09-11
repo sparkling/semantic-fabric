@@ -15,6 +15,7 @@ pub(crate) enum CompilerStage {
     Normalize,
     Lower,
     Cascade,
+    Finalize,
 }
 
 impl CompilerStage {
@@ -29,6 +30,7 @@ impl CompilerStage {
             Self::Normalize => "normalize",
             Self::Lower => "lower",
             Self::Cascade => "cascade",
+            Self::Finalize => "finalize",
         }
     }
 }

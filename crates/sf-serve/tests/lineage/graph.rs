@@ -255,7 +255,14 @@ async fn graph_lineage_charges_reification_escaping_and_completion_bytes() {
         .len() as u64;
     for (limit, succeeds) in [(size, true), (size - 1, false), (32, false)] {
         let mut cfg = config();
-        cfg.query_limits = sf_core::query_control::QueryLimits::new(10000, 10000, 10000, limit);
+        // Isolate the response-byte boundary; keep normal prerequisite funding.
+        let defaults = cfg.query_limits;
+        cfg.query_limits = sf_core::query_control::QueryLimits::new(
+            defaults.max_compiler_work(),
+            defaults.max_source_work(),
+            defaults.max_result_items(),
+            limit,
+        );
         let response = router(Arc::new(cfg)).oneshot(request(QUERY)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let result = response.into_body().collect().await;

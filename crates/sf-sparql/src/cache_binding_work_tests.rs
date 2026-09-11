@@ -165,7 +165,10 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     // Realization copies one ?x (slot + String carrier + visit/name) and visits
     // three root branches. Earlier clone-failure cuts remain unchanged.
     let realization = 1 + std::mem::size_of::<String>() as u64 + 2 + 3;
-    let expected = before_second + work + condition_tail + tail + realization;
+    // Three root branches each pay nested traversal entry and aggregate gate.
+    // This finalization is after the independently asserted clone failure cut.
+    let finalization = 3 * 2;
+    let expected = before_second + work + condition_tail + tail + realization + finalization;
     let exact = budget(expected);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
@@ -206,7 +209,8 @@ fn uncached_preflight_charges_each_pass_without_populating_cache() {
         one_column_rows_work(1, "inside"),
     );
     let realization = 1 + std::mem::size_of::<String>() as u64 + 2 + 3;
-    let tail = tail + condition_tail + realization;
+    let finalization = 3 * 2; // Three root traversal entries and aggregate gates.
+    let tail = tail + condition_tail + realization + finalization;
     let total = 2 * (rewrite_work(QUERY) + build + condition_prefix + between + tail) + 4 * work;
     // Fail the final clone in pass two, not its later scope materialization.
     for allowance in [total - tail - 1, total] {

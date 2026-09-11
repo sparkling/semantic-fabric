@@ -23,31 +23,33 @@ mod variables;
 #[path = "cache_canonical/walk.rs"]
 mod walk;
 
-/// Stabilize isolated constant DESCRIBE binders before any metered compilation.
+/// Stabilize eligible internal aggregate and constant DESCRIBE binders before
+/// metered compilation. The historical function name is retained for both
+/// direct and isolated parser callsites.
 /// The isolated parser calls this inside its bounded worker, not in the parent.
 /// Direct parsing retains caller-owned execution. This is semantic alpha
 /// renaming, not a spelling heuristic: an authored isolated constant BIND can
 /// have the same AST and qualifies too; observable/ambiguous roles are preserved.
 pub(crate) fn normalize_describe_parse(query: &mut Query) -> Result<()> {
-    if !matches!(query, Query::Describe { .. }) {
-        return Ok(());
-    }
     use crate::compile_envelope::CompileEnvelopeError;
     use sf_core::query_control::QueryControlError;
-    AlgebraEnvelopeV1::validate(query).map_err(|error| match error {
+    let envelope = AlgebraEnvelopeV1::validate(query).map_err(|error| match error {
         CompileEnvelopeError::AllocationFailed => QueryControlError::CompilerResourceExhausted,
         _ => QueryControlError::CompilerEnvelopeExceeded,
     })?;
+    if !envelope.cache_internal_binders {
+        return Ok(());
+    }
     let work = BuildWork::new(CompilerWorkMode::Uncontrolled);
+    if let Query::Select { pattern, .. } = query {
+        if !explicit_projection(pattern, work)? {
+            return Ok(());
+        }
+    }
     let mut names = variables::Names::new(work);
-    walk::query(query, work, &mut |v, role| {
-        // Parser output normalization must never rewrite aggregate binders.
-        let role = match role {
-            variables::Role::Aggregate => variables::Role::Preserved,
-            other => other,
-        };
-        names.observe(v, role)
-    })?;
+    // Reuse the cache's complete role analysis: authored bindings, projection
+    // escapes and ambiguous definitions remain preserved, not guessed by name.
+    walk::query(query, work, &mut |v, role| names.observe(v, role))?;
     if names.assign_parser()? {
         walk::query(query, work, &mut |v, _| names.rename(v))?;
     }

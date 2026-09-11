@@ -81,6 +81,26 @@ fn second_level_branches(branch: &Branch) -> &[Branch] {
     &nested_branches(branch)[0].subplan_joins[0].plan.branches
 }
 
+// Independently price the work between candidate cloning and recursive entry.
+// These fixtures have equal projection widths, so every adjacent pair is visited.
+fn candidate_tail_work(source: &[Branch]) -> u64 {
+    let post = cascade::run(source.to_vec(), &[], &cascade::CascadeCtx::default());
+    let control = budget(u64::MAX);
+    let work = crate::build::control::BuildWork::new(CompilerWorkMode::Metered(
+        CompileContext::new(&control),
+    ));
+    for branch in &post {
+        crate::finalization::projection(branch, work).unwrap();
+    }
+    let vector = post.len() as u64 * (1 + std::mem::size_of::<usize>() as u64);
+    let comparisons = if source.len() == 1 {
+        0
+    } else {
+        post.len().saturating_sub(1) as u64
+    };
+    vector + control.consumed(QueryCharge::CompilerWork) + 1 + comparisons
+}
+
 fn condition_with_nested_exists() -> Vec<IqCond> {
     vec![IqCond::Exists(Box::new(IqNode::Values {
         vars: vec!["inside".into()],
@@ -144,7 +164,9 @@ fn metered_nested_subplan_clone_accepts_the_exact_measure() {
         &source,
     )))
     .unwrap();
-    let budget = budget(measure.total_work);
+    // Root entry + join visit, candidate preparation, then two leaf entries.
+    let expected = 2 + measure.total_work + candidate_tail_work(nested_branches(&source)) + 2;
+    let budget = budget(expected);
     let mode = CompilerWorkMode::Metered(CompileContext::new(&budget));
     let mut metered = source.clone();
     let mut raw = source;
@@ -153,10 +175,7 @@ fn metered_nested_subplan_clone_accepts_the_exact_measure() {
     cascade_subplans(&mut raw, &[], CompilerWorkMode::Uncontrolled).unwrap();
 
     assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
-    assert_eq!(
-        budget.consumed(QueryCharge::CompilerWork),
-        measure.total_work
-    );
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), expected);
 }
 
 #[test]
@@ -166,7 +185,7 @@ fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
         &source,
     )))
     .unwrap();
-    let budget = budget(measure.total_work - 1);
+    let budget = budget(2 + measure.total_work - 1);
     let before = format!("{source:?}");
     let allocation = nested_branches(&source).as_ptr();
 
@@ -184,7 +203,7 @@ fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
     assert_eq!(nested_branches(&source).as_ptr(), allocation);
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        measure.measurement_work
+        2 + measure.measurement_work
     );
     assert_eq!(
         budget.checkpoint(),
@@ -203,7 +222,9 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
         second_level_branches(&source),
     ))
     .unwrap();
-    let budget = budget(outer_measure.total_work + inner_measure.total_work - 1);
+    let before_inner =
+        2 + outer_measure.total_work + candidate_tail_work(nested_branches(&source)) + 2;
+    let budget = budget(before_inner + inner_measure.total_work - 1);
     let before = format!("{source:?}");
     let original_outer_allocation = nested_branches(&source).as_ptr();
 
@@ -225,7 +246,7 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
     );
     assert_eq!(
         budget.consumed(QueryCharge::CompilerWork),
-        outer_measure.total_work + inner_measure.measurement_work,
+        before_inner + inner_measure.measurement_work,
         "completed operation charges are never refunded"
     );
     assert_eq!(
