@@ -11,10 +11,13 @@ use tower::ServiceExt;
 
 #[path = "query_budget/cache_key.rs"]
 mod cache_key;
-use cache_key::{build_work, key_work};
+use cache_key::{build_work, key_work, normalization_work};
 
 #[path = "query_budget/constant_normalization.rs"]
 mod constant_normalization;
+
+#[path = "query_budget/structural_normalization.rs"]
+mod structural_normalization;
 
 #[path = "query_budget/graph_inventory.rs"]
 mod graph_inventory;
@@ -298,7 +301,7 @@ async fn zero_compiler_work_is_a_pre_response_429() {
 async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
     let query = CLONING;
     let response = router(Arc::new(protected(
-        query.len() as u64 + key_work(query) + build_work(query),
+        query.len() as u64 + key_work(query) + build_work(query) + normalization_work(query, &[]),
     )))
     .oneshot(authenticated(query))
     .await
@@ -309,7 +312,10 @@ async fn compiler_clone_work_cannot_spend_only_its_input_allowance() {
 #[tokio::test]
 async fn compiler_products_cannot_spend_only_their_input_allowance() {
     let response = router(Arc::new(protected(
-        PRODUCTS.len() as u64 + key_work(PRODUCTS) + build_work(PRODUCTS),
+        PRODUCTS.len() as u64
+            + key_work(PRODUCTS)
+            + build_work(PRODUCTS)
+            + normalization_work(PRODUCTS, &[]),
     )))
     .oneshot(authenticated(PRODUCTS))
     .await

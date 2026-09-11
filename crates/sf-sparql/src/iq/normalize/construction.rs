@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use super::control::RowWork;
 use super::unions::normalize_union;
 use crate::iq::node::{BindDef, IqNode, Var};
-use crate::{CompilerWorkMode, Result};
+use crate::Result;
 
 // ---- (a) substitution-lifting ----------------------------------------------------
 
@@ -19,8 +20,9 @@ pub(super) fn lift_construction(
     subst: BTreeMap<Var, BindDef>,
     project: Vec<Var>,
     child: IqNode,
-    work_mode: CompilerWorkMode<'_>,
+    work: RowWork<'_>,
 ) -> Result<IqNode> {
+    work.charge(1)?;
     match child {
         // Construction ∘ Construction: compose the inner substitution into the outer
         // (the outer overrides on a key clash — a re-bind), keep the outer projection,
@@ -32,9 +34,12 @@ pub(super) fn lift_construction(
         } => {
             let mut merged = inner;
             for (k, v) in subst {
+                work.map_access(&merged, &k)?;
+                work.map_entry::<BindDef>()?;
                 merged.insert(k, v);
+                work.checkpoint()?;
             }
-            lift_construction(merged, project, *gchild, work_mode)
+            lift_construction(merged, project, *gchild, work.enter()?)
         }
 
         // Construction over Union: push the substitution AND the projection into each
@@ -53,21 +58,23 @@ pub(super) fn lift_construction(
             // `project`, for each of the first A-1 arms; clone only `project` for
             // the final arm. The original `subst` moves into that final arm and
             // the original `project` moves into the resulting outer Union.
-            let mut out = Vec::with_capacity(arms.len());
+            let mut out = work.vector(arms.len())?;
             let last = arms.pop();
             for a in arms {
-                let arm_subst = work_mode.clone_iq_substitution(&subst)?;
-                let arm_project = work_mode.clone_variables(&project)?;
-                out.push(lift_construction(arm_subst, arm_project, a, work_mode)?);
+                work.charge(1)?;
+                let arm_subst = work.mode.clone_iq_substitution(&subst)?;
+                let arm_project = work.mode.clone_variables(&project)?;
+                out.push(lift_construction(arm_subst, arm_project, a, work.enter()?)?);
             }
             if let Some(a) = last {
                 // Every arm owns an independent substitution. Preserve order while
                 // moving the original into the final arm, so only the preceding
                 // fan-out arms pay for recursive copies.
-                let arm_project = work_mode.clone_variables(&project)?;
-                out.push(lift_construction(subst, arm_project, a, work_mode)?);
+                work.charge(1)?;
+                let arm_project = work.mode.clone_variables(&project)?;
+                out.push(lift_construction(subst, arm_project, a, work.enter()?)?);
             }
-            normalize_union(out, project, work_mode)
+            normalize_union(out, project, work.mode)
         }
 
         // Construction over Empty: ∅ over the projected variables.
@@ -75,7 +82,7 @@ pub(super) fn lift_construction(
 
         // Construction over a join / leaf / filter / left-join body: the leaf-CQ root.
         other => Ok(IqNode::Construction {
-            child: Box::new(other),
+            child: work.boxed(other)?,
             subst,
             project,
         }),

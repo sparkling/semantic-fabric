@@ -1,54 +1,11 @@
 use std::collections::BTreeMap;
 
-use super::normalize_with_work_mode;
+use super::bindings::merge_into;
+use super::conditions::normalize_conds;
+use super::control::{RowVec, RowWork};
 use super::unions::normalize_union;
 use crate::iq::node::{BindDef, IqCond, IqNode, Var};
-use crate::unify::{unify, Unify};
-use crate::{CompilerWorkMode, Error, Result};
-
-/// Merge an `incoming` substitution into the accumulator `acc`, mirroring the flat
-/// [`merge`](crate::unfold) (`unfold.rs:1182-1206`) variable-by-variable:
-///
-/// * a variable absent from `acc` is **rebound** from `incoming` (the
-///   `bindings.get(var) == None ⇒ insert other side` line, `unfold.rs:1197-1199`) —
-///   a free dimension, **no equality** (R2);
-/// * a variable bound in **both** seeds an equality via the proven
-///   [`crate::unify::unify`] oracle: `Sat` conds are appended to `eqs` (as
-///   [`IqCond::Sql`]); `Empty` (provably disjoint) signals the whole join is empty;
-///   `Unsupported` propagates as a tracked sound-501.
-///
-/// A shared variable whose def is a **symbolic** [`BindDef::Expr`] on either side
-/// cannot be unified before LOWER (the flat oracle likewise defers a `Concat`/computed
-/// binding, [`crate::unify::unify`]) → a tracked sound-501, never silently dropped.
-///
-/// Returns `Ok(true)` iff the merge proved the join empty (a disjointness prune).
-fn merge_into(
-    acc: &mut BTreeMap<Var, BindDef>,
-    incoming: BTreeMap<Var, BindDef>,
-    eqs: &mut Vec<IqCond>,
-) -> Result<bool> {
-    for (var, rdef) in incoming {
-        match acc.get(&var) {
-            None => {
-                acc.insert(var, rdef);
-            }
-            Some(ldef) => match (ldef, &rdef) {
-                (BindDef::Resolved(l), BindDef::Resolved(r)) => match unify(l, r) {
-                    Unify::Sat(conds) => eqs.extend(conds.into_iter().map(IqCond::Sql)),
-                    Unify::Empty => return Ok(true),
-                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-                },
-                _ => {
-                    return Err(Error::Unsupported(format!(
-                        "normalize: shared join variable ?{var} has a symbolic BIND \
-                         definition on one side → 501 (deferred, never silently dropped)"
-                    )))
-                }
-            },
-        }
-    }
-    Ok(false)
-}
+use crate::Result;
 
 // ---- (b) + (a) inner join: distribute over Union, else lift to one Construction ---
 
@@ -60,20 +17,28 @@ fn merge_into(
 pub(super) fn normalize_inner_join(
     children: Vec<IqNode>,
     cond: Vec<IqCond>,
-    work_mode: CompilerWorkMode<'_>,
+    work: RowWork<'_>,
 ) -> Result<IqNode> {
-    let join_vars = union_vars(&children);
+    work.charge(1)?;
+    let join_vars = union_vars(&children, work)?;
 
     // (c) absorbing: any Empty child ⇒ the whole join is Empty over all its vars.
-    if children.iter().any(|c| matches!(c, IqNode::Empty { .. })) {
-        return Ok(IqNode::Empty { vars: join_vars });
+    for child in &children {
+        work.charge(1)?;
+        if matches!(child, IqNode::Empty { .. }) {
+            return Ok(IqNode::Empty { vars: join_vars });
+        }
     }
 
     // (c) identity: drop the condition-free `True` element (the empty tuple).
-    let mut children: Vec<IqNode> = children
-        .into_iter()
-        .filter(|c| !matches!(c, IqNode::True))
-        .collect();
+    let mut retained = work.vector(children.len())?;
+    for child in children {
+        work.charge(1)?;
+        if !matches!(child, IqNode::True) {
+            retained.push(child);
+        }
+    }
+    let mut children = retained;
     if children.is_empty() {
         // §4.13: `True` is the InnerJoin identity for a CONDITION-FREE join only. A
         // join of only `True` children with a residual `cond` is NOT vacuous (the cond
@@ -83,8 +48,8 @@ pub(super) fn normalize_inner_join(
             Ok(IqNode::True)
         } else {
             Ok(IqNode::Filter {
-                child: Box::new(IqNode::True),
-                cond: normalize_conds(cond, work_mode)?,
+                child: work.boxed(IqNode::True)?,
+                cond: normalize_conds(cond, work)?,
             })
         };
     }
@@ -94,35 +59,52 @@ pub(super) fn normalize_inner_join(
 
     // (b) distribute over the FIRST Union child (either operand): re-normalize each
     // resulting per-arm InnerJoin, then re-form the Union above the join.
-    if let Some(i) = children
-        .iter()
-        .position(|c| matches!(c, IqNode::Union { .. }))
-    {
+    let mut union_at = None;
+    for (i, child) in children.iter().enumerate() {
+        work.charge(1)?;
+        if matches!(child, IqNode::Union { .. }) {
+            union_at = Some(i);
+            break;
+        }
+    }
+    if let Some(i) = union_at {
+        work.moved::<IqNode>(children.len() - i - 1)?;
         let IqNode::Union {
             children: mut arms, ..
         } = children.remove(i)
         else {
             unreachable!("position matched a Union");
         };
-        let mut out_arms = Vec::with_capacity(arms.len());
+        let mut out_arms = work.vector(arms.len())?;
         let last = arms.pop();
         for arm in arms {
-            let mut nc = work_mode.clone_iq_nodes(&children)?;
-            nc.insert(i, arm);
-            let arm_cond = work_mode.clone_iq_conditions(&cond)?;
-            out_arms.push(normalize_inner_join(nc, arm_cond, work_mode)?);
+            work.charge(1)?;
+            let mut nc = RowVec::new(work.mode.clone_iq_nodes(&children)?);
+            work.insert(&mut nc, i, arm)?;
+            let arm_cond = work.mode.clone_iq_conditions(&cond)?;
+            out_arms.push(normalize_inner_join(
+                nc.into_inner(),
+                arm_cond,
+                work.enter()?,
+            )?);
         }
         if let Some(arm) = last {
             // The final distributed arm can consume both fixed operands and the
             // condition; all earlier arms still require independent copies.
-            children.insert(i, arm);
-            out_arms.push(normalize_inner_join(children, cond, work_mode)?);
+            work.charge(1)?;
+            let mut children = RowVec::new(children);
+            work.insert(&mut children, i, arm)?;
+            out_arms.push(normalize_inner_join(
+                children.into_inner(),
+                cond,
+                work.enter()?,
+            )?);
         }
-        return normalize_union(out_arms, join_vars, work_mode);
+        return normalize_union(out_arms, join_vars, work.mode);
     }
 
     // (a) no Union child: lift the children's Constructions to one Construction.
-    lift_inner_join(children, cond, join_vars, work_mode)
+    lift_inner_join(children, cond, join_vars, work)
 }
 
 /// Lift the `Construction`s of a Union-free `InnerJoin` into a single `Construction`
@@ -135,14 +117,16 @@ fn lift_inner_join(
     children: Vec<IqNode>,
     cond: Vec<IqCond>,
     join_vars: Vec<Var>,
-    work_mode: CompilerWorkMode<'_>,
+    work: RowWork<'_>,
 ) -> Result<IqNode> {
+    work.charge(1)?;
     let mut acc: BTreeMap<Var, BindDef> = BTreeMap::new();
-    let mut body_children: Vec<IqNode> = Vec::new();
-    let mut body_cond: Vec<IqCond> = normalize_conds(cond, work_mode)?;
+    let mut body_children = RowVec::new(Vec::new());
+    let mut body_cond = RowVec::new(normalize_conds(cond, work)?);
     let mut had_construction = false;
 
     for child in children {
+        work.charge(1)?;
         match child {
             IqNode::Construction {
                 child: cbody,
@@ -150,7 +134,7 @@ fn lift_inner_join(
                 ..
             } => {
                 had_construction = true;
-                if merge_into(&mut acc, subst, &mut body_cond)? {
+                if merge_into(&mut acc, subst, &mut body_cond, work)? {
                     return Ok(IqNode::Empty { vars: join_vars });
                 }
                 // Splice a nested InnerJoin body (associativity); else add it whole.
@@ -159,10 +143,10 @@ fn lift_inner_join(
                         children: gc,
                         cond: gcond,
                     } => {
-                        body_children.extend(gc);
-                        body_cond.extend(gcond);
+                        work.append(&mut body_children, gc)?;
+                        work.append(&mut body_cond, gcond)?;
                     }
-                    other => body_children.push(other),
+                    other => work.push(&mut body_children, other)?,
                 }
             }
             // A bare (Construction-free) nested InnerJoin flattens directly.
@@ -170,12 +154,15 @@ fn lift_inner_join(
                 children: gc,
                 cond: gcond,
             } => {
-                body_children.extend(gc);
-                body_cond.extend(gcond);
+                work.append(&mut body_children, gc)?;
+                work.append(&mut body_cond, gcond)?;
             }
-            other => body_children.push(other),
+            other => work.push(&mut body_children, other)?,
         }
     }
+
+    let mut body_children = body_children.into_inner();
+    let body_cond = body_cond.into_inner();
 
     let body = match body_children.len() {
         0 => IqNode::True,
@@ -188,7 +175,7 @@ fn lift_inner_join(
 
     if had_construction {
         Ok(IqNode::Construction {
-            child: Box::new(body),
+            child: work.boxed(body)?,
             subst: acc,
             project: join_vars,
         })
@@ -207,32 +194,35 @@ fn lift_inner_join(
 pub(super) fn normalize_filter(
     cond: Vec<IqCond>,
     child: IqNode,
-    work_mode: CompilerWorkMode<'_>,
+    work: RowWork<'_>,
 ) -> Result<IqNode> {
-    let cond = normalize_conds(cond, work_mode)?;
+    work.charge(1)?;
+    let cond = normalize_conds(cond, work)?;
     match child {
         IqNode::Empty { vars } => Ok(IqNode::Empty { vars }),
         IqNode::Union {
             children: mut arms,
             project,
         } => {
-            let mut out = Vec::with_capacity(arms.len());
+            let mut out = work.vector(arms.len())?;
             let last = arms.pop();
             for a in arms {
-                let arm_cond = work_mode.clone_iq_conditions(&cond)?;
-                out.push(normalize_filter(arm_cond, a, work_mode)?);
+                work.charge(1)?;
+                let arm_cond = work.mode.clone_iq_conditions(&cond)?;
+                out.push(normalize_filter(arm_cond, a, work.enter()?)?);
             }
             if let Some(a) = last {
-                out.push(normalize_filter(cond, a, work_mode)?);
+                work.charge(1)?;
+                out.push(normalize_filter(cond, a, work.enter()?)?);
             }
-            normalize_union(out, project, work_mode)
+            normalize_union(out, project, work.mode)
         }
         IqNode::Construction {
             child: body,
             subst,
             project,
         } => Ok(IqNode::Construction {
-            child: Box::new(push_filter(cond, *body)),
+            child: work.boxed(push_filter(cond, *body, work)?)?,
             subst,
             project,
         }),
@@ -240,15 +230,15 @@ pub(super) fn normalize_filter(
             child: body,
             cond: inner,
         } => {
-            let mut merged = cond;
-            merged.extend(inner);
+            let mut merged = RowVec::new(cond);
+            work.append(&mut merged, inner)?;
             Ok(IqNode::Filter {
                 child: body,
-                cond: merged,
+                cond: merged.into_inner(),
             })
         }
         other => Ok(IqNode::Filter {
-            child: Box::new(other),
+            child: work.boxed(other)?,
             cond,
         }),
     }
@@ -256,21 +246,22 @@ pub(super) fn normalize_filter(
 
 /// Wrap `body` in a `Filter[cond]`, coalescing with an existing `Filter` (the `cond`
 /// is already normalized).
-fn push_filter(cond: Vec<IqCond>, body: IqNode) -> IqNode {
-    match body {
+fn push_filter(cond: Vec<IqCond>, body: IqNode, work: RowWork<'_>) -> Result<IqNode> {
+    work.charge(1)?;
+    Ok(match body {
         IqNode::Filter { child, cond: inner } => {
-            let mut merged = cond;
-            merged.extend(inner);
+            let mut merged = RowVec::new(cond);
+            work.append(&mut merged, inner)?;
             IqNode::Filter {
                 child,
-                cond: merged,
+                cond: merged.into_inner(),
             }
         }
         other => IqNode::Filter {
-            child: Box::new(other),
+            child: work.boxed(other)?,
             cond,
         },
-    }
+    })
 }
 
 // ---- (b) left join: distribute over the LEFT union only ---------------------------
@@ -284,17 +275,16 @@ pub(super) fn normalize_left_join(
     left: IqNode,
     right: IqNode,
     cond: Vec<IqCond>,
-    work_mode: CompilerWorkMode<'_>,
+    work: RowWork<'_>,
 ) -> Result<IqNode> {
-    let cond = normalize_conds(cond, work_mode)?;
+    work.charge(1)?;
+    let cond = normalize_conds(cond, work)?;
     let combined_vars = {
-        let mut v = left.output_vars();
-        for x in right.output_vars() {
-            if !v.contains(&x) {
-                v.push(x);
-            }
+        let mut v = RowVec::new(crate::build::controlled_output_vars(&left, work)?);
+        for x in crate::build::controlled_output_vars(&right, work)? {
+            work.unique(&mut v, x)?;
         }
-        v
+        v.into_inner()
     };
     match left {
         IqNode::Empty { .. } => Ok(IqNode::Empty {
@@ -303,72 +293,43 @@ pub(super) fn normalize_left_join(
         IqNode::Union {
             children: mut arms, ..
         } => {
-            let mut out = Vec::with_capacity(arms.len());
+            let mut out = work.vector(arms.len())?;
             let last = arms.pop();
             for a in arms {
-                let arm_right = work_mode.clone_iq_node(&right)?;
-                let arm_cond = work_mode.clone_iq_conditions(&cond)?;
-                out.push(normalize_left_join(a, arm_right, arm_cond, work_mode)?);
+                work.charge(1)?;
+                let arm_right = work.mode.clone_iq_node(&right)?;
+                let arm_cond = work.mode.clone_iq_conditions(&cond)?;
+                out.push(normalize_left_join(a, arm_right, arm_cond, work.enter()?)?);
             }
             if let Some(a) = last {
                 // LEFT JOIN is non-commutative, so retain the left-arm order and
                 // transfer the original shared right/condition only to the last.
-                out.push(normalize_left_join(a, right, cond, work_mode)?);
+                work.charge(1)?;
+                out.push(normalize_left_join(a, right, cond, work.enter()?)?);
             }
-            normalize_union(out, combined_vars, work_mode)
+            normalize_union(out, combined_vars, work.mode)
         }
         _ => match right {
             IqNode::Empty { .. } => Ok(left),
             _ => Ok(IqNode::LeftJoin {
-                left: Box::new(left),
-                right: Box::new(right),
+                left: work.boxed(left)?,
+                right: work.boxed(right)?,
                 cond,
             }),
         },
     }
 }
 
-// ---- condition normalization (descend into EXISTS / NOT EXISTS payloads) ----------
-
-/// Normalize a conjunction of [`IqCond`]s (design-lock §3 recursion clause). The
-/// symbolic `Expr`/`Sql` leaves pass through untouched (FILTER/ON stays symbolic until
-/// LOWER); the `Exists`/`NotExists` subtrees are normalized as first-class `IqNode`s.
-fn normalize_conds(conds: Vec<IqCond>, work_mode: CompilerWorkMode<'_>) -> Result<Vec<IqCond>> {
-    conds
-        .into_iter()
-        .map(|cond| normalize_cond(cond, work_mode))
-        .collect()
-}
-
-/// Normalize one [`IqCond`], descending into the built `IqNode` of an
-/// `Exists`/`NotExists` payload (and through the boolean combinators).
-fn normalize_cond(cond: IqCond, work_mode: CompilerWorkMode<'_>) -> Result<IqCond> {
-    match cond {
-        IqCond::Expr(e) => Ok(IqCond::Expr(e)),
-        IqCond::Sql(s) => Ok(IqCond::Sql(s)),
-        IqCond::And(cs) => Ok(IqCond::And(normalize_conds(cs, work_mode)?)),
-        IqCond::Or(cs) => Ok(IqCond::Or(normalize_conds(cs, work_mode)?)),
-        IqCond::Not(c) => Ok(IqCond::Not(Box::new(normalize_cond(*c, work_mode)?))),
-        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(normalize_with_work_mode(
-            *n, work_mode,
-        )?))),
-        IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
-            inner: Box::new(normalize_with_work_mode(*inner, work_mode)?),
-            is_minus,
-        }),
-    }
-}
-
 /// The de-duplicated union of the children's output scopes (stable order) — the var
 /// signature an `InnerJoin`/`Empty`/distributed-`Union` publishes.
-fn union_vars(nodes: &[IqNode]) -> Vec<Var> {
-    let mut out: Vec<Var> = Vec::new();
+fn union_vars(nodes: &[IqNode], work: RowWork<'_>) -> Result<Vec<Var>> {
+    work.charge(1)?;
+    let mut out = RowVec::new(Vec::new());
     for n in nodes {
-        for v in n.output_vars() {
-            if !out.contains(&v) {
-                out.push(v);
-            }
+        work.charge(1)?;
+        for v in crate::build::controlled_output_vars(n, work)? {
+            work.unique(&mut out, v)?;
         }
     }
-    out
+    Ok(out.into_inner())
 }

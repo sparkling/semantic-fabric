@@ -56,16 +56,51 @@ pub(crate) fn build_work(source: &str) -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Isolate NORMALIZE after raw BUILD/RESOLVE. Later LOWER/copy tests pay this
+/// prerequisite without measuring away the operation they intend to reject.
+/// No database access, and no RDF-star/DESCRIBE rewrite is modeled here.
+pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let spargebra::Query::Select { pattern, .. } =
+        spargebra::SparqlParser::new().parse_query(source).unwrap()
+    else {
+        panic!("NORMALIZE calibration requires ordinary SELECT");
+    };
+    let tree = sf_sparql::build::build_tree(&pattern, None).unwrap();
+    let tbox = sf_sparql::Tbox::default();
+    let mut cx = sf_sparql::iq::resolve::ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &[]);
+    let resolved = sf_sparql::iq::resolve::resolve(tree, &mut cx).unwrap();
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    sf_sparql::iq::normalize::normalize_with_work_control(resolved, &control).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 pub(crate) const CONSTANT_QUERIES: [&str; 3] = [
     "SELECT DISTINCT ?value WHERE { VALUES ?value { \"one\" \"one\" \"two\" } }",
     "SELECT ?value WHERE { { VALUES ?value { \"one\" } } UNION { VALUES ?value { \"two\" } } }",
     "SELECT ?value WHERE { VALUES ?value { \"skip\" \"one\" \"two\" \"tail\" } } LIMIT 2 OFFSET 1",
 ];
 
+pub(crate) const STRUCTURAL_QUERIES: [&str; 3] = [
+    "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } FILTER EXISTS { VALUES ?inside { 7 } } }",
+    "SELECT ?value WHERE { { SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } } }",
+    "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } OPTIONAL { VALUES ?inside { 7 } } }",
+];
+
+pub(crate) fn structural_compile_work(source: &str) -> u64 {
+    assert!(STRUCTURAL_QUERIES.contains(&source));
+    source_free_compile_work(source)
+}
+
 /// End-to-end cold compiler allowance for the three source-free row-rule fixtures.
 /// Unit tests independently pin the new NORMALIZE schedule and copy boundaries.
 /// This excludes serving's decoded-input charge; a warm hit still pays only key work.
 pub(crate) fn constant_compile_work(source: &str) -> u64 {
+    assert!(CONSTANT_QUERIES.contains(&source));
+    source_free_compile_work(source)
+}
+
+fn source_free_compile_work(source: &str) -> u64 {
     use sf_core::{
         query_control::{QueryBudget, QueryCharge, QueryLimits},
         SourceId, SourceMapping,
@@ -74,7 +109,6 @@ pub(crate) fn constant_compile_work(source: &str) -> u64 {
         cache::{CompilerBinding, Epoch},
         Tbox,
     };
-    assert!(CONSTANT_QUERIES.contains(&source));
     let binding = CompilerBinding::from_unverified_observation(
         SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
         sf_sql::Dialect::Sqlite,

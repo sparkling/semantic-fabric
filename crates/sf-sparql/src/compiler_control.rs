@@ -14,6 +14,14 @@ use crate::plan_measure::clone_root::{
 use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
 use crate::{Error, Result};
 
+mod unification_work;
+
+#[cfg(test)]
+mod unification_work_tests;
+
+#[cfg(test)]
+pub(crate) mod normalization_test_support;
+
 /// A compiler-facing view of the request's shared query control.
 ///
 /// This adapter deliberately owns no counter, clock, deadline, or cancellation

@@ -10,7 +10,10 @@ const QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o }";
 
 #[path = "../tests/support/compiler_key.rs"]
 mod compiler_key;
-use compiler_key::{build_work, key_work};
+use compiler_key::{build_work, key_work, normalization_work};
+
+#[path = "request_normalize_tests.rs"]
+mod structural_normalization;
 
 fn config(work: u64) -> (Arc<ServeConfig>, crate::SqlitePool) {
     config_with_mapping(work, vec![])
@@ -40,7 +43,7 @@ fn config_with_mapping(
 
 #[tokio::test]
 async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
-    let build = build_work(QUERY);
+    let build = build_work(QUERY) + normalization_work(QUERY, &[]);
     let input = QUERY.len() as u64;
     let key = key_work(QUERY);
     let exact = 2 * input + key + 2 * build;
@@ -186,7 +189,14 @@ async fn compiler_expansion_work_rejects_before_source_admission() {
         ),
         ("SELECT ?s ?o WHERE { ?s !<urn:absent> ?o }", path_maps, 0),
     ] {
-        let preflight_work = query.len() as u64 + build_work(query) + extra;
+        // Source-free fixtures target LOWER; mapped fixtures still target earlier
+        // RESOLVE. Do not move their existing rejection boundary to NORMALIZE.
+        let normalization = if maps.is_empty() {
+            normalization_work(query, &[])
+        } else {
+            0
+        };
+        let preflight_work = query.len() as u64 + build_work(query) + normalization + extra;
         let (mut cfg, pool) = config_with_mapping(preflight_work + key_work(query), maps);
         Arc::get_mut(&mut cfg)
             .unwrap()

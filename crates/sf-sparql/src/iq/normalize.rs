@@ -77,6 +77,8 @@
 //! identities — none deduplicate. The bag multiplicity is preserved end-to-end, which
 //! is the `=_bag` (multiset-equivalence to the flat base translation) invariant.
 
+mod bindings;
+mod conditions;
 mod construction;
 mod control;
 mod distinct;
@@ -105,12 +107,37 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
     normalize_with_work_mode(node, CompilerWorkMode::Uncontrolled)
 }
 
+/// Normalize a resolved tree using the request's shared work/cancellation state.
+/// This controls NORMALIZE operations, not parsing, resolution, later phases,
+/// physical allocator behavior or destruction; it does not admit a profile.
+pub fn normalize_with_work_control(
+    node: IqNode,
+    control: &dyn sf_core::query_control::QueryControl,
+) -> Result<IqNode> {
+    normalize_with_work_mode(
+        node,
+        CompilerWorkMode::Metered(crate::compiler_control::CompileContext::new(control)),
+    )
+}
+
 /// Internal normalization entry point carrying the private compiler-work seam.
-/// Public/raw normalization always calls [`normalize`] and remains uncontrolled.
+/// Existing raw callers use [`normalize`] and remain uncontrolled.
 pub(crate) fn normalize_with_work_mode(
     node: IqNode,
     work_mode: CompilerWorkMode<'_>,
 ) -> Result<IqNode> {
+    normalize_node(node, control::RowWork::new(work_mode))
+}
+
+fn normalize_node(node: IqNode, work: control::RowWork<'_>) -> Result<IqNode> {
+    let work = work.enter()?;
+    let result = normalize_dispatch(node, work);
+    work.checkpoint()?;
+    result
+}
+
+#[inline(never)]
+fn normalize_dispatch(node: IqNode, work: control::RowWork<'_>) -> Result<IqNode> {
     match node {
         // ---- substitution-lifting carrier (a) -----------------------------------
         IqNode::Construction {
@@ -118,42 +145,31 @@ pub(crate) fn normalize_with_work_mode(
             subst,
             project,
         } => {
-            let child = normalize_with_work_mode(*child, work_mode)?;
-            construction::lift_construction(subst, project, child, work_mode)
+            let child = normalize_node(*child, work)?;
+            construction::lift_construction(subst, project, child, work)
         }
 
         // ---- selection: distribute over Union, else push below Construction -----
         IqNode::Filter { child, cond } => {
-            let child = normalize_with_work_mode(*child, work_mode)?;
-            relational::normalize_filter(cond, child, work_mode)
+            let child = normalize_node(*child, work)?;
+            relational::normalize_filter(cond, child, work)
         }
 
         // ---- n-ary inner join: distribute over Union, else lift Constructions ----
         IqNode::InnerJoin { children, cond } => {
-            let children = children
-                .into_iter()
-                .map(|child| normalize_with_work_mode(child, work_mode))
-                .collect::<Result<Vec<_>>>()?;
-            relational::normalize_inner_join(children, cond, work_mode)
+            let children = normalize_children(children, work)?;
+            relational::normalize_inner_join(children, cond, work)
         }
 
         // ---- left join: distribute over a LEFT Union only; right stays intact ----
         IqNode::LeftJoin { left, right, cond } => {
-            let left = normalize_with_work_mode(*left, work_mode)?;
-            let right = normalize_with_work_mode(*right, work_mode)?;
-            relational::normalize_left_join(left, right, cond, work_mode)
+            normalize_left_children(*left, *right, cond, work)
         }
 
         // ---- bag union: flatten, prune Empty arms (NO arm-merge) ----------------
         IqNode::Union { children, project } => {
-            let work = control::RowWork::new(work_mode);
-            work.charge(1)?;
-            let mut out = work.vector(children.len())?;
-            for child in children {
-                work.charge(1)?;
-                out.push(normalize_with_work_mode(child, work_mode)?);
-            }
-            unions::normalize_union(out, project, work_mode)
+            let out = normalize_children(children, work)?;
+            unions::normalize_union(out, project, work.mode)
         }
 
         // ---- modifier spine: normalize the child, keep the node above the Union --
@@ -162,24 +178,24 @@ pub(crate) fn normalize_with_work_mode(
             grouping,
             aggs,
         } => Ok(IqNode::Aggregation {
-            child: Box::new(normalize_with_work_mode(*child, work_mode)?),
+            child: work.boxed(normalize_node(*child, work)?)?,
             grouping,
             aggs,
         }),
         IqNode::Distinct { child } => {
-            let child = normalize_with_work_mode(*child, work_mode)?;
-            distinct::normalize_distinct(child, work_mode)
+            let child = normalize_node(*child, work)?;
+            distinct::normalize_distinct(child, work.mode)
         }
         IqNode::Slice {
             child,
             offset,
             limit,
         } => {
-            let child = normalize_with_work_mode(*child, work_mode)?;
-            slice::normalize_slice(offset, limit, child, work_mode)
+            let child = normalize_node(*child, work)?;
+            slice::normalize_slice(offset, limit, child, work.mode)
         }
         IqNode::OrderBy { child, keys } => Ok(IqNode::OrderBy {
-            child: Box::new(normalize_with_work_mode(*child, work_mode)?),
+            child: work.boxed(normalize_node(*child, work)?)?,
             keys,
         }),
 
@@ -197,6 +213,28 @@ pub(crate) fn normalize_with_work_mode(
     }
 }
 
+#[inline(never)]
+fn normalize_children(children: Vec<IqNode>, work: control::RowWork<'_>) -> Result<Vec<IqNode>> {
+    let mut out = work.vector(children.len())?;
+    for child in children {
+        work.charge(1)?;
+        out.push(normalize_node(child, work)?);
+    }
+    Ok(out)
+}
+
+#[inline(never)]
+fn normalize_left_children(
+    left: IqNode,
+    right: IqNode,
+    cond: Vec<crate::iq::node::IqCond>,
+    work: control::RowWork<'_>,
+) -> Result<IqNode> {
+    let left = normalize_node(left, work)?;
+    let right = normalize_node(right, work)?;
+    relational::normalize_left_join(left, right, cond, work)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -205,3 +243,13 @@ mod control_tests;
 
 #[cfg(test)]
 mod constant_control_tests;
+
+#[cfg(test)]
+mod structural_control_tests;
+
+#[cfg(test)]
+mod binding_control_tests;
+#[cfg(test)]
+mod condition_control_tests;
+#[cfg(test)]
+mod structural_test_support;

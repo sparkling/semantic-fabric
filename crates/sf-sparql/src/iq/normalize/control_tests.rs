@@ -301,9 +301,9 @@ fn undef_duplicates_pay_hand_counted_visits_comparisons_and_suffix_movement() {
     };
     let control = budget(u64::MAX);
     let result = run(tree, &control).unwrap();
-    // Entry + 3(row+cell) preflight + 3 unique-loop visits + 2 candidate
+    // Two structural visits + row-rule entry + 3(row+cell) preflight + 3 unique-loop visits + 2 candidate
     // visits + 2(length+cell) comparisons + one shifted row header/slot.
-    let expected = 1 + 6 + 3 + 2 + 4 + 1 + std::mem::size_of::<Vec<Option<TermDef>>>();
+    let expected = 2 + 1 + 6 + 3 + 2 + 4 + 1 + std::mem::size_of::<Vec<Option<TermDef>>>();
     assert_eq!(control.consumed(QueryCharge::CompilerWork), expected as u64);
     assert_eq!(
         format!("{result:?}"),

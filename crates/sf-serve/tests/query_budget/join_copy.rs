@@ -10,7 +10,11 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
     );
     // More than input admission alone, but insufficient for the repeated right payload.
     let mut cfg = Arc::new(protected(
-        query.len() as u64 + key_work(&query) + super::cache_key::build_work(&query) + 512,
+        query.len() as u64
+            + key_work(&query)
+            + build_work(&query)
+            + normalization_work(&query, &[])
+            + 512,
     ));
     assert_budget_problem(
         router(cfg.clone())

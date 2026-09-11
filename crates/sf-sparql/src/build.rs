@@ -63,6 +63,10 @@ mod filter;
 mod order;
 mod scope;
 
+pub(crate) fn controlled_output_vars(node: &IqNode, work: BuildWork<'_>) -> Result<Vec<Var>> {
+    scope::output_vars(node, work)
+}
+
 use aggregate::lower_agg_def;
 use control::{BuildVec, BuildWork};
 use filter::lower_filter_to_iqconds;

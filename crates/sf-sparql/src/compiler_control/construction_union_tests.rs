@@ -6,8 +6,8 @@ use sf_core::query_control::{
 };
 use sf_core::{Literal, Term};
 
+use crate::compiler_control::normalization_test_support as structural;
 use crate::compiler_control::CompileContext;
-use crate::compiler_control_normalize_join_tests::nonconstant_union_work;
 use crate::iq::node::{BindDef, IqNode, Var};
 use crate::iq::{Scan, TermDef};
 use crate::plan_measure::clone_root::{measure_copy_collection, CompilerCloneCollectionV1};
@@ -210,9 +210,8 @@ fn exact_variable_collection_clone_accepts_n_and_rejects_n_minus_one() {
 #[test]
 fn construction_over_three_arm_union_charges_exact_schedule_and_preserves_owners() {
     let fixture = construction_union_fixture();
-    let (input_union, output_union) = nonconstant_union_work(3);
     let expected =
-        input_union + 2 * fixture.substitution_work + 3 * fixture.project_work + output_union;
+        structural::construction(3).0 + 2 * fixture.substitution_work + 3 * fixture.project_work;
     let control = budget(expected);
     let raw = crate::iq::normalize::normalize(fixture.tree.clone()).unwrap();
 
@@ -256,8 +255,7 @@ fn construction_over_three_arm_union_charges_exact_schedule_and_preserves_owners
 
 fn assert_construction_union_rejection(max_work: u64, expected_consumed: u64) {
     let fixture = construction_union_fixture();
-    let input_union = nonconstant_union_work(3).0;
-    let control = budget(input_union + max_work);
+    let control = budget(max_work);
 
     assert_control_error(
         crate::iq::normalize::normalize_with_work_mode(
@@ -269,7 +267,7 @@ fn assert_construction_union_rejection(max_work: u64, expected_consumed: u64) {
     );
     assert_eq!(
         control.consumed(QueryCharge::CompilerWork),
-        input_union + expected_consumed
+        expected_consumed
     );
     assert_eq!(
         control.checkpoint(),
@@ -282,22 +280,26 @@ fn construction_union_rejections_pin_substitution_then_projection_operation_orde
     let fixture = construction_union_fixture();
     let substitution = fixture.substitution_work;
     let project = fixture.project_work;
+    let (_, prefix, between) = structural::construction(3);
 
-    assert_construction_union_rejection(substitution - 1, fixture.substitution_measurement);
     assert_construction_union_rejection(
-        substitution + project - 1,
-        substitution + fixture.project_measurement,
+        prefix + substitution - 1,
+        prefix + fixture.substitution_measurement,
     );
     assert_construction_union_rejection(
-        2 * substitution + project - 1,
-        substitution + project + fixture.substitution_measurement,
+        prefix + substitution + project - 1,
+        prefix + substitution + fixture.project_measurement,
     );
     assert_construction_union_rejection(
-        2 * (substitution + project) - 1,
-        2 * substitution + project + fixture.project_measurement,
+        prefix + between + 2 * substitution + project - 1,
+        prefix + between + substitution + project + fixture.substitution_measurement,
     );
     assert_construction_union_rejection(
-        2 * (substitution + project) + project - 1,
-        2 * (substitution + project) + fixture.project_measurement,
+        prefix + between + 2 * (substitution + project) - 1,
+        prefix + between + 2 * substitution + project + fixture.project_measurement,
+    );
+    assert_construction_union_rejection(
+        prefix + 2 * between + 2 * (substitution + project) + project - 1,
+        prefix + 2 * between + 2 * (substitution + project) + fixture.project_measurement,
     );
 }

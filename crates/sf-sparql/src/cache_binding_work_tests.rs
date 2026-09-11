@@ -67,6 +67,18 @@ fn build_work() -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+fn normalization_work() -> u64 {
+    let Query::Select { pattern, .. } = crate::parse_query(QUERY).unwrap() else {
+        panic!();
+    };
+    let built = crate::build::build_tree(&pattern, None).unwrap();
+    let control = budget(u64::MAX);
+    // VALUES/EXISTS has no unresolved leaves. This pays NORMALIZE only, leaving
+    // the two original LOWER/cascade clone boundaries independently measured.
+    crate::iq::normalize::normalize_with_work_control(built, &control).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 #[test]
 fn canonical_key_cold_and_warm_paths_require_work_before_cache_access() {
     let query = "SELECT ?x WHERE { VALUES ?x { \"café 東京\" } }";
@@ -102,7 +114,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let binding = binding();
     let work = clone_work();
     let key = key_work();
-    let build = build_work();
+    let build = build_work() + normalization_work();
     let short = budget(key + build + 2 * work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
@@ -148,7 +160,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
 fn uncached_preflight_charges_each_pass_without_populating_cache() {
     let binding = binding();
     let work = clone_work();
-    let build = build_work();
+    let build = build_work() + normalization_work();
     let total = 2 * build + 4 * work;
     for allowance in [total - 1, total] {
         let control = budget(allowance);
@@ -193,7 +205,7 @@ impl QueryControl for CancelAfterClone {
 #[test]
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
-    let work = key_work() + build_work() + clone_work();
+    let work = key_work() + build_work() + normalization_work() + clone_work();
     let control = CancelAfterClone(budget(u64::MAX), work);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &control),

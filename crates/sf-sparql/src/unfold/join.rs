@@ -339,16 +339,21 @@ mod tests {
         let build_control = budget(u64::MAX);
         crate::build::build_tree_with_work_control(&pattern, None, &build_control).unwrap();
         let build_work = build_control.consumed(QueryCharge::CompilerWork);
-        // Reach the unpaid first 1×4 product after paying the independent BUILD.
-        let short = budget(key_work + build_work + 3);
+        let normalize_control = budget(u64::MAX);
+        crate::iq::normalize::normalize_with_work_control(
+            crate::build::build_tree(&pattern, None).unwrap(),
+            &normalize_control,
+        )
+        .unwrap();
+        let prerequisites =
+            key_work + build_work + normalize_control.consumed(QueryCharge::CompilerWork);
+        // Reach the unpaid first 1×4 product after independent BUILD/NORMALIZE.
+        let short = budget(prerequisites + 3);
         assert!(binding
             .compile_shared_with_work_control(query, &short)
             .is_err());
         assert_eq!(binding.cache_len(), 0);
-        assert_eq!(
-            short.consumed(QueryCharge::CompilerWork),
-            key_work + build_work
-        );
+        assert_eq!(short.consumed(QueryCharge::CompilerWork), prerequisites);
         let paid = budget(100_000);
         let first = binding
             .compile_shared_with_work_control(query, &paid)

@@ -308,7 +308,14 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     let build_control = budget(u64::MAX);
     build::build_tree_with_work_control(pattern, None, &build_control).unwrap();
     let build = build_control.consumed(QueryCharge::CompilerWork);
-    let expected = build + work * 2;
+    let normalization_control = budget(u64::MAX);
+    iq::normalize::normalize_with_work_control(
+        build::build_tree(pattern, None).unwrap(),
+        &normalization_control,
+    )
+    .unwrap();
+    let before_lowering = build + normalization_control.consumed(QueryCharge::CompilerWork);
+    let expected = before_lowering + work * 2;
     let exact = budget(expected);
     let raw = translate_tree(&query, &[], &Tbox::default(), Dialect::Sqlite, &[]).unwrap();
 
@@ -326,7 +333,7 @@ fn private_whole_pipeline_entry_preserves_exact_lowering_mode_and_failure_charge
     );
     assert_eq!(
         short.consumed(QueryCharge::CompilerWork),
-        build + work + measurement
+        before_lowering + work + measurement
     );
     assert_eq!(
         short.checkpoint(),
