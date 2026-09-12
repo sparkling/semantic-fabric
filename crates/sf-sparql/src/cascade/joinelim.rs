@@ -2,11 +2,12 @@
 //! Split out of `cascade` to keep each file within the size budget; it consumes
 //! the FD/uniqueness proof built by pass (3) in the parent module.
 
-use sf_core::ir::{LogicalSource, Segment, Template, TermMap};
+use sf_core::ir::{Segment, Template, TermMap};
 use sf_sql::TableSchema;
 
-use super::{scan_table, Fds};
-use crate::iq::{collect_cond_cols, Branch, ColRef, R2rmlGraphScope, SqlCond, TermDef};
+use super::Fds;
+use crate::build::control::BuildWork;
+use crate::iq::{Branch, R2rmlGraphScope, SqlCond, TermDef};
 
 // --- 2b-pre. LJ→IJ FK-guaranteed downgrade --------------------------------
 
@@ -21,86 +22,15 @@ use crate::iq::{collect_cond_cols, Branch, ColRef, R2rmlGraphScope, SqlCond, Ter
 /// is removed from `b.opts`; subsequent cascade passes (3)/(4) see the promoted
 /// scan as a normal core scan and may eliminate it further.
 pub(super) fn lj_to_ij_fk_downgrade(b: &mut Branch, schema: &[TableSchema]) {
-    let mut i = 0;
-    while i < b.opts.len() {
-        if opt_is_fk_guaranteed(b, i, schema) {
-            let opt = b.opts.remove(i);
-            // Move ON + extra to where_conds; null-safe equalities become plain
-            // column equalities (both sides NOT NULL by FK guarantee).
-            for cond in opt.on.into_iter().chain(opt.extra) {
-                let inner = match cond {
-                    SqlCond::NullSafeEq(a, c) => SqlCond::ColEq(a, c),
-                    other => other,
-                };
-                b.where_conds.push(inner);
-            }
-            b.core.push(opt.scan);
-            // Re-check the same index — a later opt might now also qualify.
-        } else {
-            i += 1;
-        }
-    }
-}
-
-/// Returns `true` when the OptJoin at `opt_idx` is guaranteed to match every
-/// core row: the ON clause is a single (Null)SafeEq between a core FK column and
-/// the opt scan's PK column, the FK is declared NOT NULL in the child table, and
-/// referential integrity is declared in the schema.
-fn opt_is_fk_guaranteed(b: &Branch, opt_idx: usize, schema: &[TableSchema]) -> bool {
-    let opt = &b.opts[opt_idx];
-    let Some(LogicalSource::Table(opt_table)) = opt.scan.source.logical() else {
-        return false;
-    };
-    let opt_alias = opt.scan.alias;
-    // ON must be exactly one NullSafeEq or ColEq.
-    let (core_col, opt_col) = match opt.on.as_slice() {
-        [SqlCond::NullSafeEq(a, c)] | [SqlCond::ColEq(a, c)] => {
-            if a.alias != opt_alias && c.alias == opt_alias {
-                (a, c) // a is core, c is opt
-            } else if c.alias != opt_alias && a.alias == opt_alias {
-                (c, a) // c is core, a is opt
-            } else {
-                return false;
-            }
-        }
-        _ => return false,
-    };
-    // The opt-side column must be a unique key on the opt table (typically the PK).
-    let Some(opt_schema) = schema.iter().find(|t| t.name == *opt_table) else {
-        return false;
-    };
-    if !opt_schema.is_unique_key(&opt_col.column) {
-        return false;
-    }
-    // The core-side must be a declared NOT-NULL FK pointing at opt.
-    let Some(core_table) = scan_table(b, core_col.alias) else {
-        return false;
-    };
-    let Some(core_schema) = schema.iter().find(|t| t.name == core_table) else {
-        return false;
-    };
-    let fk_ok = core_schema.foreign_keys.iter().any(|fk| {
-        fk.parent_table == *opt_table
-            && fk.columns.len() == 1
-            && fk.columns[0] == *core_col.column
-            && fk.parent_columns.len() == 1
-            && fk.parent_columns[0] == *opt_col.column
-    });
-    fk_ok && column_not_null(core_schema, &core_col.column)
+    super::control_join::downgrade(
+        b,
+        schema,
+        BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled join promotion cannot refuse");
 }
 
 // --- 4. FK/PK join elimination --------------------------------------------
-
-/// One eliminable FK/PK join: the child scan keeps its FK column, the parent
-/// scan (reached only for its PK) is dropped, and every reference to the parent
-/// PK is rewritten onto the equal child FK column.
-struct FkElim {
-    cond_idx: usize,
-    parent_alias: usize,
-    parent_col: Box<str>,
-    child_alias: usize,
-    child_col: Box<str>,
-}
 
 /// Drop a parent scan reached **only for its PK** via a **NOT-NULL FK** (the big
 /// Q2/Q3 latency win). Fires only when BOTH integrity facts hold (ADR-0007 — the
@@ -112,14 +42,29 @@ struct FkElim {
 /// (a nullable FK would re-admit NULL rows on removal; a non-unique target would
 /// multiply rows — either breaks the bag). Otherwise a sound no-op.
 pub(super) fn fk_pk_join_elimination(b: &mut Branch, schema: &[TableSchema], fds: &Fds) {
-    // Single-column FK/PK elimination (uses FD uniqueness proof from pass 3).
-    while let Some(e) = find_fk_pk_join(b, schema, fds) {
-        apply_fk_pk_elim(b, &e);
+    with_work(
+        b,
+        schema,
+        fds,
+        BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled FK elimination cannot refuse");
+}
+
+pub(super) fn with_work(
+    b: &mut Branch,
+    schema: &[TableSchema],
+    fds: &Fds,
+    work: BuildWork<'_>,
+) -> crate::Result<()> {
+    while let Some(e) = find_fk_pk_join(b, schema, fds, work)? {
+        apply_multi_with_work(b, &e, work)?;
     }
     // Multi-column composite FK/PK elimination (uniqueness proven from catalog alone).
-    while let Some(e) = find_multi_fk_pk_join(b, schema) {
-        apply_multi_fk_pk_elim(b, &e);
+    while let Some(e) = find_multi_fk_pk_join(b, schema, work)? {
+        apply_multi_with_work(b, &e, work)?;
     }
+    work.checkpoint()
 }
 
 // --- 4b. Multi-column composite FK/PK join elimination ----------------------
@@ -141,88 +86,162 @@ struct MultiFkElim {
 /// composite FK whose parent columns are a composite key and all child FK
 /// columns are NOT NULL. Sound (=_bag) iff BOTH hold, same argument as the
 /// single-column variant (ADR-0007).
-fn find_multi_fk_pk_join(b: &Branch, schema: &[TableSchema]) -> Option<MultiFkElim> {
-    // Collect all cross-scan ColEqs grouped by (child_alias, parent_alias).
-    for i in 0..b.core.len() {
-        let child_alias = b.core[i].alias;
-        let Some(child_table) = scan_table(b, child_alias) else {
+fn find_multi_fk_pk_join(
+    b: &Branch,
+    schema: &[TableSchema],
+    work: BuildWork<'_>,
+) -> crate::Result<Option<MultiFkElim>> {
+    use super::control_join::{equal, schema_table, table};
+    use crate::build::control::BuildVec;
+    for (i, child) in b.core.iter().enumerate() {
+        work.charge(1)?;
+        let Some(child_name) = table(&b.core, child.alias, work)? else {
             continue;
         };
-        let cs = schema.iter().find(|t| t.name == child_table)?;
-
-        for j in 0..b.core.len() {
+        let Some(cs) = schema_table(schema, child_name, work)? else {
+            return Ok(None);
+        };
+        'parent: for (j, parent) in b.core.iter().enumerate() {
+            work.charge(1)?;
             if i == j {
                 continue;
             }
-            let parent_alias = b.core[j].alias;
-            let Some(parent_table) = scan_table(b, parent_alias) else {
+            let Some(parent_name) = table(&b.core, parent.alias, work)? else {
                 continue;
             };
-            let ps = schema.iter().find(|t| t.name == parent_table)?;
-
-            // Collect all ColEq conditions between this (child, parent) pair.
-            let mut pairs: Vec<(usize, Box<str>, Box<str>)> = Vec::new(); // (cond_idx, child_col, parent_col)
-            for (idx, cond) in b.where_conds.iter().enumerate() {
-                let SqlCond::ColEq(a, c) = cond else { continue };
-                if a.alias == child_alias && c.alias == parent_alias {
-                    pairs.push((idx, a.column.clone(), c.column.clone()));
-                } else if a.alias == parent_alias && c.alias == child_alias {
-                    pairs.push((idx, c.column.clone(), a.column.clone()));
+            let Some(ps) = schema_table(schema, parent_name, work)? else {
+                return Ok(None);
+            };
+            let mut pairs = BuildVec::new(Vec::new());
+            for (index, condition) in b.where_conds.iter().enumerate() {
+                work.charge(1)?;
+                if let SqlCond::ColEq(a, c) = condition {
+                    if a.alias == child.alias && c.alias == parent.alias {
+                        work.push(&mut pairs, (index, a.column.as_ref(), c.column.as_ref()))?;
+                    } else if a.alias == parent.alias && c.alias == child.alias {
+                        work.push(&mut pairs, (index, c.column.as_ref(), a.column.as_ref()))?;
+                    }
                 }
             }
-            if pairs.len() < 2 {
-                continue; // single-column case handled by pass 4a
-            }
-
-            let child_cols: Vec<&str> = pairs.iter().map(|(_, c, _)| c.as_ref()).collect();
-            let parent_cols: Vec<&str> = pairs.iter().map(|(_, _, p)| p.as_ref()).collect();
-
-            // Uniqueness: parent join columns form a composite key.
-            if !ps.is_composite_key(&parent_cols) {
+            if pairs.values.len() < 2 {
                 continue;
             }
-            // Match-guarantee: declared composite FK on child and all child cols NOT NULL.
-            // Sound only when each (child_col, parent_col) pair is *positionally aligned*
-            // with an FK entry: both set-coverage AND per-pair FK lookup are required.
-            // (Set-membership alone is unsound — T4.col2=T3.col2 plus T4.col3=T3.col1
-            // looks like a composite FK but the FK actually says T4.col2→T3.col1.)
-            let fk_declared = cs.foreign_keys.iter().any(|fk| {
-                fk.parent_table == parent_table
-                    && fk.columns.len() == child_cols.len()
-                    // Every observed (child_col, parent_col) pair must match a positional FK entry.
-                    && child_cols.iter().zip(parent_cols.iter()).all(|(cc, pc)| {
-                        fk.columns.iter().zip(fk.parent_columns.iter())
-                            .any(|(fc, fp)| fc.as_str() == *cc && fp.as_str() == *pc)
-                    })
-                    // Every FK entry must be covered by an observed pair (completeness).
-                    && fk.columns.iter().zip(fk.parent_columns.iter()).all(|(fc, fp)| {
-                        child_cols.iter().zip(parent_cols.iter())
-                            .any(|(cc, pc)| cc == &fc.as_str() && pc == &fp.as_str())
-                    })
-            });
-            if !fk_declared {
+            // Distinct observed columns plus equal cardinality and coverage below
+            // prove one-to-one key/FK membership, even for raw catalog input.
+            for (index, (_, cc, pc)) in pairs.values.iter().enumerate() {
+                work.charge(1)?;
+                for (_, other_cc, other_pc) in &pairs.values[..index] {
+                    work.charge(1)?;
+                    if equal(cc, other_cc, work)? || equal(pc, other_pc, work)? {
+                        continue 'parent;
+                    }
+                }
+            }
+            let mut parent_cols = work.vector(pairs.values.len())?;
+            for (_, _, name) in &pairs.values {
+                work.charge(1)?;
+                parent_cols.push(*name);
+            }
+            let mut unique = false;
+            'key: for key in std::iter::once(&ps.primary_key).chain(&ps.unique) {
+                work.charge(1)?;
+                if key.len() != parent_cols.len() {
+                    continue;
+                }
+                for name in &parent_cols {
+                    work.charge(1)?;
+                    let mut found = false;
+                    for candidate in key {
+                        work.charge(1)?;
+                        if equal(name, candidate, work)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        continue 'key;
+                    }
+                }
+                unique = true;
+                break;
+            }
+            if !unique {
                 continue;
             }
-            let all_nn = child_cols.iter().all(|cc| column_not_null(cs, cc));
-            if !all_nn {
+            let mut declared = false;
+            'fk: for fk in &cs.foreign_keys {
+                work.charge(1)?;
+                if fk.columns.len() != pairs.values.len()
+                    || fk.parent_columns.len() != pairs.values.len()
+                    || !equal(&fk.parent_table, parent_name, work)?
+                {
+                    continue;
+                }
+                for (_, cc, pc) in &pairs.values {
+                    work.charge(1)?;
+                    let mut found = false;
+                    for (fc, fp) in fk.columns.iter().zip(&fk.parent_columns) {
+                        work.charge(1)?;
+                        if equal(cc, fc, work)? && equal(pc, fp, work)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        continue 'fk;
+                    }
+                }
+                for (fc, fp) in fk.columns.iter().zip(&fk.parent_columns) {
+                    work.charge(1)?;
+                    let mut found = false;
+                    for (_, cc, pc) in &pairs.values {
+                        work.charge(1)?;
+                        if equal(cc, fc, work)? && equal(pc, fp, work)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        continue 'fk;
+                    }
+                }
+                declared = true;
+                break;
+            }
+            if !declared {
                 continue;
             }
-            // Parent reached only for its composite key columns.
-            if !parent_referenced_only_via_set(b, parent_alias, &parent_cols) {
+            for (_, cc, _) in &pairs.values {
+                work.charge(1)?;
+                if !super::control_distinct::non_null(cs, cc, work)? {
+                    continue 'parent;
+                }
+            }
+            let covered = if matches!(work.mode, crate::CompilerWorkMode::Uncontrolled) {
+                parent_referenced_only_via_set(b, parent.alias, &parent_cols)
+            } else {
+                super::control_distinct::parent_columns(b, parent.alias, &parent_cols, work)?
+            };
+            if !covered {
                 continue;
             }
-
-            let cond_indices = pairs.iter().map(|(i, _, _)| *i).collect();
-            let rewrites = pairs.into_iter().map(|(_, cc, pc)| (pc, cc)).collect();
-            return Some(MultiFkElim {
-                cond_indices,
-                parent_alias,
-                child_alias,
+            let mut indices = work.vector(pairs.values.len())?;
+            let mut rewrites = work.vector(pairs.values.len())?;
+            for (index, cc, pc) in pairs.values {
+                work.charge(1)?;
+                indices.push(index);
+                rewrites.push((work.string(pc)?.into(), work.string(cc)?.into()));
+            }
+            return Ok(Some(MultiFkElim {
+                cond_indices: indices,
+                parent_alias: parent.alias,
+                child_alias: child.alias,
                 rewrites,
-            });
+            }));
         }
     }
-    None
+    work.checkpoint()?;
+    Ok(None)
 }
 
 /// Does every reference to `alias` use only the columns in `cols`?
@@ -230,154 +249,76 @@ fn parent_referenced_only_via_set(b: &Branch, alias: usize, cols: &[&str]) -> bo
     if crate::iq::decode_valid::branch_references(b, alias) {
         return false;
     }
-    let mut ok = true;
-    let mut check = |c: &ColRef| {
-        if c.alias == alias && !cols.contains(&&*c.column) {
-            ok = false;
-        }
-    };
-    for def in b.bindings.values() {
-        for c in def.columns() {
-            check(&c);
-        }
-    }
-    for cond in &b.where_conds {
-        collect_cond_cols(cond, &mut check);
-    }
-    for opt in &b.opts {
-        for cond in opt.on.iter().chain(opt.extra.iter()) {
-            collect_cond_cols(cond, &mut check);
-        }
-    }
-    ok
+    super::control_distinct::parent_columns(
+        b,
+        alias,
+        cols,
+        BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled parent coverage cannot refuse")
 }
 
-fn apply_multi_fk_pk_elim(b: &mut Branch, e: &MultiFkElim) {
-    // Remove FK ColEq conditions (highest indices first).
-    let mut sorted_idxs = e.cond_indices.clone();
-    sorted_idxs.sort_unstable_by(|a, b| b.cmp(a));
-    for idx in sorted_idxs {
-        b.where_conds.remove(idx);
+fn apply_multi_with_work(
+    b: &mut Branch,
+    e: &MultiFkElim,
+    work: BuildWork<'_>,
+) -> crate::Result<()> {
+    // Discovery records indices in ascending condition order; no copy/sort needed.
+    for &idx in e.cond_indices.iter().rev() {
+        super::control_rewrite::remove(&mut b.where_conds, idx, work)?;
     }
-    // Rewrite parent column references → child column references.
+    let remap = super::control_conditions::ColumnRemap {
+        parent: e.parent_alias,
+        child: e.child_alias,
+        pairs: &e.rewrites,
+    };
     for def in b.bindings.values_mut() {
-        rewrite_parent_def_multi(def, e);
+        work.charge(1)?;
+        rewrite_parent_def_multi(def, e, work)?;
     }
     for cond in &mut b.where_conds {
-        rewrite_parent_cond_multi(cond, e);
+        work.charge(1)?;
+        remap.condition(cond, work)?;
     }
     for opt in &mut b.opts {
+        work.charge(1)?;
         for cond in opt.on.iter_mut().chain(opt.extra.iter_mut()) {
-            rewrite_parent_cond_multi(cond, e);
+            work.charge(1)?;
+            remap.condition(cond, work)?;
         }
     }
-    b.core.retain(|s| s.alias != e.parent_alias);
+    super::control_rewrite::retain_scan(&mut b.core, e.parent_alias, work)
 }
 
-fn rewrite_parent_colref_multi(c: &mut ColRef, e: &MultiFkElim) {
-    if c.alias != e.parent_alias {
-        return;
-    }
-    if let Some((_, child_col)) = e
-        .rewrites
-        .iter()
-        .find(|(parent_col, _)| *parent_col == c.column)
-    {
-        c.alias = e.child_alias;
-        c.column = child_col.clone();
-    }
-}
-
-/// [`rewrite_parent_colref_multi`]'s analog for a [`SqlCond::TemplateEq`]
-/// side — see [`rewrite_parent_template_segments`]'s doc comment for why the
-/// alias (stored once per side, not per column) moves unconditionally once
-/// ANY rewrite in `e.rewrites` applies to this alias.
-fn rewrite_parent_template_segments_multi(
-    segs: &mut [Segment],
-    alias: &mut usize,
+fn rewrite_parent_def_multi(
+    def: &mut TermDef,
     e: &MultiFkElim,
-) {
-    if *alias != e.parent_alias {
-        return;
-    }
-    for seg in segs.iter_mut() {
-        if let Segment::Column(col) = seg {
-            if let Some((_, child_col)) =
-                e.rewrites.iter().find(|(parent_col, _)| parent_col == col)
-            {
-                *col = child_col.clone();
-            }
-        }
-    }
-    *alias = e.child_alias;
-}
-
-fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
-    match cond {
-        SqlCond::ExpressionError => {}
-        SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref_multi(c, e)),
-        SqlCond::IriCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref_multi(c, e)),
-        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
-            rewrite_parent_colref_multi(a, e);
-            rewrite_parent_colref_multi(b, e);
-        }
-        SqlCond::Cmp(a, _, _)
-        | SqlCond::NativeCmp(a, _, _)
-        | SqlCond::IsNotNull(a)
-        | SqlCond::DecodedIsNotNull(a)
-        | SqlCond::IsNull(a) => rewrite_parent_colref_multi(a, e),
-        SqlCond::StrMatch { col, .. } => rewrite_parent_colref_multi(col, e),
-        SqlCond::Not(c) => rewrite_parent_cond_multi(c, e),
-        SqlCond::And(cs) | SqlCond::Or(cs) => {
-            for c in cs {
-                rewrite_parent_cond_multi(c, e);
-            }
-        }
-        SqlCond::NotExists { conds, .. }
-        | SqlCond::Exists { conds, .. }
-        | SqlCond::PathExists { conds, .. } => {
-            for c in conds {
-                rewrite_parent_cond_multi(c, e);
-            }
-        }
-        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
-            rewrite_parent_template_segments_multi(sx, a1, e);
-            rewrite_parent_template_segments_multi(sy, a2, e);
-        }
-    }
-}
-
-fn rewrite_parent_def_multi(def: &mut TermDef, e: &MultiFkElim) {
+    work: BuildWork<'_>,
+) -> crate::Result<()> {
+    let work = work.enter()?;
     match def {
         TermDef::Const(_) => {}
         TermDef::Derived { term_map, alias } => {
-            if *alias == e.parent_alias {
-                // Apply each parent→child column rename in the term map.
-                let mut tm = term_map.clone();
-                for (parent_col, child_col) in &e.rewrites {
-                    tm = rename_col_in_term_map(&tm, parent_col, child_col);
-                }
-                *term_map = tm;
-                *alias = e.child_alias;
-            }
+            rewrite_term_map_multi(term_map, alias, e, work)?;
         }
         TermDef::R2rmlBlank {
             term_map,
             alias,
             graph,
         } => {
-            rewrite_term_map_multi(term_map, alias, e);
+            rewrite_term_map_multi(term_map, alias, e, work)?;
             if let R2rmlGraphScope::Mapped { term_map, alias } = graph {
-                rewrite_term_map_multi(term_map, alias, e);
+                rewrite_term_map_multi(term_map, alias, e, work)?;
             }
         }
         TermDef::Coalesce(l, r) => {
-            rewrite_parent_def_multi(l, e);
-            rewrite_parent_def_multi(r, e);
+            rewrite_parent_def_multi(l, e, work)?;
+            rewrite_parent_def_multi(r, e, work)?;
         }
         TermDef::Concat(parts) => {
             for p in parts {
-                rewrite_parent_def_multi(p, e);
+                work.charge(1)?;
+                rewrite_parent_def_multi(p, e, work)?;
             }
         }
         TermDef::Agg { .. } => {}
@@ -390,287 +331,155 @@ fn rewrite_parent_def_multi(def: &mut TermDef, e: &MultiFkElim) {
             predicate,
             object,
         } => {
-            rewrite_parent_def_multi(subject, e);
-            rewrite_parent_def_multi(predicate, e);
-            rewrite_parent_def_multi(object, e);
+            rewrite_parent_def_multi(subject, e, work)?;
+            rewrite_parent_def_multi(predicate, e, work)?;
+            rewrite_parent_def_multi(object, e, work)?;
         }
     }
+    work.checkpoint()
 }
 
-fn find_fk_pk_join(b: &Branch, schema: &[TableSchema], fds: &Fds) -> Option<FkElim> {
-    for (idx, cond) in b.where_conds.iter().enumerate() {
-        let SqlCond::ColEq(x, y) = cond else { continue };
-        if x.alias == y.alias {
-            continue;
-        }
-        // Try both orientations — either side could be the parent.
-        for (child, parent) in [(x, y), (y, x)] {
-            if let Some(e) = check_fk_pk(b, schema, fds, idx, child, parent) {
-                return Some(e);
-            }
-        }
-    }
-    None
-}
-
-/// Validate the FK/PK preconditions for the orientation `child.col = parent.col`.
-fn check_fk_pk(
+fn find_fk_pk_join(
     b: &Branch,
     schema: &[TableSchema],
     fds: &Fds,
-    cond_idx: usize,
-    child: &ColRef,
-    parent: &ColRef,
-) -> Option<FkElim> {
-    // Both must be *core* base-table scans (a parent on an OPTIONAL side must not
-    // be dropped — that would change LEFT JOIN semantics; `scan_table` only finds
-    // core scans).
-    let child_table = scan_table(b, child.alias)?;
-    let parent_table = scan_table(b, parent.alias)?;
-    let cs = schema.iter().find(|t| t.name == child_table)?;
-    let ps = schema.iter().find(|t| t.name == parent_table)?;
-
-    // Uniqueness: the parent join column is a key (FD proof from pass (3) **and**
-    // the catalog agree).
-    if !fds.is_key(parent) || !ps.is_unique_key(&parent.column) {
-        return None;
-    }
-    // Match-guarantee: a declared FK child.col → parent_table.parent.col, and the
-    // child FK column is NOT NULL (every child row has exactly one parent).
-    let fk_declared = cs.foreign_keys.iter().any(|fk| {
-        fk.parent_table == parent_table
-            && fk.columns.len() == 1
-            && fk.columns[0].as_str() == &*child.column
-            && fk.parent_columns.len() == 1
-            && fk.parent_columns[0].as_str() == &*parent.column
-    });
-    if !fk_declared || !column_not_null(cs, &child.column) {
-        return None;
-    }
-    // The parent scan must be reached *only for its PK*: every reference to the
-    // parent alias must be the join column (so it can be rewritten onto the child
-    // FK and the scan dropped without losing any other parent column).
-    if !parent_referenced_only_via(b, parent.alias, &parent.column) {
-        return None;
-    }
-    Some(FkElim {
-        cond_idx,
-        parent_alias: parent.alias,
-        parent_col: parent.column.clone(),
-        child_alias: child.alias,
-        child_col: child.column.clone(),
-    })
-}
-
-/// A column is NOT NULL iff it is a PK column (PK ⇒ NOT NULL) or the catalog
-/// declares it `NOT NULL`.
-fn column_not_null(t: &TableSchema, col: &str) -> bool {
-    t.primary_key.iter().any(|c| c == col) || t.column(col).is_some_and(|c| c.not_null)
-}
-
-/// Does every reference to `alias` (bindings + WHERE + OPTIONAL conditions) use
-/// only column `col`? If so the parent scan contributes nothing but its PK.
-fn parent_referenced_only_via(b: &Branch, alias: usize, col: &str) -> bool {
-    if crate::iq::decode_valid::branch_references(b, alias) {
-        return false;
-    }
-    let mut ok = true;
-    let mut check = |c: &ColRef| {
-        if c.alias == alias && &*c.column != col {
-            ok = false;
+    work: BuildWork<'_>,
+) -> crate::Result<Option<MultiFkElim>> {
+    use super::control_join::{equal, schema_table, table, unique};
+    for (index, condition) in b.where_conds.iter().enumerate() {
+        work.charge(1)?;
+        let SqlCond::ColEq(x, y) = condition else {
+            continue;
+        };
+        if x.alias == y.alias {
+            continue;
         }
+        for (child, parent) in [(x, y), (y, x)] {
+            work.charge(1)?;
+            let Some(child_name) = table(&b.core, child.alias, work)? else {
+                continue;
+            };
+            let Some(parent_name) = table(&b.core, parent.alias, work)? else {
+                continue;
+            };
+            let Some(cs) = schema_table(schema, child_name, work)? else {
+                continue;
+            };
+            let Some(ps) = schema_table(schema, parent_name, work)? else {
+                continue;
+            };
+            let mut key = false;
+            for (det, alias) in &fds.deps {
+                work.charge(1)?;
+                if *alias == parent.alias && super::control_fd::same(det, parent, work)? {
+                    key = true;
+                    break;
+                }
+            }
+            if !key || !unique(ps, &parent.column, work)? {
+                continue;
+            }
+            let mut declared = false;
+            for fk in &cs.foreign_keys {
+                work.charge(1)?;
+                if let ([column], [target]) = (fk.columns.as_slice(), fk.parent_columns.as_slice())
+                {
+                    if equal(&fk.parent_table, parent_name, work)?
+                        && equal(column, &child.column, work)?
+                        && equal(target, &parent.column, work)?
+                    {
+                        declared = true;
+                        break;
+                    }
+                }
+            }
+            if !declared || !super::control_distinct::non_null(cs, &child.column, work)? {
+                continue;
+            }
+            if !super::control_distinct::parent_columns(b, parent.alias, &[&parent.column], work)? {
+                continue;
+            }
+            let mut indices = work.vector(1)?;
+            indices.push(index);
+            let mut pairs = work.vector(1)?;
+            pairs.push((
+                work.string(&parent.column)?.into(),
+                work.string(&child.column)?.into(),
+            ));
+            return Ok(Some(MultiFkElim {
+                cond_indices: indices,
+                parent_alias: parent.alias,
+                child_alias: child.alias,
+                rewrites: pairs,
+            }));
+        }
+    }
+    work.checkpoint()?;
+    Ok(None)
+}
+
+fn rewrite_term_map_multi(
+    term_map: &mut TermMap,
+    alias: &mut usize,
+    e: &MultiFkElim,
+    work: BuildWork<'_>,
+) -> crate::Result<()> {
+    work.charge(1)?;
+    if *alias == e.parent_alias {
+        // Look up each original column once: rename chains and swaps must not
+        // feed an earlier replacement into a later parent-column lookup.
+        *term_map = rename_columns_with_work(term_map, &e.rewrites, work)?;
+        *alias = e.child_alias;
+    }
+    work.checkpoint()
+}
+
+pub(super) fn rename_columns_with_work(
+    tm: &TermMap,
+    pairs: &[(Box<str>, Box<str>)],
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<TermMap> {
+    use crate::plan_measure::clone_root::CompilerCloneRootV1;
+    work.charge(1)?;
+    let rename = |name: &str| -> crate::Result<Box<str>> {
+        for (parent, child) in pairs {
+            work.charge(1)?;
+            if super::control_join::equal(parent, name, work)? {
+                return Ok(work.string(child)?.into());
+            }
+        }
+        Ok(work.string(name)?.into())
     };
-    for def in b.bindings.values() {
-        for c in def.columns() {
-            check(&c);
+    let copy_spec = |spec: &sf_core::ir::TermSpec| -> crate::Result<sf_core::ir::TermSpec> {
+        if let crate::CompilerWorkMode::Metered(context) = work.mode {
+            context.reserve_ast_copy(CompilerCloneRootV1::TermSpec(spec))?;
         }
-    }
-    for cond in &b.where_conds {
-        collect_cond_cols(cond, &mut check);
-    }
-    for opt in &b.opts {
-        for cond in opt.on.iter().chain(opt.extra.iter()) {
-            collect_cond_cols(cond, &mut check);
-        }
-    }
-    ok
-}
-
-/// Fire the elimination: drop the join equality, rewrite `(parent_alias,
-/// parent_col)` → `(child_alias, child_col)` everywhere (they are provably equal),
-/// then remove the parent scan.
-fn apply_fk_pk_elim(b: &mut Branch, e: &FkElim) {
-    b.where_conds.remove(e.cond_idx);
-    for def in b.bindings.values_mut() {
-        rewrite_parent_def(def, e);
-    }
-    for cond in &mut b.where_conds {
-        rewrite_parent_cond(cond, e);
-    }
-    for opt in &mut b.opts {
-        for cond in opt.on.iter_mut().chain(opt.extra.iter_mut()) {
-            rewrite_parent_cond(cond, e);
-        }
-    }
-    b.core.retain(|s| s.alias != e.parent_alias);
-}
-
-fn rewrite_parent_colref(c: &mut ColRef, e: &FkElim) {
-    if c.alias == e.parent_alias && c.column == e.parent_col {
-        c.alias = e.child_alias;
-        c.column = e.child_col.clone();
-    }
-}
-
-/// [`rewrite_parent_colref`]'s analog for a [`SqlCond::TemplateEq`] side: the
-/// alias is stored once for the WHOLE segment list, not per column, so this
-/// rewrites every `Segment::Column` matching `e.parent_col` and then moves the
-/// alias — safe because `parent_referenced_only_via` (the pre-check gating
-/// `FkElim` candidates) already refused this elimination if the parent alias
-/// were referenced via ANY other column, so every `Segment::Column` at this
-/// alias is guaranteed to be `e.parent_col`.
-fn rewrite_parent_template_segments(segs: &mut [Segment], alias: &mut usize, e: &FkElim) {
-    if *alias != e.parent_alias {
-        return;
-    }
-    for seg in segs.iter_mut() {
-        if let Segment::Column(col) = seg {
-            if *col == e.parent_col {
-                *col = e.child_col.clone();
+        Ok(spec.clone())
+    };
+    let result = match tm {
+        TermMap::Constant(_) => {
+            if let crate::CompilerWorkMode::Metered(context) = work.mode {
+                context.reserve_ast_copy(CompilerCloneRootV1::TermMap(tm))?;
             }
+            tm.clone()
         }
-    }
-    *alias = e.child_alias;
-}
-
-fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
-    match cond {
-        SqlCond::ExpressionError => {}
-        SqlCond::LiteralCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref(c, e)),
-        SqlCond::IriCmp(cmp) => cmp.rewrite_columns(|c| rewrite_parent_colref(c, e)),
-        SqlCond::ColEq(a, b) | SqlCond::NativeColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
-            rewrite_parent_colref(a, e);
-            rewrite_parent_colref(b, e);
-        }
-        SqlCond::Cmp(a, _, _)
-        | SqlCond::NativeCmp(a, _, _)
-        | SqlCond::IsNotNull(a)
-        | SqlCond::DecodedIsNotNull(a)
-        | SqlCond::IsNull(a) => rewrite_parent_colref(a, e),
-        SqlCond::StrMatch { col, .. } => rewrite_parent_colref(col, e),
-        SqlCond::Not(c) => rewrite_parent_cond(c, e),
-        SqlCond::And(cs) | SqlCond::Or(cs) => {
-            for c in cs {
-                rewrite_parent_cond(c, e);
-            }
-        }
-        // A MINUS anti-join's or FILTER EXISTS semi-join's correlation may reference
-        // the eliminated parent alias; recurse so it tracks the child. (Branches
-        // carrying subquery conds bypass the cascade, so this is defensive.)
-        SqlCond::NotExists { conds, .. }
-        | SqlCond::Exists { conds, .. }
-        | SqlCond::PathExists { conds, .. } => {
-            for c in conds {
-                rewrite_parent_cond(c, e);
-            }
-        }
-        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
-            rewrite_parent_template_segments(sx, a1, e);
-            rewrite_parent_template_segments(sy, a2, e);
-        }
-    }
-}
-
-/// Rewrite a term def that reads the parent PK at the parent alias so it reads
-/// the equal child FK column at the child alias (the constructed term — e.g. the
-/// parent subject IRI — is byte-identical because the values are equal).
-fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
-    match def {
-        TermDef::Const(_) => {}
-        TermDef::Derived { term_map, alias } => {
-            if *alias == e.parent_alias {
-                *term_map = rename_col_in_term_map(term_map, &e.parent_col, &e.child_col);
-                *alias = e.child_alias;
-            }
-        }
-        TermDef::R2rmlBlank {
-            term_map,
-            alias,
-            graph,
-        } => {
-            rewrite_term_map(term_map, alias, e);
-            if let R2rmlGraphScope::Mapped { term_map, alias } = graph {
-                rewrite_term_map(term_map, alias, e);
-            }
-        }
-        TermDef::Coalesce(l, r) => {
-            rewrite_parent_def(l, e);
-            rewrite_parent_def(r, e);
-        }
-        TermDef::Concat(parts) => {
-            for p in parts {
-                rewrite_parent_def(p, e);
-            }
-        }
-        // An aggregate result reads its synthetic group alias, never a base-scan
-        // parent alias — nothing to rewrite (agg branches bypass this cascade).
-        TermDef::Agg { .. } => {}
-        // ADR-0032 D2: forced arm (new `TermDef` variant) — see the identical note
-        // on `rewrite_parent_def_multi`, above.
-        TermDef::ComposedTriple {
-            subject,
-            predicate,
-            object,
-        } => {
-            rewrite_parent_def(subject, e);
-            rewrite_parent_def(predicate, e);
-            rewrite_parent_def(object, e);
-        }
-    }
-}
-
-fn rewrite_term_map_multi(term_map: &mut TermMap, alias: &mut usize, e: &MultiFkElim) {
-    if *alias == e.parent_alias {
-        let mut rewritten = term_map.clone();
-        for (parent_col, child_col) in &e.rewrites {
-            rewritten = rename_col_in_term_map(&rewritten, parent_col, child_col);
-        }
-        *term_map = rewritten;
-        *alias = e.child_alias;
-    }
-}
-
-fn rewrite_term_map(term_map: &mut TermMap, alias: &mut usize, e: &FkElim) {
-    if *alias == e.parent_alias {
-        *term_map = rename_col_in_term_map(term_map, &e.parent_col, &e.child_col);
-        *alias = e.child_alias;
-    }
-}
-
-/// Rebuild a term map with column `from` renamed to `to` (the FK column carries
-/// the same value as the renamed PK column, so the generated term is unchanged).
-fn rename_col_in_term_map(tm: &TermMap, from: &str, to: &str) -> TermMap {
-    match tm {
-        TermMap::Constant(t) => TermMap::Constant(t.clone()),
-        TermMap::Column(c, spec) => {
-            let name: Box<str> = if &**c == from { to.into() } else { c.clone() };
-            TermMap::Column(name, spec.clone())
-        }
+        TermMap::Column(c, spec) => TermMap::Column(rename(c)?, copy_spec(spec)?),
         TermMap::Template(t, spec) => {
-            let segs = t
-                .segments()
-                .iter()
-                .map(|s| match s {
-                    Segment::Column(c) if &**c == from => Segment::Column(to.into()),
-                    other => other.clone(),
-                })
-                .collect();
-            // from_segments only fails on an empty list; the source template was
-            // non-empty, so the renamed copy is too.
+            let mut segs = work.vector(t.segments().len())?;
+            for segment in t.segments() {
+                work.charge(1)?;
+                segs.push(match segment {
+                    Segment::Column(c) => Segment::Column(rename(c)?),
+                    Segment::Literal(value) => Segment::Literal(work.string(value)?.into()),
+                });
+            }
+            work.charge(segs.len())?;
             TermMap::Template(
                 Template::from_segments(segs).expect("renamed template is non-empty"),
-                spec.clone(),
+                copy_spec(spec)?,
             )
         }
-    }
+    };
+    work.checkpoint()?;
+    Ok(result)
 }

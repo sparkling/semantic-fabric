@@ -84,11 +84,12 @@ fn second_level_branches(branch: &Branch) -> &[Branch] {
 // Independently price the work between candidate cloning and recursive entry.
 // These fixtures have equal projection widths, so every adjacent pair is visited.
 fn candidate_tail_work(source: &[Branch]) -> u64 {
-    let post = cascade::run(source.to_vec(), &[], &cascade::CascadeCtx::default());
     let control = budget(u64::MAX);
     let work = crate::build::control::BuildWork::new(CompilerWorkMode::Metered(
         CompileContext::new(&control),
     ));
+    let post = cascade::run_with_work(source.to_vec(), &[], &cascade::CascadeCtx::default(), work)
+        .unwrap();
     for branch in &post {
         crate::finalization::projection(branch, work).unwrap();
     }

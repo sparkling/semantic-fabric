@@ -340,10 +340,12 @@ async fn compiler_products_cannot_spend_only_their_input_allowance() {
 
 #[tokio::test]
 async fn compiler_products_preserve_every_exact_public_tuple() {
-    let response = router(Arc::new(protected(100_000 + rewrite_work(PRODUCTS))))
-        .oneshot(authenticated(PRODUCTS))
-        .await
-        .unwrap();
+    let response = router(Arc::new(protected(
+        PRODUCTS.len() as u64 + cache_key::fixture_compile_work(PRODUCTS),
+    )))
+    .oneshot(authenticated(PRODUCTS))
+    .await
+    .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -364,13 +366,9 @@ async fn compiler_products_preserve_every_exact_public_tuple() {
 
 #[tokio::test]
 async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_replay() {
-    // Retain the old positive fixture's headroom plus initial rewrite and leaf work:
-    // three outer rows, then one inner VALUES row for each EXISTS branch.
-    // Negative cutpoints and the actual serving defaults are unchanged.
-    let funded = 10_000
-        + rewrite_work(CLONING)
-        + source_free_values_work(3, "x")
-        + 3 * source_free_values_work(1, "inside");
+    // Fund this success fixture's complete current schedule. Independent negative
+    // clone/product cutpoints and actual serving defaults are unchanged.
+    let funded = CLONING.len() as u64 + cache_key::fixture_compile_work(CLONING);
     for protected_profile in [false, true] {
         let mut cfg = Arc::new(if protected_profile {
             protected(funded)

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-11
+updated: 2026-09-12
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -25,9 +25,9 @@ implements: []
 
 ## Status boundary
 
-**RESOLVE schema authority (2026-09-11, verified in `308d75b`):**
-the tree RESOLVE D1/D2 path constructs one interruptible, uniquely named schema
-map before duplicate-elimination mutation and shares it across pooling groups.
+**Optimizer proof boundary (2026-09-12):** controlled compilation applies prospective logical-work admission and sticky cancellation to the complete optimizer cascade: candidate search, dependency inference, column/template rewrites and nested branches. Refusal discards the candidate, never falling back to raw execution. Raw compatibility remains uncontrolled but shares corrected proofs: FD elimination covers every dropped-alias reference, including filters/later OPTIONAL conditions; FK optional promotion requires catalog-proven extra predicates; composite FK elimination requires one-to-one key membership and simultaneous, non-cascading substitution. Malformed raw FK/key vectors cannot establish match/uniqueness. These are correctness restrictions, not feature exclusions. Serving still quarantines unverified constraints; public fixtures do not claim quarantined rewrites execute. The programme ledger records slice verification; cache/source obligations and G1–G6 remain open, without physical allocator/preemption or release-completion claims.
+
+**RESOLVE schema authority (2026-09-11, verified in `308d75b`):** the tree RESOLVE D1/D2 path constructs one interruptible, uniquely named schema map before duplicate-elimination mutation and shares it across pooling groups.
 Duplicate table names now return an explicit ambiguous-schema error, including
 identical duplicates: an arbitrary unstable-sort winner must not grant key or
 column-type authority. This tightens tree compilation validation; it is not a

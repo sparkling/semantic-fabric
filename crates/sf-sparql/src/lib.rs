@@ -727,7 +727,12 @@ fn translate_tree_with_column_type_use(
         compiler_telemetry::CompilerStage::Cascade,
         || -> Result<()> {
             let branches = std::mem::take(&mut plan.branches);
-            plan.branches = cascade::run(branches, schema, &ctx);
+            plan.branches = cascade::run_with_work(
+                branches,
+                schema,
+                &ctx,
+                build::control::BuildWork::new(work_mode),
+            )?;
             // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
             // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
             // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches

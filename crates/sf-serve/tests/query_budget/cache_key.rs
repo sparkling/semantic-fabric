@@ -3,31 +3,30 @@ use super::*;
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
 pub(super) use compiler_key::{
-    build_work, constant_compile_work, key_work, normalization_work, rewrite_work,
-    source_free_entry_work, source_free_join_seed_work, source_free_values_work,
-    structural_compile_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
+    build_work, key_work, normalization_work, rewrite_work, source_free_entry_work,
+    source_free_join_seed_work, source_free_values_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
 };
 
-fn two_value_rows_construction_work() -> u64 {
-    let output = 2 * (1 + std::mem::size_of::<sf_sparql::iq::Branch>() as u64);
-    // Per row: fold1, retention entry1, bool slot/byte2, binding visit1,
-    // ?value comparison (visit1+five bytes), retained-entry visit1.
-    // VALUES entry, two output slots/carriers and each row/cell/map/key copy.
-    let values = 1
-        + output
-        + 2 * (1 + 1 + std::mem::size_of::<(String, sf_sparql::iq::TermDef)>() as u64 + 1 + 5);
-    values + output + 2 * (1 + 1 + 2 + 1 + 1 + 5 + 1)
+// Match the owned HTTP fixture's observed table. Success-only calibration;
+// earlier BUILD/NORMALIZE/LOWER refusal cutpoints remain independently counted.
+pub(super) fn fixture_compile_work(source: &str) -> u64 {
+    let mut table = sf_sql::TableSchema::new("items");
+    table.columns = vec![
+        sf_sql::Column::new("id", "INTEGER", false),
+        sf_sql::Column::new("value", "TEXT", true),
+    ];
+    table.primary_key = vec!["id".into()];
+    compiler_key::source_free_compile_work_with_schema(source, vec![table])
 }
 
-fn two_value_rows_realization_work() -> u64 {
-    // One copied ?value: vector slot/carrier, visit and five UTF-8 bytes;
-    // two root binding-realization visits. No composed environment/subplans.
-    1 + std::mem::size_of::<String>() as u64 + 1 + 5 + 2
+pub(super) fn constant_compile_work(source: &str) -> u64 {
+    assert!(CONSTANT_QUERIES.contains(&source));
+    fixture_compile_work(source)
 }
 
-fn two_value_rows_finalization_work() -> u64 {
-    // Each root pays one nested traversal entry and one aggregate gate.
-    2 * 2
+pub(super) fn structural_compile_work(source: &str) -> u64 {
+    assert!(STRUCTURAL_QUERIES.contains(&source));
+    fixture_compile_work(source)
 }
 
 async fn set_work_after_cleanup(cfg: &mut Arc<ServeConfig>, work: u64) {
@@ -98,24 +97,13 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
 
 #[tokio::test]
 async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
-    // No branch product: input, key, BUILD, NORMALIZE, LOWER scope and the
-    // independently counted two-row Construction output/fold/retention work.
+    // Earlier input/key/BUILD cutpoints remain independent of the success-only
+    // complete schedule; exact/N-1 checks cover cold completion as well.
     let query = "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } } # café";
     let wire = form_urlencoded::Serializer::new(String::new())
         .append_pair("query", query)
         .finish();
-    let (prefix, tail) = source_free_entry_work(query);
-    let complete = query.len() as u64
-        + key_work(query)
-        + rewrite_work(query)
-        + build_work(query)
-        + compiler_key::resolve_work(query, &[])
-        + normalization_work(query, &[])
-        + prefix
-        + tail
-        + two_value_rows_construction_work()
-        + two_value_rows_realization_work()
-        + two_value_rows_finalization_work();
+    let complete = query.len() as u64 + fixture_compile_work(query);
     for method in ["GET", "POST"] {
         for (work, accepted) in [
             (query.len() as u64 - 1, false),
@@ -172,17 +160,8 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                 + if warm {
                     0
                 } else {
-                    let (prefix, tail) = source_free_entry_work(&query);
                     // Warm requests still pay only unchanged input/key work.
-                    rewrite_work(&query)
-                        + build_work(&query)
-                        + compiler_key::resolve_work(&query, &[])
-                        + normalization_work(&query, &[])
-                        + prefix
-                        + tail
-                        + two_value_rows_construction_work()
-                        + two_value_rows_realization_work()
-                        + two_value_rows_finalization_work()
+                    fixture_compile_work(&query) - key_work(&query)
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

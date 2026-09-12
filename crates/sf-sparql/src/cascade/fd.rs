@@ -166,3 +166,310 @@ pub fn single_col_keys(ts: &TableSchema) -> Vec<String> {
     }
     keys
 }
+
+#[cfg(test)]
+mod controlled_fk_tests {
+    use super::*;
+    use crate::iq::{Scan, TermDef};
+    use crate::{build::control::BuildWork, compiler_control::CompileContext, CompilerWorkMode};
+    use sf_core::ir::{TermMap, TermSpec};
+    use sf_core::query_control::{
+        QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn budget(units: u64) -> QueryBudget {
+        QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX))
+    }
+    struct Stop {
+        budget: QueryBudget,
+        calls: AtomicUsize,
+        at: usize,
+        cause: QueryControlError,
+    }
+    impl QueryControl for Stop {
+        fn checkpoint(&self) -> std::result::Result<(), QueryControlError> {
+            self.budget.checkpoint()
+        }
+        fn consume(
+            &self,
+            kind: QueryCharge,
+            units: u64,
+        ) -> std::result::Result<(), QueryControlError> {
+            self.budget.consume(kind, units)?;
+            if self.calls.fetch_add(1, Ordering::Relaxed) + 1 == self.at {
+                self.budget.terminate(self.cause);
+            }
+            Ok(())
+        }
+        fn terminate(&self, cause: QueryControlError) -> QueryControlError {
+            self.budget.terminate(cause)
+        }
+    }
+
+    #[test]
+    fn fd_merge_cannot_rewrite_filters_outside_the_dependency() {
+        for (optional, location) in [false, true]
+            .into_iter()
+            .flat_map(|o| (0..3).map(move |l| (o, l)))
+        {
+            let mut table = TableSchema::new("items");
+            table.columns = vec![sf_sql::Column::new("d", "integer", true)];
+            table.functional_dependencies.push(sf_sql::FunctionalDep {
+                det: vec!["d".into()],
+                dep: vec!["p".into()],
+            });
+            let scan = |alias| Scan {
+                alias,
+                source: LogicalSource::Table("items".into()).into(),
+            };
+            let mut branch = Branch::single(scan(0));
+            let equal = SqlCond::ColEq(ColRef::new(0, "d"), ColRef::new(1, "d"));
+            if optional {
+                branch.opts.push(crate::iq::OptJoin {
+                    scan: scan(1),
+                    on: vec![equal],
+                    extra: vec![],
+                });
+            } else {
+                branch.core.push(scan(1));
+                branch.where_conds.push(equal);
+            }
+            branch.where_conds.push(SqlCond::Cmp(
+                ColRef::new(1, "x"),
+                crate::iq::CmpOp::Eq,
+                "1".into(),
+            ));
+            if location != 0 {
+                let filter = branch.where_conds.pop().unwrap();
+                let mut later = crate::iq::OptJoin {
+                    scan: Scan {
+                        alias: 2,
+                        source: LogicalSource::Table("other".into()).into(),
+                    },
+                    on: vec![],
+                    extra: vec![],
+                };
+                if location == 1 {
+                    later.on.push(filter);
+                } else {
+                    later.extra.push(filter);
+                }
+                branch.opts.push(later);
+            }
+            branch.bindings.insert(
+                "x".into(),
+                TermDef::Derived {
+                    alias: 0,
+                    term_map: TermMap::Column("x".into(), TermSpec::plain_literal()),
+                },
+            );
+            let schema = [table];
+            let map = super::super::build_schema_map(&schema);
+            let context = super::super::CascadeCtx {
+                distinct: true,
+                project: None,
+            };
+            let mut raw = branch.clone();
+            super::super::fd_self_join_elimination(&mut raw, &map, &context);
+            assert_eq!(
+                format!("{raw:?}"),
+                format!("{branch:?}"),
+                "outside-FD filters cannot move to the kept scan"
+            );
+            super::super::control_fd::eliminate(
+                &mut branch,
+                &map,
+                &context,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(&budget(
+                    u64::MAX,
+                )))),
+            )
+            .unwrap();
+            assert_eq!(format!("{raw:?}"), format!("{branch:?}"));
+        }
+    }
+
+    #[test]
+    fn malformed_composite_proofs_preserve_parent_scan() {
+        for variant in 0..5 {
+            let mut child = TableSchema::new("child");
+            child.columns = vec![
+                sf_sql::Column::new("c1", "text", true),
+                sf_sql::Column::new("c2", "text", true),
+            ];
+            child.foreign_keys.push(sf_sql::ForeignKey {
+                columns: vec!["c1".into(), if variant == 2 { "c1" } else { "c2" }.into()],
+                parent_table: "parent".into(),
+                parent_columns: if variant == 0 {
+                    vec!["p1".into()]
+                } else {
+                    vec!["p1".into(), if variant == 2 { "p1" } else { "p2" }.into()]
+                },
+            });
+            let mut parent = TableSchema::new("parent");
+            parent.primary_key = vec!["p1".into(), if variant == 3 { "p1" } else { "p2" }.into()];
+            let mut branch = Branch::single(Scan {
+                alias: 0,
+                source: LogicalSource::Table("child".into()).into(),
+            });
+            branch.core.push(Scan {
+                alias: 1,
+                source: LogicalSource::Table("parent".into()).into(),
+            });
+            branch
+                .where_conds
+                .push(SqlCond::ColEq(ColRef::new(0, "c1"), ColRef::new(1, "p1")));
+            branch.where_conds.push(SqlCond::ColEq(
+                ColRef::new(0, if variant < 3 { "c1" } else { "c2" }),
+                ColRef::new(1, if variant < 3 { "p1" } else { "p2" }),
+            ));
+            let schema = [child, parent];
+            let fds = infer_functional_dependencies(&branch, &schema);
+            let mut raw = branch.clone();
+            super::super::joinelim::fk_pk_join_elimination(&mut raw, &schema, &fds);
+            assert_eq!(
+                raw.core.len(),
+                if variant == 4 { 1 } else { 2 },
+                "variant {variant}"
+            );
+            super::super::joinelim::with_work(
+                &mut branch,
+                &schema,
+                &fds,
+                BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(&budget(
+                    u64::MAX,
+                )))),
+            )
+            .unwrap();
+            assert_eq!(format!("{raw:?}"), format!("{branch:?}"));
+        }
+    }
+
+    #[test]
+    fn complete_fk_pass_has_exact_limits_and_sticky_stops() {
+        for composite in [false, true] {
+            for variant in 0..5 {
+                let mut child = TableSchema::new("child");
+                child.columns = vec![
+                    sf_sql::Column::new("fk", "text", variant != 1),
+                    sf_sql::Column::new("second", "text", true),
+                ];
+                let mut parent = TableSchema::new("parent");
+                parent.primary_key = if composite {
+                    vec!["id".into(), "other".into()]
+                } else {
+                    vec!["id".into()]
+                };
+                child.foreign_keys.push(sf_sql::ForeignKey {
+                    columns: if composite {
+                        vec!["fk".into(), "second".into()]
+                    } else {
+                        vec!["fk".into()]
+                    },
+                    parent_table: "parent".into(),
+                    parent_columns: if composite {
+                        vec!["id".into(), "other".into()]
+                    } else {
+                        vec!["id".into()]
+                    },
+                });
+                let mut branch = Branch::single(Scan {
+                    alias: 0,
+                    source: LogicalSource::Table("child".into()).into(),
+                });
+                branch.core.push(Scan {
+                    alias: 1,
+                    source: LogicalSource::Table("parent".into()).into(),
+                });
+                branch
+                    .where_conds
+                    .push(SqlCond::ColEq(ColRef::new(0, "fk"), ColRef::new(1, "id")));
+                if composite {
+                    branch.where_conds.push(SqlCond::ColEq(
+                        ColRef::new(0, "second"),
+                        ColRef::new(1, "other"),
+                    ));
+                }
+                if variant == 2 {
+                    child.foreign_keys.clear();
+                }
+                if variant == 3 {
+                    branch
+                        .where_conds
+                        .push(SqlCond::Not(Box::new(SqlCond::DecodedIsNotNull(
+                            ColRef::new(1, "id"),
+                        ))));
+                }
+                branch.bindings.insert(
+                    "value".into(),
+                    TermDef::Derived {
+                        alias: 1,
+                        term_map: TermMap::Column(
+                            if variant == 4 { "outside" } else { "id" }.into(),
+                            TermSpec::iri(),
+                        ),
+                    },
+                );
+                let schema = [child, parent];
+                let fds = infer_functional_dependencies(&branch, &schema);
+                let run = |control: &dyn QueryControl| {
+                    let mut output = branch.clone();
+                    super::super::joinelim::with_work(
+                        &mut output,
+                        &schema,
+                        &fds,
+                        BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control))),
+                    )?;
+                    Ok::<_, crate::Error>(output)
+                };
+                let measured = Stop {
+                    budget: budget(u64::MAX),
+                    calls: AtomicUsize::new(0),
+                    at: usize::MAX,
+                    cause: QueryControlError::Cancelled,
+                };
+                let output = run(&measured).unwrap();
+                assert_eq!(output.core.len(), if variant == 0 { 1 } else { 2 });
+                if variant == 0 {
+                    let TermDef::Derived {
+                        alias,
+                        term_map: TermMap::Column(name, _),
+                    } = &output.bindings["value"]
+                    else {
+                        panic!("column binding");
+                    };
+                    assert_eq!((*alias, name.as_ref()), (0, "fk"));
+                }
+                let units = measured.budget.consumed(QueryCharge::CompilerWork);
+                assert_eq!(
+                    format!("{:?}", run(&budget(units)).unwrap()),
+                    format!("{output:?}")
+                );
+                assert!(matches!(
+                    run(&budget(units - 1)),
+                    Err(crate::Error::QueryControl(
+                        QueryControlError::CompilerWorkExceeded
+                    ))
+                ));
+                for cause in [
+                    QueryControlError::Cancelled,
+                    QueryControlError::DeadlineExceeded,
+                ] {
+                    for at in 1..=measured.calls.load(Ordering::Relaxed) {
+                        let stop = Stop {
+                            budget: budget(u64::MAX),
+                            calls: AtomicUsize::new(0),
+                            at,
+                            cause,
+                        };
+                        assert!(
+                            matches!(run(&stop), Err(crate::Error::QueryControl(actual)) if actual == cause)
+                        );
+                        assert_eq!(stop.checkpoint(), Err(cause));
+                    }
+                }
+            }
+        }
+    }
+}

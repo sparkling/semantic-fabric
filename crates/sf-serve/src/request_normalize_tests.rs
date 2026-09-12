@@ -138,6 +138,11 @@ async fn change_work(cfg: &mut Arc<ServeConfig>, work: u64) {
 }
 
 #[test]
+fn mapped_cascade_refusal_precedes_source_and_recovers_cold_and_warm() {
+    mapped_process("request_compile::tests::structural_normalization::mapped_cascade_refusal_precedes_source_and_recovers_cold_and_warm", "cascade");
+}
+
+#[test]
 fn mapped_normalization_refusal_precedes_a_proven_source_admission_boundary() {
     mapped_process("request_compile::tests::structural_normalization::mapped_normalization_refusal_precedes_a_proven_source_admission_boundary", "normalize");
 }

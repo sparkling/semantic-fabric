@@ -68,8 +68,17 @@ fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema
         .map(|pos| map[pos].1)
 }
 
+mod control;
 pub(crate) mod distinct_scan;
 mod fd;
+pub(crate) use control::run as run_with_work;
+#[cfg(test)]
+pub(crate) use control::values_work as values_cascade_work;
+mod control_conditions;
+mod control_distinct;
+mod control_fd;
+mod control_join;
+mod control_rewrite;
 mod joinelim;
 mod optional_prune;
 pub(crate) mod rendered_distinct;
@@ -1028,18 +1037,13 @@ fn find_fd_self_left_join(b: &Branch, schema: &SchemaMap, opt_idx: usize) -> Opt
         .functional_dependencies
         .iter()
         .find(|fd| fd.det.len() == 1 && fd.det[0].as_str() == &**det_col)?;
-    let allowed: Vec<&str> = fd
-        .dep
-        .iter()
-        .map(|s| s.as_str())
-        .chain(fd.det.iter().map(|s| s.as_str()))
-        .collect();
-    let all_ok = b.bindings.values().all(|def| {
-        def.columns()
-            .iter()
-            .filter(|c| c.alias == opt_alias)
-            .all(|c| allowed.contains(&&*c.column))
-    });
+    let all_ok = control_fd::references_covered(
+        b,
+        opt_alias,
+        fd,
+        crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+    )
+    .expect("uncontrolled FD proof cannot refuse");
     if all_ok {
         Some(core_alias)
     } else {
@@ -1088,21 +1092,15 @@ fn find_fd_self_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, us
             else {
                 continue;
             };
-            // The allowed column set for the scan to be dropped: {det_col} ∪ fd.dep.
-            let allowed: Vec<&str> = fd
-                .dep
-                .iter()
-                .map(|s| s.as_str())
-                .chain(fd.det.iter().map(|s| s.as_str()))
-                .collect();
             // Try both orientations: drop scan j (keep i), then drop scan i (keep j).
             for &(keep, drop) in &[(alias_i, alias_j), (alias_j, alias_i)] {
-                let all_ok = b.bindings.values().all(|def| {
-                    def.columns()
-                        .iter()
-                        .filter(|c| c.alias == drop)
-                        .all(|c| allowed.contains(&&*c.column))
-                });
+                let all_ok = control_fd::references_covered(
+                    b,
+                    drop,
+                    fd,
+                    crate::build::control::BuildWork::new(crate::CompilerWorkMode::Uncontrolled),
+                )
+                .expect("uncontrolled FD proof cannot refuse");
                 if all_ok {
                     return Some((keep, drop, cond_idx));
                 }

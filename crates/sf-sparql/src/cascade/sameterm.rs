@@ -6,7 +6,244 @@ use sf_core::ir::LogicalSource;
 
 use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, SqlCond};
 
+use super::{control_fd::same, control_join::equal, control_rewrite};
 use super::{rewrite_def_alias, CascadeCtx};
+use crate::build::control::{BuildVec, BuildWork};
+use crate::Result;
+
+/// Paid counterpart of the raw oracle below. Refusal discards the owned candidate.
+pub(super) fn with_work(b: &mut Branch, ctx: &CascadeCtx, work: BuildWork<'_>) -> Result<()> {
+    work.charge(1)?;
+    if !ctx.distinct {
+        return Ok(());
+    }
+    while let Some((keep, drop, indices, guards)) = find_paid(b, ctx.project, work)? {
+        for index in indices.into_iter().rev() {
+            control_rewrite::remove(&mut b.where_conds, index, work)?;
+        }
+        let mut conditions = BuildVec::new(Vec::new());
+        for condition in std::mem::take(&mut b.where_conds) {
+            work.charge(1)?;
+            let (local, other) = refs_paid(&condition, drop, work)?;
+            if !local || other {
+                work.push(&mut conditions, condition)?;
+            }
+        }
+        for guard in guards {
+            work.charge(1)?;
+            let mut found = false;
+            for condition in &conditions.values {
+                work.charge(1)?;
+                if let SqlCond::IsNotNull(col) = condition {
+                    if same(col, &guard, work)? {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                work.push(&mut conditions, SqlCond::IsNotNull(guard))?;
+            }
+        }
+        b.where_conds = conditions.into_inner();
+        for def in b.bindings.values_mut() {
+            work.charge(1)?;
+            control_rewrite::definition(def, drop, keep, work)?;
+        }
+        control_rewrite::retain_scan(&mut b.core, drop, work)?;
+    }
+    work.checkpoint()
+}
+
+fn refs_paid(cond: &SqlCond, drop: usize, work: BuildWork<'_>) -> Result<(bool, bool)> {
+    let (mut local, mut other) = (false, false);
+    super::condition_columns_with_work(cond, work, &mut |alias, _| {
+        work.charge(1)?;
+        local |= alias == drop;
+        other |= alias != drop;
+        Ok(())
+    })?;
+    Ok((local, other))
+}
+
+fn equivalent_paid(
+    conditions: &[SqlCond],
+    candidate: &SqlCond,
+    drop: usize,
+    keep: usize,
+    work: BuildWork<'_>,
+) -> Result<bool> {
+    for condition in conditions {
+        work.charge(1)?;
+        let pair = match (condition, candidate) {
+            (SqlCond::Cmp(a, ao, av), SqlCond::Cmp(b, bo, bv)) => {
+                if ao != bo || !equal(av, bv, work)? {
+                    continue;
+                }
+                Some((a, b))
+            }
+            (SqlCond::IsNotNull(a), SqlCond::IsNotNull(b))
+            | (SqlCond::IsNull(a), SqlCond::IsNull(b)) => Some((a, b)),
+            _ => None,
+        };
+        if let Some((a, b)) = pair {
+            if a.alias == keep && b.alias == drop && equal(&a.column, &b.column, work)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+type SameTerms = (usize, usize, Vec<usize>, Vec<ColRef>);
+
+fn find_paid(
+    b: &Branch,
+    project: Option<&[String]>,
+    work: BuildWork<'_>,
+) -> Result<Option<SameTerms>> {
+    for (i, left) in b.core.iter().enumerate() {
+        work.charge(1)?;
+        let Some(LogicalSource::Table(left_table)) = left.source.logical() else {
+            continue;
+        };
+        let keep = left.alias;
+        'candidate: for (j, right) in b.core.iter().enumerate() {
+            work.charge(1)?;
+            if i == j {
+                continue;
+            }
+            let Some(LogicalSource::Table(right_table)) = right.source.logical() else {
+                continue;
+            };
+            if !equal(left_table, right_table, work)? {
+                continue;
+            }
+            let drop = right.alias;
+            for opt in &b.opts {
+                work.charge(1)?;
+                if opt.scan.alias == drop {
+                    continue 'candidate;
+                }
+                for cond in opt.on.iter().chain(&opt.extra) {
+                    work.charge(1)?;
+                    if refs_paid(cond, drop, work)?.0 {
+                        continue 'candidate;
+                    }
+                }
+            }
+            let mut indices = BuildVec::new(Vec::new());
+            let mut shared = BuildVec::new(Vec::new());
+            for (index, condition) in b.where_conds.iter().enumerate() {
+                work.charge(1)?;
+                if let SqlCond::ColEq(a, c) = condition {
+                    let col = if a.alias == keep && c.alias == drop {
+                        Some(a)
+                    } else if a.alias == drop && c.alias == keep {
+                        Some(c)
+                    } else {
+                        None
+                    };
+                    if let Some(col) = col {
+                        work.push(&mut indices, index)?;
+                        work.push(&mut shared, col)?;
+                    }
+                }
+            }
+            for (var, def) in &b.bindings {
+                work.charge(1)?;
+                if let Some(project) = project {
+                    let mut projected = false;
+                    for name in project {
+                        work.charge(1)?;
+                        if equal(name, var, work)? {
+                            projected = true;
+                            break;
+                        }
+                    }
+                    if !projected {
+                        continue;
+                    }
+                }
+                let mut covered = true;
+                for (alias, column) in super::term_columns_with_work(def, work)? {
+                    work.charge(1)?;
+                    if alias != drop {
+                        continue;
+                    }
+                    let mut found = false;
+                    for condition in &b.where_conds {
+                        work.charge(1)?;
+                        if let SqlCond::ColEq(a, c) = condition {
+                            if (a.alias == keep
+                                && c.alias == drop
+                                && equal(&c.column, column, work)?)
+                                || (c.alias == keep
+                                    && a.alias == drop
+                                    && equal(&a.column, column, work)?)
+                            {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    covered &= found;
+                }
+                if !covered {
+                    continue 'candidate;
+                }
+            }
+            for (index, condition) in b.where_conds.iter().enumerate() {
+                work.charge(1)?;
+                let mut cross = false;
+                for candidate in &indices.values {
+                    work.charge(1)?;
+                    if *candidate == index {
+                        cross = true;
+                        break;
+                    }
+                }
+                if cross {
+                    continue;
+                }
+                let (local, other) = refs_paid(condition, drop, work)?;
+                if local
+                    && (other || !equivalent_paid(&b.where_conds, condition, drop, keep, work)?)
+                {
+                    continue 'candidate;
+                }
+            }
+            let mut guards = BuildVec::new(Vec::new());
+            for col in shared.values {
+                work.charge(1)?;
+                let mut constant = false;
+                for condition in &b.where_conds {
+                    work.charge(1)?;
+                    if let SqlCond::Cmp(candidate, CmpOp::Eq, _) = condition {
+                        if same(candidate, col, work)? {
+                            constant = true;
+                            break;
+                        }
+                    }
+                }
+                if !constant {
+                    let copy = ColRef {
+                        alias: col.alias,
+                        column: work.string(&col.column)?.into(),
+                    };
+                    work.push(&mut guards, copy)?;
+                }
+            }
+            return Ok(Some((
+                keep,
+                drop,
+                indices.into_inner(),
+                guards.into_inner(),
+            )));
+        }
+    }
+    Ok(None)
+}
 
 /// Eliminate redundant same-table scans under `DISTINCT` (ADR-0022, WAVE 1).
 ///

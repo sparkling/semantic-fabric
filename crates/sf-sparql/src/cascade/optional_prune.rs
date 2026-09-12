@@ -2,6 +2,49 @@
 use super::{collect_cond_cols, Branch, CascadeCtx, SqlCond};
 use std::collections::BTreeSet;
 
+pub(super) fn self_left_extra_with_work(
+    opt: &crate::iq::OptJoin,
+    table: &sf_sql::TableSchema,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<bool> {
+    let mut nullable = None;
+    for condition in &opt.extra {
+        work.charge(1)?;
+        let column = match condition {
+            SqlCond::DecodedIsNotNull(column) if column.alias == opt.scan.alias => {
+                if !super::control_distinct::non_null(table, &column.column, work)? {
+                    let mut guarded = false;
+                    for condition in &opt.extra {
+                        work.charge(1)?;
+                        if let SqlCond::IsNotNull(other) = condition {
+                            if super::control_fd::same(other, column, work)? {
+                                guarded = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !guarded {
+                        return Ok(false);
+                    }
+                }
+                continue;
+            }
+            SqlCond::IsNotNull(column) if column.alias == opt.scan.alias => column,
+            _ => return Ok(false),
+        };
+        if !super::control_distinct::non_null(table, &column.column, work)? {
+            if let Some(previous) = nullable {
+                if !super::control_fd::same(previous, column, work)? {
+                    return Ok(false);
+                }
+            }
+            nullable = Some(column);
+        }
+    }
+    work.checkpoint()?;
+    Ok(true)
+}
+
 /// Decoder obligations are relocated, never discarded or used as key proof.
 /// Their NULL behavior must already be covered by ordinary guards/schema.
 pub(super) fn self_left_extra_compatible(
@@ -113,6 +156,62 @@ mod tests {
             source: LogicalSource::Table("items".to_owned()).into(),
         }
     }
+    #[test]
+    fn paid_parent_coverage_keeps_alias_specific_decoder_guards() {
+        use crate::{
+            build::control::BuildWork, compiler_control::CompileContext, CompilerWorkMode,
+        };
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+        for variant in 0..3 {
+            let mut b = branch();
+            b.where_conds
+                .push(SqlCond::Not(Box::new(SqlCond::DecodedIsNotNull(
+                    ColRef::new(if variant == 0 { 1 } else { 9 }, "id"),
+                ))));
+            let allowed: &[&str] = if variant == 2 {
+                &["id"]
+            } else {
+                &["id", "value"]
+            };
+            let run = |budget: &QueryBudget| {
+                super::super::control_distinct::parent_columns(
+                    &b,
+                    1,
+                    allowed,
+                    BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(budget))),
+                )
+            };
+            let budget =
+                |units| QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX));
+            let measured = budget(u64::MAX);
+            assert_eq!(run(&measured).unwrap(), variant == 1);
+            let units = measured.consumed(QueryCharge::CompilerWork);
+            assert_eq!(run(&budget(units)).unwrap(), variant == 1);
+            assert!(matches!(
+                run(&budget(units - 1)),
+                Err(crate::Error::QueryControl(
+                    sf_core::query_control::QueryControlError::CompilerWorkExceeded
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn foreign_key_does_not_prove_filtered_optional_matches() {
+        let mut b = branch();
+        let mut table = sf_sql::TableSchema::new("items");
+        table.primary_key = vec!["id".into()];
+        table.foreign_keys.push(sf_sql::ForeignKey {
+            columns: vec!["id".into()],
+            parent_table: "items".into(),
+            parent_columns: vec!["id".into()],
+        });
+        // Even a self FK cannot make a nullable payload IS NOT NULL true.
+        // LEFT preserves a row with NULL payload; INNER would remove it.
+        super::super::joinelim::lj_to_ij_fk_downgrade(&mut b, &[table]);
+        assert_eq!(b.opts.len(), 1, "extra predicate can reject the FK match");
+        assert_eq!(b.core.len(), 1);
+    }
     fn binding(alias: usize) -> TermDef {
         TermDef::Derived {
             term_map: TermMap::Column("value".into(), TermSpec::plain_literal()),
@@ -130,6 +229,21 @@ mod tests {
         b
     }
     fn prune(b: &mut Branch) {
+        let mut controlled = b.clone();
+        let control = sf_core::query_control::QueryBudget::new(
+            sf_core::query_control::QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        );
+        super::super::control_distinct::prune_optional(
+            &mut controlled,
+            &CascadeCtx {
+                distinct: true,
+                project: Some(&["value".to_owned()]),
+            },
+            crate::build::control::BuildWork::new(crate::CompilerWorkMode::Metered(
+                crate::compiler_control::CompileContext::new(&control),
+            )),
+        )
+        .unwrap();
         distinct_prune_unused_opts(
             b,
             &CascadeCtx {
@@ -137,6 +251,92 @@ mod tests {
                 project: Some(&["value".to_owned()]),
             },
         );
+        assert_eq!(format!("{controlled:?}"), format!("{b:?}"));
+    }
+
+    #[test]
+    fn controlled_optional_prune_exact_and_every_stop_preserve_unpublished_input() {
+        use sf_core::query_control::{
+            QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let budget =
+            |units| QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX));
+        struct Stop {
+            budget: QueryBudget,
+            calls: AtomicUsize,
+            at: usize,
+            cause: QueryControlError,
+        }
+        impl QueryControl for Stop {
+            fn checkpoint(&self) -> std::result::Result<(), QueryControlError> {
+                self.budget.checkpoint()
+            }
+            fn consume(
+                &self,
+                kind: QueryCharge,
+                units: u64,
+            ) -> std::result::Result<(), QueryControlError> {
+                self.budget.consume(kind, units)?;
+                if self.calls.fetch_add(1, Ordering::Relaxed) + 1 == self.at {
+                    self.budget.terminate(self.cause);
+                }
+                Ok(())
+            }
+            fn terminate(&self, cause: QueryControlError) -> QueryControlError {
+                self.budget.terminate(cause)
+            }
+        }
+        let run = |b: &mut Branch, control: &dyn QueryControl| {
+            super::super::control_distinct::prune_optional(
+                b,
+                &CascadeCtx {
+                    distinct: true,
+                    project: Some(&["value".into()]),
+                },
+                crate::build::control::BuildWork::new(crate::CompilerWorkMode::Metered(
+                    crate::compiler_control::CompileContext::new(control),
+                )),
+            )
+        };
+        let original = branch();
+        let measured = Stop {
+            budget: budget(u64::MAX),
+            calls: AtomicUsize::new(0),
+            at: usize::MAX,
+            cause: QueryControlError::Cancelled,
+        };
+        let mut pruned = original.clone();
+        run(&mut pruned, &measured).unwrap();
+        assert!(pruned.opts.is_empty());
+        let units = measured.budget.consumed(QueryCharge::CompilerWork);
+        run(&mut original.clone(), &budget(units)).unwrap();
+        let mut failed = original.clone();
+        assert!(matches!(
+            run(&mut failed, &budget(units - 1)),
+            Err(crate::Error::QueryControl(
+                QueryControlError::CompilerWorkExceeded
+            ))
+        ));
+        assert_eq!(format!("{failed:?}"), format!("{original:?}"));
+        for cause in [
+            QueryControlError::Cancelled,
+            QueryControlError::DeadlineExceeded,
+        ] {
+            for at in 1..=measured.calls.load(Ordering::Relaxed) {
+                let control = Stop {
+                    budget: budget(u64::MAX),
+                    calls: AtomicUsize::new(0),
+                    at,
+                    cause,
+                };
+                let mut failed = original.clone();
+                assert!(
+                    matches!(run(&mut failed,&control),Err(crate::Error::QueryControl(actual)) if actual==cause)
+                );
+                assert_eq!(format!("{failed:?}"), format!("{original:?}"));
+            }
+        }
     }
 
     #[test]

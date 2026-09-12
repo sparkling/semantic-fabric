@@ -104,6 +104,8 @@ mod query_budget_tests;
 #[cfg(test)]
 mod request_admission_tests;
 #[cfg(test)]
+mod request_cascade_tests;
+#[cfg(test)]
 mod runtime_activation_http_tests;
 #[cfg(test)]
 mod runtime_snapshot_tests;

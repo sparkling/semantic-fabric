@@ -81,7 +81,7 @@ pub(crate) fn subplans(
         let candidate = work.mode.clone_branch_forest(&nested.plan.branches)?;
         // Preserve all existing optimizer passes, including their ordering.
         // This call is not claimed as internally metered by finalization.
-        let post = cascade::run(candidate, schema, &context);
+        let post = cascade::run_with_work(candidate, schema, &context, work)?;
         work.checkpoint()?;
         let mut widths = work.vector(post.len())?;
         for branch in &post {

@@ -269,6 +269,7 @@ pub(crate) const STRUCTURAL_QUERIES: [&str; 3] = [
     "SELECT ?value WHERE { VALUES ?value { \"one\" \"two\" } OPTIONAL { VALUES ?inside { 7 } } }",
 ];
 
+#[allow(dead_code)]
 pub(crate) fn structural_compile_work(source: &str) -> u64 {
     assert!(STRUCTURAL_QUERIES.contains(&source));
     source_free_compile_work(source)
@@ -277,12 +278,21 @@ pub(crate) fn structural_compile_work(source: &str) -> u64 {
 /// End-to-end cold compiler allowance for the three source-free row-rule fixtures.
 /// Unit tests independently pin the new NORMALIZE schedule and copy boundaries.
 /// This excludes serving's decoded-input charge; a warm hit still pays only key work.
+#[allow(dead_code)]
 pub(crate) fn constant_compile_work(source: &str) -> u64 {
     assert!(CONSTANT_QUERIES.contains(&source));
     source_free_compile_work(source)
 }
 
 fn source_free_compile_work(source: &str) -> u64 {
+    source_free_compile_work_with_schema(source, vec![])
+}
+
+#[allow(dead_code)]
+pub(crate) fn source_free_compile_work_with_schema(
+    source: &str,
+    schema: Vec<sf_sql::TableSchema>,
+) -> u64 {
     use sf_core::{
         query_control::{QueryBudget, QueryCharge, QueryLimits},
         SourceId, SourceMapping,
@@ -295,7 +305,7 @@ fn source_free_compile_work(source: &str) -> u64 {
         SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
         sf_sql::Dialect::Sqlite,
         Tbox::default(),
-        vec![],
+        schema,
         Epoch::default(),
         1,
     );
