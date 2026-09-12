@@ -390,7 +390,9 @@ async fn compiler_clone_work_preserves_exact_public_results_and_avoids_hit_repla
         for warm in [false, true] {
             if warm {
                 Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
-                    CLONING.len() as u64 + warm_work(CLONING),
+                    CLONING.len() as u64
+                        + warm_work(CLONING)
+                        + cache_key::admission_work(CLONING, &[]),
                     u64::MAX,
                     u64::MAX,
                     u64::MAX,

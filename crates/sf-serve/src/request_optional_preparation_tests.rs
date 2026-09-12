@@ -64,6 +64,7 @@ fn helper_work(query: &str, profile: MappedProfile) -> (u64, u64, u64) {
         || {
             binding
                 .compile_shared_with_work_control(query, budget.as_ref())
+                .inspect(|plan| crate::admission::admit(plan, 0, budget.as_ref()).unwrap())
                 .unwrap();
         },
     );
@@ -106,7 +107,9 @@ fn mapped_optional_binding_construction_refuses_before_source_and_recovers() {
 pub(super) async fn cases(profile: MappedProfile) {
     for query in CHAINED {
         let (prefix, helper_end, complete) = helper_work(query, profile);
-        let cached = query.len() as u64 + compiler_key::warm_work(query);
+        let cached = query.len() as u64
+            + compiler_key::warm_work(query)
+            + compiler_key::admission_work(query, &mapped_fixture());
         assert!(cached < prefix && prefix < helper_end && helper_end < complete);
         for secured in [false, true] {
             let (mut cfg, pool) = config_with_mapping(prefix, mapped_fixture());

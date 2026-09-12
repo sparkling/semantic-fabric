@@ -1550,7 +1550,11 @@ pub(crate) fn eligible_for_term_dedup_with_distinct(b: &Branch, distinct: bool) 
 /// `Concat`/`Agg`/`ComposedTriple` are not `binding_is_injective`'s `Template`
 /// match arm to begin with) but is excluded defensively rather than assumed.
 fn binding_is_term_dedup_safe(def: &TermDef) -> bool {
-    if binding_is_injective(def) {
+    binding_is_term_dedup_safe_with_injectivity(def, binding_is_injective(def))
+}
+
+pub(crate) fn binding_is_term_dedup_safe_with_injectivity(def: &TermDef, injective: bool) -> bool {
+    if injective {
         return true;
     }
     let term_map = match def {

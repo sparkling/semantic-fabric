@@ -64,7 +64,7 @@ async fn structural_rules_reject_before_lowering_then_preserve_results_and_hits(
                     .unwrap(),
             )
             .await;
-            set_work(&mut cfg, warm).await;
+            set_work(&mut cfg, warm + cache_key::admission_work(query, &[])).await;
             assert_values(
                 router(cfg.clone())
                     .oneshot(authenticated(query))

@@ -32,7 +32,10 @@ async fn constant_row_rules_reject_unpaid_work_then_recover_and_reuse_warm_plans
                 + build_work(query);
             let exact = input + constant_compile_work(query);
             assert!(exact > prerequisites, "normalization is independently paid");
-            for work in [prerequisites, exact - 1] {
+            for work in [
+                prerequisites,
+                exact - cache_key::admission_work(query, &[]) - 1,
+            ] {
                 set_work(&mut cfg, work).await;
                 assert_budget_problem(
                     router(cfg.clone())
@@ -60,7 +63,7 @@ async fn constant_row_rules_reject_unpaid_work_then_recover_and_reuse_warm_plans
                     .unwrap(),
             )
             .await;
-            set_work(&mut cfg, warm).await;
+            set_work(&mut cfg, warm + cache_key::admission_work(query, &[])).await;
             assert_values(
                 router(cfg.clone())
                     .oneshot(authenticated(query))

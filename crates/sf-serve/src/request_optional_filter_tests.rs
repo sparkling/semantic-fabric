@@ -61,6 +61,7 @@ pub(super) fn helper_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64
         || {
             binding
                 .compile_shared_with_work_control(query, budget.as_ref())
+                .inspect(|plan| crate::admission::admit(plan, 0, budget.as_ref()).unwrap())
                 .unwrap();
         },
     );
@@ -118,6 +119,7 @@ pub(super) fn key_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
     ));
     let warm = binding
         .compile_shared_with_work_control(query, &control)
+        .inspect(|plan| crate::admission::admit(plan, 0, &control).unwrap())
         .unwrap();
     assert!(
         Arc::ptr_eq(&raw, &warm),

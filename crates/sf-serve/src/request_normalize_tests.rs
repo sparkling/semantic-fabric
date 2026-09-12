@@ -104,6 +104,7 @@ fn mapped_work(
     tracing::subscriber::with_default(observer, || {
         binding
             .compile_shared_with_work_control(query, control.as_ref())
+            .inspect(|plan| crate::admission::admit(plan, 0, control.as_ref()).unwrap())
             .unwrap();
     });
     let complete = query.len() as u64 + control.consumed(QueryCharge::CompilerWork);
@@ -205,7 +206,9 @@ async fn mapped_admission_cases(
 ) {
     let maps = mapped_fixture();
     let (prefix, normalized, exact) = mapped_work(&maps, phase, query);
-    let cached = query.len() as u64 + compiler_key::warm_work(query);
+    let cached = query.len() as u64
+        + compiler_key::warm_work(query)
+        + compiler_key::admission_work(query, &maps);
     assert!(cached < prefix);
     for secured in [false, true] {
         let (mut cfg, pool) = config_with_mapping(prefix, maps.clone());

@@ -3,9 +3,9 @@ use super::*;
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
 pub(super) use compiler_key::{
-    build_work, key_work, miss_work, normalization_work, rewrite_work, source_free_entry_work,
-    source_free_join_seed_work, source_free_values_work, warm_work, CONSTANT_QUERIES,
-    STRUCTURAL_QUERIES,
+    admission_work, build_work, key_work, miss_work, normalization_work, rewrite_work,
+    source_free_entry_work, source_free_join_seed_work, source_free_values_work, warm_work,
+    CONSTANT_QUERIES, STRUCTURAL_QUERIES,
 };
 
 // Match the owned HTTP fixture's observed table. Success-only calibration;
@@ -74,7 +74,13 @@ async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
     // The same immutable runtime/cache survives all requests and limit changes.
     for warm in [false, true] {
         if warm {
-            set_work_after_cleanup(&mut cfg, SELECT.len() as u64 + warm_work(SELECT)).await;
+            set_work_after_cleanup(
+                &mut cfg,
+                SELECT.len() as u64
+                    + warm_work(SELECT)
+                    + admission_work(SELECT, &sf_mapping::parse_r2rml(MAPPING).unwrap()),
+            )
+            .await;
         }
         assert_values(
             router(cfg.clone())
@@ -166,7 +172,9 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                 } else {
                     fixture_compile_work(&query)
                 };
-            set_work_after_cleanup(&mut cfg, exact - 1).await;
+            let tail = admission_work(&query, &[]);
+            let compiler_cut = if warm { exact - 1 } else { exact - tail - 1 };
+            set_work_after_cleanup(&mut cfg, compiler_cut).await;
             assert_budget_problem(
                 router(cfg.clone())
                     .oneshot(authenticated(&query))
@@ -174,7 +182,7 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
                     .unwrap(),
             )
             .await;
-            set_work_after_cleanup(&mut cfg, exact).await;
+            set_work_after_cleanup(&mut cfg, exact + if warm { tail } else { 0 }).await;
             let response = router(cfg.clone())
                 .oneshot(authenticated(&query))
                 .await

@@ -4,7 +4,7 @@ use http_body_util::BodyExt;
 use sf_core::query_control::QueryBudget;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-async fn allowance(cfg: &mut Arc<ServeConfig>, work: u64) {
+pub(super) async fn allowance(cfg: &mut Arc<ServeConfig>, work: u64) {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if let Some(cfg) = Arc::get_mut(cfg) {
@@ -47,6 +47,7 @@ async fn cache_lookup_and_publication_refuse_before_source_then_recover_exact_re
         .unwrap();
     assert!(Arc::ptr_eq(&plan, &reused));
     let input = QUERY.len() as u64;
+    let admission = compiler_key::plan_admission_work(&plan);
     let cold = input + cold.consumed(QueryCharge::CompilerWork);
     let hit = input + hit.consumed(QueryCharge::CompilerWork);
     let lookup = input + key_work(QUERY) + compiler_key::miss_work(QUERY);
@@ -83,9 +84,9 @@ async fn cache_lookup_and_publication_refuse_before_source_then_recover_exact_re
             (cold - 1, false),
             (cold - 1, false),
             (hit, false),
-            (cold, true),
+            (cold + admission, true),
             (hit - 1, false),
-            (hit, true),
+            (hit + admission, true),
         ] {
             allowance(&mut cfg, work).await;
             let held = pool.pick_owned().acquire().await.unwrap();

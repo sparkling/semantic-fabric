@@ -20,6 +20,8 @@ mod structural_normalization;
 
 #[path = "request_cache_operations_tests.rs"]
 mod cache_operations;
+#[path = "request_resource_admission_tests.rs"]
+mod resource_admission;
 
 #[path = "request_resolve_tests.rs"]
 mod resolve_work;
@@ -78,7 +80,7 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     // Empty plan still copies its one projected ?s at realization: one vector
     // slot, String carrier, visit and one-byte name; no root branches to visit.
     let realization = 1 + std::mem::size_of::<String>() as u64 + 2;
-    let pass = rewrite + build + realization;
+    let pass = rewrite + build + realization + compiler_key::admission_work(QUERY, &[]);
     let exact =
         2 * input + pass + compiler_key::source_free_compile_work_with_schema(QUERY, vec![]);
     let canonical = spargebra::SparqlParser::new()
@@ -431,7 +433,7 @@ async fn structural_build_failure_precedes_source_while_completed_hits_skip_buil
             Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
                 QUERY.len() as u64
                     + if warm {
-                        compiler_key::warm_work(QUERY)
+                        compiler_key::warm_work(QUERY) + compiler_key::admission_work(QUERY, &[])
                     } else {
                         key_work(QUERY) + compiler_key::miss_work(QUERY) + extra
                     },

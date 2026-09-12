@@ -280,8 +280,7 @@ async fn acquire_compile(
     let BoundQuery::Single(bound) = bound else {
         panic!("request-route fixture must compile a single-source plan")
     };
-    crate::admission::admit(bound.plan(), cfg.max_order_rows())
-        .expect("request-route plan is admitted");
+    // request_compile::compile already admitted the plan inside its owned worker.
     let executable = snapshot
         .prepare_execution(*bound)
         .expect("prepare binding-owned request-route execution");

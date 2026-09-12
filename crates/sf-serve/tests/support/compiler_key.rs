@@ -58,6 +58,34 @@ pub(crate) fn warm_work(source: &str) -> u64 {
     control.consumed(QueryCharge::CompilerWork)
 }
 
+/// Separate post-compile tail for funded public requests. Never add this to a
+/// negative compiler-phase prefix. Maps must match the actual public fixture.
+#[allow(dead_code)]
+pub(crate) fn admission_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
+    let plan = sf_sparql::parse_and_translate(source, maps, sf_sql::Dialect::Sqlite).unwrap();
+    plan_admission_work(&plan)
+}
+
+#[allow(dead_code)]
+pub(crate) fn plan_admission_work(plan: &sf_sparql::Plan) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControl, QueryLimits};
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    if plan.limit != Some(0) {
+        for key in &plan.order {
+            assert!(
+                key.expr.is_none(),
+                "funded helper cannot admit unsupported expression order"
+            );
+            control.consume(QueryCharge::CompilerWork, 1).unwrap();
+        }
+    }
+    assert!(plan
+        .source_sized_states_with_order_window_and_work_control(0, &control)
+        .unwrap()
+        .is_empty());
+    control.consumed(QueryCharge::CompilerWork)
+}
+
 /// Stop immediately after the empty-cache admission charge, before compilation.
 #[allow(dead_code)]
 pub(crate) fn miss_work(source: &str) -> u64 {
@@ -374,8 +402,8 @@ pub(crate) fn source_free_compile_work_with_schema(
         64, // Match RuntimeBinding's cache geometry for success-only calibration.
     );
     let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
-    binding
+    let plan = binding
         .compile_shared_with_work_control(source, &control)
         .unwrap();
-    control.consumed(QueryCharge::CompilerWork)
+    control.consumed(QueryCharge::CompilerWork) + plan_admission_work(&plan)
 }

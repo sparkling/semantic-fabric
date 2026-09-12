@@ -101,6 +101,7 @@ fn phase_work(query: &str, kinds: &[usize]) -> (Vec<u64>, u64) {
         || {
             binding
                 .compile_shared_with_work_control(query, control.as_ref())
+                .inspect(|plan| crate::admission::admit(plan, 0, control.as_ref()).unwrap())
                 .unwrap();
         },
     );

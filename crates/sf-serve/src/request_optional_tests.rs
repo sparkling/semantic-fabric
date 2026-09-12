@@ -158,6 +158,7 @@ fn mapped_work(
     tracing::subscriber::with_default(observer, || {
         binding
             .compile_shared_with_work_control(query, control.as_ref())
+            .inspect(|plan| crate::admission::admit(plan, 0, control.as_ref()).unwrap())
             .unwrap();
     });
     let complete = query.len() as u64 + control.consumed(QueryCharge::CompilerWork);
@@ -301,7 +302,7 @@ async fn mapped_admission_cases(profile: MappedProfile) {
             + if profile == MappedProfile::Filter {
                 filter::key_work(query, &maps)
             } else {
-                compiler_key::warm_work(query)
+                compiler_key::warm_work(query) + compiler_key::admission_work(query, &maps)
             };
         assert!(cached < prefix);
         for secured in [false, true] {

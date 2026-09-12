@@ -12,7 +12,6 @@ use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_sparql::{exec, Plan, PlanForm};
 
 use crate::activation::RuntimeSnapshotLease;
-use crate::admission;
 use crate::backend::Backend;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
@@ -195,14 +194,6 @@ async fn process(
 
     match bound {
         BoundQuery::Single(bound) => {
-            let admitted = traced_sync(Stage::ShapeAdmission, || {
-                admission::admit(bound.plan(), cfg.max_order_rows())
-            });
-            if let Err(error) = admitted {
-                let _internal_reason = error.reason();
-                let _ = generations.finish().await;
-                return problem::response(ProblemCode::UnsupportedQuery);
-            }
             let execution = match traced_sync(Stage::BindExecution, || {
                 snapshot.prepare_request_execution(*bound, &budget)
             }) {
@@ -264,16 +255,6 @@ async fn process(
             }
         }
         BoundQuery::Federated(bound) => {
-            for fragment in bound.plan().fragments() {
-                let admitted = traced_sync(Stage::ShapeAdmission, || {
-                    admission::admit(fragment.plan(), cfg.max_order_rows())
-                });
-                if let Err(error) = admitted {
-                    let _internal_reason = error.reason();
-                    let _ = generations.finish().await;
-                    return problem::response(ProblemCode::UnsupportedQuery);
-                }
-            }
             let execution = match traced_sync(Stage::BindExecution, || {
                 snapshot.prepare_federated_request_execution(*bound, &budget)
             }) {
