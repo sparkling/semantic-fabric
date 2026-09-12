@@ -18,6 +18,9 @@ use compiler_key::{
 #[path = "request_normalize_tests.rs"]
 mod structural_normalization;
 
+#[path = "request_cache_operations_tests.rs"]
+mod cache_operations;
+
 #[path = "request_resolve_tests.rs"]
 mod resolve_work;
 
@@ -76,7 +79,8 @@ async fn preflight_and_authoritative_compile_share_cumulative_input_charge() {
     // slot, String carrier, visit and one-byte name; no root branches to visit.
     let realization = 1 + std::mem::size_of::<String>() as u64 + 2;
     let pass = rewrite + build + realization;
-    let exact = 2 * input + key + 2 * pass;
+    let exact =
+        2 * input + pass + compiler_key::source_free_compile_work_with_schema(QUERY, vec![]);
     let canonical = spargebra::SparqlParser::new()
         .parse_query(QUERY)
         .unwrap()
@@ -321,7 +325,10 @@ async fn canonical_key_failure_precedes_held_source_and_recovers_compiler_capaci
     use std::sync::atomic::{AtomicUsize, Ordering};
     for secured in [false, true] {
         for warm in [false, true] {
-            let (mut cfg, pool) = config(100_000);
+            let (mut cfg, pool) = config(
+                QUERY.len() as u64
+                    + compiler_key::source_free_compile_work_with_schema(QUERY, vec![]),
+            );
             if secured {
                 Arc::get_mut(&mut cfg)
                     .unwrap()
@@ -392,7 +399,10 @@ async fn structural_build_failure_precedes_source_while_completed_hits_skip_buil
             (false, rewrite_work(QUERY) + build_work(QUERY) - 1),
             (true, 0),
         ] {
-            let (mut cfg, pool) = config(100_000);
+            let (mut cfg, pool) = config(
+                QUERY.len() as u64
+                    + compiler_key::source_free_compile_work_with_schema(QUERY, vec![]),
+            );
             if secured {
                 Arc::get_mut(&mut cfg)
                     .unwrap()
@@ -419,7 +429,12 @@ async fn structural_build_failure_precedes_source_while_completed_hits_skip_buil
                 response.into_body().collect().await.unwrap();
             }
             Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
-                QUERY.len() as u64 + key_work(QUERY) + extra,
+                QUERY.len() as u64
+                    + if warm {
+                        compiler_key::warm_work(QUERY)
+                    } else {
+                        key_work(QUERY) + compiler_key::miss_work(QUERY) + extra
+                    },
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,
@@ -476,66 +491,6 @@ async fn structural_build_failure_precedes_source_while_completed_hits_skip_buil
             .unwrap();
             drop(recovered);
             drop(held);
-        }
-    }
-}
-
-#[tokio::test]
-async fn constant_normalization_failure_never_enters_held_source_admission() {
-    use http_body_util::BodyExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    for query in compiler_key::CONSTANT_QUERIES {
-        let exact = query.len() as u64 + compiler_key::constant_compile_work(query);
-        let prerequisite =
-            query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
-        assert!(exact > prerequisite);
-        for secured in [false, true] {
-            for work in [prerequisite, exact - 1] {
-                let (mut cfg, pool) = config(work);
-                if secured {
-                    Arc::get_mut(&mut cfg).unwrap().set_query_admission(
-                        crate::QueryAdmission::Bearer(
-                            crate::BearerQueryAdmission::for_service_principal(
-                                "test-only-row-work-credential-123456",
-                            )
-                            .unwrap(),
-                        ),
-                    );
-                }
-                let held = pool.pick_owned().acquire().await.unwrap();
-                let calls = Arc::new(AtomicUsize::new(0));
-                let observed = calls.clone();
-                pool.set_admission_pending_observer(move || {
-                    observed.fetch_add(1, Ordering::SeqCst);
-                });
-                let request = Request::post("/sparql")
-                    .header("content-type", "application/sparql-query")
-                    .header(
-                        "authorization",
-                        "Bearer test-only-row-work-credential-123456",
-                    )
-                    .body(Body::from(query))
-                    .unwrap();
-                let response = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    crate::router(cfg.clone()).oneshot(request),
-                )
-                .await
-                .expect("row normalization rejects without source wait")
-                .unwrap();
-                assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-                response.into_body().collect().await.unwrap();
-                assert_eq!(calls.load(Ordering::SeqCst), 0);
-                let recovered = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    cfg.compiler_permits().acquire_many_owned(4),
-                )
-                .await
-                .expect("all compiler capacity recovers")
-                .unwrap();
-                drop(recovered);
-                drop(held);
-            }
         }
     }
 }

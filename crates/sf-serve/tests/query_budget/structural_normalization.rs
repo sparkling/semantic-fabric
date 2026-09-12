@@ -25,8 +25,11 @@ async fn structural_rules_reject_before_lowering_then_preserve_results_and_hits(
             } else {
                 config(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX))
             });
-            let prefix =
-                query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
+            let prefix = query.len() as u64
+                + key_work(query)
+                + miss_work(query)
+                + rewrite_work(query)
+                + build_work(query);
             let normal = normalization_work(query, &[]);
             assert!(normal > 0);
             // Both failures are within NORMALIZE, never a later LOWER copy or
@@ -52,7 +55,7 @@ async fn structural_rules_reject_before_lowering_then_preserve_results_and_hits(
             )
             .await;
             // Warm plans skip BUILD/NORMALIZE/LOWER, not paid input/key processing.
-            let warm = query.len() as u64 + key_work(query);
+            let warm = query.len() as u64 + warm_work(query);
             set_work(&mut cfg, warm - 1).await;
             assert_budget_problem(
                 router(cfg.clone())

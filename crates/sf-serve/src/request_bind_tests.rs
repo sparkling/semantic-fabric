@@ -51,7 +51,7 @@ pub(super) async fn cases(profile: MappedProfile) {
         };
         assert!(
             complete <= 1_000_000,
-            "existing default admits supported BIND"
+            "existing default admits supported BIND: variant={variant}, complete={complete}"
         );
         let cached = query.len() as u64 + filter::key_work(query, &mapped_fixture());
         assert!(cuts.iter().all(|work| cached < *work && *work < complete));

@@ -49,7 +49,7 @@ fn helper_work(query: &str, profile: MappedProfile) -> (u64, u64, u64) {
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(Observe {
@@ -106,7 +106,7 @@ fn mapped_optional_binding_construction_refuses_before_source_and_recovers() {
 pub(super) async fn cases(profile: MappedProfile) {
     for query in CHAINED {
         let (prefix, helper_end, complete) = helper_work(query, profile);
-        let cached = query.len() as u64 + key_work(query);
+        let cached = query.len() as u64 + compiler_key::warm_work(query);
         assert!(cached < prefix && prefix < helper_end && helper_end < complete);
         for secured in [false, true] {
             let (mut cfg, pool) = config_with_mapping(prefix, mapped_fixture());

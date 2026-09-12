@@ -45,7 +45,7 @@ pub(super) fn helper_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(Observe {

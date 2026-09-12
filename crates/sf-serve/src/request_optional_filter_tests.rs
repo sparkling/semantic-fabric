@@ -51,7 +51,7 @@ pub(super) fn helper_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> (u64
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(Observe {
@@ -107,7 +107,7 @@ pub(super) fn key_work(query: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Same geometry for the independently measured warm hit.
     );
     let raw = binding.compile_shared(query).unwrap();
     let control = sf_core::query_control::QueryBudget::new(QueryLimits::new(

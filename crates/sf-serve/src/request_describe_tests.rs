@@ -83,7 +83,7 @@ fn work(query: &str) -> (u64, u64, u64, u64) {
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     let control = Arc::new(QueryBudget::new(QueryLimits::new(
         u64::MAX,

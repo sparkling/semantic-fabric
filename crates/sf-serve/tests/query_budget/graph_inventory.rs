@@ -7,6 +7,7 @@ async fn empty_named_graph_inventory_still_requires_mapping_work() {
     let response = router(Arc::new(path_config(
         QUERY.len() as u64
             + key_work(QUERY)
+            + miss_work(QUERY)
             + rewrite_work(QUERY)
             + super::cache_key::build_work(QUERY),
     )))

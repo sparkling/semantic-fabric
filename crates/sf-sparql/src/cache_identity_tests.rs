@@ -131,7 +131,7 @@ fn cache_identity_distinct_semantics_and_authored_names_do_not_collide() {
 }
 
 #[test]
-fn cache_identity_unpaid_key_never_publishes_and_warm_hit_pays_only_the_key() {
+fn cache_identity_unpaid_key_never_publishes_and_warm_hit_pays_key_and_lookup() {
     let binding = CompilerBinding::from_unverified_observation(
         SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
         Dialect::Sqlite,
@@ -156,11 +156,12 @@ fn cache_identity_unpaid_key_never_publishes_and_warm_hit_pays_only_the_key() {
         .is_err());
     assert_eq!(binding.cache_len(), 0);
     let first = binding.compile_shared(COUNT).unwrap();
-    let exact = budget(key_work);
+    let warm_work = key_work + super::test_work(8, COUNT).1;
+    let exact = budget(warm_work);
     let warm = binding
         .compile_parsed_shared_with_work_control(&query, &exact)
         .unwrap();
     assert!(Arc::ptr_eq(&first, &warm));
-    assert_eq!(exact.consumed(QueryCharge::CompilerWork), key_work);
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), warm_work);
     assert_eq!(binding.cache_len(), 1);
 }

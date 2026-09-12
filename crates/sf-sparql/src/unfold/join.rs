@@ -356,7 +356,9 @@ mod tests {
             crate::iq::normalize::normalize_with_work_control(resolved, &normalize_control)
                 .unwrap();
         let prefix = crate::iq::lower::scope_test_support::entry_work(&normalized).0;
+        let (miss, hit, _) = crate::cache::test_work(8, query);
         let prerequisites = key_work
+            + miss
             + crate::star::rewrite_work(query)
             + build_work
             + resolve_control.consumed(QueryCharge::CompilerWork)
@@ -379,7 +381,7 @@ mod tests {
             .unwrap();
         assert!(paid.consumed(QueryCharge::CompilerWork) > 20);
         let second = binding
-            .compile_shared_with_work_control(query, &budget(key_work))
+            .compile_shared_with_work_control(query, &budget(key_work + hit))
             .unwrap();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         assert_eq!(

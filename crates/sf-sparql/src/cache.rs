@@ -26,6 +26,11 @@ use crate::compiler_schema::{
 use crate::runtime_identity::CompileDigests;
 use crate::{Plan, Result, Tbox};
 
+#[path = "cache_operations.rs"]
+mod operations;
+#[cfg(test)]
+pub(crate) use operations::test_work;
+
 #[path = "cache_profile.rs"]
 mod profile;
 use profile::ProfiledPlanCaches;
@@ -416,6 +421,17 @@ pub fn plan_key(query: &Query, scope: CompileScope) -> PlanKey {
     plan_key_for_profile(query, scope, CompileProfileId::Uncontrolled)
 }
 
+/// Construct the same exact key with prospective canonicalization work control.
+/// This admits key construction only; it neither accesses a cache nor grants a
+/// governed compiler profile. Cache lookup/publication require their own work.
+pub fn plan_key_with_work_control(
+    query: &Query,
+    scope: CompileScope,
+    control: &dyn sf_core::query_control::QueryControl,
+) -> Result<PlanKey> {
+    bounded_key::plan_key_with_work_control(query, scope, CompileProfileId::Uncontrolled, control)
+}
+
 pub(crate) fn plan_key_for_profile(
     query: &Query,
     scope: CompileScope,
@@ -441,13 +457,13 @@ pub(crate) use canonical::normalize_describe_parse;
 /// collapsed the hit rate to ~0 past `capacity` distinct keys — M4 wave-2 finding 1).
 pub struct PlanCache<P> {
     inner: quick_cache::sync::Cache<PlanKey, P>,
+    geometry: operations::Geometry,
 }
 
 impl<P: Clone> PlanCache<P> {
     pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: quick_cache::sync::Cache::new(capacity),
-        }
+        let (inner, geometry) = operations::new_cache(capacity);
+        Self { inner, geometry }
     }
 
     /// Look up a compiled plan.
@@ -455,21 +471,10 @@ impl<P: Clone> PlanCache<P> {
         self.inner.get(key)
     }
 
-    /// Request paths never wait on cache locks: contention is an optimization miss.
-    /// This does not govern hashing, comparisons or work after acquiring the lock.
-    fn get_if_uncontended(&self, key: &PlanKey) -> Option<P> {
-        self.inner.try_get(key).ok().flatten()
-    }
-
     /// Insert a compiled plan. Eviction (approximately-LRU, `quick_cache`) drops
     /// individual cold entries as entry capacity is reached.
     pub fn put(&self, key: PlanKey, plan: P) {
         self.inner.insert(key, plan);
-    }
-
-    /// Best-effort publication; the caller still owns its completed plan.
-    fn put_if_uncontended(&self, key: PlanKey, plan: P) {
-        drop(self.inner.try_insert(key, plan));
     }
 
     pub fn len(&self) -> usize {

@@ -61,7 +61,7 @@ pub(super) fn work(query: &str, require_borrowed: bool) -> (Vec<u64>, u64) {
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     tracing::subscriber::with_default(
         tracing_subscriber::registry().with(Observe {

@@ -292,6 +292,7 @@ fn cache_and_error_diagnostics_do_not_render_identity_material() {
         context.cache_identity(),
         binding.compile_uncached_shared(QUERY).unwrap(),
     );
+    super::super::operations::assert_fixed_hash_bound(&key);
     let key_output = format!("{key:?} {cache:?} {cached_plan:?}");
     let mismatch = binding
         .for_security_policy(policy(0xd4), &cache)
@@ -326,6 +327,7 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
     )
     .unwrap();
     let key_work = key_control.consumed(QueryCharge::CompilerWork);
+    let (miss_work, hit_work, _) = crate::cache::test_work(8, query);
     let crate::Query::Select { pattern, .. } = crate::parse_query(query).unwrap() else {
         panic!()
     };
@@ -337,7 +339,7 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
         .compile_shared_with_work_control(
             &alice,
             query,
-            &control(key_work + rewrite_work + build_work)
+            &control(key_work + miss_work + rewrite_work + build_work)
         )
         .is_err());
     assert_eq!(
@@ -356,7 +358,10 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
         .compile_shared_with_work_control(&alice, query, &hit_control)
         .unwrap();
     assert!(Arc::ptr_eq(&first, &hit));
-    assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), key_work);
+    assert_eq!(
+        hit_control.consumed(QueryCharge::CompilerWork),
+        key_work + hit_work
+    );
     assert!(key_work > 0 && key_work < paid.consumed(QueryCharge::CompilerWork));
     cache.reset_access_counts();
     assert!(compiler
@@ -368,14 +373,14 @@ fn work_control_preserves_security_partitions_and_never_caches_failed_misses() {
         "unpaid hash cannot reach cache lookup"
     );
     let exact = compiler
-        .compile_shared_with_work_control(&alice, query, &control(key_work))
+        .compile_shared_with_work_control(&alice, query, &control(key_work + hit_work))
         .unwrap();
     assert!(Arc::ptr_eq(&first, &exact));
     assert!(compiler
-        .compile_shared_with_work_control(&context(1, 4, 3), query, &control(key_work))
+        .compile_shared_with_work_control(&context(1, 4, 3), query, &control(key_work + hit_work))
         .is_err());
     assert!(compiler
-        .compile_shared_with_work_control(&context(1, 2, 4), query, &control(key_work))
+        .compile_shared_with_work_control(&context(1, 2, 4), query, &control(key_work + hit_work))
         .is_err());
     assert_eq!(cache.len(), 1);
     assert_eq!(binding.cache_len(), 0);
@@ -452,6 +457,15 @@ fn raw_cache_reuse_and_hash_cancellation_preserve_access_boundary() {
         .compile_shared_with_work_control(&context, QUERY, &budget(key_work))
         .unwrap();
     assert!(Arc::ptr_eq(&raw, &exact));
+    // Cancellation remains at key construction, before any cache access.
+    let key_control = budget(u64::MAX);
+    crate::cache::plan_key_with_work_control(
+        &crate::parse_query(QUERY).unwrap(),
+        binding.scope(),
+        &key_control,
+    )
+    .unwrap();
+    let key_work = key_control.consumed(QueryCharge::CompilerWork);
     for warm in [false, true] {
         let cache = security_cache();
         let compiler = binding.for_security_policy(policy(1), &cache);

@@ -88,6 +88,18 @@ impl Hash for SecurityPlanKey {
     }
 }
 
+impl super::operations::OperationKey for SecurityPlanKey {
+    fn canonical(&self) -> &str {
+        &self.canonical
+    }
+    fn same_identity(&self, other: &Self) -> bool {
+        self.scope == other.scope
+            && self.profile == other.profile
+            && self.security_identity == other.security_identity
+            && self.structural_hash == other.structural_hash
+    }
+}
+
 impl fmt::Debug for SecurityPlanKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
@@ -142,6 +154,7 @@ impl fmt::Debug for SecurityCachedPlan {
 /// the existing product cache.
 pub struct SecurityPlanCache {
     inner: quick_cache::sync::Cache<SecurityPlanKey, SecurityCachedPlan>,
+    geometry: super::operations::Geometry,
     #[cfg(test)]
     reads: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -150,8 +163,10 @@ pub struct SecurityPlanCache {
 
 impl SecurityPlanCache {
     pub fn new(capacity: NonZeroUsize) -> Self {
+        let (inner, geometry) = super::operations::new_cache(capacity.get());
         Self {
-            inner: quick_cache::sync::Cache::new(capacity.get()),
+            inner,
+            geometry,
             #[cfg(test)]
             reads: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -174,19 +189,28 @@ impl SecurityPlanCache {
     }
 
     // Contention affects reuse only; keys and security identity remain exact.
-    fn get_if_uncontended(&self, key: &SecurityPlanKey) -> Option<SecurityCachedPlan> {
+    fn get_if_uncontended(
+        &self,
+        key: &SecurityPlanKey,
+        control: &dyn QueryControl,
+    ) -> crate::Result<Option<SecurityCachedPlan>> {
         #[cfg(test)]
         self.reads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.inner.try_get(key).ok().flatten()
+        super::operations::lookup(&self.inner, self.geometry, key, control)
     }
 
-    fn put_if_uncontended(&self, key: SecurityPlanKey, plan: SecurityCachedPlan) {
+    fn put_if_uncontended(
+        &self,
+        key: SecurityPlanKey,
+        plan: SecurityCachedPlan,
+        control: &dyn QueryControl,
+    ) -> crate::Result<()> {
         #[cfg(test)]
         self.writes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Dropping a rejected cache clone cannot drop the caller's completed Arc.
-        drop(self.inner.try_insert(key, plan));
+        super::operations::insert(&self.inner, self.geometry, key, plan, control)
     }
 
     #[cfg(test)]
@@ -296,7 +320,7 @@ impl SecurityScopedCompiler<'_> {
         };
         control.checkpoint().map_err(crate::Error::from)?;
         let cached = match work_control {
-            Some(_) => self.cache.get_if_uncontended(&key),
+            Some(control) => self.cache.get_if_uncontended(&key, control)?,
             None => self.cache.get(&key),
         };
         control.checkpoint().map_err(crate::Error::from)?;
@@ -328,7 +352,7 @@ impl SecurityScopedCompiler<'_> {
             Arc::clone(&plan),
         );
         match work_control {
-            Some(_) => self.cache.put_if_uncontended(key, cached),
+            Some(control) => self.cache.put_if_uncontended(key, cached, control)?,
             None => self.cache.put(key, cached),
         }
         control.checkpoint().map_err(crate::Error::from)?;

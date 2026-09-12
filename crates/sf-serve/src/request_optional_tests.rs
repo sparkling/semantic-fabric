@@ -142,7 +142,7 @@ fn mapped_work(
         sf_sparql::Tbox::default(),
         vec![],
         sf_sparql::cache::Epoch::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     let control = Arc::new(QueryBudget::new(QueryLimits::new(
         u64::MAX,
@@ -301,7 +301,7 @@ async fn mapped_admission_cases(profile: MappedProfile) {
             + if profile == MappedProfile::Filter {
                 filter::key_work(query, &maps)
             } else {
-                key_work(query)
+                compiler_key::warm_work(query)
             };
         assert!(cached < prefix);
         for secured in [false, true] {

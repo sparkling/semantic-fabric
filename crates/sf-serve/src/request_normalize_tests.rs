@@ -87,7 +87,7 @@ fn mapped_work(
         sf_sparql::Tbox::default(),
         vec![],
         sf_sparql::cache::Epoch::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     let control = Arc::new(QueryBudget::new(QueryLimits::new(
         u64::MAX,
@@ -205,7 +205,7 @@ async fn mapped_admission_cases(
 ) {
     let maps = mapped_fixture();
     let (prefix, normalized, exact) = mapped_work(&maps, phase, query);
-    let cached = query.len() as u64 + key_work(query);
+    let cached = query.len() as u64 + compiler_key::warm_work(query);
     assert!(cached < prefix);
     for secured in [false, true] {
         let (mut cfg, pool) = config_with_mapping(prefix, maps.clone());
@@ -365,7 +365,11 @@ async fn mapped_admission_cases(
 #[tokio::test]
 async fn structural_normalization_rejects_before_held_source_and_recovers_capacity() {
     for query in compiler_key::STRUCTURAL_QUERIES {
-        let prefix = query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query);
+        let prefix = query.len() as u64
+            + key_work(query)
+            + compiler_key::miss_work(query)
+            + rewrite_work(query)
+            + build_work(query);
         let normalization = normalization_work(query, &[]);
         let complete = query.len() as u64 + compiler_key::structural_compile_work(query);
         assert!(complete >= prefix + normalization);
@@ -407,6 +411,69 @@ async fn structural_normalization_rejects_before_held_source_and_recovers_capaci
                 let bytes = response.into_body().collect().await.unwrap().to_bytes();
                 let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(problem["code"], "query-budget-exceeded");
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+                let recovered = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    cfg.compiler_permits().acquire_many_owned(4),
+                )
+                .await
+                .expect("all compiler capacity recovers")
+                .unwrap();
+                drop(recovered);
+                drop(held);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn constant_normalization_failure_never_enters_held_source_admission() {
+    use http_body_util::BodyExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for query in compiler_key::CONSTANT_QUERIES {
+        let exact = query.len() as u64 + compiler_key::constant_compile_work(query);
+        let prerequisite = query.len() as u64
+            + key_work(query)
+            + compiler_key::miss_work(query)
+            + rewrite_work(query)
+            + build_work(query);
+        assert!(exact > prerequisite);
+        for secured in [false, true] {
+            for work in [prerequisite, exact - 1] {
+                let (mut cfg, pool) = config(work);
+                if secured {
+                    Arc::get_mut(&mut cfg).unwrap().set_query_admission(
+                        crate::QueryAdmission::Bearer(
+                            crate::BearerQueryAdmission::for_service_principal(
+                                "test-only-row-work-credential-123456",
+                            )
+                            .unwrap(),
+                        ),
+                    );
+                }
+                let held = pool.pick_owned().acquire().await.unwrap();
+                let calls = Arc::new(AtomicUsize::new(0));
+                let observed = calls.clone();
+                pool.set_admission_pending_observer(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                });
+                let request = Request::post("/sparql")
+                    .header("content-type", "application/sparql-query")
+                    .header(
+                        "authorization",
+                        "Bearer test-only-row-work-credential-123456",
+                    )
+                    .body(Body::from(query))
+                    .unwrap();
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    crate::router(cfg.clone()).oneshot(request),
+                )
+                .await
+                .expect("row normalization rejects without source wait")
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+                response.into_body().collect().await.unwrap();
                 assert_eq!(calls.load(Ordering::SeqCst), 0);
                 let recovered = tokio::time::timeout(
                     std::time::Duration::from_secs(2),

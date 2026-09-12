@@ -1,6 +1,6 @@
 //! Pay the exact prerequisite key work in tests aimed at a later phase.
-//! This calibrates through a raw-populated warm hit, not a second copy of the
-//! private AST visitor. Independent sf-sparql observer tests check its charges.
+//! Use the controlled key-only entry, not a warm hit (which also pays lookup).
+//! Independent sf-sparql observer tests check its charges.
 
 pub(crate) fn key_work(source: &str) -> u64 {
     use sf_core::{
@@ -11,6 +11,27 @@ pub(crate) fn key_work(source: &str) -> u64 {
         cache::{CompilerBinding, Epoch},
         Tbox,
     };
+    let binding = CompilerBinding::from_unverified_observation(
+        SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
+        sf_sql::Dialect::Sqlite,
+        Tbox::default(),
+        vec![],
+        Epoch::default(),
+        1,
+    );
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let query = spargebra::SparqlParser::new().parse_query(source).unwrap();
+    sf_sparql::cache::plan_key_with_work_control(&query, binding.scope(), &control).unwrap();
+    control.consumed(QueryCharge::CompilerWork)
+}
+
+/// Exact warm lookup at serving's capacity; never use for an earlier key cut.
+#[allow(dead_code)]
+pub(crate) fn warm_work(source: &str) -> u64 {
+    use sf_core::{
+        query_control::{QueryBudget, QueryCharge, QueryLimits},
+        SourceId, SourceMapping,
+    };
     let maps = sf_mapping::parse_r2rml(r#"
         @prefix rr: <http://www.w3.org/ns/r2rml#> .
         @prefix ex: <http://example.test/> .
@@ -20,26 +41,68 @@ pub(crate) fn key_work(source: &str) -> u64 {
           rr:predicateObjectMap [rr:predicate ex:a, ex:b, ex:value;
             rr:objectMap [rr:template "http://example.test/node/{o}"]].
     "#).unwrap();
-    let binding = CompilerBinding::from_unverified_observation(
+    let binding = sf_sparql::CompilerBinding::from_unverified_observation(
         SourceMapping::new(SourceId::new(0).unwrap(), maps),
         sf_sql::Dialect::Sqlite,
-        Tbox::default(),
+        Default::default(),
         vec![],
-        Epoch::default(),
-        1,
+        Default::default(),
+        64,
     );
-    let raw = binding
-        .compile_shared(source)
-        .expect("raw fixture compiles");
+    let raw = binding.compile_shared(source).unwrap();
     let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
-    let controlled = binding
+    let warm = binding
         .compile_shared_with_work_control(source, &control)
         .unwrap();
-    assert!(
-        std::sync::Arc::ptr_eq(&raw, &controlled),
-        "measure a hit, never miss work"
-    );
+    assert!(std::sync::Arc::ptr_eq(&raw, &warm));
     control.consumed(QueryCharge::CompilerWork)
+}
+
+/// Stop immediately after the empty-cache admission charge, before compilation.
+#[allow(dead_code)]
+pub(crate) fn miss_work(source: &str) -> u64 {
+    use sf_core::{
+        query_control::{QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits},
+        SourceId, SourceMapping,
+    };
+    struct Stop {
+        budget: QueryBudget,
+        key: u64,
+    }
+    impl QueryControl for Stop {
+        fn checkpoint(&self) -> Result<(), QueryControlError> {
+            self.budget.checkpoint()
+        }
+        fn consume(&self, kind: QueryCharge, units: u64) -> Result<(), QueryControlError> {
+            let after_key = self.budget.consumed(QueryCharge::CompilerWork) == self.key;
+            self.budget.consume(kind, units)?;
+            if after_key {
+                self.budget.terminate(QueryControlError::Cancelled);
+            }
+            Ok(())
+        }
+        fn terminate(&self, error: QueryControlError) -> QueryControlError {
+            self.budget.terminate(error)
+        }
+    }
+    let key = key_work(source);
+    let control = Stop {
+        budget: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
+        key,
+    };
+    let binding = sf_sparql::CompilerBinding::from_unverified_observation(
+        SourceMapping::new(SourceId::new(0).unwrap(), vec![]),
+        sf_sql::Dialect::Sqlite,
+        Default::default(),
+        vec![],
+        Default::default(),
+        64,
+    );
+    assert!(matches!(
+        binding.compile_shared_with_work_control(source, &control),
+        Err(sf_sparql::Error::QueryControl(QueryControlError::Cancelled))
+    ));
+    control.budget.consumed(QueryCharge::CompilerWork) - key
 }
 
 /// Isolate only the initial rewrite, never measure/subtract a later operation.
@@ -93,6 +156,7 @@ pub(crate) fn normalization_work(source: &str, maps: &[sf_core::ir::TriplesMap])
 }
 
 /// Isolate RESOLVE so cumulative-input tests retain their input/key boundary.
+#[allow(dead_code)]
 pub(crate) fn resolve_work(source: &str, maps: &[sf_core::ir::TriplesMap]) -> u64 {
     use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
     let spargebra::Query::Select { pattern, .. } =
@@ -277,7 +341,7 @@ pub(crate) fn structural_compile_work(source: &str) -> u64 {
 
 /// End-to-end cold compiler allowance for the three source-free row-rule fixtures.
 /// Unit tests independently pin the new NORMALIZE schedule and copy boundaries.
-/// This excludes serving's decoded-input charge; a warm hit still pays only key work.
+/// This excludes serving's decoded-input charge; warm hits pay key and lookup work.
 #[allow(dead_code)]
 pub(crate) fn constant_compile_work(source: &str) -> u64 {
     assert!(CONSTANT_QUERIES.contains(&source));
@@ -307,7 +371,7 @@ pub(crate) fn source_free_compile_work_with_schema(
         Tbox::default(),
         schema,
         Epoch::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry for success-only calibration.
     );
     let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
     binding

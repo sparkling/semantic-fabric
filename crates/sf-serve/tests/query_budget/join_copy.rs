@@ -13,6 +13,7 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
     let mut cfg = Arc::new(protected(
         query.len() as u64
             + key_work(&query)
+            + miss_work(&query)
             + rewrite_work(&query)
             + build_work(&query)
             + normalization_work(&query, &[])
@@ -37,13 +38,17 @@ async fn right_heavy_join_rejects_then_recovers_with_exact_bag_and_cache_hits() 
             .unwrap(),
     )
     .await;
-    Arc::get_mut(&mut cfg).unwrap().query_limits =
-        QueryLimits::new(100_000 + rewrite_work(&query), u64::MAX, u64::MAX, u64::MAX);
+    Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
+        query.len() as u64 + cache_key::fixture_compile_work(&query),
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+    );
     for warm in [false, true] {
         if warm {
             // A completed shared-plan hit need not repeat either branch copy.
             Arc::get_mut(&mut cfg).unwrap().query_limits = QueryLimits::new(
-                query.len() as u64 + key_work(&query),
+                query.len() as u64 + warm_work(&query),
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,

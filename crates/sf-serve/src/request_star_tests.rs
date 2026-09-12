@@ -95,7 +95,7 @@ fn work(query: &str, realization: bool) -> (u64, u64, u64, u64) {
         Default::default(),
         vec![],
         Default::default(),
-        1,
+        64, // Match RuntimeBinding's cache geometry, not a capacity-one cache.
     );
     let control = Arc::new(QueryBudget::new(QueryLimits::new(
         u64::MAX,
@@ -235,7 +235,9 @@ async fn cases(realization: bool) {
         let (start, end, total, warm) = work(query, realization);
         // Bindings realization is the final paid translation phase for these
         // fixtures, so its end may equal the cold compilation total.
-        assert!(warm <= start && start < end && end <= total,
+        // Warm equality pays canonical comparison; the cold rewrite prefix
+        // has only an empty lookup, so warm need not be <= that prefix.
+        assert!(warm < total && start < end && end <= total,
             "case={case} realization={realization}: warm={warm} start={start} end={end} total={total}");
         if !realization {
             assert!(end < total);

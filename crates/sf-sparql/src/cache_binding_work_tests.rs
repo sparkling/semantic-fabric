@@ -125,10 +125,10 @@ fn canonical_key_cold_and_warm_paths_require_work_before_cache_access() {
 }
 
 #[test]
-fn raw_populated_entry_is_shared_after_exact_controlled_key_work() {
+fn raw_populated_entry_is_shared_after_exact_key_and_lookup_work() {
     let binding = binding();
     let raw = binding.compile_shared(QUERY).unwrap();
-    let work = key_work();
+    let work = key_work() + crate::cache::test_work(8, QUERY).1;
     let control = budget(work);
     let controlled = binding
         .compile_shared_with_work_control(QUERY, &control)
@@ -143,6 +143,7 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     let binding = binding();
     let work = clone_work();
     let key = key_work();
+    let (miss, hit_work, publication) = crate::cache::test_work(8, QUERY);
     let (prefix, tail) = lower_entry_work();
     let build = build_work() + resolve_work() + normalization_work() + prefix;
     // One retained ?x: entry1, bool slot/byte2, key visit1, comparison2, retain1.
@@ -151,7 +152,8 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
         one_column_rows_work(3, "x"),
         one_column_rows_work(1, "inside"),
     );
-    let before_second = key + rewrite_work(QUERY) + build + condition_prefix + work + between;
+    let before_second =
+        key + miss + rewrite_work(QUERY) + build + condition_prefix + work + between;
     let short = budget(before_second + work - 1);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &short),
@@ -169,7 +171,8 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
     // This finalization is after the independently asserted clone failure cut.
     let finalization =
         3 * 2 + crate::cascade::values_cascade_work(&crate::parse_query(QUERY).unwrap());
-    let expected = before_second + work + condition_tail + tail + realization + finalization;
+    let expected =
+        before_second + work + condition_tail + tail + realization + finalization + publication;
     let exact = budget(expected);
     let plan = binding
         .compile_shared_with_work_control(QUERY, &exact)
@@ -184,13 +187,16 @@ fn exact_clone_charge_rejects_failed_misses_and_shares_completed_hits() {
         binding.compile_shared_with_work_control(QUERY, &budget(key - 1)),
         Err(Error::QueryControl(QueryControlError::CompilerWorkExceeded))
     ));
-    let hit_control = budget(key);
+    let hit_control = budget(key + hit_work);
     let hit = binding
         .compile_shared_with_work_control(QUERY, &hit_control)
         .unwrap();
     assert!(Arc::ptr_eq(&plan, &hit));
     assert!(Arc::ptr_eq(&plan, &binding.compile_shared(QUERY).unwrap()));
-    assert_eq!(hit_control.consumed(QueryCharge::CompilerWork), key);
+    assert_eq!(
+        hit_control.consumed(QueryCharge::CompilerWork),
+        key + hit_work
+    );
     hit_control.terminate(QueryControlError::Cancelled);
     assert!(matches!(
         binding.compile_shared_with_work_control(QUERY, &hit_control),
@@ -259,6 +265,7 @@ impl QueryControl for CancelAfterClone {
 fn cancellation_between_clone_operations_prevents_cache_insertion() {
     let binding = binding();
     let work = key_work()
+        + crate::cache::test_work(8, QUERY).0
         + rewrite_work(QUERY)
         + build_work()
         + resolve_work()
@@ -301,7 +308,10 @@ fn metered_cache_hits_still_check_scope_and_profile() {
             CachedPlan::from_shared(scope, profile, plan),
         );
         assert!(matches!(
-            binding.compile_shared_with_work_control(QUERY, &budget(key_work())),
+            binding.compile_shared_with_work_control(
+                QUERY,
+                &budget(key_work() + crate::cache::test_work(8, QUERY).1)
+            ),
             Err(Error::Mapping(_))
         ));
     }
@@ -337,7 +347,10 @@ fn cancellation_after_insertion_can_retain_only_the_completed_valid_plan() {
     ));
     assert_eq!(binding.cache_len(), 1);
     let cached = binding
-        .compile_shared_with_work_control(QUERY, &budget(key_work()))
+        .compile_shared_with_work_control(
+            QUERY,
+            &budget(key_work() + crate::cache::test_work(8, QUERY).1),
+        )
         .unwrap();
     assert_eq!(
         format!("{cached:?}"),

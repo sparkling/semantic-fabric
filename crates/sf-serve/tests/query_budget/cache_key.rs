@@ -3,8 +3,9 @@ use super::*;
 #[path = "../support/compiler_key.rs"]
 mod compiler_key;
 pub(super) use compiler_key::{
-    build_work, key_work, normalization_work, rewrite_work, source_free_entry_work,
-    source_free_join_seed_work, source_free_values_work, CONSTANT_QUERIES, STRUCTURAL_QUERIES,
+    build_work, key_work, miss_work, normalization_work, rewrite_work, source_free_entry_work,
+    source_free_join_seed_work, source_free_values_work, warm_work, CONSTANT_QUERIES,
+    STRUCTURAL_QUERIES,
 };
 
 // Match the owned HTTP fixture's observed table. Success-only calibration;
@@ -67,14 +68,13 @@ async fn changing_budget_waits_for_the_existing_configuration_owner() {
 
 #[tokio::test]
 async fn authenticated_cold_and_warm_cache_obey_compiler_allowance() {
-    let maps = sf_mapping::parse_r2rml(MAPPING).unwrap();
-    let mut cfg = Arc::new(protected(
-        10_000 + compiler_key::resolve_work(SELECT, &maps),
-    ));
+    // Cold acceptance uses the existing production default; exact warm and
+    // unpaid key/lookup boundaries below remain independently budgeted.
+    let mut cfg = Arc::new(protected(1_000_000));
     // The same immutable runtime/cache survives all requests and limit changes.
     for warm in [false, true] {
         if warm {
-            set_work_after_cleanup(&mut cfg, SELECT.len() as u64 + key_work(SELECT)).await;
+            set_work_after_cleanup(&mut cfg, SELECT.len() as u64 + warm_work(SELECT)).await;
         }
         assert_values(
             router(cfg.clone())
@@ -109,7 +109,12 @@ async fn compiler_input_allowance_counts_decoded_utf8_not_form_encoding() {
             (query.len() as u64 - 1, false),
             (query.len() as u64 + key_work(query) - 1, false),
             (
-                query.len() as u64 + key_work(query) + rewrite_work(query) + build_work(query) - 1,
+                query.len() as u64
+                    + key_work(query)
+                    + miss_work(query)
+                    + rewrite_work(query)
+                    + build_work(query)
+                    - 1,
                 false,
             ),
             (complete - 1, false),
@@ -156,12 +161,10 @@ async fn prefix_expanded_utf8_key_is_paid_on_cold_and_warm_public_paths() {
         });
         for warm in [false, true] {
             let exact = query.len() as u64
-                + key_work(&query)
                 + if warm {
-                    0
+                    warm_work(&query)
                 } else {
-                    // Warm requests still pay only unchanged input/key work.
-                    fixture_compile_work(&query) - key_work(&query)
+                    fixture_compile_work(&query)
                 };
             set_work_after_cleanup(&mut cfg, exact - 1).await;
             assert_budget_problem(

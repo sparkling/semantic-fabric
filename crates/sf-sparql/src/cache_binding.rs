@@ -17,9 +17,10 @@ use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 impl CompilerBinding {
     /// Carry request control through structural BUILD and the metered normalization, lowering
     /// and nested-cascade operations on a cache miss, plus canonical key
-    /// output/growth/hash work on hits and misses. Cache locks are attempted once:
+    /// output/growth/hash and acquired cache logical work on hits and misses.
+    /// Cache locks are attempted once:
     /// contention is a miss/skipped insertion, never a wait or a query error.
-    /// Parsing, formatter internals, other resolve work and cache lifecycle work
+    /// Parsing, formatter internals and physical allocation/last-Arc destruction
     /// are not fully governed by this seam. BUILD controls visits, logical collection
     /// growth, stable scope comparisons and actual owned copies, not physical heap/drop.
     /// Cache identity and semantics are unchanged: this does not activate
@@ -59,7 +60,7 @@ impl CompilerBinding {
         let key =
             super::bounded_key::plan_key_with_work_control(query, self.scope(), profile, control)?;
         control.checkpoint()?;
-        let cached = self.cache().get_if_uncontended(&key);
+        let cached = self.cache().get_if_uncontended(&key, control)?;
         control.checkpoint()?;
         if let Some(cached) = cached {
             if cached.scope() != self.scope() || cached.profile() != profile {
@@ -75,7 +76,8 @@ impl CompilerBinding {
         self.cache().put_if_uncontended(
             key,
             CachedPlan::from_shared(self.scope(), profile, Arc::clone(&plan)),
-        );
+            control,
+        )?;
         control.checkpoint()?;
         Ok(plan)
     }
