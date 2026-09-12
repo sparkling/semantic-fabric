@@ -283,3 +283,79 @@ async fn dropping_body_keeps_admission_until_blocking_producer_returns() {
         "recovery request must enter the probe UDF"
     );
 }
+
+#[tokio::test]
+async fn forced_shutdown_accounts_for_real_blocked_sqlite_worker() {
+    for release_within_allowance in [true, false] {
+        let fixture = fixture();
+        let release = ReleaseOnDrop(fixture.gate.clone());
+        let holder = start_holder(&fixture).await;
+        drop(holder);
+        let capacity = fixture.holder.max_concurrent_requests();
+        assert_eq!(fixture.holder.available_request_permits(), capacity - 1);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut phase = fixture.holder.shutdown_observer();
+        let server = tokio::spawn(crate::lifecycle::serve_listener_until_shutdown(
+            listener,
+            router(fixture.holder.clone()),
+            fixture.holder.clone(),
+            async {},
+            Duration::from_millis(50),
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while *phase.borrow_and_update() != crate::lifecycle::ShutdownPhase::Forced {
+                phase.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("forced shutdown must be observed while the real UDF is held");
+        assert!(!server.is_finished(), "cancellation is not worker cleanup");
+        assert_eq!(fixture.holder.available_request_permits(), capacity - 1);
+        assert!(fixture.pool.pick().try_lock().is_err());
+
+        if release_within_allowance {
+            drop(release);
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), server)
+                    .await
+                    .expect("released worker must acknowledge cleanup")
+                    .unwrap()
+                    .unwrap(),
+                crate::lifecycle::ShutdownOutcome::Forced
+            );
+        } else {
+            let error = tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("stuck worker must not cause an unbounded shutdown wait")
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            assert_eq!(
+                error.to_string(),
+                "owned request cleanup exceeded shutdown allowance"
+            );
+            assert_eq!(fixture.holder.available_request_permits(), capacity - 1);
+            assert!(fixture.pool.pick().try_lock().is_err());
+            drop(release);
+        }
+
+        // A fresh configuration shares this exact physical connection. The
+        // stopped configuration stays stopped; recovery does not reopen it.
+        let recovered = tokio::time::timeout(Duration::from_secs(2), async {
+            let response = router(fixture.recovery.clone())
+                .oneshot(request(PROBE_QUERY))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.into_body().collect().await.unwrap().to_bytes()
+        })
+        .await
+        .expect("physical cap-one connection must recover after worker return");
+        let result: serde_json::Value = serde_json::from_slice(&recovered).unwrap();
+        let rows = result["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["value"]["value"], "11");
+        assert_eq!(fixture.holder.available_request_permits(), capacity);
+    }
+}
