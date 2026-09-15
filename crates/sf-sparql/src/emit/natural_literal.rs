@@ -38,6 +38,7 @@ pub(super) fn natural(value: &LiteralOperand, actuals: &ActualColumns) -> Option
     }
 }
 
+#[cfg(test)]
 pub(super) fn authorized_conjunction(
     conds: &[&SqlCond],
     dialect: Dialect,
@@ -45,6 +46,26 @@ pub(super) fn authorized_conjunction(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+) -> Result<Option<String>> {
+    authorized_conjunction_controlled(
+        conds,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn authorized_conjunction_controlled(
+    conds: &[&SqlCond],
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<Option<String>> {
     fn validates(cond: &SqlCond, actuals: &ActualColumns) -> bool {
         match cond {
@@ -64,10 +85,20 @@ pub(super) fn authorized_conjunction(
             _ => false,
         }
     }
-    let (policies, rest): (Vec<_>, Vec<_>) = conds
-        .iter()
-        .copied()
-        .partition(|c| matches!(c, SqlCond::NativeCmp(..)));
+    let mut policies = work
+        .vector(conds.len())
+        .map_err(source_control::validation_error)?;
+    let mut rest = work
+        .vector(conds.len())
+        .map_err(source_control::validation_error)?;
+    for &condition in conds {
+        work.charge(1).map_err(source_control::validation_error)?;
+        if matches!(condition, SqlCond::NativeCmp(..)) {
+            policies.push(condition);
+        } else {
+            rest.push(condition);
+        }
+    }
     if policies.is_empty()
         || !rest.iter().any(|c| match dialect {
             Dialect::MySql => validates(c, actuals),
@@ -81,12 +112,12 @@ pub(super) fn authorized_conjunction(
     // admission predicates: FALSE/NULL both deny, before fallible construction.
     let policy = policies
         .iter()
-        .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+        .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
         .collect::<Result<Vec<_>>>()?
         .join(" AND ");
     let body = rest
         .iter()
-        .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+        .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
         .collect::<Result<Vec<_>>>()?
         .join(" AND ");
     Ok(Some(format!(
@@ -113,6 +144,7 @@ pub(super) fn key(raw: &str, code: XsdTypeCode) -> String {
     format!("(CASE WHEN {raw} IS NULL THEN NULL WHEN {month} BETWEEN 1 AND 12 AND {day} BETWEEN 1 AND ({days}) THEN {lexical} ELSE JSON_EXTRACT('semantic-fabric-invalid-natural-date', '$') END)")
 }
 
+#[cfg(test)]
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -121,6 +153,27 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     if matches!(dialect, Dialect::MySql | Dialect::Postgres) && cmp.value_op.is_none() && [&cmp.left, &cmp.right].iter().any(|value| {
         matches!(value, LiteralOperand::Column { column, spec } if spec.language.is_none() && column_fact(column, actuals) == Some(None))
     }) {
@@ -149,39 +202,37 @@ pub(super) fn comparison(
             "natural literal identity requires each operand's exact natural decoder".into(),
         ));
     }
-    let mut bind = |value: &str| {
-        params.push(value.to_owned());
-        *pidx += 1;
-        dialect.placeholder(*pidx)
+    let mut bind = |value: &str| -> Result<String> {
+        work.parameter(params, pidx, value)
+            .map_err(source_control::validation_error)?;
+        Ok(dialect.placeholder(*pidx))
     };
     let mut component = |value: &LiteralOperand, part: usize| -> Result<String> {
         match value {
-            LiteralOperand::Constant(literal) => Ok(bind(match part {
+            LiteralOperand::Constant(literal) => bind(match part {
                 0 => literal.value(),
                 1 => literal.datatype().as_str(),
                 _ => literal.language().unwrap_or(""),
-            })),
+            }),
             LiteralOperand::Column { column, spec } => {
                 let raw = colref(column, dialect, actuals);
                 if part == 2 {
-                    return Ok(bind(spec.language.as_deref().unwrap_or("")));
+                    return bind(spec.language.as_deref().unwrap_or(""));
                 }
                 if let Some(code) = natural(value, actuals) {
                     return Ok(if part == 0 {
                         native_literal_key::key(column, code, dialect, catalog, actuals)?
                     } else {
-                        bind(code.iri().as_str())
+                        bind(code.iri().as_str())?
                     });
                 }
                 if part == 1 {
-                    return Ok(bind(
-                        spec.datatype.as_ref().map(|dt| dt.as_str()).unwrap_or(
-                            if spec.language.is_some() {
-                                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
-                            } else {
-                                "http://www.w3.org/2001/XMLSchema#string"
-                            },
-                        ),
+                    return bind(spec.datatype.as_ref().map(|dt| dt.as_str()).unwrap_or(
+                        if spec.language.is_some() {
+                            "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
+                        } else {
+                            "http://www.w3.org/2001/XMLSchema#string"
+                        },
                     ));
                 }
                 if let Some(scalar) = iri_cmp::scalar_column(column, actuals) {

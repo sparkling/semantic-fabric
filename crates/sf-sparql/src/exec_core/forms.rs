@@ -17,18 +17,7 @@ where
     F: FnMut(&Branch, &Bindings) -> Result<Fut>,
     Fut: Future<Output = Result<()>>,
 {
-    // The inner collection's "prepared branches" — `Plan::prepared_branches`'s
-    // single-branch push-down (distinct/limit/offset onto branches[0]), specialised
-    // to the KNOWN inner-modifier values (no DISTINCT/OFFSET/LIMIT/ORDER: those
-    // apply AFTER grouping) so `plan.branches` is cloned exactly ONCE here, not
-    // once here and once more inside `prepared_branches`.
-    let mut inner_branches = plan.branches.clone();
-    if inner_branches.len() == 1 {
-        let branch = &mut inner_branches[0];
-        branch.distinct = false;
-        branch.limit = None;
-        branch.offset = 0;
-    }
+    // Inner modifiers apply through PlanCtx, not a recursively cloned branch.
     let inner_ctx = PlanCtx {
         dialect: plan.dialect,
         distinct: false,
@@ -48,15 +37,16 @@ where
         control,
     };
     let mut inner_rows: Vec<Bindings> = Vec::new();
-    run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
+    run_branches(&plan.branches, inner_ctx, b, |_, bindings| {
         inner_rows.push(bindings.clone());
         Ok(std::future::ready(Ok(())))
     })
     .await?;
 
-    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
+    let empty = Branch::empty();
+    let dummy = plan.branches.first().unwrap_or(&empty);
     for result in rust_group_result_rows(plan, rg, inner_rows)? {
-        sink(&dummy, &result)?.await?;
+        sink(dummy, &result)?.await?;
         if matches!(plan.form, PlanForm::Ask) {
             break;
         }
@@ -137,8 +127,9 @@ where
     F: FnMut(Vec<Option<Term>>) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
 {
+    control.checkpoint()?;
     let vars = match &plan.form {
-        PlanForm::Select { vars } => vars.clone(),
+        PlanForm::Select { vars } => vars,
         _ => {
             return Err(Error::Unsupported(
                 "select() requires a SELECT plan".to_owned(),
@@ -202,8 +193,9 @@ where
     F: FnMut(Vec<Triple>) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
 {
+    control.checkpoint()?;
     let template = match &plan.form {
-        PlanForm::Construct { template } => template.clone(),
+        PlanForm::Construct { template } => template,
         _ => {
             return Err(Error::Unsupported(
                 "construct() requires a CONSTRUCT plan".to_owned(),

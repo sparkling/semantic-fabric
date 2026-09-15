@@ -12,25 +12,65 @@
 /// `(usize, &str)` key) measurably LOST to the plain linear scan in a criterion
 /// bench — a sorted `Vec` avoids both the allocation and the hashing while still
 /// beating an O(n) scan once a branch's schema is large (e.g. a multi-table join).
+/// Duplicate names resolve to the first projection position, matching the
+/// historical linear lookup instead of unstable-sort-dependent tie selection.
 pub(super) type ColIndex<'a> = Vec<((usize, &'a str), usize)>;
 
-/// Build a [`ColIndex`] over a branch's projection schema (see its doc comment).
+/// Raw test oracle: original position breaks ties, preserving first occurrence.
+#[cfg(test)]
 pub(super) fn build_col_index(schema: &[ColRef]) -> ColIndex<'_> {
     let mut index: ColIndex<'_> = schema
         .iter()
         .enumerate()
         .map(|(i, c)| ((c.alias, &*c.column), i))
         .collect();
-    index.sort_unstable_by_key(|&(key, _)| key);
+    index.sort_unstable_by_key(|&(key, position)| (key, position));
     index
+}
+
+/// Borrow names and retain projection positions. Stable upper-bound insertion
+/// pays comparisons, growth and shifts before they happen; no infallible sort
+/// comparator is forced to continue after the request has stopped.
+pub(super) fn build_col_index_controlled<'a>(
+    schema: &'a [ColRef],
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<ColIndex<'a>> {
+    use super::sql_error::map_sql_err;
+    let mut out: sf_sql::source_work::SourceVec<((usize, &str), usize)> = Default::default();
+    for (position, col) in schema.iter().enumerate() {
+        work.charge(1).map_err(map_sql_err)?;
+        let (mut low, mut high) = (0, out.as_slice().len());
+        while low < high {
+            work.charge(1).map_err(map_sql_err)?;
+            let mid = low + (high - low) / 2;
+            let ((alias, name), _) = out.as_slice()[mid];
+            let mut order = alias.cmp(&col.alias);
+            if order.is_eq() {
+                work.charge(name.len().min(col.column.len()))
+                    .map_err(map_sql_err)?;
+                order = name.cmp(&col.column);
+            }
+            if order.is_gt() {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        out.insert(low, ((col.alias, &col.column), position), work)
+            .map_err(map_sql_err)?;
+    }
+    work.checkpoint().map_err(map_sql_err)?;
+    Ok(out.into_vec())
 }
 
 /// Look up `(alias, column)` in a [`ColIndex`] via binary search.
 fn col_index_get(index: &ColIndex<'_>, alias: usize, column: &str) -> Option<usize> {
+    let key = (alias, column);
+    let position = index.partition_point(|&(candidate, _)| candidate < key);
     index
-        .binary_search_by_key(&(alias, column), |&(key, _)| key)
-        .ok()
-        .map(|pos| index[pos].1)
+        .get(position)
+        .filter(|&&(candidate, _)| candidate == key)
+        .map(|entry| entry.1)
 }
 
 /// One projected result row's raw column values plus each value's resolved §10
@@ -390,17 +430,43 @@ pub(super) fn canonical_pairs(b: &Bindings) -> Vec<(&str, &Term)> {
 /// clones an already-allocated `Arc` (a refcount bump) into its [`Bindings`]
 /// instead of allocating a fresh `String` per variable per row (Run 4 Wave
 /// C1 — the ADR-0006 correction note's "leaner per-row binding
-/// representation"). Does NOT touch [`Branch::bindings`] itself, which stays
+/// representation"). Does NOT touch [`crate::iq::Branch::bindings`], which stays
 /// a `BTreeMap<String, TermDef>` — its alphabetical iteration order is
 /// load-bearing elsewhere (`iq::lower`'s positional `c{i}` alias assignment).
 pub(crate) type InternedBindings<'a> = Vec<(Arc<str>, &'a TermDef)>;
 
-pub(super) fn intern_bindings(branch: &Branch) -> InternedBindings<'_> {
+#[cfg(test)]
+pub(super) fn intern_bindings(branch: &crate::iq::Branch) -> InternedBindings<'_> {
     branch
         .bindings
         .iter()
         .map(|(var, def)| (Arc::from(var.as_str()), def))
         .collect()
+}
+
+#[cfg(test)]
+pub(super) fn intern_bindings_controlled<'a>(
+    branch: &'a crate::iq::Branch,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<InternedBindings<'a>> {
+    intern_binding_view(&crate::emit::BindingView::Direct(&branch.bindings), work)
+}
+
+pub(super) fn intern_binding_view<'a>(
+    bindings: &crate::emit::BindingView<'a>,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<InternedBindings<'a>> {
+    use super::sql_error::map_sql_err;
+    let mut out = work.vector(bindings.len()).map_err(map_sql_err)?;
+    for (name, definition) in bindings.iter() {
+        work.charge(1).map_err(map_sql_err)?;
+        work.charge(name.len()).map_err(map_sql_err)?;
+        work.charge(2 * std::mem::size_of::<usize>())
+            .map_err(map_sql_err)?;
+        out.push((Arc::from(name), definition));
+    }
+    work.checkpoint().map_err(map_sql_err)?;
+    Ok(out)
 }
 
 /// Reconstruct all bound variables of one raw row from `interned` — a
@@ -425,7 +491,7 @@ use sf_core::ir::TermMap;
 use sf_core::{Literal, Row, Term, Triple};
 
 use crate::graph_map::RR_DEFAULT_GRAPH;
-use crate::iq::{AggKind, Branch, ColRef, R2rmlGraphScope, TermDef};
+use crate::iq::{AggKind, ColRef, R2rmlGraphScope, TermDef};
 use crate::{Error, Result};
 
 #[cfg(test)]

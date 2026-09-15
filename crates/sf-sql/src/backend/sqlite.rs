@@ -1,28 +1,8 @@
-//! SQLite `SqlBackend` adapter (ADR-0024 §2). A **borrowing, synchronous** pull
-//! cursor: `SqliteBackend` holds `&Connection`, `open_branch` prepares the emitted
-//! branch and stores its `Statement` in the backend, and `SqliteBranch` drives
-//! `rusqlite`'s lazy `Rows` cursor — **one `&Row` in flight**, so memory is
-//! independent of result size (ADR-0006). The per-cell marshalling
-//! (`storage_class_code` / `lexical_typed` / `CHARACTER(n)` blank-pad) is moved here
-//! **verbatim** from the old `sf-sparql::exec` SQLite loop (design §2 sqlite row).
-//!
-//! **A2 (design §2):** a mid-row marshalling failure (non-UTF-8 text, BLOB in a
-//! non-`hexBinary` position) is a HARD [`Error::Marshal`] returned by `next_row`,
-//! never a silent short read.
-//!
-//! **Two flavors, one marshalling.** The sync SQLite entry points
-//! (`exec::select`/`ask`/`construct`/…) hold only `&Connection`, from which an owned
-//! `Arc<Mutex<Connection>>` cannot be produced — they use the borrowing
-//! [`SqliteBackend`], whose GAT stream (the reason the GAT exists, design §0 fact 2)
-//! needs no thread and no channel, keeps one `&Row` in flight, and surfaces
-//! marshalling errors directly. The **serve lane** (which holds
-//! `Arc<Mutex<Connection>>`) uses [`SqliteOwnedBackend`] (design §4.1): the sync,
-//! `!Send` `Connection` lives only on a `spawn_blocking` thread behind a **cap-1**
-//! channel, so the owned `Receiver` stream is `Send + 'static` and the core future
-//! stays `Send` across `tokio::spawn`. `blocking_send` on the cap-1 channel blocks
-//! the cursor thread until the reactor consumes ⇒ explicit backpressure that
-//! *strengthens* the bounded-memory guarantee (≈2 rows materialised). Both flavors
-//! share the exact per-cell marshalling ([`marshal_row`]).
+//! SQLite pull adapters (ADR-0024 §2/§4.1), sharing [`marshal_row`].
+//! [`SqliteBackend`] borrows a connection and keeps one lazy row in flight.
+//! [`SqliteOwnedBackend`] keeps its connection on a blocking worker behind a
+//! cap-one channel (one buffered and one live row), preserving backpressure.
+//! Both propagate marshalling errors as hard failures, never silent short reads.
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Rows, Statement};
@@ -30,7 +10,6 @@ use sf_core::datatype::{self, XsdTypeCode};
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
-use crate::stream::sqlite_column_decltypes;
 
 mod cancellation;
 mod iri_key;
@@ -40,6 +19,7 @@ mod metadata_twin_tests;
 mod numeric_cmp;
 mod owned;
 mod text_key;
+pub use text_key::{lexical_keys, LexicalKeys};
 
 pub use owned::{
     SqliteOwnedBackend, SqliteOwnedConnection, SqliteOwnedLease, SqliteReceiverStream,
@@ -139,6 +119,14 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
         result_columns(self.conn, probe_sql)
     }
 
+    async fn result_columns_controlled(
+        &mut self,
+        probe_sql: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        result_columns_with_control(self.conn, probe_sql, Some(control))
+    }
+
     async fn open_branch<'s>(
         &'s mut self,
         sql: &str,
@@ -188,7 +176,7 @@ impl<'c> SqlBackend for SqliteBackend<'c> {
         let key = text_key::CharacterKeyGuard::install(self.conn, sqlite_character_keys, None)?;
         let lexical_key =
             text_key::CharacterKeyGuard::install_lexical(self.conn, sqlite_lexical_keys, None)?;
-        let (decl_codes, pads, nproj) = column_meta(self.conn, metadata_sql.unwrap_or(sql))?;
+        let (decl_codes, pads, nproj) = column_meta(self.conn, metadata_sql.unwrap_or(sql), None)?;
         // Store the prepared statement in the backend so the returned Rows can
         // borrow it for the branch's lifetime (the GAT stream). The Statement
         // borrows the EXTERNAL connection (`*self.conn`, lifetime 'c), not `self`,
@@ -224,8 +212,14 @@ type ColumnMeta = (Vec<Option<XsdTypeCode>>, Vec<Option<usize>>, usize);
 /// Prepare `sql` and derive each projected column's §10 declared code (ADR-0015,
 /// `None` ⇒ storage-class fallback per value) plus its `CHARACTER(n)` blank-pad
 /// length — metadata only, no rows fetched. Shared by both flavors' `open_branch`.
-fn column_meta(conn: &Connection, sql: &str) -> Result<ColumnMeta> {
-    let decltypes = sqlite_column_decltypes(conn, sql)?;
+fn column_meta(
+    conn: &Connection,
+    sql: &str,
+    control: Option<&dyn sf_core::query_control::QueryControl>,
+) -> Result<ColumnMeta> {
+    let work = crate::source_work::SourceWork::new(control);
+    let decltypes = crate::stream::sqlite_column_decltypes_controlled(conn, sql, work)?;
+    work.product(decltypes.len(), 2)?;
     let decl_codes: Vec<Option<XsdTypeCode>> = decltypes
         .iter()
         .map(|d| d.as_deref().and_then(datatype::natural_xsd))
@@ -240,39 +234,60 @@ fn column_meta(conn: &Connection, sql: &str) -> Result<ColumnMeta> {
 
 /// Metadata facts from one prepare, preserving authored transparent COLLATE.
 fn result_columns(conn: &Connection, sql: &str) -> Result<Vec<crate::backend::ResultColumn>> {
+    result_columns_with_control(conn, sql, None)
+}
+
+fn result_columns_with_control(
+    conn: &Connection,
+    sql: &str,
+    control: Option<&dyn sf_core::query_control::QueryControl>,
+) -> Result<Vec<crate::backend::ResultColumn>> {
     use crate::backend::{ResultColumn, TextKey};
+    let work = crate::source_work::SourceWork::new(control);
+    work.checkpoint()?;
     let stmt = conn.prepare(sql)?;
+    // rusqlite constructs a vector of borrowed descriptors in columns().
+    work.product(
+        stmt.column_count(),
+        std::mem::size_of::<rusqlite::Column<'_>>(),
+    )?;
     let columns = stmt.columns();
-    let declared = columns
-        .iter()
-        .map(|c| c.decl_type().map(str::to_owned))
-        .collect();
-    let declared = crate::stream::sqlite_metadata::recover_collated_decltypes(conn, sql, declared)?;
-    Ok(columns
-        .iter()
-        .zip(declared)
-        .map(|(column, decl)| {
-            let text_key = decl.as_deref().and_then(|decl| {
-                if let Some(width) = char_pad_len(decl) {
-                    Some(TextKey::SqliteCharacter(width))
-                } else if datatype::natural_xsd(decl) == Some(XsdTypeCode::String) {
-                    Some(TextKey::Verbatim)
-                } else {
-                    None
-                }
-            });
-            ResultColumn {
-                natural_datatype: decl.as_deref().and_then(datatype::natural_xsd),
-                native_scalar: None,
-                name: column.name().to_owned(),
-                text_key,
-                sqlite_decode: Some(crate::backend::SqliteDecode {
-                    declared: decl.as_deref().and_then(datatype::natural_xsd),
-                    padding: decl.as_deref().and_then(char_pad_len),
-                }),
-            }
-        })
-        .collect())
+    let mut declared = work.vector(columns.len())?;
+    for column in &columns {
+        work.charge(1)?;
+        declared.push(
+            column
+                .decl_type()
+                .map(|name| work.string(name))
+                .transpose()?,
+        );
+    }
+    let declared = crate::stream::sqlite_metadata::recover_collated_decltypes_controlled(
+        conn, sql, declared, work,
+    )?;
+    let mut output = work.vector(columns.len())?;
+    for (column, decl) in columns.iter().zip(declared) {
+        work.charge(1)?;
+        let (code, padding) = match decl.as_deref() {
+            Some(decl) => crate::source_work::declaration_metadata(decl, work)?,
+            None => (None, None),
+        };
+        let text_key = padding
+            .map(TextKey::SqliteCharacter)
+            .or_else(|| (code == Some(XsdTypeCode::String)).then_some(TextKey::Verbatim));
+        output.push(ResultColumn {
+            natural_datatype: code,
+            native_scalar: None,
+            name: work.string(column.name())?,
+            text_key,
+            sqlite_decode: Some(crate::backend::SqliteDecode {
+                declared: code,
+                padding,
+            }),
+        });
+    }
+    work.checkpoint()?;
+    Ok(output)
 }
 
 // --- per-cell marshalling (moved VERBATIM from sf-sparql::exec, design §2) -----

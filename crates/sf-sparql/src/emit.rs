@@ -37,15 +37,37 @@ use crate::iq::{
     PathClosure, PathKind, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
+mod metadata;
+mod metadata_path;
+mod metadata_projection;
+mod metadata_ref_atom;
+mod metadata_source;
+mod metadata_subplan;
+use metadata::branch_actuals_controlled;
 mod scan;
-use scan::{scan_actuals, scan_ref};
+mod source_control;
+#[cfg(test)]
+use metadata_source::source_actuals;
+use metadata_source::source_actuals_controlled;
+#[cfg(test)]
+mod metadata_tests;
+#[cfg(test)]
+use scan::scan_actuals;
+use scan::scan_ref_controlled;
+pub(crate) use source_control::{
+    live_metadata_sources_controlled, source_probe_controlled, validate_definition_columns,
+    SourceSet,
+};
 mod aggregate_projection;
+pub(crate) use aggregate_projection::projection_controlled;
 #[cfg(test)]
 #[path = "emit/encoding_tests.rs"]
 mod encoding_tests;
 mod encoding_ucschar;
 mod iri_cmp;
 mod projection_layout;
+#[cfg(test)]
+pub(crate) use projection_layout::projection_layout_with_distinct;
 pub(crate) use projection_layout::{projection_layout, source_projection};
 mod lexical_key;
 mod literal_cmp;
@@ -63,7 +85,9 @@ mod pg_float_value;
 mod pg_numeric;
 mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
-use path_comparison::{path_actuals, path_key_expression, render_key_equality, subplan_actuals};
+#[cfg(test)]
+use path_comparison::subplan_actuals;
+use path_comparison::{path_actuals_controlled, path_key_expression, render_key_equality};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
 /// regular-identifier column references resolve to the column the live DBMS truly
@@ -94,6 +118,7 @@ impl ColumnCatalog {
         std::sync::Arc::make_mut(&mut self.by_source).insert(source_key(source), columns);
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_live_result(
         &mut self,
         source: &LogicalSource,
@@ -134,6 +159,7 @@ impl ColumnCatalog {
 
     /// Record one live source's metadata, rejecting an unusable result schema
     /// without including mapping identifiers or query text in the error.
+    #[cfg(test)]
     pub(crate) fn insert_live(
         &mut self,
         source: &LogicalSource,
@@ -166,6 +192,7 @@ impl ColumnCatalog {
         self.by_source.get(&source_key(source)).map(Vec::as_slice)
     }
 
+    #[cfg(test)]
     fn validate_live_column(
         &self,
         source: &LogicalSource,
@@ -207,17 +234,10 @@ impl ColumnCatalog {
     }
 }
 
-/// Stable, variant-tagged identity for one logical source. A table name and an
-/// `rr:sqlQuery` can produce byte-identical probe SQL, but they are still distinct
-/// metadata authorities and must never share a catalog entry or dedup key.
-pub(crate) fn logical_source_identity(source: &LogicalSource) -> String {
-    source_key(source)
-}
-
 /// Every live logical source nested in `branches`, in deterministic encounter
-/// order. The executor deduplicates this list by [`logical_source_identity`]
-/// before probing; keeping enumeration and identity separate makes the fail-closed
-/// ordering explicit at the I/O boundary.
+/// order. The executor uses a paid, variant-tagged [`SourceSet`] before probing;
+/// keeping enumeration and identity separate makes the fail-closed ordering
+/// explicit at the I/O boundary. This raw traversal is the semantic oracle.
 pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> {
     fn hop_sources<'a>(hop: &'a HopExpr, out: &mut Vec<&'a LogicalSource>) {
         match hop {
@@ -309,11 +329,69 @@ pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> 
 /// Validate every raw base-source column that live emission can reference before
 /// any branch cursor opens. Offline [`emit_branch`] remains permissive because it
 /// never calls this preflight and continues to emit mapping-authored identifiers.
+#[cfg(test)]
 pub(crate) fn validate_live_columns(
     branches: &[Branch],
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<()> {
+    validate_live_columns_controlled(
+        branches,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn validate_live_columns_controlled(
+    branches: &[Branch],
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<()> {
+    validate_source_root(ValidationRoot::Branches(branches), dialect, catalog, work)
+}
+
+pub(crate) fn validate_execution_columns(
+    branches: &[Branch],
+    scopes: &[Option<crate::DedupScope>],
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<()> {
+    validate_source_root(
+        ValidationRoot::Execution(branches, scopes),
+        dialect,
+        catalog,
+        work,
+    )
+}
+
+pub(super) enum ValidationRoot<'a> {
+    Execution(&'a [Branch], &'a [Option<crate::DedupScope>]),
+    #[cfg(test)]
+    Branches(&'a [Branch]),
+    #[cfg(test)]
+    Projection(
+        &'a crate::iq::Scan,
+        &'a [(Box<str>, TermMap)],
+        &'a [SqlCond],
+    ),
+}
+
+/// One queue owns every Branch/Scan/EXISTS/Projection continuation. Leaf checks
+/// cannot recurse back into this driver; scopes are restored before resuming.
+pub(super) fn validate_source_root(
+    root: ValidationRoot<'_>,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<()> {
+    use crate::iq::{Scan, ScanSource, SubPlanJoin};
+    use sf_sql::source_work::SourceVec;
+    use source_control::validation_error as error;
+    work.charge(1).map_err(error)?;
     #[derive(Clone, Copy)]
     enum AliasSource<'a> {
         Base(&'a LogicalSource),
@@ -323,52 +401,102 @@ pub(crate) fn validate_live_columns(
         RefAtom(usize),
     }
 
-    fn scan_alias<'a>(
-        scan: &'a crate::iq::Scan,
-        dialect: Dialect,
-        catalog: &ColumnCatalog,
-    ) -> Result<AliasSource<'a>> {
-        match &scan.source {
-            crate::iq::ScanSource::RefAtom { input, columns } => {
-                crate::iq::scan::ref_atom::validate_shape(input, columns)?;
-                validate_branch(input, dialect, catalog)?;
-                Ok(AliasSource::RefAtom(columns.len()))
+    #[derive(Default)]
+    struct AliasMap<'a>(sf_sql::source_work::SourceVec<(usize, AliasSource<'a>)>);
+    impl<'a> AliasMap<'a> {
+        fn position(
+            &self,
+            alias: usize,
+            work: sf_sql::source_work::SourceWork<'_>,
+        ) -> Result<std::result::Result<usize, usize>> {
+            work.checkpoint()
+                .map_err(source_control::validation_error)?;
+            let (mut left, mut right) = (0, self.0.as_slice().len());
+            while left < right {
+                work.charge(1).map_err(source_control::validation_error)?;
+                let middle = left + (right - left) / 2;
+                match self.0.as_slice()[middle].0.cmp(&alias) {
+                    std::cmp::Ordering::Equal => return Ok(Ok(middle)),
+                    std::cmp::Ordering::Less => left = middle + 1,
+                    std::cmp::Ordering::Greater => right = middle,
+                }
             }
-            crate::iq::ScanSource::Logical(source) => Ok(AliasSource::Base(source)),
-            crate::iq::ScanSource::Path { closure, .. } => {
-                validate_hop(&closure.hop, dialect, catalog)?;
-                Ok(AliasSource::Path)
+            Ok(Err(left))
+        }
+        fn get(
+            &self,
+            alias: usize,
+            work: sf_sql::source_work::SourceWork<'_>,
+        ) -> Result<Option<AliasSource<'a>>> {
+            Ok(self
+                .position(alias, work)?
+                .ok()
+                .map(|index| self.0.as_slice()[index].1))
+        }
+        fn insert(
+            &mut self,
+            alias: usize,
+            source: AliasSource<'a>,
+            work: sf_sql::source_work::SourceWork<'_>,
+        ) -> Result<()> {
+            match self.position(alias, work)? {
+                Ok(index) => self.0.replace_copy(index, (alias, source), work),
+                Err(index) => self.0.insert(index, (alias, source), work),
             }
-            crate::iq::ScanSource::Projection {
-                input,
-                columns,
-                guards,
-                ..
-            } => {
-                scan::validate_projection(input, columns, guards, dialect, catalog)?;
-                Ok(AliasSource::Projection(columns))
+            .map_err(source_control::validation_error)
+        }
+        fn copy(&self, work: sf_sql::source_work::SourceWork<'_>) -> Result<Self> {
+            work.checkpoint()
+                .map_err(source_control::validation_error)?;
+            let mut output = Self::default();
+            for entry in self.0.as_slice() {
+                output
+                    .0
+                    .push(*entry, work)
+                    .map_err(source_control::validation_error)?;
             }
+            Ok(output)
         }
     }
 
     fn validate_ref(
         column: &ColRef,
-        aliases: &HashMap<usize, AliasSource<'_>>,
+        aliases: &AliasMap<'_>,
         dialect: Dialect,
         catalog: &ColumnCatalog,
+        work: sf_sql::source_work::SourceWork<'_>,
     ) -> Result<()> {
-        if let Some(AliasSource::Base(source)) = aliases.get(&column.alias) {
-            catalog.validate_live_column(source, &column.column, dialect)?;
+        work.charge(1).map_err(source_control::validation_error)?;
+        validate_named_ref(
+            column.alias,
+            &column.column,
+            aliases,
+            dialect,
+            catalog,
+            work,
+        )
+    }
+
+    fn validate_named_ref(
+        alias: usize,
+        column: &str,
+        aliases: &AliasMap<'_>,
+        dialect: Dialect,
+        catalog: &ColumnCatalog,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<()> {
+        work.charge(1).map_err(source_control::validation_error)?;
+        let resolved = aliases.get(alias, work)?;
+        if let Some(AliasSource::Base(source)) = resolved {
+            catalog.validate_live_column_controlled(source, column, dialect, work)?;
         }
-        if let Some(AliasSource::Projection(columns)) = aliases.get(&column.alias) {
-            scan::validate_output(columns, &column.column)?;
+        if let Some(AliasSource::Projection(columns)) = resolved {
+            scan::validate_output_controlled(columns, column, work)?;
         }
-        if let Some(AliasSource::RefAtom(width)) = aliases.get(&column.alias) {
-            ref_atom::validate_output(*width, &column.column)?;
+        if let Some(AliasSource::RefAtom(width)) = resolved {
+            ref_atom::validate_output_controlled(width, column, work)?;
         }
-        if matches!(aliases.get(&column.alias), Some(AliasSource::Path))
-            && !matches!(column.column.as_ref(), "sf_s" | "sf_o")
-        {
+        if matches!(resolved, Some(AliasSource::Path)) && !matches!(column, "sf_s" | "sf_o") {
             return Err(Error::Sql(
                 "path relation has no required output column".into(),
             ));
@@ -376,170 +504,401 @@ pub(crate) fn validate_live_columns(
         Ok(())
     }
 
-    fn validate_hop(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Result<()> {
-        match hop {
-            HopExpr::Pred(relation) => {
-                catalog.validate_live_column(&relation.source, &relation.subj_col, dialect)?;
-                catalog.validate_live_column(&relation.source, &relation.obj_col, dialect)
-            }
-            HopExpr::Inverse(inner) => validate_hop(inner, dialect, catalog),
-            HopExpr::Seq(left, right) => {
-                validate_hop(left, dialect, catalog)?;
-                validate_hop(right, dialect, catalog)
-            }
-            HopExpr::Alt(parts) | HopExpr::Nps(parts) => {
-                for part in parts {
-                    validate_hop(part, dialect, catalog)?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn validate_condition(
-        condition: &SqlCond,
-        aliases: &HashMap<usize, AliasSource<'_>>,
+    fn validate_hop(
+        hop: &HopExpr,
         dialect: Dialect,
         catalog: &ColumnCatalog,
+        work: sf_sql::source_work::SourceWork<'_>,
     ) -> Result<()> {
-        match condition {
-            SqlCond::ExpressionError => Ok(()),
-            SqlCond::IriCmp(cmp) => {
-                for column in cmp.columns() {
-                    validate_ref(column, aliases, dialect, catalog)?;
+        let mut pending = sf_sql::source_work::SourceVec::default();
+        pending
+            .push(hop, work)
+            .map_err(source_control::validation_error)?;
+        while let Some(hop) = pending.pop() {
+            work.charge(1).map_err(source_control::validation_error)?;
+            match hop {
+                HopExpr::Pred(relation) => {
+                    catalog.validate_live_column_controlled(
+                        &relation.source,
+                        &relation.subj_col,
+                        dialect,
+                        work,
+                    )?;
+                    catalog.validate_live_column_controlled(
+                        &relation.source,
+                        &relation.obj_col,
+                        dialect,
+                        work,
+                    )?;
                 }
-                Ok(())
-            }
-            SqlCond::LiteralCmp(cmp) => {
-                for column in cmp.columns() {
-                    validate_ref(column, aliases, dialect, catalog)?;
+                HopExpr::Inverse(inner) => pending
+                    .push(inner.as_ref(), work)
+                    .map_err(source_control::validation_error)?,
+                HopExpr::Seq(left, right) => {
+                    pending
+                        .push(right.as_ref(), work)
+                        .map_err(source_control::validation_error)?;
+                    pending
+                        .push(left.as_ref(), work)
+                        .map_err(source_control::validation_error)?;
                 }
-                Ok(())
-            }
-            SqlCond::ColEq(left, right)
-            | SqlCond::NativeColEq(left, right)
-            | SqlCond::NullSafeEq(left, right) => {
-                validate_ref(left, aliases, dialect, catalog)?;
-                validate_ref(right, aliases, dialect, catalog)
-            }
-            SqlCond::Cmp(column, _, _)
-            | SqlCond::NativeCmp(column, _, _)
-            | SqlCond::IsNotNull(column)
-            | SqlCond::DecodedIsNotNull(column)
-            | SqlCond::IsNull(column)
-            | SqlCond::StrMatch { col: column, .. } => {
-                validate_ref(column, aliases, dialect, catalog)
-            }
-            SqlCond::Not(inner) => validate_condition(inner, aliases, dialect, catalog),
-            SqlCond::And(parts) | SqlCond::Or(parts) => {
-                for part in parts {
-                    validate_condition(part, aliases, dialect, catalog)?;
-                }
-                Ok(())
-            }
-            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
-                // EXISTS/MINUS aliases live in a nested SQL scope. Insert them
-                // only while validating that scope: flattening them into the
-                // outer map can collide with a derived SubPlan alias and make an
-                // outer positional `cN` look like a base-table column.
-                let mut nested = aliases.clone();
-                for scan in scans {
-                    nested.insert(scan.alias, scan_alias(scan, dialect, catalog)?);
-                }
-                for condition in conds {
-                    validate_condition(condition, &nested, dialect, catalog)?;
-                }
-                Ok(())
-            }
-            SqlCond::PathExists { pc, conds, .. } => {
-                validate_hop(&pc.hop, dialect, catalog)?;
-                for condition in conds {
-                    validate_condition(condition, aliases, dialect, catalog)?;
-                }
-                Ok(())
-            }
-            SqlCond::TemplateEq(left, left_alias, right, right_alias, _) => {
-                for segment in left {
-                    if let Segment::Column(column) = segment {
-                        validate_ref(
-                            &ColRef::new(*left_alias, column.clone()),
-                            aliases,
-                            dialect,
-                            catalog,
-                        )?;
+                HopExpr::Alt(parts) | HopExpr::Nps(parts) => {
+                    for part in parts.iter().rev() {
+                        pending
+                            .push(part, work)
+                            .map_err(source_control::validation_error)?;
                     }
                 }
-                for segment in right {
-                    if let Segment::Column(column) = segment {
-                        validate_ref(
-                            &ColRef::new(*right_alias, column.clone()),
-                            aliases,
-                            dialect,
-                            catalog,
-                        )?;
+            }
+        }
+        work.checkpoint().map_err(source_control::validation_error)
+    }
+
+    enum Task<'a> {
+        Execution(&'a [Branch], &'a [Option<crate::DedupScope>]),
+        Branches(&'a [Branch]),
+        Scans(&'a [Scan]),
+        OptScans(&'a [crate::iq::OptJoin]),
+        Conditions(&'a [SqlCond]),
+        OptConditions(&'a [crate::iq::OptJoin]),
+        Joins(&'a [SubPlanJoin]),
+        Enter(&'a Branch, Option<&'a crate::DedupScope>),
+        Body(&'a Branch, Option<&'a crate::DedupScope>),
+        Finish(&'a Branch),
+        Join(&'a SubPlanJoin),
+        Scan(&'a Scan),
+        Install(usize, AliasSource<'a>),
+        Condition(&'a SqlCond),
+        Leave,
+        Projection(&'a Scan, &'a [(Box<str>, TermMap)], &'a [SqlCond]),
+        ProjectionInput(&'a Scan, &'a [(Box<str>, TermMap)], &'a [SqlCond]),
+        ProjectionOutput(&'a Scan, &'a [(Box<str>, TermMap)], &'a [SqlCond]),
+    }
+    let mut pending = SourceVec::default();
+    let mut scopes: SourceVec<AliasMap<'_>> = Default::default();
+    match root {
+        ValidationRoot::Execution(branches, scopes) => pending
+            .push(Task::Execution(branches, scopes), work)
+            .map_err(error)?,
+        #[cfg(test)]
+        ValidationRoot::Branches(branches) => pending
+            .push(Task::Branches(branches), work)
+            .map_err(error)?,
+        #[cfg(test)]
+        ValidationRoot::Projection(input, columns, guards) => pending
+            .push(Task::Projection(input, columns, guards), work)
+            .map_err(error)?,
+    }
+    while let Some(task) = pending.pop() {
+        work.charge(1).map_err(error)?;
+        match task {
+            Task::Execution(items, scopes) => {
+                if let Some((first, rest)) = items.split_first() {
+                    let (scope, remaining) = scopes
+                        .split_first()
+                        .map_or((None, scopes), |(scope, rest)| (scope.as_ref(), rest));
+                    pending
+                        .push(Task::Execution(rest, remaining), work)
+                        .map_err(error)?;
+                    pending
+                        .push(Task::Enter(first, scope), work)
+                        .map_err(error)?;
+                }
+            }
+            Task::Branches(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending.push(Task::Branches(rest), work).map_err(error)?;
+                    pending
+                        .push(Task::Enter(first, None), work)
+                        .map_err(error)?;
+                }
+            }
+            Task::Scans(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending.push(Task::Scans(rest), work).map_err(error)?;
+                    pending.push(Task::Scan(first), work).map_err(error)?;
+                }
+            }
+            Task::OptScans(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending.push(Task::OptScans(rest), work).map_err(error)?;
+                    pending.push(Task::Scan(&first.scan), work).map_err(error)?;
+                }
+            }
+            Task::Conditions(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending.push(Task::Conditions(rest), work).map_err(error)?;
+                    pending.push(Task::Condition(first), work).map_err(error)?;
+                }
+            }
+            Task::OptConditions(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending
+                        .push(Task::OptConditions(rest), work)
+                        .map_err(error)?;
+                    pending
+                        .push(Task::Conditions(&first.extra), work)
+                        .map_err(error)?;
+                    pending
+                        .push(Task::Conditions(&first.on), work)
+                        .map_err(error)?;
+                }
+            }
+            Task::Joins(items) => {
+                if let Some((first, rest)) = items.split_first() {
+                    pending.push(Task::Joins(rest), work).map_err(error)?;
+                    pending.push(Task::Join(first), work).map_err(error)?;
+                }
+            }
+            Task::Enter(branch, scope) => {
+                scopes.push(AliasMap::default(), work).map_err(error)?;
+                pending
+                    .push(Task::Body(branch, scope), work)
+                    .map_err(error)?;
+                pending
+                    .push(Task::OptScans(&branch.opts), work)
+                    .map_err(error)?;
+                pending
+                    .push(Task::Scans(&branch.core), work)
+                    .map_err(error)?;
+            }
+            Task::Scan(scan) => match &scan.source {
+                ScanSource::Logical(source) => pending
+                    .push(Task::Install(scan.alias, AliasSource::Base(source)), work)
+                    .map_err(error)?,
+                ScanSource::Path { closure, .. } => {
+                    validate_hop(&closure.hop, dialect, catalog, work)?;
+                    pending
+                        .push(Task::Install(scan.alias, AliasSource::Path), work)
+                        .map_err(error)?;
+                }
+                ScanSource::RefAtom { input, columns } => {
+                    ref_atom::validate_shape_controlled(input, columns, work)?;
+                    pending
+                        .push(
+                            Task::Install(scan.alias, AliasSource::RefAtom(columns.len())),
+                            work,
+                        )
+                        .map_err(error)?;
+                    pending
+                        .push(Task::Enter(input, None), work)
+                        .map_err(error)?;
+                }
+                ScanSource::Projection {
+                    input,
+                    columns,
+                    guards,
+                    ..
+                } => {
+                    pending
+                        .push(
+                            Task::Install(scan.alias, AliasSource::Projection(columns)),
+                            work,
+                        )
+                        .map_err(error)?;
+                    pending
+                        .push(Task::Projection(input, columns, guards), work)
+                        .map_err(error)?;
+                }
+            },
+            Task::Install(alias, source) => {
+                let mut aliases = scopes.pop().expect("scan installation has a caller scope");
+                aliases.insert(alias, source, work)?;
+                scopes.push(aliases, work).map_err(error)?;
+            }
+            Task::Body(branch, scope) => {
+                let mut aliases = scopes.pop().expect("branch body has a scope");
+                for subplan in &branch.subplan_joins {
+                    aliases.insert(subplan.alias, AliasSource::Derived, work)?;
+                }
+                let bindings = BindingView::merged(
+                    &branch.bindings,
+                    scope.map(|scope| &scope.key_bindings),
+                    work,
+                )?;
+                for (_, definition) in bindings.iter() {
+                    source_control::validate_definition_columns(
+                        definition,
+                        work,
+                        |alias, column| {
+                            validate_named_ref(alias, column, &aliases, dialect, catalog, work)
+                        },
+                    )?;
+                }
+                scopes.push(aliases, work).map_err(error)?;
+                pending.push(Task::Finish(branch), work).map_err(error)?;
+                pending
+                    .push(Task::Joins(&branch.subplan_joins), work)
+                    .map_err(error)?;
+                pending
+                    .push(Task::OptConditions(&branch.opts), work)
+                    .map_err(error)?;
+                pending
+                    .push(Task::Conditions(&branch.where_conds), work)
+                    .map_err(error)?;
+            }
+            Task::Join(join) => {
+                pending
+                    .push(Task::Branches(&join.plan.branches), work)
+                    .map_err(error)?;
+                pending
+                    .push(Task::Conditions(&join.on), work)
+                    .map_err(error)?;
+            }
+            Task::Finish(branch) => {
+                let aliases = scopes.pop().expect("branch finish has a scope");
+                if let Some(path) = &branch.path {
+                    validate_hop(&path.hop, dialect, catalog, work)?;
+                }
+                if let Some(aggregation) = &branch.agg {
+                    for key in &aggregation.keys {
+                        work.charge(1).map_err(error)?;
+                        for column in &key.cols {
+                            validate_ref(column, &aliases, dialect, catalog, work)?;
+                        }
+                    }
+                    for aggregate in &aggregation.aggs {
+                        work.charge(1).map_err(error)?;
+                        if let Some(column) = &aggregate.arg {
+                            validate_ref(column, &aliases, dialect, catalog, work)?;
+                        }
                     }
                 }
-                Ok(())
             }
-        }
-    }
-
-    fn validate_branch(branch: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> Result<()> {
-        let mut aliases = HashMap::new();
-        for scan in &branch.core {
-            aliases.insert(scan.alias, scan_alias(scan, dialect, catalog)?);
-        }
-        for join in &branch.opts {
-            aliases.insert(join.scan.alias, scan_alias(&join.scan, dialect, catalog)?);
-        }
-        for subplan in &branch.subplan_joins {
-            // The derived table exposes positional `cN` columns, not live base
-            // metadata. Insert it after base scans, matching `branch_actuals`.
-            aliases.insert(subplan.alias, AliasSource::Derived);
-        }
-        for definition in branch.bindings.values() {
-            for column in definition.columns() {
-                validate_ref(&column, &aliases, dialect, catalog)?;
+            Task::Leave => {
+                scopes.pop().expect("condition exit has a scope");
             }
-        }
-        for condition in &branch.where_conds {
-            validate_condition(condition, &aliases, dialect, catalog)?;
-        }
-        for join in &branch.opts {
-            for condition in join.on.iter().chain(&join.extra) {
-                validate_condition(condition, &aliases, dialect, catalog)?;
+            Task::Condition(condition) => {
+                let aliases = scopes.as_slice().last().expect("condition has a scope");
+                let result: Result<()> = match condition {
+                    SqlCond::Not(inner) => {
+                        pending.push(Task::Condition(inner), work).map_err(error)
+                    }
+                    SqlCond::And(parts) | SqlCond::Or(parts) => {
+                        pending.push(Task::Conditions(parts), work).map_err(error)
+                    }
+                    SqlCond::Exists { scans, conds } | SqlCond::NotExists { scans, conds } => {
+                        let nested = aliases.copy(work)?;
+                        scopes.push(nested, work).map_err(error)?;
+                        pending.push(Task::Leave, work).map_err(error)?;
+                        pending.push(Task::Conditions(conds), work).map_err(error)?;
+                        pending.push(Task::Scans(scans), work).map_err(error)?;
+                        Ok(())
+                    }
+                    SqlCond::PathExists { pc, conds, .. } => {
+                        validate_hop(&pc.hop, dialect, catalog, work)?;
+                        pending.push(Task::Conditions(conds), work).map_err(error)?;
+                        Ok(())
+                    }
+                    SqlCond::ExpressionError => Ok(()),
+                    SqlCond::IriCmp(cmp) => {
+                        use crate::iq::iri_cmp::{IriOperand, IriPart};
+                        for operand in [&cmp.left, &cmp.right] {
+                            work.charge(1).map_err(source_control::validation_error)?;
+                            match operand {
+                                IriOperand::Column { column, .. } => {
+                                    validate_ref(column, aliases, dialect, catalog, work)?
+                                }
+                                IriOperand::Template { parts, .. } => {
+                                    for part in parts {
+                                        work.charge(1).map_err(source_control::validation_error)?;
+                                        if let IriPart::Column(column) = part {
+                                            validate_ref(column, aliases, dialect, catalog, work)?;
+                                        }
+                                    }
+                                }
+                                IriOperand::Constant(_) => {}
+                            }
+                        }
+                        Ok(())
+                    }
+                    SqlCond::LiteralCmp(cmp) => {
+                        for column in cmp.columns() {
+                            validate_ref(column, aliases, dialect, catalog, work)?;
+                        }
+                        Ok(())
+                    }
+                    SqlCond::ColEq(left, right)
+                    | SqlCond::NativeColEq(left, right)
+                    | SqlCond::NullSafeEq(left, right) => {
+                        validate_ref(left, aliases, dialect, catalog, work)?;
+                        validate_ref(right, aliases, dialect, catalog, work)
+                    }
+                    SqlCond::Cmp(column, _, _)
+                    | SqlCond::NativeCmp(column, _, _)
+                    | SqlCond::IsNotNull(column)
+                    | SqlCond::DecodedIsNotNull(column)
+                    | SqlCond::IsNull(column)
+                    | SqlCond::StrMatch { col: column, .. } => {
+                        validate_ref(column, aliases, dialect, catalog, work)
+                    }
+                    SqlCond::TemplateEq(left, left_alias, right, right_alias, _) => {
+                        for segment in left {
+                            work.charge(1).map_err(source_control::validation_error)?;
+                            if let Segment::Column(column) = segment {
+                                validate_named_ref(
+                                    *left_alias,
+                                    column,
+                                    aliases,
+                                    dialect,
+                                    catalog,
+                                    work,
+                                )?;
+                            }
+                        }
+                        for segment in right {
+                            work.charge(1).map_err(source_control::validation_error)?;
+                            if let Segment::Column(column) = segment {
+                                validate_named_ref(
+                                    *right_alias,
+                                    column,
+                                    aliases,
+                                    dialect,
+                                    catalog,
+                                    work,
+                                )?;
+                            }
+                        }
+                        Ok(())
+                    }
+                };
+                result?;
             }
-        }
-        for subplan in &branch.subplan_joins {
-            for condition in &subplan.on {
-                validate_condition(condition, &aliases, dialect, catalog)?;
-            }
-            for inner in &subplan.plan.branches {
-                validate_branch(inner, dialect, catalog)?;
-            }
-        }
-        if let Some(path) = &branch.path {
-            validate_hop(&path.hop, dialect, catalog)?;
-        }
-        if let Some(aggregation) = &branch.agg {
-            for key in &aggregation.keys {
-                for column in &key.cols {
-                    validate_ref(column, &aliases, dialect, catalog)?;
+            Task::Projection(input, columns, guards) => {
+                pending
+                    .push(Task::ProjectionInput(input, columns, guards), work)
+                    .map_err(error)?;
+                if let ScanSource::Projection {
+                    input,
+                    columns,
+                    guards,
+                    ..
+                } = &input.source
+                {
+                    pending
+                        .push(Task::Projection(input, columns, guards), work)
+                        .map_err(error)?;
                 }
             }
-            for aggregate in &aggregation.aggs {
-                if let Some(column) = &aggregate.arg {
-                    validate_ref(column, &aliases, dialect, catalog)?;
+            Task::ProjectionInput(input, columns, guards) => {
+                pending
+                    .push(Task::ProjectionOutput(input, columns, guards), work)
+                    .map_err(error)?;
+                if let ScanSource::RefAtom { input, columns } = &input.source {
+                    ref_atom::validate_shape_controlled(input, columns, work)?;
+                    pending
+                        .push(Task::Enter(input, None), work)
+                        .map_err(error)?;
                 }
             }
+            Task::ProjectionOutput(input, columns, guards) => {
+                projection_layout::validate_projection_level(
+                    input, columns, guards, dialect, catalog, work,
+                )?
+            }
         }
-        Ok(())
     }
-
-    for branch in branches {
-        validate_branch(branch, dialect, catalog)?;
-    }
-    Ok(())
+    work.checkpoint().map_err(error)
 }
 
 fn physical_row_identifier(source: &LogicalSource, raw: &str, dialect: Dialect) -> bool {
@@ -584,36 +943,77 @@ fn path_endpoint_sql(
 /// emission. A `LogicalSource::Table` has no alias declaration to inspect and is
 /// left alone.
 pub(crate) fn synthetic_subplan_catalog(branches: &[Branch]) -> ColumnCatalog {
+    synthetic_subplan_catalog_controlled(branches, sf_sql::source_work::SourceWork::new(None))
+        .expect("uncontrolled synthetic catalog cannot be refused")
+}
+
+fn synthetic_subplan_catalog_controlled(
+    branches: &[Branch],
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<ColumnCatalog> {
     let mut catalog = ColumnCatalog::default();
     for b in branches {
+        work.charge(1 + b.core.len() + b.opts.len() + b.subplan_joins.len())
+            .map_err(source_control::validation_error)?;
         let sources: HashMap<usize, &LogicalSource> = b.alias_sources().into_iter().collect();
         let mut cols: Vec<ColRef> = Vec::new();
+        let mut refused = None;
+        // Pay each column reference before copying it; a refusal stops the walk.
+        let mut push = |c: &ColRef| {
+            if refused.is_none() {
+                match work.charge(1 + c.column.len()) {
+                    Ok(()) => cols.push(c.clone()),
+                    Err(error) => refused = Some(error),
+                }
+            }
+        };
         for def in b.bindings.values() {
-            cols.extend(def.columns());
+            for c in def.columns() {
+                push(&c);
+            }
         }
         for cond in &b.where_conds {
-            collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+            collect_cond_cols(cond, &mut push);
         }
         for opt in &b.opts {
             for cond in opt.on.iter().chain(opt.extra.iter()) {
-                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+                collect_cond_cols(cond, &mut push);
             }
         }
         for sp in &b.subplan_joins {
             for cond in &sp.on {
-                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+                collect_cond_cols(cond, &mut push);
             }
         }
+        if let Some(error) = refused {
+            return Err(source_control::validation_error(error));
+        }
+        let mut seen: std::collections::HashSet<(usize, &str)> = std::collections::HashSet::new();
+        let mut merged: HashMap<usize, usize> = HashMap::new();
         for c in &cols {
             let Some(LogicalSource::Query(sql)) = sources.get(&c.alias) else {
                 continue;
             };
+            // Each distinct column reference scans the query text once.
+            work.charge(1 + c.column.len())
+                .map_err(source_control::validation_error)?;
+            if !seen.insert((c.alias, &c.column)) {
+                continue;
+            }
+            // Lowercase copy and alias scans of the query text, the key copy,
+            // the lowercased column and the membership scan over the columns
+            // already merged for this alias.
+            work.product(sql.len(), 4)
+                .map_err(source_control::validation_error)?;
+            work.charge(1 + c.column.len() + merged.get(&c.alias).copied().unwrap_or(0))
+                .map_err(source_control::validation_error)?;
             if crate::cascade::col_is_unquoted_alias(sql, &c.column) {
                 catalog.merge(sources[&c.alias], c.column.to_lowercase());
+                *merged.entry(c.alias).or_insert(0) += 1;
             }
         }
     }
-    catalog
+    Ok(catalog)
 }
 
 /// A collision-free key for a logical source (a table name can never equal an SQL
@@ -649,7 +1049,7 @@ enum AliasSourceKind {
     Derived,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AliasActuals {
     // Effective source datatype is not canonical-key or output-cast authority.
     datatype_columns: HashMap<String, Option<sf_core::datatype::XsdTypeCode>>,
@@ -676,80 +1076,21 @@ struct AliasActuals {
 
 type ActualColumns = HashMap<usize, AliasActuals>;
 
-fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
-    let mut actuals = AliasActuals {
-        datatype_columns: catalog
-            .datatypes_by_source
-            .get(&source_key(source))
-            .into_iter()
-            .flatten()
-            .map(|(name, code)| (name.clone(), Some(*code)))
-            .collect(),
-        natural_columns: HashMap::new(),
-        scalar_columns: catalog
-            .scalars_by_source
-            .get(&source_key(source))
-            .cloned()
-            .unwrap_or_default(),
-        sqlite_columns: catalog
-            .sqlite_by_source
-            .get(&source_key(source))
-            .cloned()
-            .unwrap_or_default(),
-        lexical_columns: HashMap::new(),
-        lexical_comparison_columns: HashMap::new(),
-        source_kind: match source {
-            LogicalSource::Table(_) => AliasSourceKind::Table,
-            LogicalSource::Query(_) => AliasSourceKind::Query,
-        },
-        columns: catalog.columns(source).unwrap_or_default().to_vec(),
-        path: false,
-        text_columns: catalog
-            .text_by_source
-            .get(&source_key(source))
-            .cloned()
-            .unwrap_or_default(),
-        static_iri_columns: HashSet::new(),
-        iri_unreserved_columns: HashSet::new(),
-    };
-    for (name, code) in &actuals.datatype_columns {
-        if let Some(code) = code.filter(|code| {
-            natural_literal::qualified_source(
-                *code,
-                actuals.scalar_columns.get(name).copied(),
-                actuals.text_columns.get(name).copied(),
-            )
-        }) {
-            actuals.natural_columns.insert(name.clone(), Some(code));
-        }
-    }
-    actuals
-}
-
 /// The source kind and actual columns of every scan alias in `b`, keyed by alias,
 /// for physical-row handling and identifier resolution.
 /// For SubPlan-join aliases, the "actual columns" are the projected variable names
 /// from the nested Plan's `PlanForm::Select { vars }` (the names the derived table
 /// exposes). SubPlan aliases are NOT in `alias_sources()` (they have no catalog
 /// entry), so they are wired up here directly.
+#[cfg(test)]
 fn branch_actuals(b: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> ActualColumns {
-    let mut out = HashMap::new();
-    for (alias, source) in b.alias_sources() {
-        out.insert(alias, source_actuals(source, catalog));
-    }
-    for scan in b.core.iter().chain(b.opts.iter().map(|join| &join.scan)) {
-        out.insert(scan.alias, scan_actuals(scan, dialect, catalog));
-    }
-    if let Some(path) = &b.path {
-        out.insert(path.alias, path_actuals(path, catalog));
-    }
-    // SubPlan derived-table aliases: their columns are the positional names the
-    // inner `emit_branch` assigns (`c0`, `c1`, …), NOT the SPARQL variable names.
-    // The outer branch's bindings use `ColRef(sp_alias, "c{i}")` after remapping.
-    for sp in &b.subplan_joins {
-        out.insert(sp.alias, subplan_actuals(&sp.plan, dialect, catalog));
-    }
-    out
+    branch_actuals_controlled(
+        b,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+    .expect("uncontrolled branch metadata construction")
 }
 
 /// A branch rendered to one parameterised SQL `SELECT`.
@@ -783,15 +1124,196 @@ pub fn emit_branch_with(
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<EmittedBranch> {
+    emit_branch_with_modifiers(b, dialect, catalog, BranchModifiers::stored(b))
+}
+
+/// Borrowed, ordered execution bindings; shared names retain the base recipe.
+pub(crate) enum BindingView<'a> {
+    Direct(&'a std::collections::BTreeMap<String, TermDef>),
+    Merged(Vec<(&'a str, &'a TermDef)>),
+}
+
+impl<'a> BindingView<'a> {
+    /// Caller has proved equality for shared names. Preserve base ownership and
+    /// BTreeMap order while admitting only borrowed pointer-vector storage.
+    pub(crate) fn merged(
+        base: &'a std::collections::BTreeMap<String, TermDef>,
+        overlay: Option<&'a std::collections::BTreeMap<String, TermDef>>,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<Self> {
+        use source_control::validation_error as error;
+        work.checkpoint().map_err(error)?;
+        let Some(overlay) = overlay.filter(|map| !map.is_empty()) else {
+            return Ok(Self::Direct(base));
+        };
+        let (mut left, mut right) = (base.iter().peekable(), overlay.iter().peekable());
+        let mut entries = sf_sql::source_work::SourceVec::default();
+        while left.peek().is_some() || right.peek().is_some() {
+            work.charge(1).map_err(error)?;
+            let ordering = match (left.peek(), right.peek()) {
+                (Some((a, _)), Some((b, _))) => {
+                    work.charge(a.len().min(b.len())).map_err(error)?;
+                    a.cmp(b)
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Greater,
+            };
+            let (name, definition) = match ordering {
+                std::cmp::Ordering::Less => left.next().expect("left entry"),
+                std::cmp::Ordering::Greater => right.next().expect("right entry"),
+                std::cmp::Ordering::Equal => {
+                    right.next();
+                    left.next().expect("equal base entry")
+                }
+            };
+            entries
+                .push((name.as_str(), definition), work)
+                .map_err(error)?;
+        }
+        work.checkpoint().map_err(error)?;
+        Ok(Self::Merged(entries.into_vec()))
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Direct(map) => map.len(),
+            Self::Merged(entries) => entries.len(),
+        }
+    }
+
+    fn get(
+        &self,
+        name: &str,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<Option<&'a TermDef>> {
+        for (candidate, definition) in self.iter() {
+            work.charge(1).map_err(source_control::validation_error)?;
+            work.charge(candidate.len().min(name.len()))
+                .map_err(source_control::validation_error)?;
+            match candidate.cmp(name) {
+                std::cmp::Ordering::Equal => return Ok(Some(definition)),
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Less => {}
+            }
+        }
+        work.checkpoint()
+            .map_err(source_control::validation_error)?;
+        Ok(None)
+    }
+
+    pub(crate) fn iter(&self) -> BindingIter<'_, 'a> {
+        match self {
+            Self::Direct(map) => BindingIter::Direct(map.iter()),
+            Self::Merged(entries) => BindingIter::Merged(entries.iter()),
+        }
+    }
+}
+
+pub(crate) enum BindingIter<'view, 'a> {
+    Direct(std::collections::btree_map::Iter<'a, String, TermDef>),
+    Merged(std::slice::Iter<'view, (&'a str, &'a TermDef)>),
+}
+
+impl<'a> Iterator for BindingIter<'_, 'a> {
+    type Item = (&'a str, &'a TermDef);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Direct(iter) => iter
+                .next()
+                .map(|(name, definition)| (name.as_str(), definition)),
+            Self::Merged(iter) => iter.next().copied(),
+        }
+    }
+}
+
+/// Scalar execution overlay; preparing a root never copies its branch forest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BranchModifiers {
+    pub(crate) distinct: bool,
+    limit: Option<usize>,
+    offset: usize,
+}
+
+impl BranchModifiers {
+    pub(crate) fn stored(b: &Branch) -> Self {
+        Self {
+            distinct: b.distinct,
+            limit: b.limit,
+            offset: b.offset,
+        }
+    }
+
+    pub(crate) fn prepared(
+        b: &Branch,
+        single: bool,
+        distinct: bool,
+        unordered: bool,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Self {
+        let mut m = Self::stored(b);
+        if single {
+            m.distinct = distinct;
+            if unordered {
+                m.limit = limit;
+                m.offset = offset;
+            }
+        }
+        m
+    }
+}
+
+pub(crate) fn emit_branch_with_modifiers(
+    b: &Branch,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    modifiers: BranchModifiers,
+) -> Result<EmittedBranch> {
+    emit_branch_controlled(
+        b,
+        dialect,
+        catalog,
+        modifiers,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(crate) fn emit_branch_controlled(
+    b: &Branch,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<EmittedBranch> {
+    emit_branch_binding_view(
+        b,
+        &BindingView::Direct(&b.bindings),
+        dialect,
+        catalog,
+        modifiers,
+        work,
+    )
+}
+
+pub(crate) fn emit_branch_binding_view(
+    b: &Branch,
+    bindings: &BindingView<'_>,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<EmittedBranch> {
+    work.checkpoint()
+        .map_err(source_control::validation_error)?;
     let mut emission_catalog = catalog.clone();
     emission_catalog.character_keys = Default::default();
     emission_catalog.lexical_keys = Default::default();
     let catalog = &emission_catalog;
-    let mut emitted = emit_branch_inner(b, dialect, catalog)?;
+    let mut emitted = emit_branch_inner(b, bindings, dialect, catalog, modifiers, work)?;
     if dialect == Dialect::Sqlite && !catalog.suppress_path_collation {
         let mut metadata_catalog = catalog.clone();
         metadata_catalog.suppress_path_collation = true;
-        let metadata = emit_branch_inner(b, dialect, &metadata_catalog)?;
+        let metadata = emit_branch_inner(b, bindings, dialect, &metadata_catalog, modifiers, work)?;
         if metadata.projection != emitted.projection || metadata.params != emitted.params {
             return Err(Error::Sql(
                 "path metadata twin changed projection or parameters".into(),
@@ -812,24 +1334,38 @@ pub fn emit_branch_with(
 
 fn emit_branch_inner(
     b: &Branch,
+    bindings: &BindingView<'_>,
     dialect: Dialect,
     catalog: &ColumnCatalog,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<EmittedBranch> {
-    emit_branch_keys(b, dialect, catalog, b.distinct)
+    emit_branch_keys(
+        b,
+        bindings,
+        dialect,
+        catalog,
+        modifiers.distinct,
+        modifiers,
+        work,
+    )
 }
 
 fn emit_branch_keys(
     b: &Branch,
+    bindings: &BindingView<'_>,
     dialect: Dialect,
     catalog: &ColumnCatalog,
     normalize_projection: bool,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<EmittedBranch> {
-    let actuals = branch_actuals(b, dialect, catalog);
+    let actuals = branch_actuals_controlled(b, dialect, catalog, work)?;
     if let Some(pc) = &b.path {
-        return emit_path_branch(b, pc, dialect, catalog);
+        return emit_path_branch(b, pc, dialect, catalog, modifiers, work);
     }
     if let Some(agg) = &b.agg {
-        return emit_agg_branch(b, agg, dialect, catalog, &actuals);
+        return emit_agg_branch(b, agg, dialect, catalog, &actuals, modifiers, work);
     }
     // ADR-0025 (C.3): SQL `DISTINCT` dedups RAW columns, so it implements SPARQL DISTINCT
     // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
@@ -842,8 +1378,13 @@ fn emit_branch_keys(
     // leaving the raw, duplicate-bearing rows for `exec_core::run_branches` to dedup AFTER
     // reconstruction, on the actual term values. Injective templates need neither path —
     // SQL DISTINCT already implements SPARQL DISTINCT for them.
-    let term_dedup = projection_layout::validate_distinct(b)?;
-    let projection = b.projection();
+    let (projection, term_dedup) = aggregate_projection::projection_from_bindings(
+        b,
+        bindings,
+        dialect,
+        modifiers.distinct,
+        work,
+    )?;
     let mut params = Vec::new();
     let mut pidx = 0usize;
 
@@ -858,13 +1399,14 @@ fn emit_branch_keys(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from(
+        Some(render_from_controlled(
             b,
             dialect,
             catalog,
             &actuals,
             &mut params,
             &mut pidx,
+            work,
         )?)
     };
     let where_sql = render_where(
@@ -874,6 +1416,7 @@ fn emit_branch_keys(
         &actuals,
         &mut params,
         &mut pidx,
+        work,
     )?;
 
     let select_list = if projection.is_empty() {
@@ -899,16 +1442,21 @@ fn emit_branch_keys(
     // `term_dedup` skips SQL DISTINCT even though `b.distinct` is set (see the C.3 gate
     // above) — its raw, non-injective duplicates are collapsed downstream, by TERM, not
     // by raw-column SQL DISTINCT (which would be the unsound operation C.3 refuses).
-    let numeric_keys =
-        if b.distinct && !term_dedup && matches!(dialect, Dialect::Postgres | Dialect::MySql) {
-            pg_numeric::distinct_keys(b, dialect, &actuals)
-        } else {
-            Vec::new()
-        };
-    let numeric_distinct = b.distinct && !term_dedup && numeric_keys.iter().any(Option::is_some);
-    let literal_window = (b.distinct && !term_dedup && dialect == Dialect::Sqlite)
-        .then(|| literal_roles::sqlite_distinct(b, catalog, &actuals))
-        .flatten();
+    let numeric_keys = if modifiers.distinct
+        && !term_dedup
+        && matches!(dialect, Dialect::Postgres | Dialect::MySql)
+    {
+        pg_numeric::distinct_keys_for_projection(bindings, dialect, &actuals, &projection, work)?
+    } else {
+        Vec::new()
+    };
+    let numeric_distinct =
+        modifiers.distinct && !term_dedup && numeric_keys.iter().any(Option::is_some);
+    let literal_window = if modifiers.distinct && !term_dedup && dialect == Dialect::Sqlite {
+        literal_roles::sqlite_distinct(bindings, catalog, &actuals, &projection, work)?
+    } else {
+        None
+    };
     let (select_list, literal_output) = match &literal_window {
         Some(keys) => {
             let raw = projection
@@ -922,42 +1470,57 @@ fn emit_branch_keys(
         }
         None => (select_list, None),
     };
-    let distinct = if b.distinct && !term_dedup && !numeric_distinct && literal_window.is_none() {
-        "DISTINCT "
-    } else {
-        ""
-    };
+    let distinct =
+        if modifiers.distinct && !term_dedup && !numeric_distinct && literal_window.is_none() {
+            "DISTINCT "
+        } else {
+            ""
+        };
+    work.charge(select_list.len() + from.as_deref().map_or(0, str::len) + 64)
+        .map_err(source_control::validation_error)?;
     let mut skeleton = match from {
         Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
         None => format!("SELECT {distinct}{select_list}"),
     };
     if let Some(w) = where_sql {
+        work.charge(w.len() + 7)
+            .map_err(source_control::validation_error)?;
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
     if numeric_distinct {
+        work.charge(skeleton.len())
+            .map_err(source_control::validation_error)?;
+        work.product(numeric_keys.len(), 96)
+            .map_err(source_control::validation_error)?;
         skeleton = pg_numeric::distinct_sql(skeleton, &numeric_keys);
     }
     if let Some(output) = literal_output {
+        work.charge(skeleton.len() + output.len() + 96)
+            .map_err(source_control::validation_error)?;
         skeleton = format!("SELECT {output} FROM ({skeleton}) __sf_literal_raw WHERE __sf_literal_raw.__sf_literal_rank = 1");
     }
     // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
     if let Some(order) = if numeric_distinct || literal_window.is_some() {
-        pg_numeric::order(b, &projection, dialect)?
+        pg_numeric::order(b, bindings, &projection, dialect, work)?
     } else {
         render_order(
             &b.order,
-            b,
+            bindings,
             dialect,
             catalog,
             &actuals,
             normalize_projection && !term_dedup,
+            work,
         )?
     } {
+        work.charge(order.len())
+            .map_err(source_control::validation_error)?;
         skeleton.push_str(&order);
     }
-    push_limit_offset(&mut skeleton, b, dialect);
+    push_limit_offset(&mut skeleton, modifiers, dialect);
 
+    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
     let sql = dialect
         .emit_via_ast(&skeleton)
         .map_err(|e| Error::Sql(e.to_string()))?;
@@ -979,18 +1542,18 @@ fn emit_branch_keys(
 /// "no limit" `LIMIT` first for the dialects that need one (confirmed live: a
 /// bare `OFFSET n` is a SQLite/MySQL syntax error, so this genuinely fixed a
 /// live-emission failure, not a hypothetical one).
-fn push_limit_offset(skeleton: &mut String, b: &Branch, dialect: Dialect) {
-    match b.limit {
+fn push_limit_offset(skeleton: &mut String, m: BranchModifiers, dialect: Dialect) {
+    match m.limit {
         Some(limit) => skeleton.push_str(&format!(" LIMIT {limit}")),
-        None if b.offset > 0 => {
+        None if m.offset > 0 => {
             if let Some(sentinel) = dialect.bare_offset_limit_sentinel() {
                 skeleton.push_str(&format!(" LIMIT {sentinel}"));
             }
         }
         None => {}
     }
-    if b.offset > 0 {
-        skeleton.push_str(&format!(" OFFSET {}", b.offset));
+    if m.offset > 0 {
+        skeleton.push_str(&format!(" OFFSET {}", m.offset));
     }
 }
 
@@ -1005,18 +1568,19 @@ fn push_limit_offset(skeleton: &mut String, b: &Branch, dialect: Dialect) {
 /// soundly in SQL (the constructed string ≠ the column order) → honest 501.
 fn render_order(
     order: &[OrderKey],
-    b: &Branch,
+    bindings: &BindingView<'_>,
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
     normalize: bool,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<Option<String>> {
     if order.is_empty() {
         return Ok(None);
     }
     let mut terms = Vec::with_capacity(order.len());
     for key in order {
-        let def = b.bindings.get(&key.var).ok_or_else(|| {
+        let def = bindings.get(&key.var, work)?.ok_or_else(|| {
             Error::Unsupported(format!(
                 "ORDER BY ?{} is not a bound variable → 501",
                 key.var
@@ -1171,10 +1735,12 @@ fn emit_path_branch(
     pc: &PathClosure,
     dialect: Dialect,
     catalog: &ColumnCatalog,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<EmittedBranch> {
     // ORDER BY over a path result is handled at the exec layer (plan.order →
     // Rust-level order_cmp) — Branch.order is always empty here, so no guard needed.
-    let projection = b.projection();
+    let projection = b.projection_with_distinct(modifiers.distinct);
     let mut params = Vec::new();
     let mut pidx = 0usize;
 
@@ -1182,7 +1748,7 @@ fn emit_path_branch(
     // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
     // columns, so the outer projection / WHERE resolve against an empty catalog.
     let cte = format!("t{}", pc.alias);
-    let outer_actuals = HashMap::from([(pc.alias, path_actuals(pc, catalog))]);
+    let outer_actuals = HashMap::from([(pc.alias, path_actuals_controlled(pc, catalog, work)?)]);
     let with = path_with_prelude(pc, dialect, catalog)?;
 
     let select_list = projection
@@ -1192,7 +1758,9 @@ fn emit_path_branch(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let distinct = if b.distinct { "DISTINCT " } else { "" };
+    let distinct = if modifiers.distinct { "DISTINCT " } else { "" };
+    work.charge(with.len() + select_list.len() + cte.len() + 64)
+        .map_err(source_control::validation_error)?;
     let mut skeleton = format!("{with} SELECT {distinct}{select_list} FROM {cte}");
     if let Some(w) = render_where(
         &b.where_conds,
@@ -1201,12 +1769,14 @@ fn emit_path_branch(
         &outer_actuals,
         &mut params,
         &mut pidx,
+        work,
     )? {
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
-    push_limit_offset(&mut skeleton, b, dialect);
+    push_limit_offset(&mut skeleton, modifiers, dialect);
 
+    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
     let sql = dialect
         .emit_via_ast(&skeleton)
         .map_err(|e| Error::Sql(e.to_string()))?;
@@ -1236,6 +1806,8 @@ fn emit_agg_branch(
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
+    modifiers: BranchModifiers,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<EmittedBranch> {
     let mut params = Vec::new();
     let mut pidx = 0usize;
@@ -1249,13 +1821,14 @@ fn emit_agg_branch(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from(
+        Some(render_from_controlled(
             b,
             dialect,
             catalog,
             actuals,
             &mut params,
             &mut pidx,
+            work,
         )?)
     };
     let where_sql = render_where(
@@ -1265,6 +1838,7 @@ fn emit_agg_branch(
         actuals,
         &mut params,
         &mut pidx,
+        work,
     )?;
 
     // The projection + SELECT list, in lockstep: grouping-key raw columns first
@@ -1294,24 +1868,35 @@ fn emit_agg_branch(
     }
     let select_list = select_items.join(", ");
 
-    let distinct = if b.distinct { "DISTINCT " } else { "" };
+    let distinct = if modifiers.distinct { "DISTINCT " } else { "" };
+    work.charge(select_list.len() + from.as_deref().map_or(0, str::len) + 64)
+        .map_err(source_control::validation_error)?;
     let mut skeleton = match from {
         Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
         None => format!("SELECT {distinct}{select_list}"),
     };
     if let Some(w) = where_sql {
+        work.charge(w.len() + 7)
+            .map_err(source_control::validation_error)?;
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
     if !group_cols.is_empty() {
+        // The joined list and its copy into the skeleton.
+        let joined = group_cols
+            .iter()
+            .fold(10usize, |n, c| n.saturating_add(c.len() + 2));
+        work.charge(joined.saturating_mul(2))
+            .map_err(source_control::validation_error)?;
         skeleton.push_str(" GROUP BY ");
         skeleton.push_str(&group_cols.join(", "));
     }
     // ORDER BY over an aggregate result is applied in `exec` (never pushed to SQL —
     // it sorts the reconstructed terms type-aware). LIMIT/OFFSET on a single agg
     // branch were pushed by `Plan::prepared_branches` only when unordered.
-    push_limit_offset(&mut skeleton, b, dialect);
+    push_limit_offset(&mut skeleton, modifiers, dialect);
 
+    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
     let sql = dialect
         .emit_via_ast(&skeleton)
         .map_err(|e| Error::Sql(e.to_string()))?;
@@ -1452,14 +2037,35 @@ fn source_sql(source: &LogicalSource, dialect: Dialect) -> String {
     }
 }
 
-fn render_from(
+#[cfg(test)]
+fn scan_ref(
+    scan: &crate::iq::Scan,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<String> {
+    scan_ref_controlled(
+        scan,
+        dialect,
+        catalog,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+fn render_from_controlled(
     b: &Branch,
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
+    work.checkpoint()
+        .map_err(source_control::validation_error)?;
     // SubPlan derived-table joins (ADR-0023 M5 Wave 2): nested Plans inlined as
     // `(SELECT …) AS t{alias}`. Nested params are spliced at this text-order position
     // (load-bearing for prepared-statement binding — positional order matters).
@@ -1472,15 +2078,23 @@ fn render_from(
                    pidx: &mut usize,
                    join_kw: &str|
      -> Result<String> {
-        let (nested_sql, nested_params) = emit_subplan_sql(&sp.plan, dialect, catalog)?;
-        let nested_count = nested_params.len();
+        let (nested_sql, nested_params) =
+            emit_subplan_sql_controlled(&sp.plan, dialect, catalog, work)?;
         // Rebase Postgres $N placeholders in the nested SQL from $1.. to $(pidx+1)..
-        let rebased = rebase_placeholders(&nested_sql, dialect, *pidx)?;
+        let rebased = rebase_placeholders_controlled(&nested_sql, dialect, *pidx, work)?;
         // Splice nested params into the parent's param vector at this text position.
-        params.extend(nested_params);
-        // Advance pidx past the nested params so subsequent ON conditions number correctly.
-        *pidx += nested_count;
+        work.append_parameters(params, pidx, nested_params)
+            .map_err(source_control::validation_error)?;
+        work.charge(join_kw.len() + rebased.len() + 24)
+            .map_err(source_control::validation_error)?;
         Ok(format!("{join_kw}({rebased}) t{}", sp.alias))
+    };
+    // Pay each rendered piece before copying it into the FROM text.
+    let append = |from: &mut String, piece: String| -> Result<()> {
+        work.charge(piece.len())
+            .map_err(source_control::validation_error)?;
+        from.push_str(&piece);
+        Ok(())
     };
 
     let from = if b.core.is_empty() {
@@ -1506,13 +2120,17 @@ fn render_from(
         let mut from = "(SELECT 1) t_empty".to_owned();
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            let scan = iri_cmp::restrict_optional(opt, dialect, catalog);
-            from.push_str(&scan_ref(&scan, dialect, catalog, params, pidx)?);
+            let scan = scan::template::restrict_optional_controlled(opt, dialect, catalog, work)?;
+            append(
+                &mut from,
+                scan_ref_controlled(&scan, dialect, catalog, params, pidx, work)?,
+            )?;
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-            from.push_str(&render_conjunction(
-                &conds, dialect, catalog, actuals, params, pidx,
-            )?);
+            append(
+                &mut from,
+                render_conjunction(&conds, dialect, catalog, actuals, params, pidx, work)?,
+            )?;
         }
         for sp in &b.subplan_joins {
             let join_kw = if sp.left {
@@ -1520,13 +2138,14 @@ fn render_from(
             } else {
                 " INNER JOIN "
             };
-            from.push_str(&emit_sp(sp, params, pidx, join_kw)?);
+            append(&mut from, emit_sp(sp, params, pidx, join_kw)?)?;
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
-                from.push_str(&render_conjunction(
-                    &conds, dialect, catalog, actuals, params, pidx,
-                )?);
+                append(
+                    &mut from,
+                    render_conjunction(&conds, dialect, catalog, actuals, params, pidx, work)?,
+                )?;
             } else {
                 from.push_str(" ON 1 = 1");
             }
@@ -1535,20 +2154,27 @@ fn render_from(
     } else {
         let mut scans = b.core.iter();
         let first = scans.next().expect("core non-empty — checked above");
-        let mut from = scan_ref(first, dialect, catalog, params, pidx)?;
+        let mut from = scan_ref_controlled(first, dialect, catalog, params, pidx, work)?;
         for s in scans {
             from.push_str(" CROSS JOIN ");
-            from.push_str(&scan_ref(s, dialect, catalog, params, pidx)?);
+            append(
+                &mut from,
+                scan_ref_controlled(s, dialect, catalog, params, pidx, work)?,
+            )?;
         }
         for opt in &b.opts {
             from.push_str(" LEFT JOIN ");
-            let scan = iri_cmp::restrict_optional(opt, dialect, catalog);
-            from.push_str(&scan_ref(&scan, dialect, catalog, params, pidx)?);
+            let scan = scan::template::restrict_optional_controlled(opt, dialect, catalog, work)?;
+            append(
+                &mut from,
+                scan_ref_controlled(&scan, dialect, catalog, params, pidx, work)?,
+            )?;
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-            from.push_str(&render_conjunction(
-                &conds, dialect, catalog, actuals, params, pidx,
-            )?);
+            append(
+                &mut from,
+                render_conjunction(&conds, dialect, catalog, actuals, params, pidx, work)?,
+            )?;
         }
         for sp in &b.subplan_joins {
             let join_kw = if sp.left {
@@ -1556,13 +2182,14 @@ fn render_from(
             } else {
                 " INNER JOIN "
             };
-            from.push_str(&emit_sp(sp, params, pidx, join_kw)?);
+            append(&mut from, emit_sp(sp, params, pidx, join_kw)?)?;
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
-                from.push_str(&render_conjunction(
-                    &conds, dialect, catalog, actuals, params, pidx,
-                )?);
+                append(
+                    &mut from,
+                    render_conjunction(&conds, dialect, catalog, actuals, params, pidx, work)?,
+                )?;
             } else {
                 from.push_str(" ON 1 = 1");
             }
@@ -1576,13 +2203,31 @@ fn render_from(
 /// (for embedding as a derived table). Recursively probed live names override the
 /// offline lexical fallback. Multi-branch plans become a `UNION ALL`. Returns
 /// `(sql_text, params)` — params in text order, placeholders starting from 1.
+#[cfg(test)]
 fn emit_subplan_sql(
     plan: &crate::Plan,
     dialect: Dialect,
     live_catalog: &ColumnCatalog,
 ) -> Result<(String, Vec<String>)> {
-    let branches = plan.prepared_branches();
-    let mut catalog = synthetic_subplan_catalog(&branches);
+    emit_subplan_sql_controlled(
+        plan,
+        dialect,
+        live_catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+fn emit_subplan_sql_controlled(
+    plan: &crate::Plan,
+    dialect: Dialect,
+    live_catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<(String, Vec<String>)> {
+    work.charge(1).map_err(source_control::validation_error)?;
+    // Preparation changes only root scalar modifiers. Borrow the forest so a
+    // unary wrapper chain does not recursively copy every remaining subtree.
+    let branches = &plan.branches;
+    let mut catalog = synthetic_subplan_catalog_controlled(branches, work)?;
     catalog.suppress_path_collation = live_catalog.suppress_path_collation;
     catalog.character_keys = std::sync::Arc::clone(&live_catalog.character_keys);
     catalog.lexical_keys = std::sync::Arc::clone(&live_catalog.lexical_keys);
@@ -1591,32 +2236,73 @@ fn emit_subplan_sql(
     // does not depend on the offline lexical alias-folding heuristic. The
     // synthetic entries remain only for dialect-neutral/offline emission and
     // source-free derived columns.
-    for source in live_metadata_sources(&branches) {
-        if let Some(columns) = live_catalog.columns(source) {
-            catalog.insert(source, columns.to_vec());
-            if let Some(text) = live_catalog.text_by_source.get(&source_key(source)) {
-                std::sync::Arc::make_mut(&mut catalog.text_by_source)
-                    .insert(source_key(source), text.clone());
-            }
-            if let Some(sqlite) = live_catalog.sqlite_by_source.get(&source_key(source)) {
-                std::sync::Arc::make_mut(&mut catalog.sqlite_by_source)
-                    .insert(source_key(source), sqlite.clone());
-            }
-            if let Some(scalars) = live_catalog.scalars_by_source.get(&source_key(source)) {
-                std::sync::Arc::make_mut(&mut catalog.scalars_by_source)
-                    .insert(source_key(source), scalars.clone());
-            }
-            if let Some(datatypes) = live_catalog.datatypes_by_source.get(&source_key(source)) {
-                std::sync::Arc::make_mut(&mut catalog.datatypes_by_source)
-                    .insert(source_key(source), datatypes.clone());
-            }
+    let sources = match work.control() {
+        Some(control) => source_control::live_metadata_sources_controlled(branches, control)
+            .map_err(source_control::validation_error)?,
+        None => live_metadata_sources(branches),
+    };
+    for source in sources {
+        // One paid key copy per source, cloned once per overlaid map.
+        let text_len = match source {
+            LogicalSource::Table(table) => table.len(),
+            LogicalSource::Query(query) => query.len(),
+        };
+        work.product(text_len + 2, 6)
+            .map_err(source_control::validation_error)?;
+        let key = source_key(source);
+        let Some(columns) = live_catalog.by_source.get(&key) else {
+            continue;
+        };
+        work.product(columns.len(), std::mem::size_of::<String>())
+            .map_err(source_control::validation_error)?;
+        for column in columns {
+            work.charge(column.len())
+                .map_err(source_control::validation_error)?;
         }
+        std::sync::Arc::make_mut(&mut catalog.by_source).insert(key.clone(), columns.clone());
+        macro_rules! overlay {
+            ($field:ident) => {
+                let map = std::sync::Arc::make_mut(&mut catalog.$field);
+                match live_catalog.$field.get(&key) {
+                    Some(live) => {
+                        source_control::map_copy(live, work)
+                            .map_err(source_control::validation_error)?;
+                        map.insert(key.clone(), live.clone());
+                    }
+                    None => {
+                        map.remove(&key);
+                    }
+                }
+            };
+        }
+        overlay!(text_by_source);
+        overlay!(sqlite_by_source);
+        overlay!(scalars_by_source);
+        overlay!(datatypes_by_source);
     }
-    pg_float::validate_union(&branches, dialect, &catalog, plan.distinct)?;
-    mysql_float_value::identity::validate_union(&branches, dialect, &catalog)?;
+    pg_float::validate_union(branches, dialect, &catalog, plan.distinct, work)?;
+    mysql_float_value::identity::validate_union_controlled(branches, dialect, &catalog, work)?;
     let emitted = branches
         .iter()
-        .map(|branch| emit_branch_keys(branch, dialect, &catalog, plan.distinct || branch.distinct))
+        .map(|branch| {
+            let modifiers = BranchModifiers::prepared(
+                branch,
+                branches.len() == 1,
+                plan.distinct,
+                plan.order.is_empty(),
+                plan.limit,
+                plan.offset,
+            );
+            emit_branch_keys(
+                branch,
+                &BindingView::Direct(&branch.bindings),
+                dialect,
+                &catalog,
+                plan.distinct || modifiers.distinct,
+                modifiers,
+                work,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     if emitted.is_empty() {
         // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
@@ -1624,8 +2310,8 @@ fn emit_subplan_sql(
         return Ok(("SELECT 1 AS __sf_empty WHERE 1 = 0".to_owned(), Vec::new()));
     }
     if emitted.len() == 1 {
-        let e = &emitted[0];
-        return Ok((e.sql.clone(), e.params.clone()));
+        let e = emitted.into_iter().next().expect("one emitted branch");
+        return Ok((e.sql, e.params));
     }
     // Multiple branches: `UNION ALL` (bag semantics) by default, or `UNION` (dedup) when the
     // plan carries a DISTINCT (a multi-branch DISTINCT SubPlan, ADR-0025 Tier-2 gap 2 — the
@@ -1637,27 +2323,41 @@ fn emit_subplan_sql(
     let mut all_sql = Vec::new();
     let mut all_params = Vec::new();
     let numeric_keys = if plan.distinct {
-        pg_numeric::union_keys(&branches, dialect, &catalog)?
+        pg_numeric::union_keys(branches, dialect, &catalog, work)?
     } else {
         None
     };
-    for e in &emitted {
-        let sql = rebase_placeholders(&e.sql, dialect, all_params.len())?;
+    for e in emitted {
+        let sql = rebase_placeholders_controlled(&e.sql, dialect, all_params.len(), work)?;
         if dialect == Dialect::Sqlite {
             all_sql.push(sql);
         } else {
+            work.charge(sql.len() + 2)
+                .map_err(source_control::validation_error)?;
             all_sql.push(format!("({sql})"));
         }
-        all_params.extend(e.params.clone());
+        let mut parameter_index = all_params.len();
+        work.append_parameters(&mut all_params, &mut parameter_index, e.params)
+            .map_err(source_control::validation_error)?;
     }
     let op = if plan.distinct && numeric_keys.is_none() {
         " UNION "
     } else {
         " UNION ALL "
     };
+    for sql in &all_sql {
+        work.charge(sql.len() + op.len())
+            .map_err(source_control::validation_error)?;
+    }
     let raw = all_sql.join(op);
     let sql = match numeric_keys {
-        Some(keys) => pg_numeric::distinct_sql(raw, &keys),
+        Some(keys) => {
+            work.charge(raw.len())
+                .map_err(source_control::validation_error)?;
+            work.product(keys.len(), 96)
+                .map_err(source_control::validation_error)?;
+            pg_numeric::distinct_sql(raw, &keys)
+        }
         None => raw,
     };
     Ok((sql, all_params))
@@ -1671,6 +2371,23 @@ fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<Strin
         .map_err(|error| Error::Sql(error.to_string()))
 }
 
+/// The output copy, plus the tokenizer pass and character scan on PostgreSQL.
+fn rebase_placeholders_controlled(
+    sql: &str,
+    dialect: Dialect,
+    base: usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    let passes = if dialect == Dialect::Postgres && base > 0 {
+        3
+    } else {
+        1
+    };
+    work.product(sql.len(), passes)
+        .map_err(source_control::validation_error)?;
+    rebase_placeholders(sql, dialect, base)
+}
+
 fn render_where(
     conds: &[SqlCond],
     dialect: Dialect,
@@ -1678,13 +2395,18 @@ fn render_where(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     if conds.is_empty() {
         return Ok(None);
     }
-    let refs: Vec<&SqlCond> = conds.iter().collect();
+    let mut refs = work
+        .vector(conds.len())
+        .map_err(source_control::validation_error)?;
+    refs.extend(conds.iter());
     Ok(Some(render_conjunction(
-        &refs, dialect, catalog, actuals, params, pidx,
+        &refs, dialect, catalog, actuals, params, pidx, work,
     )?))
 }
 
@@ -1695,22 +2417,25 @@ fn render_conjunction(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
+    work.charge(1).map_err(source_control::validation_error)?;
     if conds.is_empty() {
         return Ok("1 = 1".to_owned());
     }
-    if let Some(sql) =
-        natural_literal::authorized_conjunction(conds, dialect, catalog, actuals, params, pidx)?
-    {
+    if let Some(sql) = natural_literal::authorized_conjunction_controlled(
+        conds, dialect, catalog, actuals, params, pidx, work,
+    )? {
         return Ok(sql);
     }
     Ok(conds
         .iter()
-        .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+        .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
         .collect::<Result<Vec<_>>>()?
         .join(" AND "))
 }
 
+#[cfg(test)]
 fn render_cond(
     cond: &SqlCond,
     dialect: Dialect,
@@ -1719,11 +2444,34 @@ fn render_cond(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
+    render_cond_controlled(
+        cond,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+fn render_cond_controlled(
+    cond: &SqlCond,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    work.charge(1).map_err(source_control::validation_error)?;
     Ok(match cond {
         SqlCond::ExpressionError => "(NULL = 1)".to_owned(),
-        SqlCond::IriCmp(cmp) => iri_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?,
+        SqlCond::IriCmp(cmp) => {
+            iri_cmp::render(cmp, dialect, catalog, actuals, params, pidx, work)?
+        }
         SqlCond::LiteralCmp(cmp) => {
-            literal_cmp::render(cmp, dialect, catalog, actuals, params, pidx)?
+            literal_cmp::render_controlled(cmp, dialect, catalog, actuals, params, pidx, work)?
         }
         SqlCond::ColEq(a, b) => render_key_equality(a, b, dialect, catalog, actuals)?,
         SqlCond::NativeColEq(a, b) => format!(
@@ -1737,8 +2485,8 @@ fn render_cond(
             format!("({equal} OR {la} IS NULL OR {lb} IS NULL)")
         }
         SqlCond::Cmp(a, op, val) | SqlCond::NativeCmp(a, op, val) => {
-            params.push(val.clone());
-            *pidx += 1;
+            work.parameter(params, pidx, val)
+                .map_err(source_control::validation_error)?;
             format!(
                 "{} {} {}",
                 if matches!(cond, SqlCond::NativeCmp(..)) {
@@ -1754,8 +2502,8 @@ fn render_cond(
             // The pattern/regex is a bound parameter (ADR-0010 R1) — never inlined.
             // The `ESCAPE '\'` char is a fixed engine constant (not query data), so
             // it is part of the trusted skeleton, like an identifier.
-            params.push(param.clone());
-            *pidx += 1;
+            work.parameter(params, pidx, param)
+                .map_err(source_control::validation_error)?;
             let ph = dialect.placeholder(*pidx);
             let c = colref(col, dialect, actuals);
             match op {
@@ -1796,13 +2544,13 @@ fn render_cond(
         SqlCond::IsNull(a) => format!("{} IS NULL", colref(a, dialect, actuals)),
         SqlCond::Not(c) => format!(
             "(NOT {})",
-            render_cond(c, dialect, catalog, actuals, params, pidx)?
+            render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work)?
         ),
         SqlCond::And(cs) => {
             let refs: Vec<&SqlCond> = cs.iter().collect();
             format!(
                 "({})",
-                render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?
+                render_conjunction(&refs, dialect, catalog, actuals, params, pidx, work)?
             )
         }
         SqlCond::Or(cs) => {
@@ -1811,7 +2559,7 @@ fn render_cond(
             }
             let parts: Vec<String> = cs
                 .iter()
-                .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+                .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
                 .collect::<Result<Vec<_>>>()?;
             format!("({})", parts.join(" OR "))
         }
@@ -1825,16 +2573,19 @@ fn render_cond(
             let neg = matches!(cond, SqlCond::NotExists { .. });
             let from = scans
                 .iter()
-                .map(|scan| scan_ref(scan, dialect, catalog, params, pidx))
+                .map(|scan| scan_ref_controlled(scan, dialect, catalog, params, pidx, work))
                 .collect::<Result<Vec<_>>>()?
                 .join(" CROSS JOIN ");
             let mut nested_actuals = actuals.clone();
             for scan in scans {
-                nested_actuals.insert(scan.alias, scan_actuals(scan, dialect, catalog));
+                nested_actuals.insert(
+                    scan.alias,
+                    metadata::scan_actuals_controlled(scan, dialect, catalog, work)?,
+                );
             }
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql =
-                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx)?;
+                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx, work)?;
             let kw = if neg { "NOT EXISTS" } else { "EXISTS" };
             if from.is_empty() {
                 format!("{kw} (SELECT 1 WHERE {where_sql})")
@@ -1851,10 +2602,10 @@ fn render_cond(
         SqlCond::PathExists { pc, conds, negated } => {
             let with = path_with_prelude(pc, dialect, catalog)?;
             let mut nested_actuals = actuals.clone();
-            nested_actuals.insert(pc.alias, path_actuals(pc, catalog));
+            nested_actuals.insert(pc.alias, path_actuals_controlled(pc, catalog, work)?);
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql =
-                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx)?;
+                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx, work)?;
             let kw = if *negated { "NOT EXISTS" } else { "EXISTS" };
             format!(
                 "{kw} ({with} SELECT 1 FROM t{} WHERE {where_sql})",
@@ -1869,7 +2620,7 @@ fn render_cond(
         // rather than needing special-casing here).
         SqlCond::TemplateEq(sx, a1, sy, a2, encode_iri) => {
             if let Some(sql) = mysql_float_value::identity::template_comparison(
-                cond, dialect, catalog, actuals, params, pidx,
+                cond, dialect, catalog, actuals, params, pidx, work,
             )? {
                 return Ok(sql);
             }
@@ -1877,17 +2628,21 @@ fn render_cond(
                 sx,
                 *encode_iri,
                 dialect,
+                catalog,
                 |c| path_comparison::rdf_column(&ColRef::new(*a1, c), dialect, catalog, actuals),
                 params,
                 pidx,
+                work,
             )?;
             let r2 = render_template_concat(
                 sy,
                 *encode_iri,
                 dialect,
+                catalog,
                 |c| path_comparison::rdf_column(&ColRef::new(*a2, c), dialect, catalog, actuals),
                 params,
                 pidx,
+                work,
             )?;
             format!("{r1} = {r2}")
         }
@@ -1958,29 +2713,42 @@ fn render_template_concat(
     segs: &[sf_core::ir::Segment],
     encode_iri: bool,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     column: impl Fn(&str) -> String,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     use sf_core::ir::Segment;
-    let mut parts = Vec::with_capacity(segs.len());
+    let mut parts = work
+        .vector(segs.len())
+        .map_err(source_control::validation_error)?;
     for seg in segs {
+        work.charge(1).map_err(source_control::validation_error)?;
         parts.push(match seg {
             Segment::Literal(text) => {
-                params.push(text.to_string());
-                *pidx += 1;
+                work.parameter(params, pidx, text)
+                    .map_err(source_control::validation_error)?;
                 dialect.placeholder(*pidx)
             }
             Segment::Column(c) => {
                 let col = column(c);
                 if encode_iri {
-                    percent_encode_col(&col, dialect)?
+                    percent_encode_col_controlled(&col, dialect, catalog, work)?
                 } else {
                     col
                 }
             }
         });
     }
+    // Joined bytes are copied once into the join buffer, then into its wrapper.
+    for part in &parts {
+        work.product(part.len(), 2)
+            .map_err(source_control::validation_error)?;
+    }
+    work.product(parts.len(), 8)
+        .map_err(source_control::validation_error)?;
+    work.charge(8).map_err(source_control::validation_error)?;
     match dialect {
         Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
         Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
@@ -1997,17 +2765,32 @@ pub(crate) fn render_template_inline(
     segs: &[sf_core::ir::Segment],
     encode_iri: bool,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     column: impl Fn(&str) -> String,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     use sf_core::ir::Segment;
-    let parts = segs
-        .iter()
-        .map(|segment| match segment {
-            Segment::Literal(text) => Ok(sql_string_literal(text)),
-            Segment::Column(name) if encode_iri => percent_encode_col(&column(name), dialect),
-            Segment::Column(name) => Ok(column(name)),
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut parts = work
+        .vector(segs.len())
+        .map_err(source_control::validation_error)?;
+    for segment in segs {
+        let part = match segment {
+            Segment::Literal(text) => {
+                // Quoting at most doubles the literal.
+                work.product(text.len(), 2)
+                    .map_err(source_control::validation_error)?;
+                sql_string_literal(text)
+            }
+            Segment::Column(name) if encode_iri => {
+                percent_encode_col_controlled(&column(name), dialect, catalog, work)?
+            }
+            Segment::Column(name) => column(name),
+        };
+        // The part is copied once more into the joined expression.
+        work.charge(part.len() + 4)
+            .map_err(source_control::validation_error)?;
+        parts.push(part);
+    }
     match dialect {
         Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
         Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
@@ -2072,6 +2855,10 @@ fn sql_string_literal(text: &str) -> String {
 ///    PG dialect (reproduced with a single-argument `UPPER(...)` chain, not
 ///    just `REPLACE`), so no flat chain wide enough for full coverage is
 ///    viable there at any practical depth.
+///
+/// **SQLite now uses a query-local native function instead** (see
+/// [`percent_encode_col_sqlite`]); the per-character SQL below remains the
+/// PostgreSQL and MySQL design.
 ///
 /// **The fix: per-character SQL, not per-character SQL TEXT NESTING.** Each
 /// dialect gets its OWN O(1)-parse-depth encoder — a single `WITH RECURSIVE`
@@ -2150,40 +2937,50 @@ fn percent_encode_col(col_sql: &str, dialect: Dialect) -> Result<String> {
     })
 }
 
-/// SQLite: `CAST(... AS BLOB)` throughout (byte-oriented `LENGTH`/`substr`,
-/// sidestepping TEXT-mode `LENGTH`'s NUL-terminated character counting —
-/// see [`percent_encode_col`]'s doc comment). `hex()`, not `unicode()`, for
-/// byte classification (`unicode()` reinterprets an isolated non-ASCII byte
-/// as a UTF-8 decode attempt and returns the U+FFFD replacement code point
-/// for an invalid standalone continuation/lead byte — confirmed live;
-/// `hex()` returns the raw byte unconditionally). `group_concat(...ORDER BY
-/// n)` needs SQLite ≥ 3.44 (this project's bundled `libsqlite3-sys` ships
-/// 3.46.0, confirmed live).
+/// Pay the encoder expansion before building it. Each dialect's output is an
+/// affine function of the column expression: a fixed body plus a constant
+/// number of repetitions, calibrated once from the encoder itself.
+fn percent_encode_col_controlled(
+    col_sql: &str,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    if dialect == Dialect::Sqlite {
+        // The native encoder is a query-local lexical key function.
+        catalog
+            .lexical_keys
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    static SHAPES: std::sync::OnceLock<[(usize, usize); 3]> = std::sync::OnceLock::new();
+    let shapes = SHAPES.get_or_init(|| {
+        [Dialect::Sqlite, Dialect::MySql, Dialect::Postgres].map(|dialect| {
+            let fixed = percent_encode_col("", dialect).map_or(0, |sql| sql.len());
+            let repeats = percent_encode_col("x", dialect).map_or(0, |sql| sql.len() - fixed);
+            (fixed, repeats)
+        })
+    });
+    let (fixed, repeats) = match dialect {
+        Dialect::Sqlite => shapes[0],
+        Dialect::MySql => shapes[1],
+        Dialect::Postgres => shapes[2],
+        _ => (0, 0),
+    };
+    work.product(col_sql.len(), repeats)
+        .map_err(source_control::validation_error)?;
+    work.charge(fixed + 1)
+        .map_err(source_control::validation_error)?;
+    percent_encode_col(col_sql, dialect)
+}
+
+/// SQLite: one call to the query-local native `__sf_percent_encode_v1`, which
+/// applies `sf_core::ir::encoding::percent_encode_iri` itself (installed and
+/// removed with the lexical decoder keys; the emitter raises that flag). The
+/// earlier per-byte `WITH RECURSIVE` template was ~13 KB per column reference,
+/// so identity queries produced hundreds of kilobytes of SQL per request.
+/// `CAST(... AS TEXT)` lets SQLite spell numbers before encoding.
 fn percent_encode_col_sqlite(col: &str) -> String {
-    let ucschar = encoding_ucschar::byte_member(col, Dialect::Sqlite);
-    let valid_utf8 = encoding_ucschar::valid_non_ascii_byte(col, Dialect::Sqlite);
-    format!(
-        "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
-WITH RECURSIVE seq(n) AS (\
-SELECT 1 WHERE LENGTH(CAST({col} AS BLOB)) > 0 \
-UNION ALL \
-SELECT n + 1 FROM seq WHERE n < LENGTH(CAST({col} AS BLOB))\
-) \
-SELECT group_concat(\
-CASE \
-WHEN hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '30' AND '39' \
-OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '41' AND '5A' \
-OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '61' AND '7A' \
-OR hex(substr(CAST({col} AS BLOB), n, 1)) IN ('2D', '2E', '5F', '7E') \
-OR {ucschar} \
-THEN CAST(substr(CAST({col} AS BLOB), n, 1) AS TEXT) \
-WHEN hex(substr(CAST({col} AS BLOB), n, 1)) >= '80' AND NOT {valid_utf8} \
-THEN json_extract('semantic-fabric-invalid-utf8', '$') \
-ELSE '%' || hex(substr(CAST({col} AS BLOB), n, 1)) \
-END, '' ORDER BY n\
-) FROM seq\
-), '') END)"
-    )
+    format!("__sf_percent_encode_v1(CAST({col} AS TEXT))")
 }
 
 /// MySQL: `CAST(... AS BINARY)` throughout — MySQL's `LENGTH()` is
@@ -2311,6 +3108,68 @@ mod tests {
     use super::*;
     use crate::iq::{Scan, StrMatchOp};
     use sf_core::ir::{LogicalSource, TermSpec};
+
+    #[test]
+    fn subplan_sql_pays_query_text_scans_and_parser_passes() {
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+        use sf_sql::source_work::SourceWork;
+        let consumed = |padding: usize| {
+            let maps = sf_mapping::parse_r2rml(&format!(
+                r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+                <#m> rr:logicalTable [rr:sqlQuery "SELECT v AS o FROM items WHERE '{}' <> ''"];
+                rr:subject <http://ex/s>;
+                rr:predicateObjectMap [rr:predicate <http://ex/p>; rr:objectMap [rr:column "o"]]."#,
+                "x".repeat(padding)
+            ))
+            .unwrap();
+            let plan = crate::parse_and_translate(
+                "SELECT ?o WHERE { ?s <http://ex/p> ?o }",
+                &maps,
+                Dialect::Sqlite,
+            )
+            .unwrap();
+            let control =
+                QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+            emit_subplan_sql_controlled(
+                &plan,
+                Dialect::Sqlite,
+                &ColumnCatalog::default(),
+                SourceWork::new(Some(&control)),
+            )
+            .unwrap();
+            control.consumed(QueryCharge::SourceWork)
+        };
+        // Query text is scanned per referencing column and re-parsed with the SQL.
+        let (short, long) = (consumed(0), consumed(1000));
+        assert!(long >= short + 2 * 1000, "short {short} long {long}");
+    }
+
+    #[test]
+    fn percent_encoder_charge_equals_its_output_length() {
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+        use sf_sql::source_work::SourceWork;
+        for dialect in [Dialect::Sqlite, Dialect::MySql, Dialect::Postgres] {
+            for column in [
+                "t.v",
+                "(__sf_lexical_key_v1(t0.\"value\", 1, -1) COLLATE BINARY)",
+            ] {
+                let control =
+                    QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+                let sql = percent_encode_col_controlled(
+                    column,
+                    dialect,
+                    &ColumnCatalog::default(),
+                    SourceWork::new(Some(&control)),
+                )
+                .unwrap();
+                assert_eq!(
+                    control.consumed(QueryCharge::SourceWork),
+                    sql.len() as u64 + 1,
+                    "{dialect:?} {column}"
+                );
+            }
+        }
+    }
 
     fn branch_with(cond: SqlCond) -> Branch {
         let mut b = Branch::single(Scan {
@@ -2488,19 +3347,32 @@ mod tests {
             sf_core::ir::Segment::Literal("urn:row:".into()),
             sf_core::ir::Segment::Column("rowid".into()),
         ];
-        let table_sql = render_template_inline(&template, false, Dialect::Postgres, |column| {
-            render_immediate_source_column("sfs0", column, None, Dialect::Postgres)
-        })
+        let raw = sf_sql::source_work::SourceWork::new(None);
+        let table_sql = render_template_inline(
+            &template,
+            false,
+            Dialect::Postgres,
+            &ColumnCatalog::default(),
+            |column| render_immediate_source_column("sfs0", column, None, Dialect::Postgres),
+            raw,
+        )
         .unwrap();
         assert!(table_sql.contains("(sfs0.ctid)::text"), "{table_sql}");
-        let query_sql = render_template_inline(&template, false, Dialect::Postgres, |column| {
-            render_immediate_source_column(
-                "sfs0",
-                column,
-                Some("SELECT 7 AS rowid"),
-                Dialect::Postgres,
-            )
-        })
+        let query_sql = render_template_inline(
+            &template,
+            false,
+            Dialect::Postgres,
+            &ColumnCatalog::default(),
+            |column| {
+                render_immediate_source_column(
+                    "sfs0",
+                    column,
+                    Some("SELECT 7 AS rowid"),
+                    Dialect::Postgres,
+                )
+            },
+            raw,
+        )
         .unwrap();
         assert!(query_sql.contains("sfs0.rowid"), "{query_sql}");
         assert!(!query_sql.contains("ctid"), "{query_sql}");
@@ -2567,6 +3439,7 @@ mod tests {
     #[test]
     fn percent_encode_col_sqlite_matches_reference_iri_encoding() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let _keys = sf_sql::backend::sqlite::lexical_keys(&conn).unwrap();
         conn.execute("CREATE TABLE t (v TEXT)", []).unwrap();
 
         let mut cases: Vec<Option<String>> = vec![

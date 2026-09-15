@@ -23,6 +23,7 @@ pub(super) fn exact(datatype: &str) -> bool {
         || sf_core::numeric_compare::is_integer_datatype(datatype)
 }
 
+#[cfg(test)]
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -30,6 +31,25 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let Some(op) = cmp.value_op else {
         return Ok(None);
     };
@@ -40,8 +60,8 @@ pub(super) fn comparison(
     {
         return Ok(None);
     }
-    let left = operand(&cmp.left, actuals, params, pidx)?;
-    let right = operand(&cmp.right, actuals, params, pidx)?;
+    let left = operand_controlled(&cmp.left, actuals, params, pidx, work)?;
+    let right = operand_controlled(&cmp.right, actuals, params, pidx, work)?;
     // Canonical nonzero negatives have exactly one leading '-'. After removing
     // it, compare integral length, integral digits and fractional digits under
     // C collation. Fractions retain leading zeros and discard only trailing
@@ -63,11 +83,28 @@ pub(super) fn comparison(
     )))
 }
 
+#[cfg(test)]
 fn operand(
     value: &LiteralOperand,
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+) -> Result<String> {
+    operand_controlled(
+        value,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+fn operand_controlled(
+    value: &LiteralOperand,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     let unsupported = || {
         Error::Unsupported("exact decimal value comparison requires each operand's compatible decoder, retained native lexical proof and datatype".into())
@@ -78,11 +115,13 @@ fn operand(
             // PostgreSQL text cannot transport NUL. It is never a valid XSD
             // numeric character, so retain an expression error without a bind;
             // the parent still evaluates the other source decoder obligation.
+            work.charge(literal.value().len())
+                .map_err(source_control::validation_error)?;
             if !exact(datatype) || literal.value().contains('\0') {
                 return Ok("CAST(NULL AS TEXT)".into());
             }
-            params.push(literal.value().to_owned());
-            *pidx += 1;
+            work.parameter(params, pidx, literal.value())
+                .map_err(source_control::validation_error)?;
             format!("CAST(${} AS TEXT)", *pidx)
         }
         LiteralOperand::Column { column, .. } => {
@@ -154,3 +193,77 @@ fn facets(kind: &str) -> String {
 #[cfg(test)]
 #[path = "pg_decimal_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    use sf_sql::source_work::SourceWork;
+
+    #[test]
+    fn decimal_bindings_preserve_values_and_exact_limits_in_both_backends() {
+        for dialect in [Dialect::Postgres, Dialect::MySql] {
+            for value in ["123456789012345678901234567890.000", "invalid", "\0"] {
+                let term = |v| {
+                    LiteralOperand::Constant(sf_core::Literal::new_typed_literal(
+                        v,
+                        sf_core::datatype::XsdTypeCode::Decimal.iri(),
+                    ))
+                };
+                let cmp = LiteralComparison {
+                    left: term(value),
+                    right: term("1.0"),
+                    value_op: Some(crate::iq::CmpOp::Eq),
+                };
+                let actuals = ActualColumns::new();
+                let catalog = ColumnCatalog::default();
+                let run = |work| {
+                    let mut params = vec![];
+                    let mut index = 0;
+                    let sql = if dialect == Dialect::Postgres {
+                        comparison_controlled(
+                            &cmp,
+                            dialect,
+                            &actuals,
+                            &mut params,
+                            &mut index,
+                            work,
+                        )?
+                    } else {
+                        mysql_decimal_value::comparison_controlled(
+                            &cmp,
+                            dialect,
+                            &catalog,
+                            &actuals,
+                            &mut params,
+                            &mut index,
+                            work,
+                        )?
+                    };
+                    Ok::<_, Error>((sql, params, index))
+                };
+                let expected = run(SourceWork::new(None)).unwrap();
+                assert_eq!(
+                    expected.2,
+                    if dialect == Dialect::Postgres && value == "\0" {
+                        1
+                    } else {
+                        2
+                    }
+                );
+                let budget =
+                    |n| QueryBudget::new(QueryLimits::new(u64::MAX, n, u64::MAX, u64::MAX));
+                let measured = budget(u64::MAX);
+                assert_eq!(run(SourceWork::new(Some(&measured))).unwrap(), expected);
+                let n = measured.consumed(QueryCharge::SourceWork);
+                let exact = budget(n);
+                let short = budget(n - 1);
+                assert_eq!(run(SourceWork::new(Some(&exact))).unwrap(), expected);
+                assert!(matches!(
+                    run(SourceWork::new(Some(&short))),
+                    Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+                ));
+            }
+        }
+    }
+}

@@ -3,10 +3,71 @@ use super::*;
 use crate::iq::scan::LexicalMode;
 use crate::iq::{CmpOp, Scan, ScanSource};
 #[path = "scan_template.rs"]
-mod template;
+pub(super) mod template;
 
+pub(super) fn logical_aliases<'a>(
+    branch: &'a Branch,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Vec<(usize, &'a LogicalSource)>> {
+    use sf_sql::source_work::SourceVec;
+    use source_control::validation_error as error;
+    let mut output = SourceVec::default();
+    for scan in branch
+        .core
+        .iter()
+        .chain(branch.opts.iter().map(|join| &join.scan))
+    {
+        work.charge(1).map_err(error)?;
+        if let Some(source) = scan.source.logical() {
+            output.push((scan.alias, source), work).map_err(error)?;
+        }
+    }
+    let mut pending = SourceVec::default();
+    pending
+        .push(branch.where_conds.as_slice(), work)
+        .map_err(error)?;
+    while !pending.as_slice().is_empty() {
+        work.charge(1).map_err(error)?;
+        let conditions = pending.pop().expect("nonempty metadata traversal");
+        let Some((condition, rest)) = conditions.split_first() else {
+            continue;
+        };
+        work.charge(1).map_err(error)?;
+        if !rest.is_empty() {
+            pending.push(rest, work).map_err(error)?;
+        }
+        match condition {
+            SqlCond::Exists { scans, conds } | SqlCond::NotExists { scans, conds } => {
+                for scan in scans {
+                    work.charge(1).map_err(error)?;
+                    if let Some(source) = scan.source.logical() {
+                        output.push((scan.alias, source), work).map_err(error)?;
+                    }
+                }
+                pending.push(conds.as_slice(), work).map_err(error)?;
+            }
+            SqlCond::Not(inner) => pending
+                .push(std::slice::from_ref(inner.as_ref()), work)
+                .map_err(error)?,
+            SqlCond::And(conditions) | SqlCond::Or(conditions) => {
+                pending.push(conditions.as_slice(), work).map_err(error)?;
+            }
+            _ => {}
+        }
+    }
+    work.checkpoint().map_err(error)?;
+    Ok(output.into_vec())
+}
+
+#[cfg(test)]
 pub(super) fn scan_actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
-    template::actuals(scan, dialect, catalog)
+    super::metadata::scan_actuals_controlled(
+        scan,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+    .expect("uncontrolled scan metadata")
 }
 
 fn projection_sql(
@@ -15,6 +76,7 @@ fn projection_sql(
     catalog: &ColumnCatalog,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     let ScanSource::Projection {
         input,
@@ -28,10 +90,16 @@ fn projection_sql(
         unreachable!("projection renderer")
     };
     let distinct = *distinct;
-    let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
-    let resolved_keys = literal_roles::resolved(lexical_keys, dialect, &actuals[&input.alias]);
+    let actuals = HashMap::from([(
+        input.alias,
+        super::metadata::scan_actuals_controlled(input, dialect, catalog, work)?,
+    )]);
+    let resolved_keys =
+        literal_roles::resolved_controlled(lexical_keys, dialect, &actuals[&input.alias], work)?;
     let lexical_keys = resolved_keys.as_slice();
-    let lexicalized = template::mysql_lexical_columns(source, dialect, &actuals[&input.alias]);
+    let inner = &actuals[&input.alias];
+    let lexicalized =
+        metadata_projection::mysql_lexical_columns(source, dialect, inner, lexical_keys, work)?;
     let column = |name: &str| {
         // Raw/offline APIs retain their existing authored-AS fallback. Live
         // execution always probes the original source and takes the typed path.
@@ -70,6 +138,7 @@ fn projection_sql(
                 dialect,
                 catalog,
                 &actuals,
+                work,
             )?,
             TermMap::Constant(_) => {
                 return Err(Error::Unsupported("constant projection recipe".into()))
@@ -186,6 +255,7 @@ fn projection_sql(
                             &actuals,
                             params,
                             pidx,
+                            work,
                         )?);
                     }
                 }
@@ -237,15 +307,16 @@ fn projection_sql(
         "SELECT {}{} FROM {}",
         if distinct && !window { "DISTINCT " } else { "" },
         items.join(", "),
-        scan_ref(input, dialect, catalog, params, pidx)?
+        scan_ref_controlled(input, dialect, catalog, params, pidx, work)?
     );
-    let protected = natural_literal::authorized_conjunction(
+    let protected = natural_literal::authorized_conjunction_controlled(
         &guards.iter().collect::<Vec<_>>(),
         dialect,
         catalog,
         &actuals,
         params,
         pidx,
+        work,
     )?;
     let predicates = match protected {
         Some(sql) => vec![sql],
@@ -259,10 +330,10 @@ fn projection_sql(
                     Ok(format!("{} IS NOT NULL", column(&c.column)))
                 }
                 SqlCond::NativeCmp(c, CmpOp::Eq, _) if c.alias == input.alias => {
-                    render_cond(guard, dialect, catalog, &actuals, params, pidx)
+                    render_cond_controlled(guard, dialect, catalog, &actuals, params, pidx, work)
                 }
                 _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
-                    render_cond(guard, dialect, catalog, &actuals, params, pidx)
+                    render_cond_controlled(guard, dialect, catalog, &actuals, params, pidx, work)
                 }
                 _ => Err(Error::Unsupported("projection guard shape".into())),
             })
@@ -321,109 +392,22 @@ fn projection_sql(
     Ok(sql)
 }
 
-pub(super) fn validate_projection(
-    input: &Scan,
-    columns: &[(Box<str>, TermMap)],
-    guards: &[SqlCond],
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> Result<()> {
-    if let ScanSource::Projection {
-        input,
-        columns,
-        guards,
-        ..
-    } = &input.source
-    {
-        validate_projection(input, columns, guards, dialect, catalog)?;
-    }
-    let mut outputs = HashSet::new();
-    for (name, term) in columns {
-        if !outputs.insert(name) {
-            return Err(Error::Sql("duplicate projection output".into()));
-        }
-        let raw = match term {
-            TermMap::Column(column, _) => vec![column.as_ref()],
-            TermMap::Template(template, _) => template
-                .segments()
-                .iter()
-                .filter_map(|segment| match segment {
-                    Segment::Column(column) => Some(column.as_ref()),
-                    _ => None,
-                })
-                .collect(),
-            TermMap::Constant(_) => {
-                return Err(Error::Unsupported("constant projection recipe".into()))
-            }
-        };
-        for column in raw {
-            validate_input_column(input, column, dialect, catalog)?;
-        }
-    }
-    for guard in guards {
-        match guard {
-            SqlCond::IsNull(c) | SqlCond::IsNotNull(c) | SqlCond::NativeCmp(c, CmpOp::Eq, _)
-                if c.alias == input.alias =>
-            {
-                validate_input_column(input, &c.column, dialect, catalog)?
-            }
-            _ if crate::iq::iri_cmp::atom_guard(guard, input.alias) => {
-                let mut result = Ok(());
-                crate::iq::collect_cond_cols(guard, &mut |column| {
-                    if result.is_ok() {
-                        result = validate_input_column(input, &column.column, dialect, catalog);
-                    }
-                });
-                result?;
-            }
-            _ => return Err(Error::Unsupported("projection guard shape".into())),
-        }
-    }
-    Ok(())
-}
-
-fn validate_input_column(
-    input: &Scan,
-    name: &str,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> Result<()> {
-    match &input.source {
-        ScanSource::RefAtom { input, columns } => {
-            validate_live_columns(std::slice::from_ref(input), dialect, catalog)?;
-            ref_atom::validate_output(columns.len(), name)
-        }
-        ScanSource::Logical(source) => catalog.validate_live_column(source, name, dialect),
-        ScanSource::Projection { columns, .. } => validate_output(columns, name),
-        ScanSource::Path { .. } => Err(Error::Unsupported("projection over path".into())),
-    }
-}
-
-pub(super) fn validate_output(columns: &[(Box<str>, TermMap)], name: &str) -> Result<()> {
-    if columns.iter().any(|(output, _)| output.as_ref() == name)
-        || columns
-            .iter()
-            .filter(|(output, _)| output.eq_ignore_ascii_case(name))
-            .count()
-            == 1
-    {
-        Ok(())
-    } else {
-        Err(Error::Sql("missing or ambiguous projection output".into()))
-    }
-}
-
-pub(super) fn scan_ref(
+pub(super) use super::projection_layout::validate_output_controlled;
+#[cfg(test)]
+pub(super) use super::scan_ref;
+pub(super) fn scan_ref_controlled(
     scan: &Scan,
     dialect: Dialect,
     catalog: &ColumnCatalog,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let alias = scan.alias;
     match &scan.source {
         ScanSource::RefAtom { input, columns } => {
-            let sql = ref_atom::sql(input, columns, dialect, catalog, params, pidx)?;
+            let sql = ref_atom::sql(input, columns, dialect, catalog, params, pidx, work)?;
             Ok(format!("({sql}) t{alias}"))
         }
         ScanSource::Logical(LogicalSource::Table(table)) => {
@@ -435,7 +419,7 @@ pub(super) fn scan_ref(
             Ok(format!("({sql}) t{alias}"))
         }
         ScanSource::Projection { .. } => {
-            let sql = projection_sql(&scan.source, dialect, catalog, params, pidx)?;
+            let sql = projection_sql(&scan.source, dialect, catalog, params, pidx, work)?;
             Ok(format!("({sql}) t{alias}"))
         }
     }

@@ -117,3 +117,33 @@ async fn exec_core_and_sqlite_worker_use_the_exact_same_control_identity() {
         "a fresh control/deadline in the worker cannot observe exec-core state"
     );
 }
+
+#[test]
+fn rust_group_limit_zero_answers_empty_before_any_source_probe() {
+    // A base table that does not exist on the connection: any probe fails.
+    let maps = sf_mapping::parse_r2rml(
+        r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
+<#Missing> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "missing_items" ] ;
+  rr:subjectMap [ rr:template "http://example.test/item/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate <http://example.test/value> ; rr:objectMap [ rr:column "value" ] ] ."#,
+    )
+    .expect("parse mapping");
+    let conn = Connection::open_in_memory().unwrap();
+    let query =
+        "SELECT (COUNT(DISTINCT *) AS ?n) WHERE { ?item <http://example.test/value> ?value }";
+    let probing = parse_and_translate(query, &maps, Dialect::Sqlite).expect("translate");
+    assert!(
+        probing.rust_group.is_some(),
+        "COUNT(DISTINCT *) routes to the Rust group path"
+    );
+    assert!(
+        exec::select(&probing, &conn).is_err(),
+        "rows are needed, so the absent table errors"
+    );
+    let zero = parse_and_translate(&format!("{query} LIMIT 0"), &maps, Dialect::Sqlite)
+        .expect("translate");
+    assert!(zero.rust_group.is_some());
+    let solutions = exec::select(&zero, &conn).expect("LIMIT 0 answers before any source probe");
+    assert!(solutions.rows.is_empty());
+}

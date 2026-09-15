@@ -2,6 +2,7 @@
 use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 
+#[cfg(test)]
 pub(super) fn render(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -10,31 +11,57 @@ pub(super) fn render(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
+    render_controlled(
+        cmp,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn render_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    work.charge(1).map_err(source_control::validation_error)?;
     if let Some(sql) = literal_datatype::mismatch(cmp, dialect, actuals)? {
         return Ok(sql);
     }
-    if let Some(sql) = mysql_float_value::identity::comparison(cmp, dialect, actuals, params, pidx)?
-    {
+    if let Some(sql) = mysql_float_value::identity::comparison_controlled(
+        cmp, dialect, actuals, params, pidx, work,
+    )? {
         return Ok(sql);
     }
-    if let Some(sql) = pg_float_value::comparison(cmp, dialect, actuals, params, pidx)? {
+    if let Some(sql) =
+        pg_float_value::comparison_controlled(cmp, dialect, actuals, params, pidx, work)?
+    {
         return Ok(sql);
     }
     // Offline branches can have aliases and synthetic names, but no live
     // result metadata. A live prepare inserts a datatype map even when all
     // facts are absent: those columns must reach the strict decoder check.
     if !catalog.datatypes_by_source.is_empty() || cmp.columns().next().is_none() {
-        if let Some(sql) =
-            mysql_float_value::comparison(cmp, dialect, catalog, actuals, params, pidx)?
-        {
-            return Ok(sql);
-        }
-        if let Some(sql) = pg_decimal_value::comparison(cmp, dialect, actuals, params, pidx)? {
+        if let Some(sql) = mysql_float_value::comparison_controlled(
+            cmp, dialect, catalog, actuals, params, pidx, work,
+        )? {
             return Ok(sql);
         }
         if let Some(sql) =
-            mysql_decimal_value::comparison(cmp, dialect, catalog, actuals, params, pidx)?
+            pg_decimal_value::comparison_controlled(cmp, dialect, actuals, params, pidx, work)?
         {
+            return Ok(sql);
+        }
+        if let Some(sql) = mysql_decimal_value::comparison_controlled(
+            cmp, dialect, catalog, actuals, params, pidx, work,
+        )? {
             return Ok(sql);
         }
     }
@@ -42,9 +69,22 @@ pub(super) fn render(
         (&cmp.left, &cmp.right)
     {
         let value = match cmp.value_op {
-            None => Some(left == right),
+            None => {
+                for literal in [left, right] {
+                    work.charge(literal.value().len())
+                        .map_err(source_control::validation_error)?;
+                }
+                Some(left == right)
+            }
             Some(op) if cmp.base_numeric() => {
                 use sf_core::numeric_compare::NumericOp;
+                // Pay both lexical parses and the bounded decimal-to-double
+                // widening before any parser reads the constants.
+                for literal in [left, right] {
+                    source_control::numeric_lexical(literal.value(), work)
+                        .map_err(source_control::validation_error)?;
+                }
+                work.charge(64).map_err(source_control::validation_error)?;
                 sf_core::numeric_compare::compare(
                     left.value(),
                     left.datatype().as_str(),
@@ -77,18 +117,20 @@ pub(super) fn render(
         }
         .into());
     }
+    if let Some(sql) = natural_decimal::value_equality_controlled(
+        cmp, dialect, catalog, actuals, params, pidx, work,
+    )? {
+        return Ok(sql);
+    }
     if let Some(sql) =
-        natural_decimal::value_equality(cmp, dialect, catalog, actuals, params, pidx)?
+        natural_literal::comparison_controlled(cmp, dialect, catalog, actuals, params, pidx, work)?
     {
         return Ok(sql);
     }
-    if let Some(sql) = natural_literal::comparison(cmp, dialect, catalog, actuals, params, pidx)? {
-        return Ok(sql);
-    }
-    let mut bind = |value: &str| {
-        params.push(value.to_owned());
-        *pidx += 1;
-        dialect.placeholder(*pidx)
+    let mut bind = |value: &str| -> Result<String> {
+        work.parameter(params, pidx, value)
+            .map_err(source_control::validation_error)?;
+        Ok(dialect.placeholder(*pidx))
     };
     // A missing live natural decoder is not evidence of xsd:string. Native
     // non-text decoder-equivalent identity remains a separate qualification;
@@ -125,29 +167,29 @@ pub(super) fn render(
     }
     if unknown_natural || (cmp.value_op.is_some() && !decoded_numeric) {
         let mut raw = |value: &LiteralOperand| match value {
-            LiteralOperand::Column { column, .. } if cmp.value_op.is_some() => {
-                path_comparison::rdf_text_column(column, dialect, catalog, actuals)
-            }
-            LiteralOperand::Column { column, .. } => {
-                path_comparison::rdf_column(column, dialect, catalog, actuals)
-            }
+            LiteralOperand::Column { column, .. } if cmp.value_op.is_some() => Ok(
+                path_comparison::rdf_text_column(column, dialect, catalog, actuals),
+            ),
+            LiteralOperand::Column { column, .. } => Ok(path_comparison::rdf_column(
+                column, dialect, catalog, actuals,
+            )),
             LiteralOperand::Constant(literal) => bind(literal.value()),
         };
         return Ok(format!(
             "{} {} {}",
-            raw(&cmp.left),
+            raw(&cmp.left)?,
             cmp.value_op.unwrap_or(crate::iq::CmpOp::Eq).as_sql(),
-            raw(&cmp.right)
+            raw(&cmp.right)?
         ));
     }
     // Render components in SQL text order: MySQL and SQLite use anonymous binds.
     let mut component = |value: &LiteralOperand, part: usize| -> Result<String> {
         match value {
-            LiteralOperand::Constant(literal) => Ok(bind(match part {
+            LiteralOperand::Constant(literal) => bind(match part {
                 0 => literal.value(),
                 1 => literal.datatype().as_str(),
                 _ => literal.language().unwrap_or(""),
-            })),
+            }),
             LiteralOperand::Column { column, spec } => {
                 let raw = colref(column, dialect, actuals);
                 let natural = spec.datatype.is_none() && spec.language.is_none();
@@ -177,10 +219,10 @@ pub(super) fn render(
                             } else {
                                 "http://www.w3.org/2001/XMLSchema#string"
                             },
-                        ))
+                        ))?
                     });
                 }
-                Ok(bind(spec.language.as_deref().unwrap_or("")))
+                bind(spec.language.as_deref().unwrap_or(""))
             }
         }
     };
@@ -234,6 +276,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn iri_parameter_modes_share_exact_admission() {
+        use crate::iq::iri_cmp::{IriComparison, IriOperand, IriPart};
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+        use sf_sql::source_work::SourceWork;
+        for dialect in [Dialect::Sqlite, Dialect::Postgres, Dialect::MySql] {
+            let cmp = IriComparison {
+                left: IriOperand::Template {
+                    parts: vec![IriPart::Literal("http://example/item".into())],
+                    base: (dialect == Dialect::Sqlite).then(|| "http://base/".into()),
+                },
+                right: IriOperand::Constant(sf_core::NamedNode::new_unchecked(
+                    "http://example/item",
+                )),
+            };
+            let catalog = ColumnCatalog::default();
+            let actuals = ActualColumns::new();
+            let run = |work| {
+                let mut params = vec![];
+                let mut index = 0;
+                let sql = iri_cmp::render(
+                    &cmp,
+                    dialect,
+                    &catalog,
+                    &actuals,
+                    &mut params,
+                    &mut index,
+                    work,
+                )?;
+                Ok::<_, Error>((sql, params, index))
+            };
+            let expected = run(SourceWork::new(None)).unwrap();
+            assert_eq!(expected.2, 2);
+            let budget = |n| QueryBudget::new(QueryLimits::new(u64::MAX, n, u64::MAX, u64::MAX));
+            let measured = budget(u64::MAX);
+            assert_eq!(run(SourceWork::new(Some(&measured))).unwrap(), expected);
+            let n = measured.consumed(QueryCharge::SourceWork);
+            let exact = budget(n);
+            let short = budget(n - 1);
+            assert_eq!(run(SourceWork::new(Some(&exact))).unwrap(), expected);
+            assert!(matches!(
+                run(SourceWork::new(Some(&short))),
+                Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+            ));
+        }
+    }
+
+    #[test]
+    fn constant_folding_pays_each_lexical_before_parsing_it() {
+        use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+        let double = sf_core::datatype::XsdTypeCode::Double.iri();
+        let constant = |lexical: &str| {
+            LiteralOperand::Constant(sf_core::Literal::new_typed_literal(lexical, double))
+        };
+        let consumed = |cmp: &LiteralComparison| {
+            let control =
+                QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+            render_controlled(
+                cmp,
+                Dialect::Sqlite,
+                &ColumnCatalog::default(),
+                &ActualColumns::new(),
+                &mut vec![],
+                &mut 0,
+                sf_sql::source_work::SourceWork::new(Some(&control)),
+            )
+            .unwrap();
+            control.consumed(QueryCharge::SourceWork)
+        };
+        let long = format!("1.0{}", "0".repeat(100));
+        let mut cmp = LiteralComparison {
+            left: constant("1.0"),
+            right: constant("1.0"),
+            value_op: Some(crate::iq::CmpOp::Lt),
+        };
+        let short = consumed(&cmp);
+        cmp.right = constant(&long);
+        // Numeric folding parses both constants: four units per extra byte.
+        assert_eq!(consumed(&cmp), short + 400);
+        // Term identity only scans the lexicals.
+        cmp.value_op = None;
+        let identity = consumed(&cmp);
+        cmp.right = constant("1.0");
+        assert_eq!(identity, consumed(&cmp) + 100);
+    }
+
+    #[test]
     fn missing_decoder_preserves_value_lane_without_fabricating_callback_input() {
         let integer = sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer");
         let mut cmp = LiteralComparison {
@@ -258,6 +386,33 @@ mod tests {
             .unwrap();
             assert!(!sql.contains("__sf_"), "{sql}");
             assert_eq!(params, ["9"]);
+            use sf_core::query_control::{
+                QueryBudget, QueryCharge, QueryControlError, QueryLimits,
+            };
+            let budget = |n| QueryBudget::new(QueryLimits::new(u64::MAX, n, u64::MAX, u64::MAX));
+            let run = |control: &QueryBudget| {
+                let mut params = vec![];
+                let mut index = 0;
+                let sql = render_controlled(
+                    &cmp,
+                    dialect,
+                    &catalog,
+                    &ActualColumns::new(),
+                    &mut params,
+                    &mut index,
+                    sf_sql::source_work::SourceWork::new(Some(control)),
+                )?;
+                Ok::<_, Error>((sql, params, index))
+            };
+            let measured = budget(u64::MAX);
+            let expected = (sql.clone(), params.clone(), 1);
+            assert_eq!(run(&measured).unwrap(), expected);
+            let n = measured.consumed(QueryCharge::SourceWork);
+            assert_eq!(run(&budget(n)).unwrap(), expected);
+            assert!(matches!(
+                run(&budget(n - 1)),
+                Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+            ));
             assert!(!catalog
                 .lexical_keys
                 .load(std::sync::atomic::Ordering::Relaxed));

@@ -48,7 +48,9 @@ impl Fixture {
             timeout: Duration::from_secs(5),
             max_query_len: 4096,
             max_concurrent_requests: 8,
-            max_source_work: 1000,
+            // These cases qualify reload ownership, not an isolated work phase.
+            // Keep complete request preparation funded at the application default.
+            max_source_work: crate::DEFAULT_QUERY_LIMITS.max_source_work(),
             max_result_items: 1000,
             max_order_rows: 100,
             max_order_bytes: 4096,

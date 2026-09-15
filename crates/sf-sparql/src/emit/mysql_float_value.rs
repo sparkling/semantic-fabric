@@ -24,6 +24,7 @@ pub(super) fn double_lexical(raw: &str) -> String {
     double_lexical::lexical(raw)
 }
 
+#[cfg(test)]
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -32,6 +33,27 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let Some(op) = cmp.value_op else {
         return Ok(None);
     };
@@ -42,8 +64,8 @@ pub(super) fn comparison(
     {
         return Ok(None);
     }
-    let left = operand(&cmp.left, double, catalog, actuals, params, pidx)?;
-    let right = operand(&cmp.right, double, catalog, actuals, params, pidx)?;
+    let left = operand(&cmp.left, double, catalog, actuals, params, pidx, work)?;
+    let right = operand(&cmp.right, double, catalog, actuals, params, pidx, work)?;
     let nan = if op == crate::iq::CmpOp::Ne {
         "TRUE"
     } else {
@@ -74,8 +96,11 @@ fn operand(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     if let LiteralOperand::Constant(literal) = value {
+        source_control::numeric_lexical(literal.value(), work)
+            .map_err(source_control::validation_error)?;
         let number = if double {
             sf_core::numeric_compare::promote_to_double(
                 literal.value(),
@@ -93,8 +118,11 @@ fn operand(
             _ => 0,
         };
         return Ok(if tag == 0 {
-            params.push(number.unwrap().to_string());
-            *pidx += 1;
+            // Prepay the bounded IEEE display before constructing its String.
+            work.charge(1024)
+                .map_err(source_control::validation_error)?;
+            work.parameter(params, pidx, &number.unwrap().to_string())
+                .map_err(source_control::validation_error)?;
             "JSON_ARRAY(0,CAST(? AS DOUBLE))".into()
         } else {
             format!("JSON_ARRAY({tag},CAST(0 AS DOUBLE))")
@@ -134,7 +162,8 @@ fn operand(
             }
         }
     }
-    let raw = mysql_decimal_value::raw_operand(value, catalog, actuals, params, pidx)?;
+    let raw =
+        mysql_decimal_value::raw_operand_controlled(value, catalog, actuals, params, pidx, work)?;
     let kind = datatype
         .strip_prefix("http://www.w3.org/2001/XMLSchema#")
         .unwrap_or("");
@@ -147,3 +176,69 @@ fn operand(
 #[cfg(test)]
 #[path = "mysql_float_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    use sf_sql::source_work::SourceWork;
+
+    #[test]
+    fn floating_parameter_admission_keeps_ieee_cases() {
+        for dialect in [Dialect::Postgres, Dialect::MySql] {
+            for value in ["-0", "5e-324", "INF", "-INF", "NaN", "invalid"] {
+                let term = |v| {
+                    LiteralOperand::Constant(sf_core::Literal::new_typed_literal(
+                        v,
+                        sf_core::datatype::XsdTypeCode::Double.iri(),
+                    ))
+                };
+                let cmp = LiteralComparison {
+                    left: term(value),
+                    right: term("1"),
+                    value_op: Some(crate::iq::CmpOp::Eq),
+                };
+                let actuals = ActualColumns::new();
+                let catalog = ColumnCatalog::default();
+                let run = |work| {
+                    let mut params = vec![];
+                    let mut index = 0;
+                    let sql = if dialect == Dialect::Postgres {
+                        pg_float_value::comparison_controlled(
+                            &cmp,
+                            dialect,
+                            &actuals,
+                            &mut params,
+                            &mut index,
+                            work,
+                        )?
+                    } else {
+                        comparison_controlled(
+                            &cmp,
+                            dialect,
+                            &catalog,
+                            &actuals,
+                            &mut params,
+                            &mut index,
+                            work,
+                        )?
+                    };
+                    Ok::<_, Error>((sql, params, index))
+                };
+                let expected = run(SourceWork::new(None)).unwrap();
+                let budget =
+                    |n| QueryBudget::new(QueryLimits::new(u64::MAX, n, u64::MAX, u64::MAX));
+                let measured = budget(u64::MAX);
+                assert_eq!(run(SourceWork::new(Some(&measured))).unwrap(), expected);
+                let n = measured.consumed(QueryCharge::SourceWork);
+                let exact = budget(n);
+                let short = budget(n - 1);
+                assert_eq!(run(SourceWork::new(Some(&exact))).unwrap(), expected);
+                assert!(matches!(
+                    run(SourceWork::new(Some(&short))),
+                    Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+                ));
+            }
+        }
+    }
+}

@@ -171,6 +171,31 @@ async fn zero_order_window_returns_empty_before_source_or_payload_budget_io() {
 }
 
 #[tokio::test]
+async fn aggregate_limit_zero_returns_empty_before_source_io() {
+    let (cfg, pool) = config_and_pool();
+    pool.pick()
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TABLE \"items\"")
+        .unwrap();
+
+    let response = router(Arc::new(cfg))
+        .oneshot(query_request(
+            "SELECT (COUNT(*) AS ?n) WHERE { ?item <http://example.test/label> ?label } LIMIT 0",
+        ))
+        .await
+        .expect("route request");
+
+    // A single-branch COUNT(*) lowers to the SQL aggregate branch, not the Rust
+    // group path (serving refuses source-backed Rust-group plans). LIMIT 0 is
+    // source-independent: no probe, so no source error.
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["results"]["bindings"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn order_window_over_result_ceiling_is_501_before_source_io() {
     let (mut cfg, pool) = config_and_pool();
     cfg.set_max_order_rows(1);

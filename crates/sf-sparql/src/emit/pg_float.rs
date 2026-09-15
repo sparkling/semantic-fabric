@@ -117,19 +117,20 @@ pub(super) fn validate_union(
     dialect: Dialect,
     catalog: &ColumnCatalog,
     distinct: bool,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<()> {
     if dialect != Dialect::Postgres || branches.len() < 2 {
         return Ok(());
     }
-    let keys: Vec<Vec<_>> = branches
-        .iter()
-        .map(|branch| {
-            let actuals = branch_actuals(branch, dialect, catalog);
-            let consumed: HashSet<_> = branch
-                .bindings
-                .values()
-                .flat_map(TermDef::columns)
-                .collect();
+    let mut keys: Vec<Vec<_>> = Vec::new();
+    for branch in branches {
+        let actuals = branch_actuals_controlled(branch, dialect, catalog, work)?;
+        let consumed: HashSet<_> = branch
+            .bindings
+            .values()
+            .flat_map(TermDef::columns)
+            .collect();
+        keys.push(
             source_projection(branch, distinct || branch.distinct, dialect)
                 .iter()
                 .map(|column| {
@@ -138,9 +139,9 @@ pub(super) fn validate_union(
                         .filter(|column| consumed.contains(column))
                         .and_then(|column| iri_cmp::scalar_column(column, &actuals))
                 })
-                .collect()
-        })
-        .collect();
+                .collect(),
+        );
+    }
     for arm in &keys {
         for (index, key) in arm.iter().enumerate() {
             if key.is_some_and(is_float) && keys.iter().any(|other| other.get(index) != Some(key)) {

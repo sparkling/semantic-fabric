@@ -205,7 +205,9 @@ async fn multi_origin_exceeding_witness_or_byte_cap_never_completes() {
         .len() as u64;
     for (limit, ok) in [(size, true), (size - 1, false)] {
         let mut cfg = config();
-        cfg.query_limits = sf_core::query_control::QueryLimits::new(10000, 10000, 10000, limit);
+        // Only the serialized-byte cap is under test here.
+        cfg.query_limits =
+            sf_core::query_control::QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, limit);
         let response = router(Arc::new(cfg)).oneshot(request(query)).await.unwrap();
         assert_eq!(response.into_body().collect().await.is_ok(), ok);
     }

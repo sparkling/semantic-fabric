@@ -3,6 +3,7 @@ use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use sf_core::datatype::XsdTypeCode;
 
+#[cfg(test)]
 pub(super) fn value_equality(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -11,6 +12,27 @@ pub(super) fn value_equality(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    value_equality_controlled(
+        cmp,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn value_equality_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     use crate::iq::CmpOp;
     let natural = |value: &LiteralOperand| {
         natural_literal::natural(value, actuals) == Some(XsdTypeCode::Decimal)
@@ -47,24 +69,52 @@ pub(super) fn value_equality(
     // Numeric equality promotes integer/decimal values, not RDF term identity.
     // Full lexical normalization is injective on these finite values. Never
     // canonicalize the original query literal or feed this key to ordered ops.
-    let normalize = |value: &LiteralOperand| -> Option<LiteralOperand> {
-        let LiteralOperand::Constant(literal) = value else {
-            return Some(value.clone());
+    let normalize = |value: &LiteralOperand| -> Result<Option<LiteralOperand>> {
+        let literal = match value {
+            LiteralOperand::Constant(literal) => literal,
+            LiteralOperand::Column { column, spec } => {
+                // The identity comparison owns its operands: pay every owned
+                // string the copy duplicates (column, datatype, language, base).
+                for len in [
+                    column.column.len(),
+                    spec.datatype.as_ref().map_or(0, |dt| dt.as_str().len()),
+                    spec.language.as_deref().map_or(0, str::len),
+                    spec.base.as_deref().map_or(0, str::len),
+                ] {
+                    work.charge(len).map_err(source_control::validation_error)?;
+                }
+                work.charge(1).map_err(source_control::validation_error)?;
+                return Ok(Some(value.clone()));
+            }
         };
         let raw = literal.value();
+        // Prepay the integer grammar pass, decimal split/validation/trimming,
+        // canonical output and owned literal copy. Decimal output is <= n+1.
+        work.product(raw.len(), 8)
+            .map_err(source_control::validation_error)?;
+        work.charge(2).map_err(source_control::validation_error)?;
         if literal.datatype() == XsdTypeCode::Integer.iri() {
             let digits = raw.strip_prefix(['+', '-']).unwrap_or(raw);
             if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
+                return Ok(None);
             }
         }
         let mut canonical = String::new();
-        sf_core::datatype::canonical_lexical(raw, XsdTypeCode::Decimal, &mut canonical).ok()?;
-        Some(LiteralOperand::Constant(
+        // A valid str cannot exceed isize::MAX bytes, so n+1 fits usize.
+        canonical
+            .try_reserve_exact(raw.len() + 1)
+            .map_err(|_| Error::Sql("decimal normalization allocation failed".into()))?;
+        if sf_core::datatype::canonical_lexical(raw, XsdTypeCode::Decimal, &mut canonical).is_err()
+        {
+            return Ok(None);
+        }
+        work.checkpoint()
+            .map_err(source_control::validation_error)?;
+        Ok(Some(LiteralOperand::Constant(
             sf_core::Literal::new_typed_literal(canonical, XsdTypeCode::Decimal.iri()),
-        ))
+        )))
     };
-    let (Some(left), Some(right)) = (normalize(&cmp.left), normalize(&cmp.right)) else {
+    let (Some(left), Some(right)) = (normalize(&cmp.left)?, normalize(&cmp.right)?) else {
         return Ok(Some("(NULL = 1)".into()));
     };
     let identity = LiteralComparison {
@@ -72,7 +122,9 @@ pub(super) fn value_equality(
         right,
         value_op: None,
     };
-    let sql = natural_literal::comparison(&identity, dialect, catalog, actuals, params, pidx)?;
+    let sql = natural_literal::comparison_controlled(
+        &identity, dialect, catalog, actuals, params, pidx, work,
+    )?;
     Ok(sql.map(|sql| {
         if cmp.value_op == Some(CmpOp::Ne) {
             format!("NOT ({sql})")
@@ -101,6 +153,7 @@ pub(super) fn key(raw: &str, dialect: Dialect) -> String {
 mod tests {
     use super::*;
     use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
     use sf_core::{datatype::XsdTypeCode, ir::TermSpec};
 
     fn catalog(source: &LogicalSource, key: NativeScalarKey) -> ColumnCatalog {
@@ -315,6 +368,62 @@ mod tests {
                         .is_some()
                 );
                 assert_eq!(params[0], expected);
+                let budget =
+                    |n| QueryBudget::new(QueryLimits::new(u64::MAX, n, u64::MAX, u64::MAX));
+                let run = |control: &QueryBudget| {
+                    let mut values = vec![];
+                    let mut index = 0;
+                    let sql = value_equality_controlled(
+                        &cmp,
+                        dialect,
+                        &catalog,
+                        &actuals,
+                        &mut values,
+                        &mut index,
+                        sf_sql::source_work::SourceWork::new(Some(control)),
+                    )?;
+                    Ok::<_, Error>((sql, values, index))
+                };
+                let measured = budget(u64::MAX);
+                let result = run(&measured).unwrap();
+                assert_eq!(result.1, params);
+                let n = measured.consumed(QueryCharge::SourceWork);
+                assert_eq!(run(&budget(n)).unwrap(), result);
+                assert!(matches!(
+                    run(&budget(n - 1)),
+                    Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+                ));
+            }
+            {
+                // The column operand's owned strings are paid before its copy.
+                let consumed = |cmp: &LiteralComparison| {
+                    let control =
+                        QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+                    value_equality_controlled(
+                        cmp,
+                        dialect,
+                        &catalog,
+                        &actuals,
+                        &mut vec![],
+                        &mut 0,
+                        sf_sql::source_work::SourceWork::new(Some(&control)),
+                    )
+                    .unwrap()
+                    .unwrap();
+                    control.consumed(QueryCharge::SourceWork)
+                };
+                let mut typed = comparison(ColRef::new(0, "src"));
+                typed.value_op = Some(crate::iq::CmpOp::Eq);
+                let plain = consumed(&typed);
+                let datatype = XsdTypeCode::Decimal.iri();
+                typed.left = LiteralOperand::Column {
+                    column: ColRef::new(0, "src"),
+                    spec: TermSpec {
+                        datatype: Some(datatype.into_owned()),
+                        ..TermSpec::plain_literal()
+                    },
+                };
+                assert_eq!(consumed(&typed), plain + datatype.as_str().len() as u64);
             }
             for (lexical, code) in [
                 ("1.0", XsdTypeCode::Integer),

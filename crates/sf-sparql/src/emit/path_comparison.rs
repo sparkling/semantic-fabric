@@ -43,7 +43,8 @@ pub(super) fn path_key_expression(
     }
 }
 
-fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
+#[cfg(test)]
+pub(super) fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
     match hop {
         HopExpr::Pred(rel) => (
             source_text(&rel.source, &rel.subj_col, catalog).is_some(),
@@ -65,31 +66,15 @@ fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
     }
 }
 
-pub(super) fn path_actuals(path: &PathClosure, catalog: &ColumnCatalog) -> AliasActuals {
-    let (s, o) = hop_text(&path.hop, catalog);
-    let mut text_columns = HashMap::new();
-    if s {
-        text_columns.insert("sf_s".into(), TextKey::Verbatim);
-    }
-    if o {
-        text_columns.insert("sf_o".into(), TextKey::Verbatim);
-    }
-    AliasActuals {
-        datatype_columns: HashMap::new(),
-        natural_columns: HashMap::new(),
-        scalar_columns: HashMap::new(),
-        sqlite_columns: HashMap::new(),
-        lexical_columns: HashMap::new(),
-        lexical_comparison_columns: HashMap::new(),
-        source_kind: AliasSourceKind::Derived,
-        columns: vec!["sf_s".into(), "sf_o".into()],
-        path: true,
-        text_columns,
-        static_iri_columns: HashSet::new(),
-        iri_unreserved_columns: HashSet::new(),
-    }
+pub(super) fn path_actuals_controlled(
+    path: &PathClosure,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<AliasActuals> {
+    super::metadata_path::actuals(path, catalog, work)
 }
 
+#[cfg(test)]
 fn condition_has_path(cond: &SqlCond) -> bool {
     match cond {
         SqlCond::PathExists { .. } => true,
@@ -105,6 +90,7 @@ fn condition_has_path(cond: &SqlCond) -> bool {
     }
 }
 
+#[cfg(test)]
 pub(super) fn branch_has_path(branch: &Branch) -> bool {
     branch.path.is_some()
         || branch
@@ -186,210 +172,24 @@ pub(super) fn rdf_text_column(
     }
 }
 
+#[cfg(test)]
 pub(super) fn subplan_actuals(
     plan: &crate::Plan,
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> AliasActuals {
-    #[cfg(test)]
+    super::metadata::subplan_actuals_controlled(
+        plan,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+    .expect("uncontrolled subplan metadata")
+}
+
+#[cfg(test)]
+pub(super) fn metadata_visit() {
     METADATA_VISITS.with(|visits| visits.set(visits.get() + 1));
-    let mut width = 0;
-    let mut common: Option<HashMap<usize, TextKey>> = None;
-    let mut common_static_iris: Option<HashSet<usize>> = None;
-    let mut common_scalars: Option<HashMap<usize, NativeScalarKey>> = None;
-    let mut common_datatypes = None;
-    let mut common_temporals: Option<HashMap<usize, Option<sf_core::datatype::XsdTypeCode>>> = None;
-    for branch in &plan.branches {
-        let effective_distinct = if plan.branches.len() == 1 {
-            plan.distinct
-        } else {
-            branch.distinct
-        };
-        let projection = source_projection(branch, effective_distinct, dialect);
-        width = width.max(projection.len());
-        let actuals = branch_actuals(branch, dialect, catalog);
-        literal_datatype::merge(
-            &mut common_datatypes,
-            projection
-                .iter()
-                .enumerate()
-                .filter_map(|(index, column)| {
-                    column
-                        .as_ref()
-                        .and_then(|column| literal_datatype::fact(column, &actuals))
-                        .map(|code| {
-                            (
-                                index,
-                                literal_datatype::after_union(code, dialect, plan.branches.len()),
-                            )
-                        })
-                })
-                .collect(),
-        );
-        let temporals = projection
-            .iter()
-            .enumerate()
-            .filter_map(|(index, column)| {
-                column
-                    .as_ref()
-                    .and_then(|column| natural_literal::column_fact(column, &actuals))
-                    // MySQL UNION caps decimal precision at 65 while growing
-                    // scale: even two DECIMAL arms can lose integral digits.
-                    .map(|code| {
-                        if dialect == Dialect::MySql
-                            && plan.branches.len() > 1
-                            && code == Some(sf_core::datatype::XsdTypeCode::Decimal)
-                        {
-                            None
-                        } else {
-                            literal_datatype::after_union(code, dialect, plan.branches.len())
-                        }
-                    })
-                    .map(|code| (index, code))
-            })
-            .collect::<HashMap<_, _>>();
-        match common_temporals.as_mut() {
-            None => common_temporals = Some(temporals),
-            Some(common) => {
-                for (index, code) in common.iter_mut() {
-                    if temporals.get(index) != Some(code) {
-                        *code = None;
-                    }
-                }
-                for index in temporals.keys() {
-                    common.entry(*index).or_insert(None);
-                }
-            }
-        }
-        let scalars: HashMap<_, _> = projection
-            .iter()
-            .enumerate()
-            .filter_map(|(index, column)| {
-                column
-                    .as_ref()
-                    .and_then(|column| iri_cmp::scalar_column(column, &actuals))
-                    .filter(|key| {
-                        !matches!(
-                            key,
-                            NativeScalarKey::MysqlDate | NativeScalarKey::MysqlDateTime
-                        )
-                    })
-                    // UNION can change decimal display, BIT width/type or
-                    // temporal representation. No pre-coercion proof carries over.
-                    .filter(|key| {
-                        plan.branches.len() == 1
-                            || !matches!(
-                                key,
-                                NativeScalarKey::MysqlDecimal
-                                    | NativeScalarKey::MysqlFloat4
-                                    | NativeScalarKey::MysqlFloat8
-                                    | NativeScalarKey::MysqlBit
-                                    | NativeScalarKey::MysqlTimestamp
-                                    | NativeScalarKey::MysqlTime
-                            )
-                    })
-                    .map(|key| (index, key))
-            })
-            .collect();
-        match common_scalars.as_mut() {
-            None => common_scalars = Some(scalars),
-            Some(common) => common.retain(|index, key| scalars.get(index) == Some(key)),
-        }
-        let text: HashMap<_, _> = projection
-            .iter()
-            .enumerate()
-            .filter_map(|(index, column)| {
-                column
-                    .as_ref()
-                    .and_then(|column| column_text(column, &actuals))
-                    .map(|key| {
-                        (
-                            index,
-                            if branch.agg.is_none()
-                                && branch.path.is_none()
-                                && (plan.distinct || effective_distinct)
-                                && !crate::cascade::eligible_for_term_dedup_with_distinct(
-                                    branch,
-                                    effective_distinct,
-                                )
-                            {
-                                TextKey::Verbatim
-                            } else {
-                                key
-                            },
-                        )
-                    })
-            })
-            .collect();
-        match common.as_mut() {
-            None => common = Some(text),
-            Some(common) => common.retain(|index, key| text.get(index) == Some(key)),
-        }
-        let static_iris = projection
-            .iter()
-            .enumerate()
-            .filter_map(|(index, column)| {
-                column.as_ref().and_then(|column| {
-                    iri_cmp::static_iri_column(column, &actuals).then_some(index)
-                })
-            })
-            .collect::<HashSet<_>>();
-        match common_static_iris.as_mut() {
-            None => common_static_iris = Some(static_iris),
-            Some(common) => common.retain(|index| static_iris.contains(index)),
-        }
-    }
-    // Equal XSD double types do not prove equal native float decoders. A
-    // FLOAT4/FLOAT8 UNION widens the former and changes Rust's raw spelling.
-    if dialect == Dialect::Postgres {
-        for (index, code) in common_temporals.iter_mut().flat_map(|keys| keys.iter_mut()) {
-            if *code == Some(sf_core::datatype::XsdTypeCode::Double)
-                && !common_scalars
-                    .as_ref()
-                    .and_then(|keys| keys.get(index))
-                    .is_some_and(|key| pg_float::is_float(*key))
-            {
-                *code = None;
-            }
-        }
-    }
-    let columns: Vec<_> = (0..width).map(|i| format!("c{i}")).collect();
-    let text_columns = common
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(i, key)| (format!("c{i}"), key))
-        .collect();
-    AliasActuals {
-        datatype_columns: common_datatypes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(i, code)| (format!("c{i}"), code))
-            .collect(),
-        natural_columns: common_temporals
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(i, code)| (format!("c{i}"), code))
-            .collect(),
-        scalar_columns: common_scalars
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(i, key)| (format!("c{i}"), key))
-            .collect(),
-        sqlite_columns: HashMap::new(),
-        lexical_columns: HashMap::new(),
-        lexical_comparison_columns: HashMap::new(),
-        source_kind: AliasSourceKind::Derived,
-        columns,
-        path: plan.branches.iter().any(branch_has_path),
-        text_columns,
-        static_iri_columns: common_static_iris
-            .unwrap_or_default()
-            .into_iter()
-            .map(|i| format!("c{i}"))
-            .collect(),
-        // Conservatively discard this optimization across pooled outputs.
-        iri_unreserved_columns: HashSet::new(),
-    }
 }
 
 pub(super) fn render_key_equality(

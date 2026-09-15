@@ -144,6 +144,21 @@ pub trait SqlBackend {
             .collect())
     }
 
+    /// Request-controlled metadata seam. The compatibility default only checks
+    /// terminal state; it does not qualify an adapter's metadata allocations.
+    /// Admitted serving adapters must override this or retain the identical
+    /// request control in their owned metadata worker.
+    async fn result_columns_controlled(
+        &mut self,
+        probe_sql: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Vec<ResultColumn>> {
+        control.checkpoint()?;
+        let columns = self.result_columns(probe_sql).await?;
+        control.checkpoint()?;
+        Ok(columns)
+    }
+
     /// `metadata_sql` is a compiler-generated, prepare-only twin with identical
     /// output positions, omitting only engine-added comparison decorations.
     /// SQLite uses it because COLLATE otherwise erases declared result types.

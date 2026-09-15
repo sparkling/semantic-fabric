@@ -243,23 +243,30 @@ impl SqlBackend for SqliteOwnedBackend {
         let lease = self.lease.clone();
         let control = self.control.clone();
         let observer = self.observer.clone();
-        let probe_sql = probe_sql.to_owned();
+        let probe_sql =
+            crate::source_work::SourceWork::new(control.as_deref()).string(probe_sql)?;
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
             let control = control;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
-            let cancellation = match control {
+            let cancellation = match control.as_ref() {
                 Some(control) => {
                     control.checkpoint()?;
-                    Some(SqliteCancellationGuard::install(&guard, control, observer)?)
+                    Some(SqliteCancellationGuard::install(
+                        &guard,
+                        control.clone(),
+                        observer,
+                    )?)
                 }
                 None => None,
             };
-            super::result_columns(&guard, &probe_sql).map_err(|error| match cancellation {
-                Some(cancellation) => cancellation.map_error(error),
-                None => error,
-            })
+            super::result_columns_with_control(&guard, &probe_sql, control.as_deref()).map_err(
+                |error| match cancellation {
+                    Some(cancellation) => cancellation.map_error(error),
+                    None => error,
+                },
+            )
         })
         .await
         .map_err(|e| Error::Introspection(format!("result_columns worker join error: {e}")))?
@@ -371,18 +378,21 @@ impl SqlBackend for SqliteOwnedBackend {
                     return;
                 }
             };
-            let (decl_codes, pads, nproj) =
-                match column_meta(&guard, metadata_sql.as_deref().unwrap_or(&sql)) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        let error = match cancellation.as_ref() {
-                            Some(cancellation) => cancellation.map_error(e),
-                            None => e,
-                        };
-                        send_error(&tx, control.as_deref(), error);
-                        return;
-                    }
-                };
+            let (decl_codes, pads, nproj) = match column_meta(
+                &guard,
+                metadata_sql.as_deref().unwrap_or(&sql),
+                control.as_deref(),
+            ) {
+                Ok(m) => m,
+                Err(e) => {
+                    let error = match cancellation.as_ref() {
+                        Some(cancellation) => cancellation.map_error(e),
+                        None => e,
+                    };
+                    send_error(&tx, control.as_deref(), error);
+                    return;
+                }
+            };
             observer.observe(SqliteCancellationEvent::MetadataReady);
             if let Some(control) = control.as_ref() {
                 if let Err(error) = control.checkpoint() {

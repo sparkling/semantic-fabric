@@ -76,7 +76,8 @@ fn missing_or_native_decoder_never_authorizes_raw_iri_equality() {
                 &ColumnCatalog::default(),
                 &ActualColumns::default(),
                 &mut vec![],
-                &mut 0
+                &mut 0,
+                sf_sql::source_work::SourceWork::new(None),
             ),
             Err(Error::Unsupported(_))
         ));
@@ -101,6 +102,7 @@ fn zero_slot_template_registers_its_finalizer_without_a_column_decoder() {
         &ActualColumns::default(),
         &mut params,
         &mut 0,
+        sf_sql::source_work::SourceWork::new(None),
     )
     .unwrap();
     assert!(sql.contains("__sf_iri_key_v1"));
@@ -194,6 +196,7 @@ fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
             &HashMap::from([(7, actual)]),
             &mut params,
             &mut 0,
+            sf_sql::source_work::SourceWork::new(None),
         )
         .unwrap();
         assert!(sql.contains(expression), "{sql}");
@@ -222,7 +225,8 @@ fn native_scalar_proof_survives_raw_projection_but_not_names_only_refresh() {
                 &catalog,
                 &actuals,
                 &mut vec![],
-                &mut 0
+                &mut 0,
+                sf_sql::source_work::SourceWork::new(None),
             ),
             Err(Error::Unsupported(_))
         ));
@@ -272,6 +276,7 @@ fn native_static_templates_require_live_decoder_facts_and_preserve_char_padding(
                 &actuals,
                 &mut vec![],
                 &mut 0,
+                sf_sql::source_work::SourceWork::new(None),
             );
             if key.is_none() {
                 assert!(
@@ -332,7 +337,8 @@ fn mysql_float4_template_key_is_only_a_retained_fixed_ascii_recipe() {
         &ColumnCatalog::default(),
         &ActualColumns::new(),
         &mut vec![],
-        &mut 0
+        &mut 0,
+        sf_sql::source_work::SourceWork::new(None),
     )
     .is_err());
 }

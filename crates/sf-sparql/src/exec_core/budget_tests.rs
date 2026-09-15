@@ -118,6 +118,56 @@ fn assert_calls(calls: &Calls, probes: usize, opens: usize, pulls: usize) {
     assert_eq!(calls.pulls.load(Ordering::Relaxed), pulls);
 }
 
+// These tests isolate cursor/result boundaries. Pay the independently measured
+// preparation prerequisite, retaining their original probe/open/pull allowance.
+fn preparation_work(plan: &Plan) -> u64 {
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let work = sf_sql::source_work::SourceWork::new(Some(&control));
+    let branches = &plan.branches;
+    let mut seen = crate::emit::SourceSet::default();
+    let mut catalog = crate::emit::ColumnCatalog::default();
+    for source in crate::emit::live_metadata_sources_controlled(branches, &control).unwrap() {
+        if seen.insert(source, &control).unwrap() {
+            crate::emit::source_probe_controlled(source, plan.dialect, &control).unwrap();
+            catalog
+                .insert_live_result_controlled(
+                    source,
+                    vec![sf_sql::backend::ResultColumn {
+                        name: "value".into(),
+                        natural_datatype: None,
+                        native_scalar: None,
+                        text_key: None,
+                        sqlite_decode: None,
+                    }],
+                    &control,
+                )
+                .unwrap();
+        }
+    }
+    crate::emit::validate_live_columns_controlled(branches, plan.dialect, &catalog, work).unwrap();
+    let grouping = plan.rust_group.is_some();
+    for branch in branches {
+        let emitted = crate::emit::emit_branch_controlled(
+            branch,
+            plan.dialect,
+            &catalog,
+            crate::emit::BranchModifiers::prepared(
+                branch,
+                branches.len() == 1,
+                !grouping && plan.distinct,
+                grouping || plan.order.is_empty(),
+                if grouping { None } else { plan.limit },
+                if grouping { 0 } else { plan.offset },
+            ),
+            work,
+        )
+        .unwrap();
+        super::row::build_col_index_controlled(&emitted.projection, work).unwrap();
+        super::row::intern_bindings_controlled(branch, work).unwrap();
+    }
+    control.consumed(QueryCharge::SourceWork)
+}
+
 #[test]
 fn zero_source_budget_rejects_before_metadata_or_branch_io() {
     let plan = plan(
@@ -160,7 +210,8 @@ fn offset_discarded_rows_charge_every_pull_attempt() {
     );
     plan.offset = usize::MAX;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")], Vec::new()]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 7, 0, u64::MAX));
+    let source = preparation_work(&plan) + 7;
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, source, 0, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
     super::block_on(select_each_async_controlled(
@@ -175,7 +226,7 @@ fn offset_discarded_rows_charge_every_pull_attempt() {
     .unwrap();
 
     assert_calls(&calls, 1, 2, 4);
-    assert_eq!(budget.consumed(QueryCharge::SourceWork), 7);
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), source);
     assert_eq!(budget.consumed(QueryCharge::ResultItems), 0);
     assert_eq!(sinks.load(Ordering::Relaxed), 0);
 }
@@ -189,7 +240,12 @@ fn select_result_budget_rejects_before_over_limit_sink() {
         vec![column_branch(0)],
     );
     let (mut backend, _) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 2, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 10,
+        2,
+        u64::MAX,
+    ));
     let sinks = AtomicUsize::new(0);
 
     let error = super::block_on(select_each_async_controlled(
@@ -233,7 +289,8 @@ fn ordered_retained_payload_has_an_exact_typed_high_water_limit() {
     let exact = expected.retained_payload_bytes().unwrap();
 
     let (mut exact_backend, _) = backend(vec![vec![row("payload")]]);
-    let limits = QueryLimits::new(u64::MAX, 10, 1, u64::MAX).with_max_retained_bytes(exact);
+    let limits = QueryLimits::new(u64::MAX, preparation_work(&plan) + 10, 1, u64::MAX)
+        .with_max_retained_bytes(exact);
     let budget = QueryBudget::new(limits);
     super::block_on(select_each_async_controlled(
         &plan,
@@ -245,7 +302,8 @@ fn ordered_retained_payload_has_an_exact_typed_high_water_limit() {
     assert_eq!(budget.consumed(QueryCharge::RetainedBytes), exact);
 
     let (mut backend, _) = backend(vec![vec![row("payload")]]);
-    let limits = QueryLimits::new(u64::MAX, 10, 1, u64::MAX).with_max_retained_bytes(exact - 1);
+    let limits = QueryLimits::new(u64::MAX, preparation_work(&plan) + 10, 1, u64::MAX)
+        .with_max_retained_bytes(exact - 1);
     let budget = QueryBudget::new(limits);
     let error = super::block_on(select_each_async_controlled(
         &plan,
@@ -279,7 +337,12 @@ fn construct_budget_counts_triples_not_solutions() {
         vec![column_branch(0)],
     );
     let (mut backend, _) = backend(vec![vec![row("one")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 10,
+        1,
+        u64::MAX,
+    ));
     let sinks = AtomicUsize::new(0);
 
     let error = super::block_on(construct_each_async_controlled(
@@ -306,7 +369,12 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
     for (rows, expected) in [(vec![row("one"), row("two")], true), (Vec::new(), false)] {
         let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
         let (mut backend, _) = backend(vec![rows]);
-        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 1, u64::MAX));
+        let budget = QueryBudget::new(QueryLimits::new(
+            u64::MAX,
+            preparation_work(&plan) + 10,
+            1,
+            u64::MAX,
+        ));
 
         assert_eq!(
             super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap(),
@@ -320,11 +388,12 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
 fn ask_stops_after_the_first_solution_and_its_pull() {
     let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 3, 1, u64::MAX));
+    let source = preparation_work(&plan) + 3;
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, source, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 1);
-    assert_eq!(budget.consumed(QueryCharge::SourceWork), 3);
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), source);
     assert_eq!(budget.consumed(QueryCharge::ResultItems), 1);
 }
 
@@ -338,11 +407,19 @@ fn ask_does_not_truncate_the_inner_rows_of_rust_group() {
         post_exprs: Vec::new(),
     });
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 5, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 5,
+        1,
+        u64::MAX,
+    ));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 3);
-    assert_eq!(budget.consumed(QueryCharge::SourceWork), 5);
+    assert_eq!(
+        budget.consumed(QueryCharge::SourceWork),
+        preparation_work(&plan) + 5
+    );
 }
 
 #[test]
@@ -355,7 +432,12 @@ fn ask_ignores_order_but_still_applies_a_single_branch_offset() {
     }];
     plan.offset = 3;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 5, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 5,
+        1,
+        u64::MAX,
+    ));
 
     assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 3);
@@ -371,7 +453,12 @@ fn ordered_ask_stops_after_the_first_post_offset_solution() {
     }];
     plan.offset = 1;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 4, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 4,
+        1,
+        u64::MAX,
+    ));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 2);

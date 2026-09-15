@@ -31,6 +31,34 @@ fn setup(kind: &str, key: Option<TextKey>) -> (LiteralComparison, ColumnCatalog,
 }
 
 #[test]
+fn constant_parse_is_paid_by_lexical_length_before_display() {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let (_, catalog, actuals) = setup("double", Some(TextKey::Verbatim));
+    let consumed = |lexical: &str| {
+        let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+        let value = LiteralOperand::Constant(Literal::new_typed_literal(
+            lexical,
+            XsdTypeCode::Double.iri(),
+        ));
+        operand(
+            &value,
+            true,
+            &catalog,
+            &actuals,
+            &mut vec![],
+            &mut 0,
+            sf_sql::source_work::SourceWork::new(Some(&control)),
+        )
+        .unwrap();
+        control.consumed(QueryCharge::SourceWork)
+    };
+    let zeros = "0".repeat(100);
+    assert_eq!(consumed(&format!("1.0{zeros}")), consumed("1.0") + 400);
+    // A rejected lexical still pays the scan that rejects it.
+    assert_eq!(consumed(&format!("x{zeros}")), consumed("x") + 400);
+}
+
+#[test]
 fn mysql_floating_ast_and_anonymous_bind_order() {
     for kind in ["float", "double", "decimal", "integer", "byte"] {
         let (mut cmp, catalog, actuals) = setup(kind, Some(TextKey::Verbatim));

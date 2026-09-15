@@ -28,6 +28,7 @@ pub mod error;
 pub mod introspect;
 pub mod policy_projection;
 pub mod schema;
+pub mod source_work;
 pub mod stream;
 
 pub use backend::{BranchStream, RawTuple, SqlBackend};

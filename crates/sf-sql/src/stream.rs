@@ -61,13 +61,35 @@ pub fn sqlite_column_decltypes(
     conn: &rusqlite::Connection,
     sql: &str,
 ) -> Result<Vec<Option<String>>> {
+    sqlite_column_decltypes_controlled(conn, sql, crate::source_work::SourceWork::new(None))
+}
+
+/// The same declared types, admitting every scan, parse and copy the recovery
+/// performs against the request's own source control.
+pub fn sqlite_column_decltypes_controlled(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    work: crate::source_work::SourceWork<'_>,
+) -> Result<Vec<Option<String>>> {
+    work.checkpoint()?;
     let stmt = conn.prepare(sql)?;
-    let declared: Vec<_> = stmt
-        .columns()
-        .iter()
-        .map(|c| c.decl_type().map(str::to_owned))
-        .collect();
-    sqlite_metadata::recover_collated_decltypes(conn, sql, declared)
+    // rusqlite builds a borrowed descriptor vector in columns().
+    work.product(
+        stmt.column_count(),
+        std::mem::size_of::<rusqlite::Column<'_>>(),
+    )?;
+    let columns = stmt.columns();
+    let mut declared = work.vector(columns.len())?;
+    for column in &columns {
+        work.charge(1)?;
+        declared.push(
+            column
+                .decl_type()
+                .map(|name| work.string(name))
+                .transpose()?,
+        );
+    }
+    sqlite_metadata::recover_collated_decltypes_controlled(conn, sql, declared, work)
 }
 
 /// The result-set column **names** of `sql`, in projection order (R2RML §5.1: an

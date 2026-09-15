@@ -2,6 +2,157 @@ use super::*;
 use crate::iq::{OptJoin, ScanSource};
 use sf_core::ir::Template;
 
+#[test]
+fn dedup_wrapper_walk_borrows_deep_plans_and_preserves_prepared_modifiers() {
+    use crate::exec_core::dedup_scope_runtime::validate_runtime_scopes;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut branch = column_branch(0, LogicalSource::Table("t".into()), "c0");
+            let keys = branch.bindings.clone();
+            for _ in 0..4096 {
+                // An unordered single-branch plan replaces these stored modifiers.
+                branch.limit = Some(7);
+                branch.offset = 3;
+                branch.distinct = true;
+                let nested = select_plan(vec![branch]);
+                branch = Branch::empty();
+                branch.bindings = keys.clone();
+                branch.subplan_joins.push(crate::iq::SubPlanJoin {
+                    alias: 0,
+                    plan: Box::new(nested),
+                    on: vec![],
+                    left: false,
+                });
+            }
+            let branches = vec![
+                branch,
+                column_branch(0, LogicalSource::Table("t".into()), "c0"),
+            ];
+            let scopes = vec![
+                Some(DedupScope {
+                    group_id: 1,
+                    key_bindings: keys.clone(),
+                }),
+                Some(DedupScope {
+                    group_id: 1,
+                    key_bindings: keys,
+                }),
+            ];
+            let budget =
+                |units| QueryBudget::new(QueryLimits::new(u64::MAX, units, u64::MAX, u64::MAX));
+            let measured = budget(u64::MAX);
+            assert!(validate_runtime_scopes(&branches, &scopes, &measured).unwrap());
+            let units = measured.consumed(QueryCharge::SourceWork);
+            assert!(validate_runtime_scopes(&branches, &scopes, &budget(units)).unwrap());
+            assert!(matches!(
+                validate_runtime_scopes(&branches, &scopes, &budget(units - 1)),
+                Err(crate::Error::QueryControl(
+                    QueryControlError::SourceWorkExceeded
+                ))
+            ));
+            let overlay = budget(u64::MAX);
+            assert!(!super::super::driver::source_prepare::requires_key_overlay(
+                &branches,
+                &scopes,
+                sf_sql::source_work::SourceWork::new(Some(&overlay)),
+            )
+            .unwrap());
+            let mut plan = select_plan(branches);
+            plan.dedup_scopes = scopes;
+            let control = budget(units + overlay.consumed(QueryCharge::SourceWork));
+            let mut backend = backend_with(vec![]);
+            assert!(matches!(
+                super::super::block_on(super::super::driver::for_each_solution_controlled(
+                    &plan,
+                    &mut backend,
+                    &control,
+                    |_, _| Ok(std::future::ready(Ok(()))),
+                )),
+                Err(crate::Error::QueryControl(
+                    QueryControlError::SourceWorkExceeded
+                ))
+            ));
+            assert!(backend.probes.is_empty());
+            assert_eq!(backend.opens, 0);
+            let previous = plan.branches[0]
+                .bindings
+                .insert(
+                    "v".into(),
+                    TermDef::Const(sf_core::Literal::new_simple_literal("collision").into()),
+                )
+                .unwrap();
+            assert!(
+                matches!(super::super::block_on(super::super::driver::for_each_solution_controlled(
+                &plan, &mut backend, &budget(u64::MAX), |_, _| Ok(std::future::ready(Ok(()))),
+            )), Err(crate::Error::Unsupported(message)) if message.contains("key collides"))
+            );
+            assert!(backend.probes.is_empty());
+            assert_eq!(backend.opens, 0);
+            plan.branches[0].bindings.insert("v".into(), previous);
+            let mut branches = plan.branches;
+            let scopes = plan.dedup_scopes;
+            // Root modifiers have no enclosing plan override and must still refuse.
+            branches[0].limit = Some(1);
+            assert!(validate_runtime_scopes(&branches, &scopes, &budget(u64::MAX)).is_err());
+            branches[0].limit = None;
+            // Ordered plans do not clear stored branch slices during preparation.
+            branches[0].subplan_joins[0]
+                .plan
+                .order
+                .push(crate::iq::OrderKey {
+                    var: "v".into(),
+                    descending: false,
+                    expr: None,
+                });
+            assert!(validate_runtime_scopes(&branches, &scopes, &budget(u64::MAX)).is_err());
+            // Recursive IQ Drop is separate; test zero/nonzero modifier preparation.
+            let mut zero = select_plan(vec![branches.remove(0)]);
+            zero.limit = Some(0);
+            zero.branches[0].distinct = true;
+            let mut backend = backend_with(vec![]);
+            assert!(run_select(&zero, &mut backend).unwrap().rows.is_empty());
+            zero.rust_group = Some(crate::iq::RustGroup {
+                keys: vec![],
+                aggs: vec![],
+                post_exprs: vec![],
+            });
+            assert!(run_select(&zero, &mut backend).unwrap().rows.is_empty());
+            assert!(backend.probes.is_empty());
+            assert_eq!(backend.opens, 0);
+            zero.limit = Some(1);
+            for grouped in [true, false] {
+                if !grouped {
+                    zero.rust_group = None;
+                }
+                let control = budget(0);
+                assert!(matches!(
+                    super::super::block_on(super::super::driver::for_each_solution_controlled(
+                        &zero,
+                        &mut backend,
+                        &control,
+                        |_, _| Ok(std::future::ready(Ok(()))),
+                    )),
+                    Err(crate::Error::QueryControl(
+                        QueryControlError::SourceWorkExceeded
+                    ))
+                ));
+                assert!(backend.probes.is_empty());
+                assert_eq!(backend.opens, 0);
+            }
+            branches.push(zero.branches.pop().unwrap());
+            for mut branch in branches {
+                while let Some(mut join) = branch.subplan_joins.pop() {
+                    branch = join.plan.branches.pop().unwrap();
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn projected(source: LogicalSource) -> Scan {
     Scan {
         alias: 7,

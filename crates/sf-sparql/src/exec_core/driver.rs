@@ -18,8 +18,11 @@ use super::batch::{reconstruct_batch, TERM_GEN_BATCH_SIZE, TERM_GEN_FIRST_BATCH_
 use super::expression::eval_expr;
 use super::forms::rust_group_execute;
 use super::order::{compact_to_window, sorted_indices};
-use super::row::{build_col_index, canonical_pairs, intern_bindings, Bindings};
+use super::row::{build_col_index_controlled, canonical_pairs, Bindings};
 use super::sql_error::map_sql_err;
+
+#[path = "source_prepare.rs"]
+pub(super) mod source_prepare;
 
 /// Drive an always-ready future to completion with no runtime (design §5 M2).
 /// SQLite's cooperative `Pending` checkpoint is immediately re-polled here.
@@ -74,11 +77,7 @@ fn inject_order_expr_keys(order: &[OrderKey], bindings: Bindings) -> Bindings {
         for key in order {
             if let Some(expr) = &key.expr {
                 if let Some(val) = eval_expr(expr, &b) {
-                    // Not pre-interned like `intern_bindings` below (Run 4 Wave
-                    // C1): an expression-based ORDER BY key is rare and this
-                    // fires O(order.len()) times per row, nowhere near the
-                    // O(branch.bindings.len())-per-row volume that makes
-                    // `reconstruct`'s interning worth it.
+                    // ORDER expression keys are sparse; recipe names are interned separately.
                     b.insert(Arc::from(key.var.as_str()), val);
                 }
             }
@@ -119,10 +118,17 @@ where
     Fut: Future<Output = Result<()>>,
 {
     control.checkpoint()?;
+    // LIMIT 0 is source-independent for every form, grouped plans included: it
+    // answers empty before any source probe, SQL or deep-plan descent, so a
+    // missing or failing source is not reported. Serving admission relies on
+    // this order, and it keeps a modifier difference from cloning a deep
+    // single-branch plan.
+    if plan.limit == Some(0) {
+        return Ok(());
+    }
     if let Some(rg) = &plan.rust_group {
         return rust_group_execute(plan, b, rg, control, sink).await;
     }
-    let branches = plan.prepared_branches();
     let ctx = PlanCtx {
         dialect: plan.dialect,
         distinct: plan.distinct,
@@ -137,13 +143,10 @@ where
         dedup_scopes: &plan.dedup_scopes,
         control,
     };
-    run_branches(&branches, ctx, b, sink).await
+    run_branches(&plan.branches, ctx, b, sink).await
 }
-/// The scalar [`Plan`] fields [`run_branches`] needs, threaded independently of
-/// `branches` — decoupled so [`rust_group_execute`]'s inner-collection call can
-/// override just the modifiers ([`Plan::prepared_branches`]'s single-branch
-/// push-down values) without cloning the whole `Plan` first (see `run_branches`'
-/// doc comment).
+/// Scalar plan fields allow [`rust_group_execute`] to override inner modifiers
+/// without cloning the whole plan before [`run_branches`].
 pub(super) struct PlanCtx<'a> {
     pub(super) dialect: Dialect,
     pub(super) distinct: bool,
@@ -163,10 +166,9 @@ pub(super) struct PlanCtx<'a> {
     pub(super) control: &'a dyn QueryControl,
 }
 
-/// Non-recursive streaming loop reused by `rust_group_execute` for inner
-/// collection. It takes prepared branches plus [`PlanCtx`] so that caller does
-/// not clone a whole `Plan` only to repeat [`Plan::prepared_branches`]
-/// (ADR-0024/M4).
+/// Borrowed branches plus scalar modifier overlays; grouped inner execution uses
+/// the same loop without copying the recursive plan. Sinks consume bindings and
+/// branch source identity, not the prepared DISTINCT/LIMIT/OFFSET fields.
 pub(super) async fn run_branches<B, F, Fut>(
     branches: &[Branch],
     ctx: PlanCtx<'_>,
@@ -186,89 +188,97 @@ where
     // The post-cascade lift normally guarantees alignment. Keep this boundary
     // fail-closed for hand-built/internal Plans before metadata probing or SQL
     // emission can perform I/O.
-    if !ctx.dedup_scopes.is_empty() && ctx.dedup_scopes.len() != branches.len() {
-        return Err(Error::Unsupported(
-            "shared term-dedup branch ownership is malformed -> 501".to_owned(),
-        ));
-    }
-    let mut scope_keys =
-        std::collections::HashMap::<usize, std::collections::BTreeSet<String>>::new();
-    let mut scope_counts = std::collections::HashMap::<usize, usize>::new();
-    for (branch, scope) in branches.iter().zip(ctx.dedup_scopes) {
-        let Some(scope) = scope else { continue };
-        super::dedup_scope_runtime::validate_runtime_scope(branch, scope)?;
-        let keys: std::collections::BTreeSet<String> = scope.key_bindings.keys().cloned().collect();
-        if keys.is_empty()
-            || scope_keys
-                .insert(scope.group_id, keys.clone())
-                .is_some_and(|existing| existing != keys)
-        {
-            return Err(Error::Unsupported(
-                "shared term-dedup key metadata is malformed -> 501".to_owned(),
-            ));
-        }
-        *scope_counts.entry(scope.group_id).or_default() += 1;
-    }
-    if scope_counts.values().any(|count| *count < 2) {
-        return Err(Error::Unsupported(
-            "shared term-dedup group no longer spans two executable branches -> 501".to_owned(),
-        ));
-    }
-    // Overlay hidden BGP-boundary key definitions only onto this execution's
-    // private branch clone. The cached Plan and public SELECT projection remain
-    // unchanged, while SQL emission/reconstruction can still dedup before the
-    // later outer projection.
-    let mut execution_branches = if ctx.dedup_scopes.is_empty() {
-        None
-    } else {
-        Some(branches.to_vec())
+    let single = branches.len() == 1;
+    let modifiers = |branch: &Branch| {
+        emit::BranchModifiers::prepared(
+            branch,
+            single,
+            ctx.distinct,
+            ctx.order.is_empty(),
+            ctx.limit,
+            ctx.offset,
+        )
     };
-    if let Some(scoped) = &mut execution_branches {
-        for (branch, scope) in scoped.iter_mut().zip(ctx.dedup_scopes) {
-            if let Some(scope) = scope {
-                super::dedup_scope::overlay_key_bindings(branch, &scope.key_bindings)?;
-            }
-        }
+    let has_scopes = super::dedup_scope_runtime::validate_runtime_scopes_with_slice(
+        branches,
+        ctx.dedup_scopes,
+        ctx.control,
+        (single && ctx.order.is_empty()).then_some((ctx.limit, ctx.offset)),
+    )?;
+    // Prove collisions before borrowing hidden keys; never copy cached branch forests.
+    if has_scopes {
+        source_prepare::requires_key_overlay(
+            branches,
+            ctx.dedup_scopes,
+            sf_sql::source_work::SourceWork::new(Some(ctx.control)),
+        )?;
     }
-    let branches = execution_branches.as_deref().unwrap_or(branches);
-    // Fail-closed live metadata preflight: probe every distinct logical source
-    // before opening any branch. Dedup uses the tagged Table/Query identity, not
-    // probe SQL text (the two variants can deliberately render identical probes).
+    // Preflight all tagged Table/Query identities before any branch opens.
     let mut catalog = ColumnCatalog::default();
-    let mut seen_sources = std::collections::HashSet::new();
-    for source in emit::live_metadata_sources(branches) {
-        if !seen_sources.insert(emit::logical_source_identity(source)) {
+    let mut seen_sources = emit::SourceSet::default();
+    for source in
+        emit::live_metadata_sources_controlled(branches, ctx.control).map_err(map_sql_err)?
+    {
+        if !seen_sources
+            .insert(source, ctx.control)
+            .map_err(map_sql_err)?
+        {
             continue;
         }
-        let probe = ctx.dialect.probe_sql(source);
+        let probe =
+            emit::source_probe_controlled(source, ctx.dialect, ctx.control).map_err(map_sql_err)?;
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
-        let columns = b.result_columns(&probe).await.map_err(map_sql_err)?;
-        catalog.insert_live_result(source, columns)?;
+        let columns = b
+            .result_columns_controlled(&probe, ctx.control)
+            .await
+            .map_err(map_sql_err)?;
+        catalog
+            .insert_live_result_controlled(source, columns, ctx.control)
+            .map_err(map_sql_err)?;
     }
     ctx.control.checkpoint()?;
-    emit::validate_live_columns(branches, ctx.dialect, &catalog)?;
+    emit::validate_execution_columns(
+        branches,
+        ctx.dedup_scopes,
+        ctx.dialect,
+        &catalog,
+        sf_sql::source_work::SourceWork::new(Some(ctx.control)),
+    )?;
     // Emission is part of the same preflight. A malformed later branch must fail
     // before an earlier branch can open a cursor or expose a partial result.
     let emitted_branches = branches
         .iter()
-        .map(|branch| emit::emit_branch_with(branch, ctx.dialect, &catalog))
+        .enumerate()
+        .map(|(index, branch)| {
+            let work = sf_sql::source_work::SourceWork::new(Some(ctx.control));
+            let bindings = emit::BindingView::merged(
+                &branch.bindings,
+                ctx.dedup_scopes
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .map(|s| &s.key_bindings),
+                work,
+            )?;
+            emit::emit_branch_binding_view(
+                branch,
+                &bindings,
+                ctx.dialect,
+                &catalog,
+                modifiers(branch),
+                work,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let multi = branches.len() > 1;
-    // DISTINCT over a multi-branch bag-union: SQL dedups only within each branch, so
-    // dedup the projected solutions here — before OFFSET/LIMIT (SPARQL evaluates
-    // DISTINCT before slicing). The single-branch case pushes DISTINCT into SQL.
-    let distinct_vars: Option<Vec<String>> = match (ctx.distinct && multi, ctx.form) {
-        (true, PlanForm::Select { vars }) => Some(vars.clone()),
+    // Cross-branch DISTINCT precedes OFFSET/LIMIT; SQL only dedups within branches.
+    let distinct_vars: Option<&[String]> = match (ctx.distinct && multi, ctx.form) {
+        (true, PlanForm::Select { vars }) => Some(vars),
         _ => None,
     };
     let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
         std::collections::HashSet::new();
-    // ADR-0034 C0e restoration: one seen-set PER shared dedup group, keyed by
-    // `ctx.dedup_scopes`' ids — declared OUTSIDE the branch loop below (unlike
-    // the per-branch `own_term_seen` further down) so every branch tagged with
-    // the SAME group id contributes to and checks against the SAME set, giving
-    // the cross-branch dedup `unfold::pool_group`'s SQL `UNION` used to provide,
-    // without ever emitting one.
+    // ADR-0034: each shared group owns one seen-set across all its branches;
+    // this preserves pooled UNION deduplication without emitting that UNION.
     let mut group_seen: std::collections::HashMap<
         usize,
         std::collections::HashSet<Vec<Option<Term>>>,
@@ -282,33 +292,32 @@ where
     let mut retained_payload = 0_u64;
     let mut charged_payload_peak = 0_u64;
     for (bi, (branch, e)) in branches.iter().zip(&emitted_branches).enumerate() {
-        // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
-        // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
-        // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
-        // set, because `emit_branch_with` deferred to this dedup instead of refusing.
-        // `own_term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is
-        // shared across branches and keys on the OUTER projected vars) — a different
-        // scope and question: this collapses duplicates WITHIN this one branch's own
-        // relation, on its FULL reconstructed solution tuple (every bound variable),
-        // independent of whatever the outer query later projects or whether it asked
-        // for DISTINCT at all. `group_scope` (ADR-0034 C0e restoration), when set, means
-        // this branch is one member of a D2 standalone group sharing `group_seen`'s
-        // entry instead — a DIFFERENT branch, tagged with the SAME id, may already
-        // have inserted the key this branch's own row reconstructs to (the cross-
-        // branch same-triple case a fresh-per-branch set could never catch).
+        // ADR-0034: effective DISTINCT may defer non-injective raw rows to a
+        // fresh per-branch full-term set. A shared scope instead dedups against
+        // other arms with the same group id, before outer projection/slicing.
         let group_scope = ctx.dedup_scopes.get(bi).and_then(Option::as_ref);
-        let term_dedup = group_scope.is_some() || crate::cascade::eligible_for_term_dedup(branch);
+        let term_dedup = group_scope.is_some()
+            || crate::cascade::eligible_for_term_dedup_with_distinct(
+                branch,
+                modifiers(branch).distinct,
+            );
         let mut own_term_seen: std::collections::HashSet<Vec<Term>> =
             std::collections::HashSet::new();
-        // The column schema is fixed for this branch's whole row stream, so index
-        // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
-        // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
-        let col_index = build_col_index(&e.projection);
-        // `branch.bindings`' variable names, interned ONCE here for the whole
-        // branch stream — see `intern_bindings`'s doc comment (Run 4 Wave C1,
-        // the same "once per branch, not per row" idiom as `col_index` above).
-        let interned = intern_bindings(branch);
-        // The ONLY bind site: `e.params` bound as N positional params by the adapter.
+        // Build the fixed column index once per stream (ADR-0024/M4).
+        let col_index = build_col_index_controlled(
+            &e.projection,
+            sf_sql::source_work::SourceWork::new(Some(ctx.control)),
+        )?;
+        let bindings = emit::BindingView::merged(
+            &branch.bindings,
+            group_scope.map(|scope| &scope.key_bindings),
+            sf_sql::source_work::SourceWork::new(Some(ctx.control)),
+        )?;
+        let interned = super::row::intern_binding_view(
+            &bindings,
+            sf_sql::source_work::SourceWork::new(Some(ctx.control)),
+        )?;
+        // Parameters bind once, in their emitted positional order.
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let mut s = b
             .open_branch_with_identity(
@@ -329,9 +338,7 @@ where
         // one-row-at-a-time loop, just with term-gen's CPU work batched. The
         // batch-and-reconstruct-as-a-unit SHAPE stays the same regardless of
         // `parallel_term_gen` (ledger F8 measured this indirection alone costs
-        // ~nothing — see `reconstruct_batch`'s doc comment); only whether a big
-        // batch may fan out to rayon changes. `first_batch` ramps the very first
-        // fill down to `TERM_GEN_FIRST_BATCH_SIZE` so a branch with many rows
+        // ~nothing); the first batch uses `TERM_GEN_FIRST_BATCH_SIZE` so many rows
         // still yields its first result quickly (the streaming invariant), then
         // grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
         let mut first_batch = true;
@@ -366,23 +373,9 @@ where
             ctx.control.checkpoint()?;
             let exhausted = raw_batch.len() < target;
             first_batch = false;
-            // Reconstruct first: DISTINCT needs the projected terms, and dedup must
-            // precede OFFSET/LIMIT (SPARQL order). `raw_batch`'s raw SQL lexical
-            // values are dropped HERE, right after `reconstruct_batch` has consumed
-            // them — nothing downstream (DISTINCT/ORDER BY/OFFSET/LIMIT/sink) needs
-            // them again, only the reconstructed terms, so there is no reason to
-            // keep `raw_batch` alive for the whole sink loop below. NOTE (measured,
-            // not assumed): this does NOT move `sf-bench`'s constant-memory peak —
-            // profiling found the peak is reached DURING `reconstruct_batch`'s own
-            // construction (raw_batch and the growing reconstructed batch are both
-            // live then regardless), not after it returns. Run 4 Wave C1 replaced
-            // the per-row binding map itself (`Bindings`, this file — see its doc
-            // comment) for exactly this reason: the many small (1-3-entry) per-row
-            // maps live at once were previously `BTreeMap<String, Term>`, whose
-            // per-node allocation dominated this peak — see `TERM_GEN_BATCH_SIZE`'s
-            // doc comment for the re-tuned batch size the leaner representation
-            // affords. Dropping `raw_batch` here is kept anyway as unambiguously
-            // correct hygiene, not as the memory fix.
+            // Reconstruct before DISTINCT and slicing; release raw values before
+            // the sink. Peak memory remains inside reconstruction, where both raw
+            // and reconstructed batches coexist (see Bindings/TERM_GEN_BATCH_SIZE).
             let reconstructed =
                 reconstruct_batch(&interned, &raw_batch, &col_index, ctx.parallel_term_gen);
             drop(raw_batch);

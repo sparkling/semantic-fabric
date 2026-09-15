@@ -3,7 +3,72 @@ use super::*;
 use crate::build::control::BuildWork;
 use crate::Result;
 
-fn consumer_payload(mode: &Consumer, work: BuildWork<'_>) -> Result<()> {
+#[derive(Clone, Copy)]
+pub(super) enum InventoryWork<'a> {
+    Compiler(BuildWork<'a>),
+    Source(sf_sql::source_work::SourceWork<'a>),
+}
+
+fn source_result<T>(result: sf_sql::Result<T>) -> Result<T> {
+    result.map_err(|error| match error {
+        sf_sql::Error::QueryControl(reason) => crate::Error::QueryControl(reason),
+        other => crate::Error::Sql(other.to_string()),
+    })
+}
+
+impl InventoryWork<'_> {
+    pub(super) fn charge(self, units: usize) -> Result<()> {
+        match self {
+            Self::Compiler(work) => work.charge(units),
+            Self::Source(work) => source_result(work.charge(units)),
+        }
+    }
+    pub(super) fn checkpoint(self) -> Result<()> {
+        match self {
+            Self::Compiler(work) => work.checkpoint(),
+            Self::Source(work) => source_result(work.checkpoint()),
+        }
+    }
+    pub(super) fn variable(self, name: &str) -> Result<Box<str>> {
+        match self {
+            Self::Compiler(work) => work.variable(name),
+            Self::Source(work) => {
+                source_result(work.charge(name.len()))?;
+                Ok(source_result(work.string(name))?.into_boxed_str())
+            }
+        }
+    }
+}
+
+enum KeyBuffer {
+    Compiler(crate::build::control::BuildVec<crate::iq::LexicalKey>),
+    Source(sf_sql::source_work::SourceVec<crate::iq::LexicalKey>),
+}
+impl KeyBuffer {
+    fn new(work: InventoryWork<'_>) -> Self {
+        match work {
+            InventoryWork::Compiler(_) => {
+                Self::Compiler(crate::build::control::BuildVec::new(Vec::new()))
+            }
+            InventoryWork::Source(_) => Self::Source(Default::default()),
+        }
+    }
+    fn push(&mut self, key: crate::iq::LexicalKey, work: InventoryWork<'_>) -> Result<()> {
+        match (self, work) {
+            (Self::Compiler(out), InventoryWork::Compiler(work)) => work.push(out, key),
+            (Self::Source(out), InventoryWork::Source(work)) => source_result(out.push(key, work)),
+            _ => unreachable!("lexical buffer retains its work domain"),
+        }
+    }
+    fn finish(self) -> Vec<crate::iq::LexicalKey> {
+        match self {
+            Self::Compiler(out) => out.into_inner(),
+            Self::Source(out) => out.into_vec(),
+        }
+    }
+}
+
+fn consumer_payload(mode: &Consumer, work: InventoryWork<'_>) -> Result<()> {
     work.charge(1)?;
     match mode {
         Consumer::Lexical(LexicalMode::Iri { base: Some(base) }) => work.charge(base.len())?,
@@ -18,7 +83,7 @@ fn consumer_payload(mode: &Consumer, work: BuildWork<'_>) -> Result<()> {
 fn insert_consumer(
     set: &mut BTreeSet<Consumer>,
     mode: &Consumer,
-    work: BuildWork<'_>,
+    work: InventoryWork<'_>,
 ) -> Result<()> {
     for existing in set.iter() {
         consumer_payload(existing, work)?;
@@ -34,7 +99,7 @@ pub(super) fn record(
     name: &str,
     mode: Option<&Consumer>,
     modes: &mut Modes,
-    work: BuildWork<'_>,
+    work: InventoryWork<'_>,
 ) -> Result<()> {
     use std::collections::btree_map::Entry;
     for key in modes.keys() {
@@ -63,7 +128,7 @@ pub(super) fn record(
 
 pub(super) fn column_mode(
     spec: &sf_core::ir::TermSpec,
-    work: BuildWork<'_>,
+    work: InventoryWork<'_>,
 ) -> Result<Option<Consumer>> {
     use sf_core::ir::TermType;
     work.charge(1)?;
@@ -95,7 +160,7 @@ pub(super) fn term(
     owner: usize,
     alias: usize,
     modes: &mut Modes,
-    work: BuildWork<'_>,
+    work: InventoryWork<'_>,
 ) -> Result<()> {
     work.charge(1)?;
     if owner != alias {
@@ -121,8 +186,8 @@ pub(super) fn term(
     Ok(())
 }
 
-pub(super) fn finish(modes: Modes, work: BuildWork<'_>) -> Result<Vec<crate::iq::LexicalKey>> {
-    let mut out = crate::build::control::BuildVec::new(Vec::new());
+pub(super) fn finish(modes: Modes, work: InventoryWork<'_>) -> Result<Vec<crate::iq::LexicalKey>> {
+    let mut out = KeyBuffer::new(work);
     for (column, modes) in modes {
         work.charge(1)?;
         let modes = modes.unwrap_or_default();
@@ -146,10 +211,10 @@ pub(super) fn finish(modes: Modes, work: BuildWork<'_>) -> Result<Vec<crate::iq:
                 Consumer::Lexical(mode) => mode,
             };
             let name = work.variable(&column)?;
-            work.push(&mut out, crate::iq::LexicalKey { column: name, mode })?;
+            out.push(crate::iq::LexicalKey { column: name, mode }, work)?;
         }
     }
-    Ok(out.into_inner())
+    Ok(out.finish())
 }
 
 fn insert(set: &mut BTreeSet<Box<str>>, name: &str, work: BuildWork<'_>) -> Result<()> {

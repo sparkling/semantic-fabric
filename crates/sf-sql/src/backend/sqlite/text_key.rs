@@ -70,7 +70,11 @@ impl<'c> CharacterKeyGuard<'c> {
             ));
         }
         if lexical {
-            for name in ["__sf_numeric_cmp_v1", "__sf_iri_key_v1"] {
+            for name in [
+                "__sf_numeric_cmp_v1",
+                "__sf_iri_key_v1",
+                "__sf_percent_encode_v1",
+            ] {
                 if connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_function_list WHERE name = ? COLLATE NOCASE)", [name], |row| row.get::<_,bool>(0))? {
                     return Err(Error::Emit("SQLite term comparison function name is already registered".into()));
                 }
@@ -86,6 +90,7 @@ impl<'c> CharacterKeyGuard<'c> {
                 ("__sf_lexical_key_v1", 3, 0),
                 ("__sf_numeric_cmp_v1", 5, 1),
                 ("__sf_iri_key_v1", 2, 2),
+                ("__sf_percent_encode_v1", 1, 3),
             ]
         } else {
             &[(NAME, 2, 0)]
@@ -108,6 +113,9 @@ impl<'c> CharacterKeyGuard<'c> {
                         }
                         if kind == 2 {
                             return super::iri_key::evaluate(args, state.control.as_deref());
+                        }
+                        if kind == 3 {
+                            return percent_encode(args.get_raw(0), state.control.as_deref());
                         }
                         if lexical {
                             return super::lexical_key::evaluate(args, state.control.as_deref());
@@ -180,9 +188,15 @@ impl<'c> CharacterKeyGuard<'c> {
             } else {
                 Ok(())
             };
+            let percent_result = if self.lexical {
+                self.connection.remove_function("__sf_percent_encode_v1", 1)
+            } else {
+                Ok(())
+            };
             lexical_result?;
             numeric_result?;
             iri_result?;
+            percent_result?;
         }
         Ok(())
     }
@@ -192,6 +206,47 @@ impl Drop for CharacterKeyGuard<'_> {
     fn drop(&mut self) {
         let _ = self.finish();
     }
+}
+
+/// Query-local lexical decoder keys on a caller-owned connection; removed on drop.
+pub struct LexicalKeys<'c>(#[allow(dead_code)] CharacterKeyGuard<'c>);
+
+pub fn lexical_keys(connection: &Connection) -> Result<LexicalKeys<'_>> {
+    CharacterKeyGuard::install_lexical(connection, true, None).map(LexicalKeys)
+}
+
+/// RFC 3987 IRI percent encoding with the exact Rust reference encoder. NULL
+/// stays NULL; invalid UTF-8 is an error, never repaired into a valid IRI.
+fn percent_encode(
+    value: ValueRef<'_>,
+    control: Option<&dyn QueryControl>,
+) -> Result<Option<String>> {
+    let bytes = match value {
+        ValueRef::Null => return Ok(None),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes,
+        _ => return Err(Error::Marshal("percent encoding requires text".into())),
+    };
+    if let Some(control) = control {
+        // One scan plus at most three output bytes per input byte.
+        let work = bytes
+            .len()
+            .checked_mul(4)
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or(Error::QueryControl(
+                sf_core::query_control::QueryControlError::SourceWorkExceeded,
+            ))?;
+        control.consume(QueryCharge::SourceWork, work)?;
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| Error::Marshal("percent encoding requires valid UTF-8".into()))?;
+    let mut out = String::new();
+    out.try_reserve(bytes.len())
+        .map_err(|_| Error::Marshal("percent encoding allocation failed".into()))?;
+    sf_core::ir::encoding::percent_encode_iri(text, &mut out);
+    if let Some(control) = control {
+        control.checkpoint()?;
+    }
+    Ok(Some(out))
 }
 
 /// The same Rust lexical conversion and Unicode-scalar padding as row decoding.

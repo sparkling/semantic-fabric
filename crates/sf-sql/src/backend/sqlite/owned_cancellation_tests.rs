@@ -181,23 +181,39 @@ async fn deadline_interrupts_recursive_sqlite_vm_and_preserves_exact_cause() {
     assert_control_error(error, QueryControlError::DeadlineExceeded);
 }
 
-#[tokio::test]
-async fn progress_callbacks_do_not_charge_source_work() {
+async fn run_recursive_max(iterations: &str) -> u64 {
     let control = budget();
     let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
     let mut backend = SqliteOwnedBackend::new_controlled(conn, control.clone());
     let mut rows = backend
         .open_branch(
-            "WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL \
-             SELECT x + 1 FROM c WHERE x < 10000) SELECT max(x) FROM c",
+            &format!(
+                "WITH RECURSIVE c(x) AS (VALUES(0) UNION ALL \
+                 SELECT x + 1 FROM c WHERE x < {iterations}) SELECT max(x) FROM c"
+            ),
             &[],
         )
         .await
         .unwrap();
     assert!(rows.next_row().await.unwrap().is_some());
     assert!(rows.next_row().await.unwrap().is_none());
+    control.consumed(QueryCharge::SourceWork)
+}
 
-    assert_eq!(control.consumed(QueryCharge::SourceWork), 0);
+/// Column-metadata preparation is a one-time, request-text-shaped charge
+/// (`sqlite_column_decltypes_controlled`'s COLLATE scan and decl-type copy).
+/// The SQLite progress callback the VM invokes on every step of the recursive
+/// evaluation below must add nothing on top of it: two SQL strings of equal
+/// length but a 10x difference in recursive iterations (and progress-callback
+/// firings) must charge identically.
+#[tokio::test]
+async fn progress_callbacks_do_not_charge_source_work() {
+    let charged = run_recursive_max("10000").await;
+    assert!(
+        charged > 0,
+        "governed column-metadata preparation must charge SourceWork"
+    );
+    assert_eq!(charged, run_recursive_max("99999").await);
 }
 
 #[tokio::test]

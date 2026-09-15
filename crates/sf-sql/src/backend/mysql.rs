@@ -173,61 +173,73 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
         &mut self,
         probe_sql: &str,
     ) -> Result<Vec<crate::backend::ResultColumn>> {
+        self.result_columns_controlled(probe_sql, &sf_core::query_control::UncontrolledQueryControl)
+            .await
+    }
+
+    async fn result_columns_controlled(
+        &mut self,
+        probe_sql: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        let work = crate::source_work::SourceWork::new(Some(control));
+        work.checkpoint()?;
         let stmt = self.conn.borrow_mut().prep(probe_sql).await?;
-        stmt.columns()
-            .iter()
-            .map(|column| {
-                let bytes = matches!(
-                    column.column_type(),
-                    ColumnType::MYSQL_TYPE_VARCHAR
-                        | ColumnType::MYSQL_TYPE_STRING
-                        | ColumnType::MYSQL_TYPE_VAR_STRING
-                        | ColumnType::MYSQL_TYPE_TINY_BLOB
-                        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                        | ColumnType::MYSQL_TYPE_LONG_BLOB
-                        | ColumnType::MYSQL_TYPE_BLOB
-                );
-                let code = mysql_xsd_code(column, self.type_profile)?;
-                let varying_text = bytes && code == Some(XsdTypeCode::String);
-                Ok(crate::backend::ResultColumn {
-                    natural_datatype: code,
-                    // DATE/DATETIME facts describe direct fields only. The
-                    // emitter must revoke them at temporal materialization.
-                    // *_2 temporal wire codes are not decoded by the locked driver.
-                    native_scalar: match column.column_type() {
-                        ColumnType::MYSQL_TYPE_TINY
-                        | ColumnType::MYSQL_TYPE_SHORT
-                        | ColumnType::MYSQL_TYPE_LONG
-                        | ColumnType::MYSQL_TYPE_LONGLONG
-                        | ColumnType::MYSQL_TYPE_INT24
-                        | ColumnType::MYSQL_TYPE_YEAR => Some(super::NativeScalarKey::Integer),
-                        ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                            Some(super::NativeScalarKey::MysqlDecimal)
-                        }
-                        ColumnType::MYSQL_TYPE_DOUBLE => Some(super::NativeScalarKey::MysqlFloat8),
-                        ColumnType::MYSQL_TYPE_FLOAT => Some(super::NativeScalarKey::MysqlFloat4),
-                        ColumnType::MYSQL_TYPE_BIT => Some(super::NativeScalarKey::MysqlBit),
-                        ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => {
-                            Some(super::NativeScalarKey::MysqlDate)
-                        }
-                        ColumnType::MYSQL_TYPE_DATETIME => {
-                            Some(super::NativeScalarKey::MysqlDateTime)
-                        }
-                        ColumnType::MYSQL_TYPE_TIMESTAMP => {
-                            Some(super::NativeScalarKey::MysqlTimestamp)
-                        }
-                        ColumnType::MYSQL_TYPE_TIME => Some(super::NativeScalarKey::MysqlTime),
-                        _ if bytes && code == Some(XsdTypeCode::HexBinary) => {
-                            Some(super::NativeScalarKey::MysqlBinaryBytes)
-                        }
-                        _ => None,
-                    },
-                    sqlite_decode: None,
-                    name: column.name_str().into_owned(),
-                    text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),
-                })
-            })
-            .collect()
+        let mut output = work.vector(stmt.columns().len())?;
+        for column in stmt.columns().iter() {
+            work.charge(1)?;
+            let bytes = matches!(
+                column.column_type(),
+                ColumnType::MYSQL_TYPE_VARCHAR
+                    | ColumnType::MYSQL_TYPE_STRING
+                    | ColumnType::MYSQL_TYPE_VAR_STRING
+                    | ColumnType::MYSQL_TYPE_TINY_BLOB
+                    | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                    | ColumnType::MYSQL_TYPE_LONG_BLOB
+                    | ColumnType::MYSQL_TYPE_BLOB
+            );
+            let code = mysql_xsd_code(column, self.type_profile)?;
+            let varying_text = bytes && code == Some(XsdTypeCode::String);
+            // Decode borrowed native bytes only after reserving the worst
+            // UTF-8-lossy expansion; name_str() may itself allocate.
+            work.product(column.name_ref().len(), 3)?;
+            let name = column.name_str();
+            output.push(crate::backend::ResultColumn {
+                natural_datatype: code,
+                // DATE/DATETIME facts describe direct fields only. The
+                // emitter must revoke them at temporal materialization.
+                // *_2 temporal wire codes are not decoded by the locked driver.
+                native_scalar: match column.column_type() {
+                    ColumnType::MYSQL_TYPE_TINY
+                    | ColumnType::MYSQL_TYPE_SHORT
+                    | ColumnType::MYSQL_TYPE_LONG
+                    | ColumnType::MYSQL_TYPE_LONGLONG
+                    | ColumnType::MYSQL_TYPE_INT24
+                    | ColumnType::MYSQL_TYPE_YEAR => Some(super::NativeScalarKey::Integer),
+                    ColumnType::MYSQL_TYPE_NEWDECIMAL => Some(super::NativeScalarKey::MysqlDecimal),
+                    ColumnType::MYSQL_TYPE_DOUBLE => Some(super::NativeScalarKey::MysqlFloat8),
+                    ColumnType::MYSQL_TYPE_FLOAT => Some(super::NativeScalarKey::MysqlFloat4),
+                    ColumnType::MYSQL_TYPE_BIT => Some(super::NativeScalarKey::MysqlBit),
+                    ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => {
+                        Some(super::NativeScalarKey::MysqlDate)
+                    }
+                    ColumnType::MYSQL_TYPE_DATETIME => Some(super::NativeScalarKey::MysqlDateTime),
+                    ColumnType::MYSQL_TYPE_TIMESTAMP => {
+                        Some(super::NativeScalarKey::MysqlTimestamp)
+                    }
+                    ColumnType::MYSQL_TYPE_TIME => Some(super::NativeScalarKey::MysqlTime),
+                    _ if bytes && code == Some(XsdTypeCode::HexBinary) => {
+                        Some(super::NativeScalarKey::MysqlBinaryBytes)
+                    }
+                    _ => None,
+                },
+                sqlite_decode: None,
+                name: work.string(&name)?,
+                text_key: varying_text.then_some(crate::backend::TextKey::Verbatim),
+            });
+        }
+        work.checkpoint()?;
+        Ok(output)
     }
 
     async fn open_branch<'s>(

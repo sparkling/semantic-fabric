@@ -13,6 +13,7 @@ type Modes = std::collections::BTreeMap<Box<str>, Option<BTreeSet<Consumer>>>;
 mod work;
 pub(super) use work::condition_columns;
 pub(super) use work::native_keys_with_work;
+use work::InventoryWork;
 
 /// Capture original consumer semantics before D1 replaces them with synthetic
 /// raw Column recipes. IRI templates and explicit column literals preserve the
@@ -22,8 +23,15 @@ pub(crate) fn lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::Lexi
     keys(branch, alias, true)
 }
 
-pub(crate) fn binding_lexical_keys(branch: &Branch, alias: usize) -> Vec<crate::iq::LexicalKey> {
-    keys(branch, alias, false)
+pub(crate) fn binding_lexical_keys_controlled<'a>(
+    definitions: impl Iterator<Item = &'a TermDef>,
+    alias: usize,
+    source_work: sf_sql::source_work::SourceWork<'_>,
+) -> crate::Result<Vec<crate::iq::LexicalKey>> {
+    let work = InventoryWork::Source(source_work);
+    work.checkpoint()?;
+    let modes = binding_modes(definitions, alias, work)?;
+    work::finish(modes, work)
 }
 
 fn keys(branch: &Branch, alias: usize, with_conditions: bool) -> Vec<crate::iq::LexicalKey> {
@@ -43,8 +51,31 @@ pub(super) fn keys_with_work(
     work: crate::build::control::BuildWork<'_>,
 ) -> crate::Result<Vec<crate::iq::LexicalKey>> {
     work.checkpoint()?;
+    let mut modes = binding_modes(
+        branch.bindings.values(),
+        alias,
+        InventoryWork::Compiler(work),
+    )?;
+    if with_conditions {
+        for cond in branch.where_conds.iter().chain(
+            branch
+                .opts
+                .iter()
+                .flat_map(|opt| opt.on.iter().chain(&opt.extra)),
+        ) {
+            condition(cond, alias, &mut modes, work)?;
+        }
+    }
+    work::finish(modes, InventoryWork::Compiler(work))
+}
+
+fn binding_modes<'a>(
+    definitions: impl Iterator<Item = &'a TermDef>,
+    alias: usize,
+    work: InventoryWork<'_>,
+) -> crate::Result<Modes> {
     let mut modes = Modes::new();
-    for definition in branch.bindings.values() {
+    for definition in definitions {
         work.charge(1)?;
         match definition {
             TermDef::Const(_) => (),
@@ -66,94 +97,104 @@ pub(super) fn keys_with_work(
                     work::term(term_map, *owner, alias, &mut modes, work)?;
                 }
             }
-            _ => {
-                for (owner, name) in super::resolve_work::columns(definition, work)? {
-                    work.charge(1)?;
-                    if owner == alias {
-                        work::record(name, None, &mut modes, work)?;
+            _ => match work {
+                InventoryWork::Compiler(compiler) => {
+                    for (owner, name) in super::resolve_work::columns(definition, compiler)? {
+                        work.charge(1)?;
+                        if owner == alias {
+                            work::record(name, None, &mut modes, work)?;
+                        }
                     }
                 }
-            }
+                InventoryWork::Source(source) => {
+                    crate::emit::validate_definition_columns(definition, source, |owner, name| {
+                        if owner == alias {
+                            work::record(name, None, &mut modes, work)?;
+                        }
+                        Ok(())
+                    })?
+                }
+            },
         }
     }
-    fn condition(
-        cond: &SqlCond,
-        alias: usize,
-        modes: &mut Modes,
-        work: crate::build::control::BuildWork<'_>,
-    ) -> crate::Result<()> {
-        let work = work.enter()?;
-        match cond {
-            SqlCond::IriCmp(cmp) => {
-                for operand in [&cmp.left, &cmp.right] {
-                    work.charge(1)?;
-                    match operand {
-                        crate::iq::iri_cmp::IriOperand::Column { column, base } => {
-                            if column.alias == alias {
-                                let mode = Consumer::Lexical(LexicalMode::Iri {
-                                    base: base
-                                        .as_deref()
-                                        .map(|value| work.variable(value))
-                                        .transpose()?,
-                                });
-                                work::record(&column.column, Some(&mode), modes, work)?;
-                            }
-                        }
-                        crate::iq::iri_cmp::IriOperand::Template { parts, .. } => {
-                            work.charge(parts.len())?;
-                            for column in operand.columns() {
-                                work.charge(1)?;
-                                if column.alias == alias {
-                                    work::record(
-                                        &column.column,
-                                        Some(&Consumer::Lexical(LexicalMode::Decoded)),
-                                        modes,
-                                        work,
-                                    )?;
-                                }
-                            }
-                        }
-                        crate::iq::iri_cmp::IriOperand::Constant(_) => (),
-                    }
-                }
-            }
-            SqlCond::LiteralCmp(cmp) => {
-                for operand in [&cmp.left, &cmp.right] {
-                    work.charge(1)?;
-                    if let crate::iq::literal_cmp::LiteralOperand::Column { column, spec } = operand
-                    {
+    Ok(modes)
+}
+
+fn condition(
+    cond: &SqlCond,
+    alias: usize,
+    modes: &mut Modes,
+    work: crate::build::control::BuildWork<'_>,
+) -> crate::Result<()> {
+    let work = work.enter()?;
+    match cond {
+        SqlCond::IriCmp(cmp) => {
+            for operand in [&cmp.left, &cmp.right] {
+                work.charge(1)?;
+                match operand {
+                    crate::iq::iri_cmp::IriOperand::Column { column, base } => {
                         if column.alias == alias {
-                            let mode = work::column_mode(spec, work)?;
-                            work::record(&column.column, mode.as_ref(), modes, work)?;
+                            let mode = Consumer::Lexical(LexicalMode::Iri {
+                                base: base
+                                    .as_deref()
+                                    .map(|value| work.variable(value))
+                                    .transpose()?,
+                            });
+                            work::record(
+                                &column.column,
+                                Some(&mode),
+                                modes,
+                                InventoryWork::Compiler(work),
+                            )?;
                         }
+                    }
+                    crate::iq::iri_cmp::IriOperand::Template { parts, .. } => {
+                        work.charge(parts.len())?;
+                        for column in operand.columns() {
+                            work.charge(1)?;
+                            if column.alias == alias {
+                                work::record(
+                                    &column.column,
+                                    Some(&Consumer::Lexical(LexicalMode::Decoded)),
+                                    modes,
+                                    InventoryWork::Compiler(work),
+                                )?;
+                            }
+                        }
+                    }
+                    crate::iq::iri_cmp::IriOperand::Constant(_) => (),
+                }
+            }
+        }
+        SqlCond::LiteralCmp(cmp) => {
+            for operand in [&cmp.left, &cmp.right] {
+                work.charge(1)?;
+                if let crate::iq::literal_cmp::LiteralOperand::Column { column, spec } = operand {
+                    if column.alias == alias {
+                        let mode = work::column_mode(spec, InventoryWork::Compiler(work))?;
+                        work::record(
+                            &column.column,
+                            mode.as_ref(),
+                            modes,
+                            InventoryWork::Compiler(work),
+                        )?;
                     }
                 }
             }
-            SqlCond::And(conds)
-            | SqlCond::Or(conds)
-            | SqlCond::Exists { conds, .. }
-            | SqlCond::NotExists { conds, .. }
-            | SqlCond::PathExists { conds, .. } => {
-                for cond in conds {
-                    condition(cond, alias, modes, work)?;
-                }
+        }
+        SqlCond::And(conds)
+        | SqlCond::Or(conds)
+        | SqlCond::Exists { conds, .. }
+        | SqlCond::NotExists { conds, .. }
+        | SqlCond::PathExists { conds, .. } => {
+            for cond in conds {
+                condition(cond, alias, modes, work)?;
             }
-            SqlCond::Not(cond) => condition(cond, alias, modes, work)?,
-            _ => (),
         }
-        Ok(())
+        SqlCond::Not(cond) => condition(cond, alias, modes, work)?,
+        _ => (),
     }
-    if with_conditions {
-        for cond in branch.where_conds.iter().chain(
-            branch
-                .opts
-                .iter()
-                .flat_map(|opt| opt.on.iter().chain(&opt.extra)),
-        ) {
-            condition(cond, alias, &mut modes, work)?;
-        }
-    }
-    work::finish(modes, work)
+    Ok(())
 }
 
 #[cfg(test)]

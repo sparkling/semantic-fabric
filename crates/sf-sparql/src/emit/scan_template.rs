@@ -1,169 +1,15 @@
 //! Decoded template projections retain generated-text, not source-column, authority.
+#[cfg(test)]
+use super::scan_actuals as actuals;
 use super::*;
+use crate::iq::iri_cmp::{IriOperand, IriPart};
 use sf_core::ir::{Template, TermSpec, TermType};
-
-pub(super) fn actuals(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> AliasActuals {
-    match &scan.source {
-        ScanSource::RefAtom { input, columns } => {
-            ref_atom::actuals(input, columns, dialect, catalog)
-        }
-        ScanSource::Logical(source) => source_actuals(source, catalog),
-        ScanSource::Path { closure, .. } => path_actuals(closure, catalog),
-        ScanSource::Projection {
-            input,
-            columns,
-            lexical_keys,
-            ..
-        } => {
-            let inner = scan_actuals(input, dialect, catalog);
-            let original_lexical_keys = lexical_keys;
-            let lexical_keys = literal_roles::resolved(lexical_keys, dialect, &inner);
-            let lexicalized = mysql_lexical_columns(&scan.source, dialect, &inner);
-            let sqlite_columns: HashMap<_, _> = columns
-                .iter()
-                .filter_map(|(name, term)| {
-                    output_decode(term, dialect, &inner).map(|decode| (name.to_string(), decode))
-                })
-                .collect();
-            let lexical_columns = sqlite_columns
-                .iter()
-                .filter(|(name, _)| {
-                    let mut modes = lexical_keys
-                        .iter()
-                        .filter(|key| key.column.as_ref() == name.as_str());
-                    modes.clone().any(|key| key.mode == LexicalMode::Decoded)
-                        && modes.all(|key| {
-                            matches!(key.mode, LexicalMode::Decoded | LexicalMode::Iri { .. })
-                        })
-                })
-                .map(|(name, decode)| (name.clone(), *decode))
-                .collect();
-            let lexical_comparison_columns = sqlite_columns
-                .iter()
-                .filter(|(name, _)| {
-                    original_lexical_keys.iter().any(|key| {
-                        key.column.as_ref() == name.as_str() && key.mode == LexicalMode::Decoded
-                    })
-                })
-                .map(|(name, decode)| (name.clone(), *decode))
-                .collect();
-            AliasActuals {
-                datatype_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| {
-                        let TermMap::Column(raw, _) = term else {
-                            return None;
-                        };
-                        let code = if lexicalized.contains_key(name.as_ref()) {
-                            Some(Some(sf_core::datatype::XsdTypeCode::String))
-                        } else {
-                            inner
-                                .datatype_columns
-                                .get(resolve_col(raw, Some(&inner.columns)))
-                                .copied()
-                        };
-                        code.map(|code| (name.to_string(), code))
-                    })
-                    .collect(),
-                natural_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| {
-                        let TermMap::Column(raw, _) = term else {
-                            return None;
-                        };
-                        (!lexicalized.contains_key(name.as_ref()))
-                            .then(|| {
-                                inner
-                                    .natural_columns
-                                    .get(resolve_col(raw, Some(&inner.columns)))
-                            })
-                            .flatten()
-                            .map(|code| (name.to_string(), *code))
-                    })
-                    .collect(),
-                scalar_columns: iri_cmp::projected_scalars(columns, &inner)
-                    .into_iter()
-                    .filter(|(name, _)| !lexicalized.contains_key(name))
-                    .collect(),
-                sqlite_columns,
-                lexical_columns,
-                lexical_comparison_columns,
-                source_kind: AliasSourceKind::Derived,
-                columns: columns.iter().map(|(name, _)| name.to_string()).collect(),
-                path: false,
-                iri_unreserved_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| {
-                        let TermMap::Column(raw, _) = term else {
-                            return None;
-                        };
-                        (lexicalized
-                            .get(name.as_ref())
-                            .is_some_and(|key| mysql_float_value::identity::is_float(*key))
-                            || inner
-                                .iri_unreserved_columns
-                                .contains(resolve_col(raw, Some(&inner.columns))))
-                        .then(|| name.to_string())
-                    })
-                    .collect(),
-                static_iri_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| match term {
-                        TermMap::Column(raw, spec)
-                            if spec.term_type == TermType::Iri
-                                && spec.base.is_none()
-                                && iri_cmp::static_iri_name(raw, &inner) =>
-                        {
-                            Some(name.to_string())
-                        }
-                        TermMap::Template(template, spec)
-                            if iri_cmp::qualified_static_template(
-                                template, spec, dialect, &inner,
-                            ) =>
-                        {
-                            Some(name.to_string())
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                text_columns: columns
-                    .iter()
-                    .filter_map(|(name, term)| {
-                        let key = match term {
-                            TermMap::Column(_, _) if lexicalized.contains_key(name.as_ref()) => {
-                                Some(TextKey::Verbatim)
-                            }
-                            TermMap::Column(column, _) => inner
-                                .text_columns
-                                .get(resolve_col(column, Some(&inner.columns)))
-                                .copied(),
-                            TermMap::Template(template, spec) => match template.segments() {
-                                [Segment::Column(column)]
-                                    if dialect != Dialect::MySql
-                                        && spec.term_type != sf_core::ir::TermType::Iri =>
-                                {
-                                    inner
-                                        .text_columns
-                                        .get(resolve_col(column, Some(&inner.columns)))
-                                        .copied()
-                                        .map(|_| TextKey::Verbatim)
-                                }
-                                _ => Some(TextKey::Verbatim),
-                            },
-                            TermMap::Constant(_) => None,
-                        };
-                        key.map(|key| (name.to_string(), key))
-                    })
-                    .collect(),
-            }
-        }
-    }
-}
 
 /// Preserve lexical-only DATE/DATETIME and signed float spellings before lossy
 /// MySQL temp copies. Outputs become text, never native scalar authorities.
 /// A natural literal or native comparison consumer withholds this authority.
-pub(super) fn mysql_lexical_columns(
+#[cfg(test)]
+pub(in crate::emit) fn mysql_lexical_columns(
     source: &ScanSource,
     dialect: Dialect,
     inner: &AliasActuals,
@@ -217,7 +63,8 @@ pub(super) fn mysql_lexical_columns(
         .collect()
 }
 
-pub(super) fn output_decode(
+#[cfg(test)]
+pub(in crate::emit) fn output_decode(
     term: &TermMap,
     dialect: Dialect,
     inner: &AliasActuals,
@@ -247,8 +94,24 @@ pub(super) fn render(
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     if spec.term_type == TermType::Iri && spec.base.is_some() {
+        // Pay the recipe and modifier copies the operand view takes.
+        for segment in recipe.segments() {
+            let len = match segment {
+                Segment::Literal(text) => text.len(),
+                Segment::Column(name) => name.len(),
+            };
+            work.charge(len + 1)
+                .map_err(source_control::validation_error)?;
+        }
+        work.charge(
+            4 + spec.datatype.as_ref().map_or(0, |dt| dt.as_str().len())
+                + spec.language.as_deref().map_or(0, str::len)
+                + spec.base.as_deref().map_or(0, str::len),
+        )
+        .map_err(source_control::validation_error)?;
         let crate::iq::iri_cmp::IriOperand::Template { parts, base } =
             crate::iq::iri_cmp::IriOperand::from_map(
                 &TermMap::Template(recipe.clone(), spec.clone()),
@@ -259,7 +122,8 @@ pub(super) fn render(
             unreachable!()
         };
         // Both recipe and base are mapping-owned text, never query parameters.
-        let expression = iri_cmp::template_lexical(&parts, dialect, catalog, actuals)?;
+        let expression =
+            iri_cmp::template_lexical_controlled(&parts, dialect, catalog, actuals, work)?;
         catalog
             .lexical_keys
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -284,7 +148,9 @@ pub(super) fn render(
                 Segment::Column(name) => {
                     let column = ColRef::new(alias, name.clone());
                     if path_comparison::column_text(&column, actuals).is_some() {
-                        iri_cmp::encode_text_column(&column, dialect, catalog, actuals)
+                        iri_cmp::encode_text_column_controlled(
+                            &column, dialect, catalog, actuals, work,
+                        )
                     } else {
                         let key = iri_cmp::scalar_column(&column, actuals)
                             .expect("qualified template has a live decoder for every slot");
@@ -338,11 +204,18 @@ pub(super) fn render(
             }
         }
     }
-    let expression = render_template_inline(recipe.segments(), iri, dialect, |name| {
-        decoded.get(name).cloned().unwrap_or_else(|| {
-            path_comparison::rdf_column(&ColRef::new(alias, name), dialect, catalog, actuals)
-        })
-    })?;
+    let expression = render_template_inline(
+        recipe.segments(),
+        iri,
+        dialect,
+        catalog,
+        |name| {
+            decoded.get(name).cloned().unwrap_or_else(|| {
+                path_comparison::rdf_column(&ColRef::new(alias, name), dialect, catalog, actuals)
+            })
+        },
+        work,
+    )?;
     if distinct && iri && dialect == Dialect::Sqlite && spec.base.is_none() {
         catalog
             .lexical_keys
@@ -364,6 +237,97 @@ pub(super) fn distinct_key(term: &TermMap, expression: &str, dialect: Dialect) -
 
 pub(super) fn supports_distinct(term: &TermMap) -> bool {
     matches!(term, TermMap::Template(_, spec) if spec.term_type == TermType::Iri)
+}
+
+/// Copy only total integer IRI constraints below an already authorized D1 copy.
+/// VALUES/OPTIONAL otherwise materializes every permitted float for each branch.
+/// Keep the original ON predicate and policy barrier; fallible decoders stay out.
+#[cfg(test)]
+pub(in crate::emit) fn restrict_optional<'a>(
+    opt: &'a crate::iq::OptJoin,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> std::borrow::Cow<'a, crate::iq::Scan> {
+    restrict_optional_controlled(
+        opt,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+    .expect("uncontrolled optional restriction")
+}
+
+pub(in crate::emit) fn restrict_optional_controlled<'a>(
+    opt: &'a crate::iq::OptJoin,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<std::borrow::Cow<'a, crate::iq::Scan>> {
+    use crate::iq::ScanSource;
+    let unchanged = std::borrow::Cow::Borrowed(&opt.scan);
+    let ScanSource::Projection {
+        input,
+        columns,
+        guards,
+        distinct: true,
+        ..
+    } = &opt.scan.source
+    else {
+        return Ok(unchanged);
+    };
+    if dialect != Dialect::MySql
+        || input.alias != opt.scan.alias
+        || input.source.logical().is_none()
+        || !guards
+            .iter()
+            .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
+        || !columns
+            .iter()
+            .all(|(name, term)| matches!(term, TermMap::Column(raw, _) if raw == name))
+    {
+        return Ok(unchanged);
+    }
+    let actuals = HashMap::from([(
+        input.alias,
+        crate::emit::metadata::scan_actuals_controlled(input, dialect, catalog, work)?,
+    )]);
+    let additional: Vec<_> = opt
+        .on
+        .iter()
+        .chain(&opt.extra)
+        .filter(|guard| {
+            let SqlCond::IriCmp(cmp) = guard else {
+                return false;
+            };
+            let parts = match (&cmp.left, &cmp.right) {
+                (IriOperand::Template { parts, base: None }, IriOperand::Constant(_))
+                | (IriOperand::Constant(_), IriOperand::Template { parts, base: None }) => parts,
+                _ => return false,
+            };
+            parts.iter().any(|part| matches!(part, IriPart::Column(_)))
+                && parts.iter().all(|part| match part {
+                    IriPart::Literal(_) => true,
+                    IriPart::Column(c) => {
+                        c.alias == input.alias
+                            && columns.iter().any(|(name, _)| name == &c.column)
+                            && crate::emit::iri_cmp::scalar_column(c, &actuals)
+                                == Some(NativeScalarKey::Integer)
+                            && crate::emit::literal_datatype::fact(c, &actuals)
+                                == Some(Some(sf_core::datatype::XsdTypeCode::Integer))
+                    }
+                })
+        })
+        .cloned()
+        .collect();
+    if additional.is_empty() {
+        return Ok(unchanged);
+    }
+    let mut scan = opt.scan.clone();
+    let ScanSource::Projection { guards, .. } = &mut scan.source else {
+        return Err(super::metadata::invariant());
+    };
+    guards.extend(additional);
+    Ok(std::borrow::Cow::Owned(scan))
 }
 
 #[cfg(test)]

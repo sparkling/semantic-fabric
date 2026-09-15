@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn sqlite_ucschar_boundaries_match_core_with_nul_and_adjacent_scalars() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let _keys = sf_sql::backend::sqlite::lexical_keys(&conn).unwrap();
     conn.execute_batch("CREATE TABLE t(v TEXT)").unwrap();
     let query = format!(
         "SELECT {} FROM t",
@@ -45,6 +46,7 @@ fn sqlite_ucschar_boundaries_match_core_with_nul_and_adjacent_scalars() {
 #[test]
 fn sqlite_invalid_utf8_is_not_silently_repaired_to_a_valid_iri() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let _keys = sf_sql::backend::sqlite::lexical_keys(&conn).unwrap();
     conn.execute_batch("CREATE TABLE t(v TEXT)").unwrap();
     let query = format!(
         "SELECT {} FROM t",
@@ -69,4 +71,31 @@ fn sqlite_invalid_utf8_is_not_silently_repaired_to_a_valid_iri() {
             "{bad:?}"
         );
     }
+}
+
+#[test]
+fn sqlite_numeric_storage_classes_encode_their_text_spelling() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let _keys = sf_sql::backend::sqlite::lexical_keys(&conn).unwrap();
+    conn.execute_batch("CREATE TABLE t(v)").unwrap();
+    let query = format!(
+        "SELECT {} FROM t",
+        percent_encode_col("t.v", Dialect::Sqlite).unwrap()
+    );
+    for (value, text) in [
+        (rusqlite::types::Value::Integer(42), "42"),
+        (rusqlite::types::Value::Integer(-7), "-7"),
+        (rusqlite::types::Value::Real(1.5), "1.5"),
+        (rusqlite::types::Value::Text("a b".into()), "a b"),
+        (rusqlite::types::Value::Blob(b"x/y".to_vec()), "x/y"),
+    ] {
+        conn.execute("DELETE FROM t", []).unwrap();
+        conn.execute("INSERT INTO t VALUES (?1)", [&value]).unwrap();
+        let got: String = conn.query_row(&query, [], |row| row.get(0)).unwrap();
+        assert_eq!(got, tests::reference_encode(text), "{value:?}");
+    }
+    conn.execute("DELETE FROM t", []).unwrap();
+    conn.execute("INSERT INTO t VALUES (NULL)", []).unwrap();
+    let got: Option<String> = conn.query_row(&query, [], |row| row.get(0)).unwrap();
+    assert_eq!(got, None);
 }

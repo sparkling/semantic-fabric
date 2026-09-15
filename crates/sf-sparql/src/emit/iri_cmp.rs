@@ -3,77 +3,8 @@ use super::*;
 use crate::iq::iri_cmp::{IriComparison, IriOperand, IriPart};
 #[cfg(test)]
 mod tests;
-
-/// Copy only total integer IRI constraints below an already authorized D1 copy.
-/// VALUES/OPTIONAL otherwise materializes every permitted float for each branch.
-/// Keep the original ON predicate and policy barrier; fallible decoders stay out.
-pub(super) fn restrict_optional<'a>(
-    opt: &'a crate::iq::OptJoin,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> std::borrow::Cow<'a, crate::iq::Scan> {
-    use crate::iq::ScanSource;
-    let unchanged = std::borrow::Cow::Borrowed(&opt.scan);
-    let ScanSource::Projection {
-        input,
-        columns,
-        guards,
-        distinct: true,
-        ..
-    } = &opt.scan.source
-    else {
-        return unchanged;
-    };
-    if dialect != Dialect::MySql
-        || input.alias != opt.scan.alias
-        || input.source.logical().is_none()
-        || !guards
-            .iter()
-            .any(|guard| matches!(guard, SqlCond::NativeCmp(..)))
-        || !columns
-            .iter()
-            .all(|(name, term)| matches!(term, TermMap::Column(raw, _) if raw == name))
-    {
-        return unchanged;
-    }
-    let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
-    let additional: Vec<_> = opt
-        .on
-        .iter()
-        .chain(&opt.extra)
-        .filter(|guard| {
-            let SqlCond::IriCmp(cmp) = guard else {
-                return false;
-            };
-            let parts = match (&cmp.left, &cmp.right) {
-                (IriOperand::Template { parts, base: None }, IriOperand::Constant(_))
-                | (IriOperand::Constant(_), IriOperand::Template { parts, base: None }) => parts,
-                _ => return false,
-            };
-            parts.iter().any(|part| matches!(part, IriPart::Column(_)))
-                && parts.iter().all(|part| match part {
-                    IriPart::Literal(_) => true,
-                    IriPart::Column(c) => {
-                        c.alias == input.alias
-                            && columns.iter().any(|(name, _)| name == &c.column)
-                            && scalar_column(c, &actuals) == Some(NativeScalarKey::Integer)
-                            && literal_datatype::fact(c, &actuals)
-                                == Some(Some(sf_core::datatype::XsdTypeCode::Integer))
-                    }
-                })
-        })
-        .cloned()
-        .collect();
-    if additional.is_empty() {
-        return unchanged;
-    }
-    let mut scan = opt.scan.clone();
-    let ScanSource::Projection { guards, .. } = &mut scan.source else {
-        unreachable!()
-    };
-    guards.extend(additional);
-    std::borrow::Cow::Owned(scan)
-}
+#[cfg(test)]
+pub(super) use super::scan::template::restrict_optional;
 
 pub(super) fn column(
     column: &ColRef,
@@ -83,6 +14,7 @@ pub(super) fn column(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     if dialect == Dialect::MySql && base.is_none() && static_iri_column(column, actuals) {
         return Ok(path_comparison::exact_text(
@@ -97,7 +29,7 @@ pub(super) fn column(
             Error::Unsupported("resolved column-IRI identity requires a live SQLite decoder".into())
         })?;
     let lexical = lexical_key::expression(colref(column, dialect, actuals), decode, catalog);
-    finalize(lexical, base, dialect, catalog, params, pidx)
+    finalize(lexical, base, dialect, catalog, params, pidx, work)
 }
 
 pub(super) fn unreserved_column(column: &ColRef, actuals: &ActualColumns) -> bool {
@@ -110,17 +42,34 @@ pub(super) fn unreserved_column(column: &ColRef, actuals: &ActualColumns) -> boo
     })
 }
 
+#[cfg(test)]
 pub(super) fn encode_text_column(
     column: &ColRef,
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
 ) -> Result<String> {
+    encode_text_column_controlled(
+        column,
+        dialect,
+        catalog,
+        actuals,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn encode_text_column_controlled(
+    column: &ColRef,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
     let text = path_comparison::rdf_column(column, dialect, catalog, actuals);
     if dialect == Dialect::MySql && unreserved_column(column, actuals) {
         Ok(text)
     } else {
-        percent_encode_col(&text, dialect)
+        percent_encode_col_controlled(&text, dialect, catalog, work)
     }
 }
 
@@ -131,14 +80,15 @@ fn finalize(
     catalog: &ColumnCatalog,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     catalog
         .lexical_keys
         .store(true, std::sync::atomic::Ordering::Relaxed);
     let base = match base {
         Some(base) => {
-            params.push(base.to_owned());
-            *pidx += 1;
+            work.parameter(params, pidx, base)
+                .map_err(source_control::validation_error)?;
             dialect.placeholder(*pidx)
         }
         None => "NULL".into(),
@@ -159,19 +109,22 @@ pub(super) fn template(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     if base.is_none() && matches!(dialect, Dialect::Postgres | Dialect::MySql) {
-        let mut expressions = Vec::with_capacity(parts.len());
+        let mut expressions = work
+            .vector(parts.len())
+            .map_err(source_control::validation_error)?;
         for part in parts {
             expressions.push(match part {
                 IriPart::Literal(text) => {
-                    params.push(text.to_string());
-                    *pidx += 1;
+                    work.parameter(params, pidx, text)
+                        .map_err(source_control::validation_error)?;
                     dialect.placeholder(*pidx)
                 }
                 IriPart::Column(column) => {
                     if path_comparison::column_text(column, actuals).is_some() {
-                        encode_text_column(column, dialect, catalog, actuals)?
+                        encode_text_column_controlled(column, dialect, catalog, actuals, work)?
                     } else if let Some(key) = scalar_column(column, actuals) {
                         scalar_template_key(key, &colref(column, dialect, actuals), dialect)?
                     } else {
@@ -192,12 +145,13 @@ pub(super) fn template(
         return Ok(path_comparison::exact_text(lexical, dialect));
     }
     finalize(
-        template_lexical(parts, dialect, catalog, actuals)?,
+        template_lexical_controlled(parts, dialect, catalog, actuals, work)?,
         base,
         dialect,
         catalog,
         params,
         pidx,
+        work,
     )
 }
 
@@ -335,7 +289,7 @@ pub(super) fn qualified_static_template(
         })
 }
 
-fn supports_scalar_template_key(key: NativeScalarKey, dialect: Dialect) -> bool {
+pub(super) fn supports_scalar_template_key(key: NativeScalarKey, dialect: Dialect) -> bool {
     matches!(
         (dialect, key),
         (
@@ -363,6 +317,7 @@ pub(super) fn scalar_column(column: &ColRef, actuals: &ActualColumns) -> Option<
     })
 }
 
+#[cfg(test)]
 pub(super) fn projected_scalars(
     columns: &[(Box<str>, TermMap)],
     inner: &AliasActuals,
@@ -385,18 +340,21 @@ pub(super) fn projected_scalars(
         .collect()
 }
 
-pub(super) fn template_lexical(
+pub(super) fn template_lexical_controlled(
     parts: &[IriPart],
     dialect: Dialect,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     if dialect != Dialect::Sqlite {
         return Err(Error::Unsupported(
             "resolved template-IRI identity requires a live SQLite decoder".into(),
         ));
     }
-    let mut expressions = Vec::with_capacity(parts.len());
+    let mut expressions = work
+        .vector(parts.len())
+        .map_err(source_control::validation_error)?;
     for part in parts {
         expressions.push(match part {
             IriPart::Literal(text) => sql_string_literal(text),
@@ -408,7 +366,7 @@ pub(super) fn template_lexical(
                 })?;
                 let lexical =
                     lexical_key::expression(colref(column, dialect, actuals), decode, catalog);
-                percent_encode_col(&lexical, dialect)?
+                percent_encode_col_controlled(&lexical, dialect, catalog, work)?
             }
         });
     }
@@ -426,7 +384,9 @@ pub(super) fn render(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let mut operand = |operand: &IriOperand| match operand {
         IriOperand::Column { column: col, base } => column(
             col,
@@ -436,6 +396,7 @@ pub(super) fn render(
             actuals,
             params,
             pidx,
+            work,
         ),
         IriOperand::Template { parts, base } => template(
             parts,
@@ -445,10 +406,11 @@ pub(super) fn render(
             actuals,
             params,
             pidx,
+            work,
         ),
         IriOperand::Constant(iri) => {
-            params.push(iri.as_str().to_owned());
-            *pidx += 1;
+            work.parameter(params, pidx, iri.as_str())
+                .map_err(source_control::validation_error)?;
             Ok(path_comparison::exact_text(
                 dialect.placeholder(*pidx),
                 dialect,

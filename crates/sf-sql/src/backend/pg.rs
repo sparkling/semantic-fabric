@@ -367,11 +367,22 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
         &mut self,
         probe_sql: &str,
     ) -> Result<Vec<crate::backend::ResultColumn>> {
+        self.result_columns_controlled(probe_sql, &sf_core::query_control::UncontrolledQueryControl)
+            .await
+    }
+
+    async fn result_columns_controlled(
+        &mut self,
+        probe_sql: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Vec<crate::backend::ResultColumn>> {
+        let work = crate::source_work::SourceWork::new(Some(control));
+        work.checkpoint()?;
         let stmt = self.client.prepare(probe_sql).await?;
-        Ok(stmt
-            .columns()
-            .iter()
-            .map(|column| crate::backend::ResultColumn {
+        let mut output = work.vector(stmt.columns().len())?;
+        for column in stmt.columns() {
+            work.charge(1)?;
+            output.push(crate::backend::ResultColumn {
                 natural_datatype: pg_xsd_code(column.type_()),
                 native_scalar: match *column.type_() {
                     Type::INT2 | Type::INT4 | Type::INT8 => Some(super::NativeScalarKey::Integer),
@@ -383,14 +394,16 @@ impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
                     _ => None,
                 },
                 sqlite_decode: None,
-                name: column.name().to_owned(),
+                name: work.string(column.name())?,
                 text_key: match *column.type_() {
                     Type::TEXT | Type::VARCHAR => Some(crate::backend::TextKey::Verbatim),
                     Type::BPCHAR => Some(crate::backend::TextKey::PostgresCharacter),
                     _ => None,
                 },
-            })
-            .collect())
+            });
+        }
+        work.checkpoint()?;
+        Ok(output)
     }
 
     async fn open_branch(&mut self, sql: &str, lexical_params: &[String]) -> Result<PgRowStream> {

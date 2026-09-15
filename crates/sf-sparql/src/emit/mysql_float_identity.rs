@@ -80,6 +80,7 @@ pub(in crate::emit) fn template_comparison(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<Option<String>> {
     use crate::iq::iri_cmp::{IriComparison, IriOperand, IriPart};
     let SqlCond::TemplateEq(left, a, right, b, iri) = cond else {
@@ -120,6 +121,7 @@ pub(in crate::emit) fn template_comparison(
         actuals,
         params,
         pidx,
+        work,
     )
     .map(Some)
 }
@@ -154,26 +156,48 @@ pub(in crate::emit) fn decoder_key(
 
 /// A pooled MySQL FLOAT/DOUBLE field may change width or fixed-scale spelling.
 /// Hidden guards do not consume its output; independent root arms stay separate.
+#[cfg(test)]
 pub(in crate::emit) fn validate_union(
     branches: &[Branch],
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<()> {
+    validate_union_controlled(
+        branches,
+        dialect,
+        catalog,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(in crate::emit) fn validate_union_controlled(
+    branches: &[Branch],
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<()> {
     if dialect != Dialect::MySql || branches.len() < 2 {
         return Ok(());
     }
     for branch in branches {
-        let actuals = branch_actuals(branch, dialect, catalog);
+        let actuals = branch_actuals_controlled(branch, dialect, catalog, work)?;
+        let mut rendered_float = false;
+        for scan in branch
+            .core
+            .iter()
+            .chain(branch.opts.iter().map(|join| &join.scan))
+        {
+            if has_rendered_float(scan, dialect, catalog, work)? {
+                rendered_float = true;
+                break;
+            }
+        }
         if branch
             .bindings
             .values()
             .flat_map(TermDef::columns)
             .any(|column| iri_cmp::scalar_column(&column, &actuals).is_some_and(is_float))
-            || branch
-                .core
-                .iter()
-                .chain(branch.opts.iter().map(|join| &join.scan))
-                .any(|scan| has_rendered_float(scan, dialect, catalog))
+            || rendered_float
         {
             return Err(Error::Unsupported(
                 "native MySQL floating UNION requires qualified pooled decoder normalization"
@@ -187,11 +211,19 @@ pub(in crate::emit) fn validate_union(
 /// Rendered pooling hides a template's source scalar behind a text column.
 /// Check before that lineage is erased; raw D1/pass-through projections remain
 /// governed by the output-consumer check above. This is only a UNION veto.
-fn has_rendered_float(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) -> bool {
+fn has_rendered_float(
+    scan: &Scan,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<bool> {
     match &scan.source {
         ScanSource::Projection { input, columns, .. } => {
-            let actuals = HashMap::from([(input.alias, scan_actuals(input, dialect, catalog))]);
-            columns.iter().any(|(_, term)| {
+            let actuals = HashMap::from([(
+                input.alias,
+                metadata::scan_actuals_controlled(input, dialect, catalog, work)?,
+            )]);
+            let rendered = columns.iter().any(|(_, term)| {
                 matches!(term,
                 TermMap::Template(template, spec)
                     if template_has_float(template.segments(), input.alias, &actuals)
@@ -201,17 +233,26 @@ fn has_rendered_float(scan: &Scan, dialect: Dialect, catalog: &ColumnCatalog) ->
                             dialect,
                             &actuals[&input.alias],
                         ))
-            }) || has_rendered_float(input, dialect, catalog)
+            });
+            Ok(rendered || has_rendered_float(input, dialect, catalog, work)?)
         }
-        ScanSource::RefAtom { input, .. } => input
-            .core
-            .iter()
-            .chain(input.opts.iter().map(|join| &join.scan))
-            .any(|scan| has_rendered_float(scan, dialect, catalog)),
-        ScanSource::Logical(_) | ScanSource::Path { .. } => false,
+        ScanSource::RefAtom { input, .. } => {
+            for scan in input
+                .core
+                .iter()
+                .chain(input.opts.iter().map(|join| &join.scan))
+            {
+                if has_rendered_float(scan, dialect, catalog, work)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ScanSource::Logical(_) | ScanSource::Path { .. } => Ok(false),
     }
 }
 
+#[cfg(test)]
 pub(in crate::emit) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -219,6 +260,25 @@ pub(in crate::emit) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(in crate::emit) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     if dialect != Dialect::MySql
         || cmp.value_op.is_some()
         || ![&cmp.left, &cmp.right].iter().any(|operand| {
@@ -259,8 +319,8 @@ pub(in crate::emit) fn comparison(
             )));
         }
     }
-    let left = operand(&cmp.left, actuals, params, pidx)?;
-    let right = operand(&cmp.right, actuals, params, pidx)?;
+    let left = operand(&cmp.left, actuals, params, pidx, work)?;
+    let right = operand(&cmp.right, actuals, params, pidx, work)?;
     // Tags: 0 finite canonical term; 1 nonmatching constant; 2 missing column.
     Ok(Some(format!(
         r#"(WITH __sf_float_identity AS (
@@ -289,9 +349,17 @@ fn operand(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     match value {
         LiteralOperand::Constant(literal) => {
+            // Pay both lexical parses (promotion and canonical form) and the
+            // bounded canonical Double buffer before any parser reads the bytes.
+            for _ in 0..2 {
+                source_control::numeric_lexical(literal.value(), work)
+                    .map_err(source_control::validation_error)?;
+            }
+            work.charge(64).map_err(source_control::validation_error)?;
             let mut canonical = String::new();
             let parsed = sf_core::numeric_compare::promote_to_double(
                 literal.value(),
@@ -313,11 +381,11 @@ fn operand(
                 .expect("canonical Double exponent");
             let (whole, fraction) = mantissa.split_once('.').expect("canonical Double fraction");
             let exponent: i32 = exponent.parse().expect("bounded Double exponent");
-            params.push(format!(
-                "{whole}{fraction}e{}",
-                exponent - fraction.len() as i32
-            ));
-            *pidx += 1;
+            work.charge(1024)
+                .map_err(source_control::validation_error)?;
+            let parameter = format!("{whole}{fraction}e{}", exponent - fraction.len() as i32);
+            work.parameter(params, pidx, &parameter)
+                .map_err(source_control::validation_error)?;
             Ok(format!(
                 "JSON_ARRAY(0,CAST(? AS DOUBLE),{})",
                 if value == 0. && value.is_sign_negative() {

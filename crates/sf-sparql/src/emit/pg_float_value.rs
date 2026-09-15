@@ -65,6 +65,7 @@ fn kind(value: &LiteralOperand, actuals: &ActualColumns) -> Kind {
     }
 }
 
+#[cfg(test)]
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -72,6 +73,25 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let Some(op) = cmp.value_op else {
         return Ok(None);
     };
@@ -87,8 +107,8 @@ pub(super) fn comparison(
         return Ok(None);
     };
     let sql_type = promotion.sql_type();
-    let left = operand(&cmp.left, promotion, actuals, params, pidx)?;
-    let right = operand(&cmp.right, promotion, actuals, params, pidx)?;
+    let left = operand(&cmp.left, promotion, actuals, params, pidx, work)?;
+    let right = operand(&cmp.right, promotion, actuals, params, pidx, work)?;
     let nan_result = if op == crate::iq::CmpOp::Ne {
         "TRUE"
     } else {
@@ -105,15 +125,22 @@ fn operand(
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     let sql_type = promotion.sql_type();
     let null = format!("CAST(NULL AS {sql_type})");
     if let LiteralOperand::Constant(literal) = value {
+        // Pay the lexical parse, then the fixed IEEE f32/f64 display, which is
+        // shorter than 1024 bytes including expanded subnormal digits.
+        source_control::numeric_lexical(literal.value(), work)
+            .map_err(source_control::validation_error)?;
+        work.charge(1024)
+            .map_err(source_control::validation_error)?;
         return Ok(
             match promotion.constant(literal.value(), literal.datatype().as_str()) {
                 Some(value) => {
-                    params.push(value);
-                    *pidx += 1;
+                    work.parameter(params, pidx, &value)
+                        .map_err(source_control::validation_error)?;
                     format!("CAST(${} AS {sql_type})", *pidx)
                 }
                 None => null,
@@ -263,3 +290,35 @@ fn numeric(raw: &str, promotion: Promotion) -> String {
 #[cfg(test)]
 #[path = "pg_float_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod lexical_tests {
+    use super::*;
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+
+    #[test]
+    fn constant_parse_is_paid_by_lexical_length_before_display() {
+        let consumed = |lexical: &str| {
+            let control =
+                QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+            let value = LiteralOperand::Constant(sf_core::Literal::new_typed_literal(
+                lexical,
+                XsdTypeCode::Double.iri(),
+            ));
+            operand(
+                &value,
+                Promotion::Double,
+                &ActualColumns::new(),
+                &mut vec![],
+                &mut 0,
+                sf_sql::source_work::SourceWork::new(Some(&control)),
+            )
+            .unwrap();
+            control.consumed(QueryCharge::SourceWork)
+        };
+        let zeros = "0".repeat(100);
+        assert_eq!(consumed(&format!("1.0{zeros}")), consumed("1.0") + 400);
+        // A rejected lexical still pays the scan that rejects it.
+        assert_eq!(consumed(&format!("x{zeros}")), consumed("x") + 400);
+    }
+}

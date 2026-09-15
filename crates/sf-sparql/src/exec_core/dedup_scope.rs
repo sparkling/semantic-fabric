@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::iq::{Branch, TermDef};
+use crate::iq::Branch;
 use crate::unfold::DedupMarker;
 use crate::{DedupScope, Error, PlanForm, Result};
 
@@ -240,9 +240,10 @@ fn malformed_key() -> Error {
     Error::Unsupported("shared term-dedup key metadata is malformed -> 501".to_owned())
 }
 
+#[cfg(test)]
 pub(super) fn overlay_key_bindings(
     branch: &mut Branch,
-    key_bindings: &BTreeMap<String, TermDef>,
+    key_bindings: &BTreeMap<String, crate::iq::TermDef>,
 ) -> Result<()> {
     for (variable, definition) in key_bindings {
         if let Some(existing) = branch.bindings.get(variable) {

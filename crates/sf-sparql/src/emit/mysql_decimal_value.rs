@@ -3,6 +3,7 @@ use super::*;
 use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 use pg_decimal_value::{datatype, exact};
 
+#[cfg(test)]
 pub(super) fn comparison(
     cmp: &LiteralComparison,
     dialect: Dialect,
@@ -11,6 +12,27 @@ pub(super) fn comparison(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
+    comparison_controlled(
+        cmp,
+        dialect,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+pub(super) fn comparison_controlled(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<Option<String>> {
+    work.charge(1).map_err(source_control::validation_error)?;
     let Some(op) = cmp.value_op else {
         return Ok(None);
     };
@@ -29,8 +51,8 @@ pub(super) fn comparison(
     {
         return Ok(None);
     }
-    let left = operand(&cmp.left, catalog, actuals, params, pidx)?;
-    let right = operand(&cmp.right, catalog, actuals, params, pidx)?;
+    let left = operand_controlled(&cmp.left, catalog, actuals, params, pidx, work)?;
+    let right = operand_controlled(&cmp.right, catalog, actuals, params, pidx, work)?;
     // Each stage is one row with nullable cells, never a WHERE-filtered row.
     // LIMIT blocks merging/pushdown; both cells retain source validations.
     // Digit strings are binary only AFTER UTF8 regex normalization (MySQL's
@@ -52,20 +74,21 @@ pub(super) fn comparison(
     )))
 }
 
-pub(super) fn raw_operand(
+pub(super) fn raw_operand_controlled(
     value: &LiteralOperand,
     catalog: &ColumnCatalog,
     actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     let unsupported = || {
         Error::Unsupported("exact MySQL numeric comparison requires compatible decoder and retained datatype provenance".into())
     };
     let raw = match value {
         LiteralOperand::Constant(literal) => {
-            params.push(literal.value().to_owned());
-            *pidx += 1;
+            work.parameter(params, pidx, literal.value())
+                .map_err(source_control::validation_error)?;
             "CONVERT(? USING utf8mb4)".into()
         }
         LiteralOperand::Column { column, spec } => {
@@ -120,6 +143,7 @@ pub(super) fn raw_operand(
     Ok(raw)
 }
 
+#[cfg(test)]
 fn operand(
     value: &LiteralOperand,
     catalog: &ColumnCatalog,
@@ -127,11 +151,29 @@ fn operand(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
+    operand_controlled(
+        value,
+        catalog,
+        actuals,
+        params,
+        pidx,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+}
+
+fn operand_controlled(
+    value: &LiteralOperand,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
     let datatype = datatype(value, actuals).ok_or_else(|| Error::Unsupported("exact MySQL numeric comparison requires compatible decoder and retained datatype provenance".into()))?;
     if matches!(value, LiteralOperand::Constant(_)) && !exact(datatype) {
         return Ok("CAST(NULL AS CHAR)".into());
     }
-    let raw = raw_operand(value, catalog, actuals, params, pidx)?;
+    let raw = raw_operand_controlled(value, catalog, actuals, params, pidx, work)?;
     if !exact(datatype) {
         return Ok(format!("(WITH __sf_exact_checked AS (SELECT {raw} AS v LIMIT 18446744073709551615) SELECT CAST(NULLIF(LENGTH(v),LENGTH(v)) AS CHAR) FROM __sf_exact_checked)"));
     }

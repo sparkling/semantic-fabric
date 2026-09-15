@@ -368,6 +368,7 @@ fn mysql_static_template_authority_requires_every_slot_and_encodes_once() {
         &raw_actuals,
         &mut vec![],
         &mut 0,
+        sf_sql::source_work::SourceWork::new(None),
     )
     .is_err());
 
@@ -439,6 +440,7 @@ fn mysql_static_iri_lineage_intersects_across_union_and_licenses_column_identity
         &actuals,
         &mut params,
         &mut 0,
+        sf_sql::source_work::SourceWork::new(None),
     )
     .unwrap();
     assert!(sql.contains("utf8mb4_0900_bin"), "{sql}");

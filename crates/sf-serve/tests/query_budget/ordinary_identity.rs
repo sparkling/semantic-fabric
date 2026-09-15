@@ -37,8 +37,14 @@ async fn answer(cfg: ServeConfig, query: &str) -> serde_json::Value {
         .oneshot(authenticated(query))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "{query}");
+    let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{query}: {}",
+        String::from_utf8_lossy(&body)
+    );
     serde_json::from_slice(&body).unwrap()
 }
 

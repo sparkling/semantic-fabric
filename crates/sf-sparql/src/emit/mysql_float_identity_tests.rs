@@ -33,6 +33,28 @@ fn setup(key: NativeScalarKey) -> (LiteralComparison, ColumnCatalog, ActualColum
 }
 
 #[test]
+fn constant_parse_is_paid_by_lexical_length_before_canonical_form() {
+    use sf_core::query_control::{QueryBudget, QueryCharge, QueryLimits};
+    let (_, _, actuals) = setup(NativeScalarKey::MysqlFloat8);
+    let consumed = |lexical: &str| {
+        let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+        let value = LiteralOperand::Constant(Literal::new_typed_literal(lexical, Double.iri()));
+        operand(
+            &value,
+            &actuals,
+            &mut vec![],
+            &mut 0,
+            sf_sql::source_work::SourceWork::new(Some(&control)),
+        )
+        .unwrap();
+        control.consumed(QueryCharge::SourceWork)
+    };
+    // Promotion and canonicalization each scan the lexical before rejecting it.
+    let zeros = "0".repeat(100);
+    assert_eq!(consumed(&format!("x{zeros}")), consumed("x") + 800);
+}
+
+#[test]
 fn canonical_constants_bind_integer_coefficients_and_integer_zero_signs() {
     for key in [NativeScalarKey::MysqlFloat4, NativeScalarKey::MysqlFloat8] {
         let (mut cmp, _, actuals) = setup(key);
