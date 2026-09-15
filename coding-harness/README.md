@@ -126,9 +126,14 @@ Native binding fields are `host`, `model`, `effort`, `executorId`,
 `authentication: "native-subscription"`, and `observation` (the actual host
 metadata/error, never credentials). Default Codex routes are Luna low for
 mechanical work, Terra medium for patterns, Sol medium for implementation, Sol
-high for a correctness proof, Astra high for difficult work. Claude routes use
-Haiku/Sonnet/Opus with native-default effort. These are explicit project policy,
-not learned quality estimates. `requested: {host, model, effort}` plus
+high for a correctness proof, Astra high for difficult work. Default Claude
+routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
+may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
+Fable is the bounded escalation (ADR-0055) and, like Astra max, requires an
+explicit `requested` route. These are explicit project policy, not learned
+quality estimates. When one native subscription is unavailable, continue on the
+other host with a successor task that adopts the unchanged patches; never fall
+back to keys or another provider. `requested: {host, model, effort}` plus
 `selectionReason` preserves an explicit choice; `preserveMainModel: true`
 retains the active main model and requires its explicit `requested` route.
 Ultra otherwise requires `explicitUltra: true`.

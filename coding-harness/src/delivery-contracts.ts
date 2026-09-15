@@ -58,10 +58,10 @@ export function route(value: unknown): DeliveryRoute {
   if (!/^[a-zA-Z0-9._-]+$/.test(model) || /openrouter|requesty/i.test(model)) {
     throw new Error('DELIVERY_NATIVE_MODEL_REQUIRED');
   }
+  if (r.effort === undefined) throw new Error('DELIVERY_EXPLICIT_NATIVE_EFFORT_REQUIRED');
   if (r.effort !== 'default') codexReasoningArguments(r.effort as CodexReasoningEffort);
-  if (r.effort === undefined || (r.host === 'claude-code' && r.effort !== 'default')) {
-    throw new Error('DELIVERY_EXPLICIT_NATIVE_EFFORT_REQUIRED');
-  }
+  // Claude Code exposes low..max natively; ultra exists only on Codex.
+  if (r.host === 'claude-code' && r.effort === 'ultra') throw new Error('DELIVERY_EFFORT_NOT_NATIVE');
   return { host: r.host, model, effort: r.effort as DeliveryRoute['effort'] };
 }
 export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
