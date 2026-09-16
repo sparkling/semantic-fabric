@@ -16,6 +16,7 @@ fn options(max_concurrent_requests: usize) -> ServeOptions {
         timeout: Duration::from_secs(1),
         max_query_len: 1024,
         max_concurrent_requests,
+        max_compiler_work: 1,
         max_source_work: 1,
         max_result_items: 1,
         max_order_rows: 1,

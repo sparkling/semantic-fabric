@@ -31,6 +31,7 @@ pub(super) const OPTIONS: &[&str] = &[
     "timeout-secs",
     "max-query-len",
     "max-concurrent-requests",
+    "max-compiler-work",
     "max-source-work",
     "max-result-items",
     "max-order-rows",

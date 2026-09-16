@@ -170,6 +170,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         timeout: Duration::from_secs(args.timeout_secs),
         max_query_len: args.max_query_len,
         max_concurrent_requests: args.max_concurrent_requests,
+        max_compiler_work: args.max_compiler_work,
         max_source_work: args.max_source_work,
         max_result_items: args.max_result_items,
         max_order_rows: args.max_order_rows,

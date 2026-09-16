@@ -47,7 +47,7 @@ pub(crate) fn configure(opts: &ServeOptions, config: &mut ServeConfig) -> Result
     config.set_max_concurrent_requests(opts.max_concurrent_requests)?;
     config.set_max_order_rows(opts.max_order_rows);
     config.query_limits = QueryLimits::new(
-        config.query_limits.max_compiler_work(),
+        opts.max_compiler_work,
         opts.max_source_work,
         opts.max_result_items,
         opts.max_serialized_bytes,

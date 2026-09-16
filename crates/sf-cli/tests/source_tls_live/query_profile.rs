@@ -64,6 +64,13 @@ fn start_command(
         "1",
         "--timeout-secs",
         "2",
+        // The default 1,000,000-unit ceiling is tripped by the deliberately
+        // conservative FILTER cost model on exact large-integer/decimal
+        // comparisons this suite exercises on purpose (up to ~400-digit
+        // literals), not by any runaway cost; raise it well above the largest
+        // measured case here while still enforcing a real, finite ceiling.
+        "--max-compiler-work",
+        "100000000",
     ]);
     let log = fixture.root.join("query-profile.stderr");
     let mut server = Server(

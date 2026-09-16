@@ -21,6 +21,9 @@ pub struct ServeOptions {
     pub max_query_len: usize,
     /// Server-wide ceiling for requests admitted into application work.
     pub max_concurrent_requests: usize,
+    /// Inclusive compiler-phase (parse/rewrite/build/resolve/normalize/lower/
+    /// cascade/finalize) logical-work ceiling per request.
+    pub max_compiler_work: u64,
     /// Inclusive metadata-probe, branch-open, and row-pull ceiling per request.
     pub max_source_work: u64,
     /// Inclusive semantic SELECT-row, CONSTRUCT-triple, or ASK-boolean ceiling.

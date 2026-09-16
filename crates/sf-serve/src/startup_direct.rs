@@ -181,6 +181,7 @@ mod tests {
             timeout: Duration::ZERO,
             max_query_len: 4096,
             max_concurrent_requests: 1,
+            max_compiler_work: 100,
             max_source_work: 100,
             max_result_items: 100,
             max_order_rows: 100,

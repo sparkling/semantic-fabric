@@ -63,6 +63,10 @@ pub(super) struct ServeArgs {
     /// Server-wide ceiling for requests admitted into application work.
     #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
     pub(super) max_concurrent_requests: usize,
+    /// Max compiler-phase logical work per request (parse/rewrite/build/resolve/
+    /// normalize/lower/cascade/finalize).
+    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_compiler_work())]
+    pub(super) max_compiler_work: u64,
     /// Max metadata probes, branch opens, and row-pull attempts per request.
     #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_source_work())]
     pub(super) max_source_work: u64,

@@ -316,6 +316,7 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
         timeout_secs: 1,
         max_query_len: 1024,
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+        max_compiler_work: 1_000_000,
         max_source_work: 1_000,
         max_result_items: 1_000,
         max_order_rows: DEFAULT_MAX_ORDER_ROWS,

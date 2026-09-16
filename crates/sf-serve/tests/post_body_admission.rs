@@ -350,6 +350,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
         timeout: Duration::from_secs(1),
         max_query_len: usize::MAX,
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+        max_compiler_work: 1,
         max_source_work: 1,
         max_result_items: 1,
         max_order_rows: 1,

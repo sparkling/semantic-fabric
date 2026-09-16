@@ -50,6 +50,7 @@ impl Fixture {
             max_concurrent_requests: 8,
             // These cases qualify reload ownership, not an isolated work phase.
             // Keep complete request preparation funded at the application default.
+            max_compiler_work: crate::DEFAULT_QUERY_LIMITS.max_compiler_work(),
             max_source_work: crate::DEFAULT_QUERY_LIMITS.max_source_work(),
             max_result_items: 1000,
             max_order_rows: 100,
