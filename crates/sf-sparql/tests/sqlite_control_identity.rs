@@ -147,3 +147,53 @@ fn rust_group_limit_zero_answers_empty_before_any_source_probe() {
     let solutions = exec::select(&zero, &conn).expect("LIMIT 0 answers before any source probe");
     assert!(solutions.rows.is_empty());
 }
+
+const REF_ATOM_MAPPING: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.test/> .
+<#parent> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "ref_parent" ] ;
+  rr:subjectMap [ rr:template "http://example.test/n/{label}" ] .
+<#child> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "ref_child" ] ;
+  rr:subjectMap [ rr:template "http://example.test/n/{s}" ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:edge ;
+    rr:objectMap [ rr:parentTriplesMap <#parent>; rr:joinCondition [ rr:child "fk"; rr:parent "k" ] ]
+  ] .
+"#;
+
+async fn ref_atom_source_work(query: &str) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryLimits};
+
+    let maps = sf_mapping::parse_r2rml(REF_ATOM_MAPPING).expect("parse mapping");
+    let plan = parse_and_translate(query, &maps, Dialect::Sqlite).expect("translate query");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE ref_parent(k TEXT, label TEXT);
+         CREATE TABLE ref_child(s TEXT, fk TEXT);
+         INSERT INTO ref_parent VALUES ('a','target');
+         INSERT INTO ref_child VALUES ('one','a'), ('two','a');",
+    )
+    .unwrap();
+    let conn = Arc::new(Mutex::new(conn));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    exec::select_each_sqlite_owned_controlled(&plan, conn, &budget, |_row| async { Ok(()) })
+        .await
+        .expect("ref-atom query executes under a real budget");
+    budget.consumed(QueryCharge::SourceWork)
+}
+
+/// Pins `ref_atom.rs`'s own single call site that passes `work` into
+/// `literal_roles::resolved_controlled`, distinct from the callee's own
+/// exact/scaling tests in `literal_roles.rs`. The exact total below was
+/// measured with the real call in place, then re-measured (46139, a 1332-unit
+/// drop) after temporarily changing that one call's `work` argument to
+/// `SourceWork::new(None)` and restoring it — proving this assertion would
+/// fail if that specific call site regressed, not just that some SourceWork
+/// is charged somewhere in a reference-atom join.
+#[tokio::test]
+async fn resolved_controlled_call_site_in_ref_atom_sql_is_pinned() {
+    let total = ref_atom_source_work("SELECT ?o WHERE { ?s <http://example.test/edge> ?o }").await;
+    assert_eq!(total, 47471);
+}
