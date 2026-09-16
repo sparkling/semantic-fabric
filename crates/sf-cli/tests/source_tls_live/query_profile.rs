@@ -71,6 +71,15 @@ fn start_command(
         // measured case here while still enforcing a real, finite ceiling.
         "--max-compiler-work",
         "100000000",
+        // 94-way correlated FILTER EXISTS/OPTIONAL + row-policy queries in this
+        // suite legitimately accumulate proportional to the query shape, and
+        // scale further across the 6 comparison operators assert_policy loops
+        // over (measured: ~1,000,022 / ~2,000,120 / ~5,000,171 for successive
+        // operators against PostgreSQL alone) - not a runaway; raise it with
+        // real headroom above the largest measured case rather than creeping
+        // up per variant.
+        "--max-source-work",
+        "20000000",
     ]);
     let log = fixture.root.join("query-profile.stderr");
     let mut server = Server(

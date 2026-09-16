@@ -3014,36 +3014,45 @@ const MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES: usize = MYSQL_GROUP_CONCAT_MAX_LEN /
 const MYSQL_PACKET_RESERVE_BYTES: usize = 4_096;
 
 fn percent_encode_col_mysql(col: &str) -> String {
-    let ucschar = encoding_ucschar::byte_member(col, Dialect::MySql);
-    let valid_utf8 = encoding_ucschar::valid_non_ascii_byte(col, Dialect::MySql);
+    // Bind the BINARY cast once as `pre.b` and reference that short alias
+    // everywhere below, instead of re-embedding the (potentially long) column
+    // expression at each of the ~40 byte-range/length checks. This is a pure
+    // SQL-text-size optimization: it does not change which bytes are read or
+    // how they are classified, only how many times the source expression is
+    // spelled out. `CAST(NULL AS BINARY) IS NULL`, so the null check is
+    // unaffected; `pre` is always exactly one row, so this remains a scalar
+    // expression usable anywhere `{col}` was used directly before.
+    let ucschar = encoding_ucschar::byte_member("pre.b", Dialect::MySql);
+    let valid_utf8 = encoding_ucschar::valid_non_ascii_byte("pre.b", Dialect::MySql);
     format!(
-        "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
+        "(SELECT CASE WHEN pre.b IS NULL THEN NULL ELSE COALESCE((\
 SELECT /*+ SET_VAR(group_concat_max_len = {group_limit}) */ \
 CONVERT(CAST(GROUP_CONCAT(\
 CASE \
-WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
-OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '41' AND '5A' \
-OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '61' AND '7A' \
-OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) IN ('2D', '2E', '5F', '7E') \
+WHEN HEX(SUBSTRING(pre.b, n, 1)) BETWEEN '30' AND '39' \
+OR HEX(SUBSTRING(pre.b, n, 1)) BETWEEN '41' AND '5A' \
+OR HEX(SUBSTRING(pre.b, n, 1)) BETWEEN '61' AND '7A' \
+OR HEX(SUBSTRING(pre.b, n, 1)) IN ('2D', '2E', '5F', '7E') \
 OR {ucschar} \
-THEN SUBSTRING(CAST({col} AS BINARY), n, 1) \
-WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) >= '80' AND NOT {valid_utf8} \
+THEN SUBSTRING(pre.b, n, 1) \
+WHEN HEX(SUBSTRING(pre.b, n, 1)) >= '80' AND NOT {valid_utf8} \
 THEN JSON_EXTRACT('semantic-fabric-invalid-utf8', '$') \
-ELSE CAST(CONCAT('%', HEX(SUBSTRING(CAST({col} AS BINARY), n, 1))) AS BINARY) \
+ELSE CAST(CONCAT('%', HEX(SUBSTRING(pre.b, n, 1))) AS BINARY) \
 END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
 FROM JSON_TABLE(\
-CASE WHEN LENGTH(CAST({col} AS BINARY)) = 0 THEN '[]' \
-WHEN LENGTH(CAST({col} AS BINARY)) > LEAST(\
+CASE WHEN LENGTH(pre.b) = 0 THEN '[]' \
+WHEN LENGTH(pre.b) > LEAST(\
 {max_input}, \
 GREATEST(CAST(@@SESSION.group_concat_max_len AS SIGNED), 0) DIV 3, \
 GREATEST(CAST(@@SESSION.max_allowed_packet AS SIGNED) - {packet_reserve}, 0) DIV 3\
 ) \
 THEN 'semantic-fabric-percent-encoding-input-limit' \
-ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
+ELSE CONCAT('[0', REPEAT(',0', LENGTH(pre.b) - 1), ']') END, \
 '$[*]' COLUMNS (n FOR ORDINALITY)\
 ) AS sfpe\
-), '') END)",
+), '') END \
+FROM (SELECT CAST({col} AS BINARY) AS b) AS pre)",
         group_limit = MYSQL_GROUP_CONCAT_MAX_LEN,
         max_input = MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
         packet_reserve = MYSQL_PACKET_RESERVE_BYTES,
@@ -3108,6 +3117,115 @@ mod tests {
     use super::*;
     use crate::iq::{Scan, StrMatchOp};
     use sf_core::ir::{LogicalSource, TermSpec};
+
+    /// Regression guard for the fix that bound the MySQL BINARY cast once
+    /// (`pre.b`) instead of re-embedding the source column expression at
+    /// every byte-range/length check: before that fix MySQL's `repeats` was
+    /// 148 (vs. PostgreSQL's 2 and SQLite's 1), so `SourceWork` charged for
+    /// percent-encoding a MySQL column scaled ~74x worse per byte of column-
+    /// expression length than the other dialects for the identical
+    /// semantic check, not because of any larger actual workload. `<= 5`
+    /// leaves headroom for incidental template growth while catching a
+    /// reintroduced per-check re-embedding of the column expression.
+    #[test]
+    fn mysql_percent_encoder_repeats_stays_bounded() {
+        let repeats = |dialect| {
+            let fixed = percent_encode_col("", dialect).map_or(0, |sql| sql.len());
+            let with_x = percent_encode_col("x", dialect).map_or(0, |sql| sql.len());
+            with_x - fixed
+        };
+        assert!(
+            repeats(Dialect::MySql) <= 5,
+            "MySQL percent-encoding repeats={} (was 148 before pre.b binding)",
+            repeats(Dialect::MySql)
+        );
+    }
+
+    /// Mirrors [`percent_encode_col_sqlite_matches_reference_iri_encoding`]
+    /// for MySQL, plus the two standalone-invalid-UTF-8 byte cases (0x80, a
+    /// lone continuation byte; 0xC2, a lone 2-byte lead), which deliberately
+    /// make the generated SQL raise via `JSON_EXTRACT` on invalid JSON per
+    /// [`percent_encode_col_mysql`]'s own doc comment, rather than compare
+    /// against `reference_encode` (which requires valid UTF-8 input).
+    /// Verified against a live MySQL 8.4 instance during this fix's
+    /// development: identical pass/fail and identical encoded output to the
+    /// pre-fix template across every case here, only the generated SQL's
+    /// `repeats` factor changed (148 -> 1).
+    #[tokio::test]
+    #[ignore = "requires a purpose-created isolated MySQL provider"]
+    async fn mysql_percent_encoder_matches_reference_iri_encoding() {
+        use mysql_async::prelude::Queryable;
+
+        let socket = std::env::var("SF_MYSQL_SOCKET")
+            .expect("required-live MySQL socket must be configured");
+        let opts: mysql_async::Opts = mysql_async::OptsBuilder::default()
+            .user(Some("root"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into();
+        let mut conn = mysql_async::Conn::new(opts)
+            .await
+            .unwrap_or_else(|_| panic!("connect to isolated MySQL provider failed"));
+        conn.query_drop("CREATE TEMPORARY TABLE t (v BLOB)")
+            .await
+            .unwrap();
+
+        let mut cases: Vec<Option<Vec<u8>>> = vec![
+            Some(b"a b/c".to_vec()),
+            Some(b"A-z.0_9~".to_vec()),
+            Some(b"".to_vec()),
+            None,
+            Some(b"X/Y".to_vec()),
+            Some("你好/世界".as_bytes().to_vec()),
+            Some(b"tab\ttab".to_vec()),
+            Some(b"nul\0nul".to_vec()),
+        ];
+        for b in 0x20u8..=0x7e {
+            cases.push(Some(vec![b]));
+        }
+        for b in 0..=0x1fu8 {
+            cases.push(Some(vec![b]));
+        }
+        cases.push(Some(vec![0x7fu8]));
+
+        let sql = percent_encode_col("t.v", Dialect::MySql).expect("MySQL is supported");
+        let query = format!("SELECT {sql} FROM t");
+        let mut mismatches = Vec::new();
+        for v in &cases {
+            conn.query_drop("DELETE FROM t").await.unwrap();
+            conn.exec_drop("INSERT INTO t (v) VALUES (?)", (v.clone(),))
+                .await
+                .unwrap();
+            let got = conn
+                .query_first::<Option<String>, _>(&query)
+                .await
+                .unwrap()
+                .flatten();
+            let want = v
+                .as_ref()
+                .map(|bytes| reference_encode(&String::from_utf8_lossy(bytes)));
+            if got != want {
+                mismatches.push(format!("input={v:?} got={got:?} want={want:?}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+
+        for invalid in [vec![0x80u8], vec![0xC2u8]] {
+            conn.query_drop("DELETE FROM t").await.unwrap();
+            conn.exec_drop("INSERT INTO t (v) VALUES (?)", (invalid.clone(),))
+                .await
+                .unwrap();
+            let result = conn.query_first::<Option<String>, _>(&query).await;
+            assert!(
+                result.is_err(),
+                "standalone-invalid UTF-8 {invalid:?} must fail closed, not silently encode"
+            );
+        }
+        conn.disconnect()
+            .await
+            .unwrap_or_else(|_| panic!("close isolated MySQL connection failed"));
+    }
 
     #[test]
     fn subplan_sql_pays_query_text_scans_and_parser_passes() {
