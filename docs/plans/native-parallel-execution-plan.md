@@ -1,6 +1,7 @@
 # Native parallel execution and model usage
 
-Date: 2026-09-19. Status: operating plan; application implementation remains paused.
+Date: 2026-09-19. Updated: 2026-09-20. Status: execution authorized by the user's
+goal "complete the programme using the harness"; G3 work is active.
 Scope: native Codex/ChatGPT and Claude subscription agents, using the existing
 delivery harness. Based on the three-worker design discussion in Ruflo swarm
 `swarm-1789853768325-0ps4xv` and repository evidence through `f2d2a469`.
@@ -129,7 +130,8 @@ tokens when it avoids failed attempts.
 Sources: [current G1-G6 ledger](sota-application-completion-programme.md#remaining-release-gates-2026-09-11),
 [2026-09-19 handover](session-handover-2026-09-19.md#ledger-status), and exact command
 definitions in `tests/capabilities/catalog-v1.json`. This comparison authorizes no
-application execution. It replaces the earlier assumption that the maintenance
+application execution by itself; the later user goal above releases that hold.
+It replaces the earlier assumption that the maintenance
 failures below describe the application's next critical path.
 
 | Gate | Current evidence / remaining outcome | Useful parallelism and dependency |
@@ -239,7 +241,34 @@ remain sufficient; no runtime scheduler changes are justified.
 Validate with the harness build, delivery runtime/workflow regression tests,
 configuration parsing, local link checks, diff checks and independent native
 Claude review. Keep the setup commit scoped and finish against that exact commit.
-No application task is released by completing this setup.
+No application task was released by completing setup alone; the subsequent
+explicit programme-completion goal authorizes the execution below.
+
+### Execution checkpoint (2026-09-20)
+
+Five bounded investigations ran: Sol lifecycle, Sonnet semantic admission/cache,
+Terra acceptance/G1 evidence, Sonnet federation preparation and Luna release
+inventory. Results are proposals until source-checked by the integration owner.
+The lifecycle audit rejected a suggested redundant PostgreSQL digest extension:
+immutable application admission plus exact binding identity and schema/session
+lease revalidation already supply that link. Ordinary SQLite/MySQL generations
+remain unprotected, a real G3 blocker; G4 also needs the admitted combination
+matrix qualified. Do not infer distributed database atomicity, which is not an
+advertised guarantee, from the shared application snapshot requirement.
+
+The first scoped task, `g3-admission-reload-20260920`, qualifies the missing public
+semantic-admission/cache reload evidence in `runtime_activation_http_tests.rs`.
+It uses observed SQLite types, exact duplicate typed results, cached-plan pointer
+reuse, invalid-candidate rejection, a held pre-body request across activation,
+and bidirectional old/new plan rejection. This proves application-generation
+isolation, not a database DDL lease or policy hot reload. G3 stays open.
+
+Next: complete a transaction-backed SQLite generation path from coherent schema
+observation through request compilation and every response form, with DDL and
+terminal-cleanup proof. Retain ordinary PostgreSQL/policy, MySQL and federated
+generation obligations in the queue; an initial SQLite slice cannot close G3.
+G1 receipts confirm the completed declared slices, but retained historical gap
+wording still needs reconciliation with source before a final programme verdict.
 
 Actual cross-provider throughput, independent-session ceilings and model-route
 efficiency remain unmeasured. Resolve them through the above useful work, recording

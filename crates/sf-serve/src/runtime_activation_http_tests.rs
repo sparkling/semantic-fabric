@@ -202,3 +202,173 @@ async fn lineage_uses_the_request_pinned_snapshot_across_reload_and_cache_hits()
     assert_ne!(header(old)["snapshot"], header(new)["snapshot"]);
     assert_ne!(header(old)["logicalPlan"], header(new)["logicalPlan"]);
 }
+
+fn typed_source(integer: bool) -> (IntrospectedSource, SourceMapping) {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(if integer {
+        "CREATE TABLE People(id INTEGER PRIMARY KEY, name INTEGER NOT NULL); \
+         INSERT INTO People VALUES (1, 7), (2, 7);"
+    } else {
+        "CREATE TABLE People(id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+         INSERT INTO People VALUES (1, 'Bob'), (2, 'Bob');"
+    })
+    .unwrap();
+    (
+        IntrospectedSource::observe_sqlite(Backend::sqlite(conn)).unwrap(),
+        SourceMapping::new(
+            SourceId::new(0).unwrap(),
+            sf_mapping::parse_r2rml(MAPPING).unwrap(),
+        ),
+    )
+}
+
+fn typed_ontology(integer: bool) -> crate::SemanticOntology {
+    let datatype = if integer { "integer" } else { "string" };
+    crate::SemanticOntology::from_turtle(&format!(
+        "@prefix ex: <http://example.test/> . \
+         @prefix owl: <http://www.w3.org/2002/07/owl#> . \
+         @prefix sh: <http://www.w3.org/ns/shacl#> . \
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> . \
+         ex:name a owl:DatatypeProperty . \
+         ex:shape sh:property [ sh:path ex:name; sh:datatype xsd:{datatype} ] ."
+    ))
+    .unwrap()
+}
+
+async fn assert_typed_bag(response: axum::response::Response, integer: bool) {
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["head"]["vars"], serde_json::json!(["name"]));
+    let term = if integer {
+        serde_json::json!({"type":"literal", "value":"7",
+            "datatype":"http://www.w3.org/2001/XMLSchema#integer"})
+    } else {
+        serde_json::json!({"type":"literal", "value":"Bob"})
+    };
+    assert_eq!(
+        json["results"]["bindings"],
+        serde_json::json!([
+            {"name":term.clone()}, {"name":term}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn semantic_admission_and_warm_plans_stay_with_the_request_generation() {
+    use sf_core::query_control::UncontrolledQueryControl;
+
+    const QUERY: &str = "SELECT ?name WHERE { ?s <http://example.test/name> ?name }";
+    let source_id = SourceId::new(0).unwrap();
+    let (source, mapping) = typed_source(true);
+    let config = Arc::new(ServeConfig::new(source, mapping, typed_ontology(true)).unwrap());
+    let old = config.runtime_lease().unwrap();
+    let cold = old
+        .compile(source_id, QUERY, &UncontrolledQueryControl)
+        .unwrap();
+    let warm = old
+        .compile(source_id, QUERY, &UncontrolledQueryControl)
+        .unwrap();
+    // A shared plan address proves cache reuse, not merely equal query results.
+    assert!(std::ptr::eq(cold.plan(), warm.plan()));
+    for _ in 0..2 {
+        let response = router(config.clone())
+            .oneshot(request(Body::from(QUERY)))
+            .await
+            .unwrap();
+        assert_typed_bag(response, true).await;
+    }
+
+    let (polled_tx, polled_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let mut gates = Some((polled_tx, release_rx));
+    let stream = tokio_stream::once(()).then(move |_| {
+        let (polled, release) = gates.take().unwrap();
+        async move {
+            polled.send(()).unwrap();
+            release.await.unwrap();
+            Ok::<_, Infallible>(Bytes::from_static(QUERY.as_bytes()))
+        }
+    });
+    let held = tokio::spawn(router(config.clone()).oneshot(request(Body::from_stream(stream))));
+    tokio::time::timeout(std::time::Duration::from_secs(2), polled_rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let before = config.runtime_readiness().unwrap();
+    let (source, mapping) = typed_source(false);
+    let invalid = RuntimeSnapshot::single(
+        Epoch(1),
+        typed_ontology(true),
+        RuntimeSource::new(source, mapping),
+    );
+    assert!(
+        matches!(invalid, Err(crate::SnapshotError::SemanticAdmission {
+        cause: crate::SemanticAdmissionError::Violations { count }, ..
+    }) if count > 0)
+    );
+    assert_eq!(config.runtime_readiness().unwrap(), before);
+    config
+        .mark_runtime_not_ready(before, ReadinessCause::SchemaDrift)
+        .unwrap();
+    let refused = router(config.clone())
+        .oneshot(request(Body::from(QUERY)))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = refused.into_body().collect().await.unwrap().to_bytes();
+    let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(problem["code"], "source-unavailable");
+
+    let (source, mapping) = typed_source(false);
+    let successor = RuntimeSnapshot::single(
+        Epoch(1),
+        typed_ontology(false),
+        RuntimeSource::new(source, mapping),
+    )
+    .unwrap();
+    let old_digests = old.snapshot().registry().digests(source_id).unwrap();
+    let new_digests = successor.registry().digests(source_id).unwrap();
+    assert_eq!(old_digests.mapping(), new_digests.mapping());
+    assert_ne!(old_digests.ontology(), new_digests.ontology());
+    assert_ne!(
+        old_digests.semantic_admission(),
+        new_digests.semantic_admission()
+    );
+    config
+        .activate_snapshot(config.runtime_readiness().unwrap(), successor)
+        .unwrap();
+    let new = config.runtime_lease().unwrap();
+    assert_ne!(old.activation_id(), new.activation_id());
+    let new_cold = new
+        .compile(source_id, QUERY, &UncontrolledQueryControl)
+        .unwrap();
+    let new_warm = new
+        .compile(source_id, QUERY, &UncontrolledQueryControl)
+        .unwrap();
+    assert!(std::ptr::eq(new_cold.plan(), new_warm.plan()));
+    assert!(!std::ptr::eq(cold.plan(), new_cold.plan()));
+    assert!(new.prepare_execution(warm).is_err());
+    assert!(old.prepare_execution(new_warm).is_err());
+
+    // Successor requests complete while the earlier request still pins its lease.
+    for _ in 0..2 {
+        let response = router(config.clone())
+            .oneshot(request(Body::from(QUERY)))
+            .await
+            .unwrap();
+        assert_typed_bag(response, false).await;
+    }
+    release_tx.send(()).unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), held)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_typed_bag(response, true).await;
+    let old_warm = old
+        .compile(source_id, QUERY, &UncontrolledQueryControl)
+        .unwrap();
+    assert!(std::ptr::eq(cold.plan(), old_warm.plan()));
+}
