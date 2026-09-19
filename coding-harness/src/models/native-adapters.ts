@@ -39,7 +39,6 @@ const CODEX_ESSENTIAL_TRAFFIC_CONFIG = Object.freeze([
 ] as const);
 
 const CODEX_FIXED_CONFIG = Object.freeze([
-  'model_provider="openai"',
   'approval_policy="never"',
   ...CODEX_ESSENTIAL_TRAFFIC_CONFIG,
   'project_doc_max_bytes=0',
@@ -129,8 +128,11 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
           [
-            ...CODEX_ESSENTIAL_TRAFFIC_CONFIG.flatMap((value) => ['-c', value]),
-            '-c', 'model_provider="openai"', 'login', 'status',
+            'exec', '--ephemeral', '--ignore-rules', '--strict-config',
+            '--skip-git-repo-check', '--sandbox', 'read-only',
+            '--model', request.requestedModel,
+            ...CODEX_FIXED_CONFIG.flatMap((value) => ['-c', value]),
+            'Do not use tools. Reply exactly READY.',
           ],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
@@ -153,8 +155,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
         ),
       ),
     ] as const, request.signal);
-    const status = `${login.stdout}${login.stderr}`.trim();
-    if (!processSucceeded(login) || status !== 'Logged in using ChatGPT') {
+    const status = login.stdout.trim();
+    if (!processSucceeded(login) || status !== 'READY') {
       throw new NativeAuthPreflightError(
         this.host,
         'HARNESS_CODEX_SUBSCRIPTION_UNAVAILABLE',
@@ -184,7 +186,6 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       '--cd',
       request.cwd,
       '--ephemeral',
-      '--ignore-user-config',
       '--ignore-rules',
       '--strict-config',
       '--skip-git-repo-check',

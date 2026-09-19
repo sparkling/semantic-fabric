@@ -56,7 +56,11 @@ describe('native subscription adapters', () => {
     roots.push(evidenceRoot);
     const runner = new FakeRunner((request) => {
       if (request.executable === '/tools/codex') {
-        return ok(request.args.includes('--version') ? 'codex-cli 1.2.3' : 'Logged in using ChatGPT');
+        if (request.args.includes('--version')) return ok('codex-cli 1.2.3');
+        expect(request.args).toContain('exec');
+        expect(request.args[request.args.indexOf('--model') + 1]).toBe('gpt-5.6-sol');
+        expect(request.args).not.toContain('login');
+        return { ...ok('READY'), stderr: 'Not logged in' };
       }
       return ok(
         request.args.includes('--version')
@@ -165,14 +169,14 @@ describe('native subscription adapters', () => {
       expect.arrayContaining([
         'exec',
         '--ephemeral',
-        '--ignore-user-config',
         '--strict-config',
         '--skip-git-repo-check',
         '--output-schema',
         schemaPath,
       ]),
     );
-    expect(codexRequest?.args.join(' ')).toContain('model_provider="openai"');
+    expect(codexRequest?.args.join(' ')).not.toContain('model_provider="openai"');
+    expect(codexRequest?.args).not.toContain('--ignore-user-config');
     expect(codexRequest?.args.join(' ')).not.toContain('model_reasoning_effort=');
     expect(codexRequest?.args.join(' ')).toContain('analytics.enabled=false');
     expect(codexRequest?.args.join(' ')).toContain('otel.metrics_exporter="none"');
