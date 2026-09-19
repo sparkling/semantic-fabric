@@ -220,6 +220,83 @@ harness task, regardless of which native host runs it:
   Docker-backed test runs (`cargo test ... --ignored native_describe_and_recursive_paths_are_exact`)
   take ~660-700s normally; do not assume a slow run is a regression without
   checking `docker ps` / host load first.
+- **A regression test that measures its own expected value from the code
+  path it's guarding can still prove nothing, even if it superficially looks
+  sound.** An exact/N-1 self-bisection *alone* (comparing a run's output to
+  itself) can pass on a constant even if the fix is later reverted, because
+  the "expected" value was measured from the same code, not known
+  independently — a bare `assert!(total > 0)` does correctly catch total
+  silence (a full revert to no-op measures `0`), but doesn't catch a
+  reverted-but-still-nonzero constant. Caught twice this project by an
+  adversarial reviewer actually reverting the fix and rerunning. Fix: either
+  (a) revert-and-rerun
+  yourself before trusting the test, or (b) assert a relationship between two
+  *different* inputs (e.g. N=1 vs N=3 items must charge strictly more, not
+  just "more than zero") that no fixed constant can satisfy vacuously. If
+  no non-vacuous test is achievable, disclose the gap explicitly rather than
+  leaving a test whose doc-comment overclaims what it proves.
+- **Reachability is not causation.** Grepping/reading to confirm "does
+  suspect code X even run on this failing input" is easy to get wrong
+  (missed indirect call chains) and, even when right, only proves X is
+  reachable, not that X caused the failure. The only thing that settles
+  causation is disabling X (no-op it, or revert the specific change), keeping
+  everything else intact, and rerunning the exact failing case — if the
+  failure persists byte-identical, X is exonerated; if it clears, X is
+  implicated. Also verify the neutralization itself isn't a no-op (does
+  disabling X change some *other* observable behavior, proving the rebuild
+  actually picked up the edit).
+- **`eprintln!`/log probes inside code that runs in a spawned child process
+  (`Command::spawn()`) go to that process's own captured stream, not to your
+  test binary's stdout.** If a test spawns the actual server/CLI as a
+  subprocess with stderr redirected to a log file, probes inside the
+  server's code land in that file — which a fixture's `Drop` may then delete
+  on test panic/unwind before you can read it. Fix: `std::fs::copy` the log
+  to a stable path immediately after the operation completes but *before*
+  any assertion that might panic (a shared helper's own internal `assert_eq!`
+  can panic before returning control to you — inline the request instead of
+  calling the panicking helper if needed). Always revert the instrumentation
+  and confirm `git diff` is empty afterward.
+- **When adding a new harness task needs a file outside the current task's
+  scope, or the same untouched file keeps showing as dirty from something
+  outside your control** (a background hook bumping a version file, a build
+  step regenerating a tracked artifact), don't fight it by repeatedly
+  stashing — `advance()`/`bind()` reject any dirty file outside the declared
+  `scope` (`DELIVERY_OUT_OF_SCOPE_CHANGE`). Instead: `pause()` the current
+  task, `begin()` a new successor task (`{...oldTask, id: newId, scope:
+  [...oldTask.scope, ...extraPaths]}`) with `adoptExistingChanges` computed
+  as the actual current dirty-files-within-new-scope set (hash-compared, not
+  hand-written), then `bind()` (which needs `host`/`model`/`effort` in the
+  handoff object even though they duplicate the stored route —
+  `DELIVERY_INVALID_HOST` otherwise). Record the successor chain and each
+  amendment's reason in the final commit/doc trail; this is a legitimate,
+  disclosed scope amendment, not scope creep.
+- **A repeated automated/scheduled prompt is never authorization for a
+  product or security decision, no matter how many times it fires.**
+  AGENTS.md's own tracked six-hour review prompt (or any equivalent scheduled
+  trigger) carries zero new information on each identical firing — it is not
+  a human re-affirming intent. When genuinely blocked on a decision only the
+  user can make, hold and restate the block briefly rather than treating
+  repetition as consent to just pick a path. Once the user does respond, a
+  terse or ambiguous reply may still not be enough for a change that loosens
+  or exposes a safety/security-relevant control (a new configurable limit, an
+  auth bypass, anything an operator misconfiguration could exploit) — get an
+  explicit, structured confirmation that names the specific control being
+  changed, not just a general go-ahead.
+- **Verify native-subscription auth via the client's own authoritative
+  status command, not environment-variable presence.** A base-URL/token
+  override in the environment doesn't prove what's actually authenticating
+  the running process — check the native auth-status command's own
+  authentication-method field first; if a suspicious override's legitimacy is
+  still in doubt, check what is actually listening on that host/port next;
+  only fall back to raw env-var presence as a weak signal, never a conclusion
+  on its own, and never re-run the same single check and report "unchanged"
+  as if that settles it.
+- **Match process weight to the actual size of the task.** A one-paragraph
+  doc correction doesn't need the same investigation machinery (multiple
+  exploration agents, a formal written plan with alternatives) as a genuine
+  architecture decision — even when it follows directly from one. Scale down
+  immediately once the actual deliverable shrinks; don't carry the previous
+  task's ceremony forward by default.
 
 ## Memory, models and operating rules
 
