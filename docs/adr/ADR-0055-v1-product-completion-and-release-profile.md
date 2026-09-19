@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-12
+updated: 2026-09-19
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -357,7 +357,7 @@ release run, and a previous-head result cannot attest a later commit. Pure
 documentation status changes use structural, link, line-count, and diff checks;
 they do not require an unrelated product rebuild.
 
-**User correction 2026-09-10:** every build uses `coding-harness`'s main-only delivery mode: scoped task/adoption → native model/effort binding → source-bound implementation request → actual checks → feedback-directed repair if needed → independent read-only native review → scoped main commit → exact-commit completion. `advance`/`submit` persist task/stage/attempt/source/route/prerequisite bindings; the outer controller admits dependencies and the real MetaHarness kernel verifies each ready stage. It does not assume upstream's retry loop supplies feedback or receipts provide crash-resume. The existing Codex/Claude host executes requests, without a second build daemon; the integrator remains accountable for native dispatch, meaningful acceptance and commit. Missing/stale evidence fails closed, no-progress repairs and native unavailability pause, and resume needs fresh handoff/request identity. Ruflo MCP synchronization remains host-owned and must be read back; local records are not managed memory or provider attestation. This cooperative harness is not an OS sandbox or release proof. Model allocation below and subscription-only/no-quota rules remain intact. Manifests track `latest` with exact lockfile-resolved checks. ADR-0037's closed experiment remains optional, its worktree launchers prohibited, historical isolation/replay law intact and evolution post-1.0. User pauses override queued continuation. The user explicitly released this hold on 2026-09-10: application work resumes through the completed harness and a tracked swarm, with one main writer and independent native review. The first resumed slice is exact MySQL rendered static-IRI pools; its named public TLS acceptance and remaining boundaries are recorded in ADR-0015/0034. No publication or whole-application completion is implied.
+**User corrections 2026-09-10 and 2026-09-19:** every build uses `coding-harness`'s main-only delivery mode: scoped task/adoption → native model/effort binding → source-bound implementation request → actual checks → feedback-directed repair if needed → independent read-only review on the other native provider → scoped main commit → exact-commit completion. `advance`/`submit` persist task/stage/attempt/source/route/prerequisite bindings; the outer controller admits dependencies and the real MetaHarness kernel verifies each ready stage. It does not assume upstream's retry loop supplies feedback or receipts provide crash-resume. The selected Codex/Claude host writes and the other provider reviews, without a second build daemon; the integrator remains accountable for native dispatch, meaningful acceptance and commit. Missing/stale evidence fails closed, no-progress repairs and either native subscription's unavailability pause, and resume needs fresh handoff/request identity. Ruflo MCP synchronization remains host-owned and must be read back; local records are not managed memory or provider attestation. This cooperative harness is not an OS sandbox or release proof. Model allocation below and subscription-only/no-quota rules remain intact. Manifests track `latest` with exact lockfile-resolved checks. ADR-0037's closed experiment remains optional, its worktree launchers prohibited, historical isolation/replay law intact and evolution post-1.0. User pauses override queued continuation. The user explicitly released this hold on 2026-09-10: application work resumes through the completed harness and a tracked swarm, with one main writer and cross-provider native review. The first resumed slice is exact MySQL rendered static-IRI pools; its named public TLS acceptance and remaining boundaries are recorded in ADR-0015/0034. No publication or whole-application completion is implied.
 
 ### 7. Status and claim discipline
 
@@ -388,7 +388,7 @@ release notes must be generated or updated from the same truth after code lands.
 6. Produce and verify the minimum release-evidence bundle. Tag, push or publish
    that candidate only with explicit authorization in the current task.
 
-### Model and reasoning-effort allocation (2026-09-10)
+### Model and reasoning-effort allocation (2026-09-10; dual-host review restored 2026-09-19)
 
 Use the selected main model without asking for a downgrade. Choose supporting
 native subscription agents by task, with no spend/token/request/invocation/quota
@@ -411,7 +411,7 @@ Observed programme delta: the existing V5/V6 harness and gate-contract defaults 
 
 This task-based effort change is consistent with [official model guidance](https://developers.openai.com/api/docs/guides/latest-model#whats-new); the table is project policy based on live executor capabilities, not an OpenAI/Anthropic comparative benchmark. Reassess using actual integrated outcomes, elapsed time, failed checks and rework; never create a model-benchmark programme to enforce routing.
 
-Distinct model/effort configurations need distinct candidate IDs when used. Native errors are authoritative: pause and report exact client/model/error on subscription or requested-model unavailability; never substitute a provider or silently change a requested model. Independent native Codex and Claude review remains required for the release delta, not every edit.
+Distinct model/effort configurations need distinct candidate IDs when used. Native errors are authoritative: pause and report exact client/model/error on subscription or requested-model unavailability; never substitute a provider or silently change a requested model. Every building task pairs its selected native writer with independent review by the other provider; the exact release delta still requires both native providers.
 
 ### Six-hour course correction
 

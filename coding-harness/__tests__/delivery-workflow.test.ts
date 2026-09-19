@@ -27,6 +27,7 @@ describe('native-host delivery workflow', () => {
     await harness.submit('task-1', 'root', responseFor(harness, request));
     const review = await nextRequest(harness);
     expect(review.stage).toBe('review'); expect(review.prerequisiteDigests).toHaveLength(3);
+    expect(review.route).toEqual({ host: 'claude-code', model: 'sonnet', effort: 'default' });
     expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(false);
     await harness.submit('task-1', 'root', responseFor(harness, review));
     expect((await harness.advance('task-1', 'root')).kind).toBe('ready-to-commit');
@@ -96,7 +97,8 @@ describe('native-host delivery workflow', () => {
     await harness.submit('task-1', 'root', responseFor(harness, request));
     await expect(harness.submit('task-1', 'root', responseFor(harness, request))).rejects.toThrow('PENDING_REQUEST');
     const review = await nextRequest(harness);
-    await expect(harness.submit('task-1', 'root', responseFor(harness, review, { native }))).rejects.toThrow('INDEPENDENT_REVIEW');
+    await expect(harness.submit('task-1', 'root', responseFor(harness, review,
+      { native: { ...native, ...review.route } }))).rejects.toThrow('INDEPENDENT_REVIEW');
   });
   it('rejects source changes and rerun-check drift while a review is pending', async () => {
     const { root, harness } = await started(); await implementation(harness);
@@ -126,9 +128,29 @@ describe('native-host delivery workflow', () => {
     expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(false);
     expect(await harness.next('task-1', 'root')).toEqual({ kind: 'check', checkId: 'build' });
   });
-  it('respects a declared Claude reviewer route and exposes next/submit via the real CLI', async () => {
+  it('uses the other native host by default and rejects a same-host reviewer', async () => {
+    const codex = await started(); await implementation(codex.harness);
+    expect((await nextRequest(codex.harness)).route).toEqual(
+      { host: 'claude-code', model: 'sonnet', effort: 'default' });
+
+    const claude = workflowFixture(roots);
+    claude.task.host = 'claude-code';
+    const claudeNative = { ...native, host: 'claude-code' as const, model: 'sonnet', effort: 'default' as const,
+      executorId: 'native-sonnet' };
+    await claude.harness.begin(claude.task); await claude.harness.bind('task-1', 'root', claudeNative);
+    await implementation(claude.harness);
+    expect((await nextRequest(claude.harness)).route).toEqual(
+      { host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' });
+
+    const invalid = workflowFixture(roots);
+    invalid.task.reviewer = { host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' };
+    await invalid.harness.begin(invalid.task); await invalid.harness.bind('task-1', 'root', native);
+    await implementation(invalid.harness);
+    await expect(nextRequest(invalid.harness)).rejects.toThrow('CROSS_HOST_REVIEW_REQUIRED');
+  });
+  it('respects a declared cross-host reviewer route and exposes next/submit via the real CLI', async () => {
     const { root, task, harness } = workflowFixture(roots);
-    task.reviewer = { host: 'claude-code', model: 'sonnet', effort: 'default' };
+    task.reviewer = { host: 'claude-code', model: 'opus', effort: 'high' };
     await harness.begin(task); await harness.bind('task-1', 'root', native); await implementation(harness);
     const review = await nextRequest(harness); expect(review.route).toEqual(task.reviewer);
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});

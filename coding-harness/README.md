@@ -131,9 +131,12 @@ routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
 may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
 Fable is the bounded escalation (ADR-0055) and, like Astra max, requires an
 explicit `requested` route. These are explicit project policy, not learned
-quality estimates. When one native subscription is unavailable, continue on the
-other host with a successor task that adopts the unchanged patches; never fall
-back to keys or another provider. `requested: {host, model, effort}` plus
+quality estimates. The selected host writes; review defaults to the other native
+provider at the normal implementation tier (Codex Sol medium or Claude Sonnet
+native default). An explicit `reviewer` route must remain cross-provider. If
+either required subscription is unavailable, pause with the exact native error;
+never replace the missing review with a same-provider reviewer, keys or another
+provider. `requested: {host, model, effort}` plus
 `selectionReason` preserves an explicit choice; `preserveMainModel: true`
 retains the active main model and requires its explicit `requested` route.
 Ultra otherwise requires `explicitUltra: true`.

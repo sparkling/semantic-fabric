@@ -71,7 +71,8 @@ This target never truncates necessary implementation or correctness checks.
    supporting outcomes. State owner, dependency, next action, observable
    acceptance test and what is intentionally outside that slice. Native Codex
    and Claude subscription agents execute through the mandatory main-only
-   delivery harness (coding-harness/README.md); Ruflo MCP coordinates and records.
+   delivery harness (coding-harness/README.md): the selected host writes and the
+   other native provider reviews. Ruflo MCP coordinates and records.
    Audit prerequisite test callsites before freezing scope. Group compatible work
    by whole phase/public outcome, not one task per helper. Preserve precise negative
    cutpoints and unchanged default-admitted queries; no weakened controls for speed.
@@ -90,6 +91,8 @@ This target never truncates necessary implementation or correctness checks.
    named unresolved cross-component problem. Max/Fable needs a bounded hard
    task; Ultra is not a routine worker and requires a specific user request.
    Route each next task afresh; stop escalations when their question is answered.
+   Keep the writer/reviewer pair cross-provider; if either required subscription
+   is unavailable, pause and report its exact native client/model error.
    Retain the selected main model and explicit requested effort; never clamp. Measure
    verified integrated outcomes, elapsed time and rework, not invented savings.
    Use no subscription spend/token/request/quota ceilings and no API keys or
