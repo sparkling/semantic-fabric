@@ -484,6 +484,17 @@ tests cover this slice. Wider compiler/source work and release qualification sta
 from partial-write/EOF fixtures that must first make progress. They retain exact
 byte/error/reaping assertions and the immutable spawn deadline; production limits are unchanged.
 
+**Post-200 diagnosability reconsidered, no change (2026-09-19):** during G2's
+`--timeout-secs` fix, review flagged that any mid-stream failure after `200`
+still surfaces only as a truncated body with no typed reason. Considered
+HTTP/1.1 trailers to carry the already-logged failure reason/correlation id
+to the client; declined — it would require changing every streaming failure
+path (~10 call sites) from an abrupt reset to a deliberate clean terminator,
+and reconciling ~15+ existing tests that assert truncation itself as the
+failure signal, for a narrow benefit (self-service diagnosis for a caller
+without server-log access). Reaffirms the existing atomic-no-prefix nonclaim;
+no code or test behavior changed.
+
 ## More Information
 
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
