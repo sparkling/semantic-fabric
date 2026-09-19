@@ -62,8 +62,21 @@ fn start_command(
         "1",
         "--max-concurrent-requests",
         "1",
+        // This is a single absolute per-request wall-clock deadline (see
+        // RequestBudget in sf-serve's budget.rs), not a per-phase or
+        // per-row allowance - once it fires mid-stream, after the 200
+        // headers are already committed, the body truncates with no way
+        // to send a typed error (stream.rs). Confirmed directly (injected
+        // a per-row streaming delay against the real "2" value; the
+        // server logged reason=DeadlineExceeded at the exact moment of
+        // truncation) that 2s is too tight for this suite's heaviest
+        // streamed queries (measured ~661-766ms for the 94-item
+        // VALUES + OPTIONAL policy query in pg_decimal_text.rs) under
+        // transient shared-host contention, not any accounting bug -
+        // raise it with real headroom (~20x the measured worst case)
+        // rather than leaving an uncommented, unexamined default.
         "--timeout-secs",
-        "2",
+        "15",
         // The default 1,000,000-unit ceiling is tripped by the deliberately
         // conservative FILTER cost model on exact large-integer/decimal
         // comparisons this suite exercises on purpose (up to ~400-digit
