@@ -13,6 +13,16 @@ export function buildCheckEnvironment(): Record<string, string> {
   }
   return env;
 }
+export function checkEnvironmentEvidence(environment: Record<string, string>): Record<string, string> {
+  const evidence = { ...environment };
+  if (evidence.PATH === undefined) return evidence;
+  const seen = new Set<string>();
+  evidence.PATH = evidence.PATH.split(':').filter(entry => {
+    if (/(?:^|\/)\.codex\/tmp\/arg0\/codex-arg0[^/]*$/.test(entry) || seen.has(entry)) return false;
+    seen.add(entry); return true;
+  }).join(':');
+  return evidence;
+}
 export async function logDigest(path: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);

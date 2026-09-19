@@ -8,7 +8,7 @@ import { DeliveryHarness } from '../src/delivery-runtime.js';
 import { parseDeliveryTask, selectDeliveryRoute, type DeliveryTask } from '../src/delivery-contracts.js';
 import { git, withOperationLock } from '../src/delivery-workspace.js';
 import { deliveryCli } from '../src/delivery-cli.js';
-import { buildCheckEnvironment } from '../src/delivery-process.js';
+import { buildCheckEnvironment, checkEnvironmentEvidence } from '../src/delivery-process.js';
 import { responseFor } from './delivery-workflow-fixtures.js';
 
 const roots: string[] = [];
@@ -36,15 +36,15 @@ const binding = { host: 'codex' as const, model: 'gpt-5.6-sol', effort: 'medium'
 async function started() {
   const f = fixture(); await f.harness.begin(f.task); await f.harness.bind(f.task.id, 'root', binding); return f;
 }
-async function checks(harness: DeliveryHarness) {
-  const before = await harness.next('task-1', 'root');
+async function checks(harness: DeliveryHarness, id = 'task-1') {
+  const before = await harness.next(id, 'root');
   if (before.kind === 'native' && before.request.stage === 'implementation') {
-    await harness.submit('task-1', 'root', responseFor(harness, before.request));
+    await harness.submit(id, 'root', responseFor(harness, before.request));
   }
-  await harness.check('task-1', 'root', 'build'); await harness.check('task-1', 'root', 'public');
-  const after = await harness.next('task-1', 'root');
+  await harness.check(id, 'root', 'build'); await harness.check(id, 'root', 'public');
+  const after = await harness.next(id, 'root');
   if (after.kind === 'native' && after.request.stage === 'review') {
-    await harness.submit('task-1', 'root', responseFor(harness, after.request));
+    await harness.submit(id, 'root', responseFor(harness, after.request));
   }
 }
 
@@ -162,8 +162,70 @@ describe('mandatory main-only delivery harness', () => {
     expect(env.RUSTFLAGS).toBe('-C debuginfo=1'); expect(env.SF_TEST_MARKER).toBe('owned-fixture');
     expect(env).not.toHaveProperty('CODEX_HOME'); expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
     const { harness } = await started(); await checks(harness);
+    const currentPath = process.env.PATH!;
+    vi.stubEnv('PATH', `/home/test/.codex/tmp/arg0/codex-arg0ABC:${currentPath}:${currentPath}`);
+    expect(checkEnvironmentEvidence({ PATH: process.env.PATH }).PATH).toBe(checkEnvironmentEvidence({ PATH: currentPath }).PATH);
+    expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(true);
+    vi.stubEnv('PATH', `/meaningful/toolchain/v2:${currentPath}`);
+    expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(false);
+    vi.stubEnv('PATH', currentPath);
     vi.stubEnv('RUSTFLAGS', '-C debuginfo=2');
     expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(false);
+  });
+  it('terminally supersedes a paused run with a verified descendant while preserving its evidence', async () => {
+    const { root, task, harness } = await started();
+    await harness.check(task.id, 'root', 'build');
+    await harness.pause(task.id, 'root', 'superseded implementation attempt');
+    const before = structuredClone(harness.read(task.id));
+    const successor = { ...task, id: 'task-2' };
+    await harness.begin(successor); await harness.bind(successor.id, 'root', binding);
+    writeFileSync(join(root, 'product.txt'), 'after\n'); await checks(harness, successor.id);
+    git(root, 'add', 'product.txt'); git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'successor');
+    const commit = git(root, 'rev-parse', 'HEAD'); await harness.finish(successor.id, 'root', commit);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(await deliveryCli([root, 'supersede', task.id, 'root', successor.id, 'closed by verified successor'])).toBe(true);
+    const resolved = harness.read(task.id);
+    expect(resolved.status).toBe('superseded');
+    expect(resolved.resolution).toMatchObject({ successorTask: successor.id, successorCommit: commit,
+      reason: 'closed by verified successor' });
+    expect(resolved.checks).toEqual(before.checks); expect(resolved.handoffs).toEqual(before.handoffs);
+    expect(resolved.workflow).toEqual(before.workflow); expect(resolved.verdict).toEqual(before.verdict);
+    expect(resolved.events.slice(0, -1)).toEqual(before.events);
+    await expect(harness.resume(task.id, 'root')).rejects.toThrow('PAUSED_OWNER_REQUIRED');
+    expect(await deliveryCli([root, 'status', task.id])).toBe(true);
+    expect(JSON.parse(vi.mocked(console.log).mock.calls.at(-1)![0]).status).toBe('superseded');
+    await expect(harness.next(task.id, 'root')).rejects.toThrow('WRITER_MISMATCH');
+    writeFileSync(join(root, '.metaharness/delivery/active.json'), JSON.stringify({ id: task.id }));
+    expect((await harness.reconcile(task.id, 'root', 'none', 'interrupted cleanup')).status).toBe('superseded');
+    expect(harness.inspect().active).toBeNull();
+  });
+  it('rejects unverified and non-descendant supersession claims', async () => {
+    const { root, task, harness } = await started();
+    await expect(harness.supersede(task.id, 'root', task.id, 'invalid')).rejects.toThrow('PAUSED_RUN_REQUIRED');
+    await harness.pause(task.id, 'root', 'paused');
+    const incomplete = { ...task, id: 'task-2' };
+    await harness.begin(incomplete); await harness.pause(incomplete.id, 'root', 'also paused');
+    await expect(harness.supersede(task.id, 'root', incomplete.id, 'invalid')).rejects.toThrow('COMPLETE_SUCCESSOR_REQUIRED');
+
+    await harness.resume(incomplete.id, 'root'); await harness.bind(incomplete.id, 'root', binding);
+    writeFileSync(join(root, 'product.txt'), 'successor\n'); await checks(harness, incomplete.id);
+    git(root, 'add', 'product.txt'); git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'successor');
+    await harness.finish(incomplete.id, 'root', git(root, 'rev-parse', 'HEAD'));
+    const sameBase = { ...task, id: 'same-base' };
+    await harness.begin(sameBase); await harness.pause(sameBase.id, 'root', 'new attempt at successor commit');
+    await expect(harness.supersede(sameBase.id, 'root', incomplete.id, 'no progress')).rejects.toThrow('SUCCESSOR_DESCENDANT_REQUIRED');
+    const read = harness.read.bind(harness);
+    const spy = vi.spyOn(harness, 'read').mockImplementation(id => {
+      const record = read(id);
+      return id === incomplete.id ? { ...record, commit: 'f'.repeat(40) } : record;
+    });
+    await expect(harness.supersede(task.id, 'root', incomplete.id, 'missing object')).rejects.toThrow('SUCCESSOR_COMMIT_REQUIRED');
+    spy.mockRestore();
+    writeFileSync(join(root, 'unrelated.txt'), 'later\n'); git(root, 'add', 'unrelated.txt');
+    git(root, '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'later base');
+    const later = { ...task, id: 'task-3' };
+    await harness.begin(later); await harness.pause(later.id, 'root', 'later paused attempt');
+    await expect(harness.supersede(later.id, 'root', incomplete.id, 'older result')).rejects.toThrow('SUCCESSOR_DESCENDANT_REQUIRED');
   });
   it('records timeout and output overflow as failures with bounded logs', async () => {
     for (const mode of ['timeout', 'output']) {

@@ -7,7 +7,7 @@ import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, ex
 import { atomicJson, evidenceDirectory, git, mainRoot, outsideDigest, readJson,
   sourceSnapshot, withOperationLock, recoverOperation } from './delivery-workspace.js';
 import { resolveWorkspacePath } from './workspace.js';
-import { buildCheckEnvironment, logDigest, runCommand } from './delivery-process.js';
+import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest, runCommand } from './delivery-process.js';
 import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow } from './delivery-workflow-contracts.js';
 import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } from './delivery-workflow.js';
 import { verifyNativeStage } from './delivery-stage.js';
@@ -22,11 +22,12 @@ export interface CheckResult {
 export interface DeliveryRun {
   schemaVersion: 1; task: DeliveryTask; route: DeliveryRoute; baseCommit: string;
   outsideDigest: string; startedAt: string; updatedAt: string;
-  status: 'awaiting-native' | 'active' | 'paused' | 'complete';
+  status: 'awaiting-native' | 'active' | 'paused' | 'complete' | 'superseded';
   handoffs: (NativeHandoff & { at: string })[]; checks: CheckResult[];
   events: { at: string; kind: string; reason: string }[];
   adoptedSource: Record<string, string | null>;
   commit?: string; verdict?: Verdict; digest?: string;
+  resolution?: { successorTask: string; successorCommit: string; reason: string; at: string };
   workflow?: DeliveryWorkflow;
 }
 
@@ -52,6 +53,16 @@ export class DeliveryHarness {
     const { digest, ...body } = run;
     if (hash(body) !== digest || run.task.id !== id) throw new Error('DELIVERY_RECORD_DIGEST_MISMATCH');
     parseDeliveryTask(run.task);
+    if (!['awaiting-native', 'active', 'paused', 'complete', 'superseded'].includes(run.status)) {
+      throw new Error('DELIVERY_INVALID_STATUS');
+    }
+    if (run.status === 'superseded') {
+      if (!run.resolution || identifier(run.resolution.successorTask) !== run.resolution.successorTask
+        || !/^[a-f0-9]{40,64}$/.test(run.resolution.successorCommit)) {
+        throw new Error('DELIVERY_INVALID_RESOLUTION');
+      }
+      nonempty(run.resolution.reason, 'resolution reason'); nonempty(run.resolution.at, 'resolution timestamp');
+    } else if (run.resolution !== undefined) throw new Error('DELIVERY_INVALID_RESOLUTION');
     return run;
   }
   private save(run: DeliveryRun): DeliveryRun {
@@ -145,7 +156,8 @@ export class DeliveryHarness {
       try { mainRoot(this.root); sourceAfter = this.source(run); }
       catch (e) { sourceAfter = 'invalid'; result.error = String(e); }
       run.checks.push({ ...check, attempt, startedAt, durationMs: Math.round(performance.now() - start),
-        sourceBefore, sourceAfter, environmentDigest: hash(env), ...result, stdout, stderr, stdoutDigest: await logDigest(stdout), stderrDigest: await logDigest(stderr),
+        sourceBefore, sourceAfter, environmentDigest: hash(checkEnvironmentEvidence(env)), ...result, stdout, stderr,
+        stdoutDigest: await logDigest(stdout), stderrDigest: await logDigest(stderr),
         passed: result.exitCode === 0 && result.signal === null && !result.error && sourceBefore === sourceAfter });
       delete run.verdict;
       return this.save(run);
@@ -158,7 +170,7 @@ export class DeliveryHarness {
       const start = run.events.filter(e => e.kind === 'check-start' && e.reason.startsWith(`${check.id}:`)).at(-1);
       if (!latest?.passed || start?.reason !== `${check.id}:${latest.attempt}`
         || latest.sourceBefore !== digest || latest.sourceAfter !== digest
-        || latest.environmentDigest !== hash(buildCheckEnvironment())) continue;
+        || latest.environmentDigest !== hash(checkEnvironmentEvidence(buildCheckEnvironment()))) continue;
       let intact = true;
       for (const [path, expected] of [[latest.stdout, latest.stdoutDigest], [latest.stderr, latest.stderrDigest]]) {
         if (!existsSync(path) || await logDigest(path) !== expected) intact = false;
@@ -289,6 +301,39 @@ export class DeliveryHarness {
       this.save(run); this.claim(id); return run;
     });
   }
+  async supersede(id: string, owner: string, successorId: string, reason: string): Promise<DeliveryRun> {
+    return withOperationLock(this.directory, async () => {
+      const run = this.read(id); mainRoot(this.root);
+      if (run.task.owner !== owner) throw new Error('DELIVERY_WRITER_MISMATCH');
+      if (run.status !== 'paused') throw new Error('DELIVERY_PAUSED_RUN_REQUIRED');
+      if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+      const successor = this.read(identifier(successorId));
+      if (successor.status !== 'complete' || successor.verdict?.pass !== true
+        || !successor.commit || !/^[a-f0-9]{40,64}$/.test(successor.commit)) {
+        throw new Error('DELIVERY_COMPLETE_SUCCESSOR_REQUIRED');
+      }
+      try {
+        if (git(this.root, 'rev-parse', '--verify', `${successor.commit}^{commit}`) !== successor.commit) {
+          throw new Error('commit identity mismatch');
+        }
+      } catch (error) {
+        throw new Error('DELIVERY_SUCCESSOR_COMMIT_REQUIRED', { cause: error });
+      }
+      try {
+        if (run.baseCommit === successor.commit) throw new Error('successor must advance past base');
+        git(this.root, 'merge-base', '--is-ancestor', run.baseCommit, successor.commit);
+      } catch (error) {
+        throw new Error('DELIVERY_SUCCESSOR_DESCENDANT_REQUIRED', { cause: error });
+      }
+      const at = new Date().toISOString(), resolutionReason = nonempty(reason, 'resolution reason');
+      run.resolution = { successorTask: successor.task.id, successorCommit: successor.commit,
+        reason: resolutionReason, at };
+      run.status = 'superseded';
+      run.events.push({ at, kind: 'supersede',
+        reason: `${successor.task.id}@${successor.commit}: ${resolutionReason}` });
+      return this.save(run);
+    });
+  }
   async reconcile(id: string, owner: string, nonce: string, reason: string): Promise<DeliveryRun> {
     const current = this.read(id);
     if (current.task.owner !== owner) throw new Error('DELIVERY_WRITER_MISMATCH');
@@ -298,7 +343,7 @@ export class DeliveryHarness {
       const run = this.read(id); mainRoot(this.root);
       const active = existsSync(this.activeFile) ? (readJson(this.activeFile) as { id: string }).id : undefined;
       if (active && active !== id) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
-      if (run.status === 'paused' || run.status === 'complete') {
+      if (run.status === 'paused' || run.status === 'complete' || run.status === 'superseded') {
         if (active === id) unlinkSync(this.activeFile);
       } else {
         this.source(run);

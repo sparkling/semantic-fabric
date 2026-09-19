@@ -142,6 +142,10 @@ retains the active main model and requires its explicit `requested` route.
 Ultra otherwise requires `explicitUltra: true`.
 Max/ultra are forwarded unchanged. No monetary/token/request/quota ceilings,
 provider keys, OpenRouter fallback, inferred savings, or automatic escalation.
+Check commands receive the sanitized environment unchanged. Evidence hashing
+deduplicates `PATH` in first-match order and omits only Codex's volatile
+`.codex/tmp/arg0/codex-arg0*` launcher entries, so a native-host transition does
+not stale checks while meaningful toolchain or environment changes still do.
 
 `pause <id> <owner> <exact reason>` releases the claim without discarding work;
 `resume <id> <owner>` requires unchanged base/outside scope and a new native
@@ -149,6 +153,11 @@ handoff. On native unavailability, pause and report exact client/model/error.
 Resume invalidates pending native requests and requires a fresh bound executor;
 it preserves prior failures and only reuses unchanged evidence. A review transport
 failure resumes at review, not as a request to edit already-passing source.
+`supersede <id> <owner> <successor-id> <exact reason>` terminally reconciles a
+paused historical run only when the named successor is complete at an exact commit
+that descends from the paused run's base. It records the successor task, commit,
+reason and timestamp while preserving every prior check, handoff, event, workflow
+result and verdict; it never promotes failed evidence to passing.
 On an explicit user review hold, stop: neither a scheduler nor an active goal
 releases that hold. A stale operation lock after a hard crash requires checking
 the recorded process and any child before explicit recovery; it is never

@@ -9,9 +9,10 @@ import type { NativeHandoff } from './delivery-contracts.js';
  * The active native host performs handoffs and mirrors outcomes through Ruflo MCP. */
 export async function deliveryCli(args: string[], signal?: AbortSignal): Promise<boolean> {
   const [root, command, ...rest] = args;
-  const counts: Record<string, number> = { begin: 1, status: 1, inspect: 0, bind: 3, check: 3, verify: 2, finish: 3, pause: 3, resume: 2, reconcile: 4, next: 2, advance: 2, submit: 3 };
+  const counts: Record<string, number> = { begin: 1, status: 1, inspect: 0, bind: 3, check: 3, verify: 2, finish: 3,
+    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3 };
   if (!root || !(command in counts) || rest.length !== counts[command]) {
-    throw new Error('usage: delivery <repository-root> begin <task.json> | status <id> | inspect | bind <id> <owner> <native.json> | next|advance <id> <owner> | submit <id> <owner> <response.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | reconcile <id> <owner> <nonce-or-none> <reason>');
+    throw new Error('usage: delivery <repository-root> begin <task.json> | status <id> | inspect | bind <id> <owner> <native.json> | next|advance <id> <owner> | submit <id> <owner> <response.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
   }
   const harness = new DeliveryHarness(resolve(root));
   if (command === 'inspect') { console.log(JSON.stringify(harness.inspect(), null, 2)); return true; }
@@ -28,6 +29,7 @@ export async function deliveryCli(args: string[], signal?: AbortSignal): Promise
     : command === 'verify' ? await harness.verify(id, owner)
     : command === 'finish' ? await harness.finish(id, owner, extra)
     : command === 'pause' ? await harness.pause(id, owner, extra)
+    : command === 'supersede' ? await harness.supersede(id, owner, extra, rest[3])
     : command === 'reconcile' ? await harness.reconcile(id, owner, extra, rest[3])
     : await harness.resume(id, owner);
   console.log(JSON.stringify(run, null, 2));

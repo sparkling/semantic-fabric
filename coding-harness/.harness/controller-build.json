@@ -31,10 +31,10 @@
     "coding-harness/dist/contracts.js": "36144d64c65feb03d26e52b57135d9b7a8c8197d3e3110259a9fec0fe355b32e",
     "coding-harness/dist/controller-attestation.js": "2caf6b563d52e6e3f7066db16c1f9b0635c6c9a339d5e463d2083b98964704fb",
     "coding-harness/dist/controller-build.js": "9c4c95b8fac6488a6e0457e3dac3b3a746c59d96878c19e18145151918fe1a79",
-    "coding-harness/dist/delivery-cli.js": "56999f05c29bbf8a17c8fc581aa4475b4c5b3bbcfe1100b97334c85113ad2878",
+    "coding-harness/dist/delivery-cli.js": "a9ff85c8d8c8bc08d5a5f62fcabed487303f4c323a6fc4e0ca9367e981379eef",
     "coding-harness/dist/delivery-contracts.js": "c7c18b186b9ad1c539e9c81ab843e81bbadab9e246eeee3acddaf84c17301adf",
-    "coding-harness/dist/delivery-process.js": "a336bf3ad066cf1686254dcb49513d0bce9d1fedc52c8f8a667474beb657d0c2",
-    "coding-harness/dist/delivery-runtime.js": "f9388fd4ef2cfba1f6e11df68aafad470b1d44d826c9dc16cc980f68e5128a43",
+    "coding-harness/dist/delivery-process.js": "7bf147da059d59846155ecf1b501423e8786a6bc9641e75db346206e38622724",
+    "coding-harness/dist/delivery-runtime.js": "50dc14e2dab071877c4408846f188f72a1d3298febe3c2577689aeb90f3be40e",
     "coding-harness/dist/delivery-stage.js": "bbfca6d8fe168f7533075ff3d57db85c5c6850364a85dd20920fc9fb547dee23",
     "coding-harness/dist/delivery-workflow-contracts.js": "a91bfdabfa5395908296a1dcc270cbfe6d4659e7080fc99cc19155ad6fffab2d",
     "coding-harness/dist/delivery-workflow.js": "9b8386af4105e2840d14d205c956ceed573c252fed92e159978e3e1bd02d2a5d",
@@ -325,5 +325,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "f7d831c680ca2a1247c69639adfcda9115ce3873244e7fcf786c385f1a59d61b"
+  "runtimeTreeDigest": "916b072ea5a71780e95f6c9c84cb8f2a7c82b03a5a8b071f601726cfbf38a199"
 }
