@@ -18,6 +18,13 @@ publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 
 ### Native parallel execution
 
+The programme coordinator is native Codex `gpt-6-astra` at `xhigh` effort,
+configured in `.agents/config.toml` and required by `AGENTS.md`. When resuming
+the existing conversation explicitly, use
+`codex --model gpt-6-astra -c model_reasoning_effort=xhigh resume <UUID>`.
+Configuration edits do not change a running host: bind its observed model/effort
+only after the host adopts the selection. Worker/reviewer routes remain task-specific.
+
 The operating plan is [native parallel execution](../docs/plans/native-parallel-execution-plan.md).
 The existing native conversation coordinates and remains the sole integration
 writer. There is no repository-wide native session cap or new scheduler.

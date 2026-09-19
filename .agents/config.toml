@@ -12,9 +12,9 @@
 # Core Settings
 # =============================================================================
 
-# Model selection - the AI model to use for code generation
-# Options: gpt-5.3-codex, gpt-4o, claude-sonnet, claude-opus
-model = "gpt-5.3-codex"
+# Programme coordinator; workers retain task-specific routing.
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 
 # Approval policy determines when human approval is required
 # - untrusted: Always require approval

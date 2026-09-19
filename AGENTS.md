@@ -22,6 +22,12 @@ in-session capacity observations are not a global model-session limit.
 
 ### Parallel execution operating policy
 
+The programme coordinator uses native Codex `gpt-6-astra` with `xhigh`
+reasoning effort (explicit user selection, 2026-09-20). Keep the existing
+coordinating conversation; worker and reviewer routes remain task-specific.
+Record actual runtime settings in harness bindings, never a requested setting
+that the running host has not adopted.
+
 Follow `docs/plans/native-parallel-execution-plan.md` and the delivery harness
 README. Keep the existing coordinating conversation; provider capacity does not
 determine coordination ownership. Dispatch bounded dependency-ready work through
