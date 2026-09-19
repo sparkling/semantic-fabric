@@ -8,6 +8,16 @@
 > it via `@AGENTS.md` at the top of `CLAUDE.md`. Edit SHARED instructions HERE.
 > Claude-Code-only guidance lives in `CLAUDE.md` (below its `@AGENTS.md` line).
 
+## Independent Codex session capacity (2026-09-19 user amendment)
+
+Do not impose a repository-wide three- or four-session cap on independent
+`codex exec` processes using the ChatGPT subscription. Four distinct concurrent
+sessions completed successfully on Codex 0.155.1. This does not establish an
+infinite capacity or override a native client's per-session subagent limits.
+Select parallel work from ready dependencies and file ownership; preserve the
+single integration writer and existing build/resource isolation. Historical
+in-session capacity observations are not a global model-session limit.
+
 ## Rules
 
 - Do what has been asked; nothing more, nothing less
