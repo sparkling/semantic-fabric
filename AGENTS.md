@@ -20,6 +20,24 @@ Select parallel work from ready dependencies and file ownership; preserve the
 single integration writer and existing build/resource isolation. Historical
 in-session capacity observations are not a global model-session limit.
 
+### Parallel execution operating policy
+
+Follow `docs/plans/native-parallel-execution-plan.md` and the delivery harness
+README. Keep the existing coordinating conversation; provider capacity does not
+determine coordination ownership. Dispatch bounded dependency-ready work through
+native agents or independent native sessions, with explicit input revision,
+scope, deliverable, acceptance checks and result recipient. Refill on accepted
+completion; report active, ready, blocked and review queues and resource waits.
+Keep one integration writer and stable source during checks and formal review.
+Native agent concurrency and build/resource concurrency are separate controls.
+
+Route each worker by its task, preserving the selected main model. Prefer tools
+for deterministic work and escalate only a named unresolved question. The user's
+2026-09-19 efficiency instruction permits comparing total tokens per accepted
+outcome, including repeated context and rework, alongside latency and accuracy.
+This is efficiency evidence, never a subscription price, usage budget, quota,
+availability gate or reason to substitute an explicitly requested model.
+
 ## Rules
 
 - Do what has been asked; nothing more, nothing less

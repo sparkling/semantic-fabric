@@ -172,8 +172,8 @@ blocked_patterns = ["\\.env$", "credentials\\.json$", "\\.pem$", "\\.key$"]
 # =============================================================================
 
 [performance]
-# Maximum concurrent agents
-max_agents = 8
+# Native session capacity is not configured here. Dispatch dependency-ready work
+# through the existing host; native per-session limits and resource locks apply.
 
 # Task timeout in seconds
 task_timeout = 300

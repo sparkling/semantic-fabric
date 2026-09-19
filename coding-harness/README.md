@@ -16,6 +16,38 @@ publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 
 ## Mandatory delivery path
 
+### Native parallel execution
+
+The operating plan is [native parallel execution](../docs/plans/native-parallel-execution-plan.md).
+The existing native conversation coordinates and remains the sole integration
+writer. There is no repository-wide native session cap or new scheduler.
+Independent Codex/Claude sessions may investigate ready tasks concurrently;
+native per-session subagent limits still apply. `.agents/config.toml` does not
+set native session capacity. The delivery CLI returns requests, not workers.
+
+Before dispatch, record dependencies, source revision, owned scope, read-only
+status, deliverable, acceptance checks, native model/effort and result recipient
+in the coordinator's task queue (Ruflo MCP for persistent tracking). These queue
+fields are coordination metadata, not additional `DeliveryTask` JSON fields.
+Accept each result against its inputs before releasing dependents. Refill ready
+work promptly; report active/ready/blocked/review queues and why capacity is idle.
+
+Only the integration owner edits. Checks and formal review require stable whole
+source, including unrelated files; pause writes until their evidence is captured.
+Other read-only investigations may continue. Serialize shared generated outputs,
+Git operations and heavy builds/fixtures separately from model execution. Keep
+the current delivery locks, sequential declared checks and opposite-provider
+review. Do not use the historical worktree launchers or dual-mode templates as a
+parallel execution path.
+
+`selectDeliveryRoute` already supplies task-based model/effort defaults. Preserve
+an explicit route and the selected main model; escalate only a named unresolved
+question. Measure accepted-outcome latency, review/repair failures and total
+reported tokens (including context and rework); unavailable token data stays
+unknown. No model-provider usage budget or automatic quota-based routing is added.
+
+### Scoped delivery lifecycle
+
 Use one task per coherent requirement closure. The existing native conversation
 is the executor; `DeliveryHarness` supplies durable sequencing and the installed
 `@metaharness/harness` kernel verifies each ready native stage. The outer controller

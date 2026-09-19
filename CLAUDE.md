@@ -18,7 +18,7 @@ Claude Code invokes skills with `/skill-name`. (Codex uses `$skill-name`.)
 The `Agent` tool and `SendMessage` are Claude Code features; Codex uses its own native agent surface. Named native agents coordinate by messaging, not by polling shared state. Native agents are not automatically Ruflo-tracked.
 
 - Name every agent and tell it who receives which result.
-- Launch independent agents together; give writers isolated worktrees and non-overlapping ownership.
+- Launch independent read-only agents together; the existing integration owner is the sole writer on canonical main. Follow the shared parallel execution plan in AGENTS.md.
 - For Ruflo-tracked work, create the structured swarm/agent records before launching matching native agents.
 - After spawning, continue independent work. Wait only when a real dependency blocks progress.
 - Do not poll repeatedly; agents message back or complete through the native host.
