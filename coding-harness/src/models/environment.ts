@@ -27,6 +27,8 @@ export const NATIVE_SUBSCRIPTION_ENV_ALLOWLIST = Object.freeze({
   'claude-code': Object.freeze([
     ...COMMON_ALLOWLIST,
     'CLAUDE_CONFIG_DIR',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
   ]),
 } as const);
@@ -58,7 +60,8 @@ export function assertNativeSubscriptionEnvironment(
 ): void {
   const allowed = new Set<string>(NATIVE_SUBSCRIPTION_ENV_ALLOWLIST[host]);
   for (const [name, value] of Object.entries(environment)) {
-    if (isSensitiveTransportName(name) || !allowed.has(name)) {
+    const gateway = host === 'claude-code' && ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'].includes(name);
+    if ((!gateway && isSensitiveTransportName(name)) || !allowed.has(name)) {
       throw new Error(`HARNESS_NATIVE_ENVIRONMENT_FORBIDDEN:${name}`);
     }
     if (typeof value !== 'string' || value.includes('\0')) {

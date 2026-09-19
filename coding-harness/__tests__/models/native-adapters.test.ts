@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 describe('native subscription adapters', () => {
-  it('proves both first-party subscriptions without provider fallback', async () => {
+  it('checks both configured subscriptions without provider fallback', async () => {
     const evidenceRoot = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
     roots.push(evidenceRoot);
     const runner = new FakeRunner((request) => {
@@ -65,12 +65,7 @@ describe('native subscription adapters', () => {
       return ok(
         request.args.includes('--version')
           ? 'claude-code 4.5.6'
-          : JSON.stringify({
-              loggedIn: true,
-              authMethod: 'claude.ai',
-              apiProvider: 'firstParty',
-              apiKeySource: null,
-            }),
+          : 'READY',
       );
     });
     const environment = {
@@ -107,7 +102,7 @@ describe('native subscription adapters', () => {
     expect(runner.requests).toHaveLength(4);
     for (const request of runner.requests) {
       expect(request.env.OPENAI_API_KEY).toBeUndefined();
-      expect(request.env.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(request.env.ANTHROPIC_BASE_URL).toBe(request.host === 'claude-code' ? 'https://gateway.invalid' : undefined);
       expect(request.env.HTTPS_PROXY).toBeUndefined();
       if (request.host === 'codex') {
         expect(request.args.filter((argument) => argument === 'analytics.enabled=false'))
@@ -251,7 +246,7 @@ describe('native subscription adapters', () => {
     }
   });
 
-  it('rejects Claude auth evidence backed by an API key', async () => {
+  it('rejects auth metadata in place of a successful Claude readiness response', async () => {
     const runner = new FakeRunner((request) =>
       ok(
         request.args.includes('--version')

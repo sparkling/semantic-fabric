@@ -17,6 +17,7 @@ describe('native subscription environment', () => {
     OPENROUTER_API_KEY: 'must-not-cross',
     OPENAI_BASE_URL: 'https://gateway.invalid',
     ANTHROPIC_BASE_URL: 'https://gateway.invalid',
+    ANTHROPIC_AUTH_TOKEN: 'gateway-canary',
     HTTP_PROXY: 'http://proxy.invalid',
     HTTPS_PROXY: 'http://proxy.invalid',
     ALL_PROXY: 'socks://proxy.invalid',
@@ -45,6 +46,8 @@ describe('native subscription environment', () => {
       PATH: '/usr/bin',
       LANG: 'C.UTF-8',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      ANTHROPIC_BASE_URL: 'https://gateway.invalid',
+      ANTHROPIC_AUTH_TOKEN: 'gateway-canary',
     });
   });
 

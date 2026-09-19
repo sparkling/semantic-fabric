@@ -21,7 +21,6 @@ import type {
 import {
   assertAdapterExecutable,
   codexReasoningArguments,
-  parseRecord,
   processSucceeded,
   signalAborted,
   validateInvocation,
@@ -274,9 +273,13 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
     const [login, version] = await runAbortableCohort([
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
-          ['auth', 'status', '--json'],
+          ['--safe-mode', '-p', '--model', request.requestedModel,
+            '--output-format', 'text', '--tools', '', '--strict-mcp-config',
+            '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence',
+            '--disable-slash-commands', '--no-chrome',
+            'Do not use tools. Reply exactly READY.'],
           request.cwd,
-          PREFLIGHT_TIMEOUT_MS,
+          120_000,
           cohortSignal,
           'authentication-preflight',
           request.requestedModel,
@@ -293,14 +296,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
         ),
       ),
     ] as const, request.signal);
-    const status = parseRecord(login.stdout);
-    if (
-      !processSucceeded(login) ||
-      status?.loggedIn !== true ||
-      status.authMethod !== 'claude.ai' ||
-      status.apiProvider !== 'firstParty' ||
-      (status.apiKeySource !== undefined && status.apiKeySource !== null)
-    ) {
+    if (!processSucceeded(login) || login.stdout.trim() !== 'READY') {
       throw new NativeAuthPreflightError(
         this.host,
         'HARNESS_CLAUDE_SUBSCRIPTION_UNAVAILABLE',
