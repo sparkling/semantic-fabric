@@ -67,62 +67,24 @@ pub(super) fn authorized_conjunction_controlled(
     pidx: &mut usize,
     work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<Option<String>> {
-    fn validates(cond: &SqlCond, actuals: &ActualColumns) -> bool {
-        match cond {
-            SqlCond::LiteralCmp(cmp) => [&cmp.left, &cmp.right].iter().any(|v| {
-                matches!(
-                    natural(v, actuals),
-                    Some(
-                        XsdTypeCode::Date
-                            | XsdTypeCode::DateTime
-                            | XsdTypeCode::Integer
-                            | XsdTypeCode::Boolean
-                    )
+    condition_control::authorized(conds, dialect, catalog, actuals, params, pidx, work)
+}
+
+pub(super) fn validates_leaf(cond: &SqlCond, actuals: &ActualColumns) -> bool {
+    match cond {
+        SqlCond::LiteralCmp(cmp) => [&cmp.left, &cmp.right].iter().any(|v| {
+            matches!(
+                natural(v, actuals),
+                Some(
+                    XsdTypeCode::Date
+                        | XsdTypeCode::DateTime
+                        | XsdTypeCode::Integer
+                        | XsdTypeCode::Boolean
                 )
-            }),
-            SqlCond::Not(c) => validates(c, actuals),
-            SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(|c| validates(c, actuals)),
-            _ => false,
-        }
+            )
+        }),
+        _ => false,
     }
-    let mut policies = work
-        .vector(conds.len())
-        .map_err(source_control::validation_error)?;
-    let mut rest = work
-        .vector(conds.len())
-        .map_err(source_control::validation_error)?;
-    for &condition in conds {
-        work.charge(1).map_err(source_control::validation_error)?;
-        if matches!(condition, SqlCond::NativeCmp(..)) {
-            policies.push(condition);
-        } else {
-            rest.push(condition);
-        }
-    }
-    if policies.is_empty()
-        || !rest.iter().any(|c| match dialect {
-            Dialect::MySql => validates(c, actuals),
-            Dialect::Postgres => pg_numeric::validates(c, actuals),
-            _ => false,
-        })
-    {
-        return Ok(None);
-    }
-    // Direct EXISTS bodies have no D1 barrier. These native conditions are
-    // admission predicates: FALSE/NULL both deny, before fallible construction.
-    let policy = policies
-        .iter()
-        .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
-        .collect::<Result<Vec<_>>>()?
-        .join(" AND ");
-    let body = rest
-        .iter()
-        .map(|c| render_cond_controlled(c, dialect, catalog, actuals, params, pidx, work))
-        .collect::<Result<Vec<_>>>()?
-        .join(" AND ");
-    Ok(Some(format!(
-        "CASE WHEN ({policy}) THEN ({body}) ELSE FALSE END"
-    )))
 }
 
 pub(super) fn key(raw: &str, code: XsdTypeCode) -> String {

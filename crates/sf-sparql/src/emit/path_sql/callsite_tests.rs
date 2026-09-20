@@ -102,7 +102,7 @@ impl QueryControl for Stop {
 
 #[test]
 fn production_edges_have_fixed_accounting_and_sticky_boundaries() {
-    for (edge, fixed_units) in [3958, 2078, 2953].into_iter().enumerate() {
+    for (edge, fixed_units) in [3958, 9154, 2953].into_iter().enumerate() {
         let meter = budget(u64::MAX);
         let expected = run_edge(edge, SourceWork::new(Some(&meter))).unwrap();
         let units = meter.consumed(QueryCharge::SourceWork);

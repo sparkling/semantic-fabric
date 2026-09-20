@@ -45,7 +45,17 @@ pub(super) fn lexical(raw: &str) -> String {
     // PostgreSQL JSON, unlike JSONB, preserves its validated input text.
     format!("CAST(CAST(CAST({raw} AS TEXT) AS JSON) AS TEXT)")
 }
+#[cfg(test)]
 pub(super) fn validates(condition: &SqlCond, actuals: &ActualColumns) -> bool {
+    condition_control::validates(
+        condition,
+        Dialect::Postgres,
+        actuals,
+        sf_sql::source_work::SourceWork::new(None),
+    )
+    .expect("raw condition validation")
+}
+pub(super) fn validates_leaf(condition: &SqlCond, actuals: &ActualColumns) -> bool {
     match condition {
         SqlCond::DecodedIsNotNull(column) => is_numeric(column, Dialect::Postgres, actuals),
         SqlCond::IriCmp(cmp) => cmp
@@ -54,8 +64,6 @@ pub(super) fn validates(condition: &SqlCond, actuals: &ActualColumns) -> bool {
         SqlCond::LiteralCmp(cmp) => cmp
             .columns()
             .any(|c| is_numeric(c, Dialect::Postgres, actuals)),
-        SqlCond::Not(inner) => validates(inner, actuals),
-        SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(|c| validates(c, actuals)),
         _ => false,
     }
 }
