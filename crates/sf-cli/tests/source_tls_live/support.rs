@@ -7,6 +7,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "mysql_ordering.rs"]
+mod mysql_ordering;
+
 const POSTGRES: &str =
     "postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8";
 const MYSQL: &str = "mysql@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0";
@@ -82,6 +85,11 @@ impl Fixture {
             KeyUsagePurpose,
         };
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        // OpenSSL distinguishes this issuer from the leaf by subject name.
+        params.distinguished_name.push(
+            rcgen::DnType::CommonName,
+            format!("semantic-fabric-{prefix}-fixture-ca"),
+        );
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         let key = KeyPair::generate().unwrap();

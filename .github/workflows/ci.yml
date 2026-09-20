@@ -302,13 +302,14 @@ jobs:
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
           done
-      - name: qualify public protected authored PostgreSQL generations
+      - name: qualify protected PostgreSQL generations and MySQL snapshot ordering
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          test_name='authored_generation::public_authored_postgres_generation_is_protected'
-          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
-          cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --test-threads=1 --nocapture
+          for test_name in authored_generation::public_authored_postgres_generation_is_protected support::mysql_ordering::all_table_locks_precede_the_read_view; do
+            cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
+            cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --test-threads=1 --nocapture
+          done
       # ADR-0040 comparison evidence only: default-off, no product admission.
       - name: clippy (sf-sparql secure-spill-prototype)
         run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings
