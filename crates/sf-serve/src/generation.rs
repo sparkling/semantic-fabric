@@ -13,15 +13,20 @@ use crate::pg_generation::{
 };
 use crate::sqlite_generation::{SqliteGeneration, SqliteRequestLease};
 
-/// Equality evidence for reload; SQLite does not claim the PostgreSQL V1 profile.
+/// Equality evidence for reload; SQLite/MySQL do not claim the PostgreSQL V1 profile.
 #[derive(Clone, PartialEq)]
 pub(crate) enum GenerationObservation {
     Postgres(ObservedSchemaIdentityV1),
     Sqlite(Arc<SqliteGenerationSchema>),
+    Mysql(Arc<crate::mysql_generation::schema::Schema>),
 }
 
 pub(crate) enum GenerationRequirement {
     Postgres(PgGenerationRequirement),
+    Mysql {
+        expected: Arc<crate::mysql_generation::MysqlGeneration>,
+        binding_identity: RuntimeBindingIdentity,
+    },
     Sqlite {
         expected: Arc<SqliteGeneration>,
         binding_identity: RuntimeBindingIdentity,
@@ -33,6 +38,7 @@ impl GenerationRequirement {
         match self {
             Self::Postgres(requirement) => requirement.source_id(),
             Self::Sqlite { expected, .. } => expected.source_id(),
+            Self::Mysql { expected, .. } => expected.source_id(),
         }
     }
 
@@ -40,6 +46,9 @@ impl GenerationRequirement {
         match self {
             Self::Postgres(requirement) => &requirement.binding_identity,
             Self::Sqlite {
+                binding_identity, ..
+            }
+            | Self::Mysql {
                 binding_identity, ..
             } => binding_identity,
         }
@@ -49,6 +58,7 @@ impl GenerationRequirement {
 pub(crate) enum VerifiedGenerationLease {
     Postgres(VerifiedPostgresGenerationLease),
     Sqlite(SqliteRequestLease),
+    Mysql(crate::mysql_generation::MysqlRequestLease),
 }
 
 impl VerifiedGenerationLease {
@@ -57,7 +67,7 @@ impl VerifiedGenerationLease {
     ) -> Result<VerifiedPostgresGenerationLease, PgGenerationError> {
         match self {
             Self::Postgres(lease) => Ok(lease),
-            Self::Sqlite(_) => Err(PgGenerationError::Internal),
+            Self::Sqlite(_) | Self::Mysql(_) => Err(PgGenerationError::Internal),
         }
     }
 
@@ -65,6 +75,7 @@ impl VerifiedGenerationLease {
         match self {
             Self::Postgres(lease) => lease.source_id(),
             Self::Sqlite(lease) => lease.source_id(),
+            Self::Mysql(lease) => lease.source_id(),
         }
     }
 
@@ -72,6 +83,7 @@ impl VerifiedGenerationLease {
         match self {
             Self::Postgres(lease) => lease.rollback_bounded().await,
             Self::Sqlite(lease) => lease.finish().await,
+            Self::Mysql(lease) => lease.finish().await,
         }
     }
 }
@@ -109,6 +121,10 @@ impl VerifiedGenerationLeases {
                     .acquire(budget)
                     .await
                     .map(VerifiedGenerationLease::Sqlite),
+                GenerationRequirement::Mysql { expected, .. } => expected
+                    .acquire(budget)
+                    .await
+                    .map(VerifiedGenerationLease::Mysql),
             };
             match result {
                 Ok(lease) => {

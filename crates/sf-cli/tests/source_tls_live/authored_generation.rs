@@ -2,6 +2,8 @@
 use super::*;
 #[path = "authored_generation_checks.rs"]
 mod checks;
+#[path = "authored_mysql_generation.rs"]
+mod mysql;
 #[path = "authored_generation_policy.rs"]
 mod portable_policy;
 

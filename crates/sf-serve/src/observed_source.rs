@@ -69,6 +69,19 @@ impl IntrospectedSource {
         }
     }
 
+    pub(crate) fn observed_mysql_generation(
+        pool: mysql_async::Pool,
+        generation: std::sync::Arc<crate::mysql_generation::MysqlGeneration>,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<Self, PgGenerationError> {
+        Ok(Self {
+            backend: Backend::Mysql(pool),
+            schema: generation.schema().compiler_tables(work)?,
+            observation: SourceSchemaObservationV1::unavailable(),
+            generation: SourceGeneration::AuthoredMysql(generation),
+        })
+    }
+
     /// Builds the lifecycle discovery source only from the normalized rich
     /// projection carried by the same opaque observation. The legacy schema
     /// vector is intentionally inaccessible to this path.

@@ -53,6 +53,7 @@ mod lifecycle;
 mod lineage;
 mod lineage_response;
 mod metrics;
+mod mysql_generation;
 mod mysql_query;
 mod observed_source;
 mod pg_direct_lifecycle;

@@ -14,12 +14,16 @@ pub(super) async fn respond_select(
     fmt: stream::SelectFormat,
     budget: RequestBudget,
 ) -> Response {
-    let (generation, sqlite_generation) = match generation {
-        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
-        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
-        None => (None, None),
+    let (generation, sqlite_generation, mysql_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease), None),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None, None),
+        Some(VerifiedGenerationLease::Mysql(lease)) => (None, None, Some(lease)),
+        None => (None, None, None),
     };
     if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
+    }
+    if mysql_generation.is_some() && !matches!(backend, Backend::Mysql(_)) {
         return problem::response(ProblemCode::Internal);
     }
     let media_type = fmt.media_type();
@@ -78,9 +82,12 @@ pub(super) async fn respond_select(
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }
-            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
-                Ok(conn) => conn,
-                Err(response) => return response,
+            let conn = match mysql_generation {
+                Some(lease) => lease.into_query(),
+                None => match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
+                    Ok(conn) => conn,
+                    Err(response) => return response,
+                },
             };
             let drive_budget = budget.clone();
             stream::select_body_streaming_controlled(
@@ -112,12 +119,16 @@ pub(super) async fn respond_ask(
         }
         return problem::response_for_control(error);
     }
-    let (generation, sqlite_generation) = match generation {
-        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
-        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
-        None => (None, None),
+    let (generation, sqlite_generation, mysql_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease), None),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None, None),
+        Some(VerifiedGenerationLease::Mysql(lease)) => (None, None, Some(lease)),
+        None => (None, None, None),
     };
     if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
+    }
+    if mysql_generation.is_some() && !matches!(backend, Backend::Mysql(_)) {
         return problem::response(ProblemCode::Internal);
     }
     let fmt = negotiate_results(accept);
@@ -165,9 +176,12 @@ pub(super) async fn respond_ask(
             // cannot discharge. `spawn_request_task` proves `Send` on the concrete
             // owned-`Conn` task, dropped/disposed after the run (§4.2), mirroring
             // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` handling.
-            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
-                Ok(conn) => conn,
-                Err(response) => return response,
+            let conn = match mysql_generation {
+                Some(lease) => lease.into_query(),
+                None => match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
+                    Ok(conn) => conn,
+                    Err(response) => return response,
+                },
             };
             let task_budget = budget.clone();
             let run = deadline::spawn_request_task(async move {
@@ -217,12 +231,16 @@ pub(super) async fn respond_construct(
     fmt: stream::GraphFormat,
     budget: RequestBudget,
 ) -> Response {
-    let (generation, sqlite_generation) = match generation {
-        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
-        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
-        None => (None, None),
+    let (generation, sqlite_generation, mysql_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease), None),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None, None),
+        Some(VerifiedGenerationLease::Mysql(lease)) => (None, None, Some(lease)),
+        None => (None, None, None),
     };
     if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
+    }
+    if mysql_generation.is_some() && !matches!(backend, Backend::Mysql(_)) {
         return problem::response(ProblemCode::Internal);
     }
     let media_type = fmt.media_type();
@@ -275,9 +293,12 @@ pub(super) async fn respond_construct(
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }
-            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
-                Ok(conn) => conn,
-                Err(response) => return response,
+            let conn = match mysql_generation {
+                Some(lease) => lease.into_query(),
+                None => match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
+                    Ok(conn) => conn,
+                    Err(response) => return response,
+                },
             };
             let drive_budget = budget.clone();
             stream::construct_body_streaming_controlled(

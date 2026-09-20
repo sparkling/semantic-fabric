@@ -273,10 +273,20 @@ and qualifies denial, subject isolation and reload through native CLI tests.
 A read-only worker identified the policy-only column gap while root implemented;
 root remains the sole writer and serializes builds and live fixtures. Formal
 Claude review follows the source-stable declared checks. Ordinary modes, native
-PostgreSQL RLS, MySQL and federated generations remain in G3.
+PostgreSQL RLS and federated generations remain in G3. The MySQL slice below adds the third protected authored backend.
 G1 receipts confirm the completed declared slices, but retained historical gap
 wording still needs reconciliation with source before a final programme verdict.
 
 Actual cross-provider throughput, independent-session ceilings and model-route
 efficiency remain unmeasured. Resolve them through the above useful work, recording
 observed concurrency separately from configured limits and completed outcomes.
+
+The next slice, `g3-protected-mysql-generation-20260920`, integrates the proven
+MySQL ordering primitive from `7c2aa47b` into candidate, request and response
+ownership. Root writes; a read-only source audit identified the required
+NO_BACKSLASH_ESCAPES mode and explicit raw-transaction rollback. The pinned TLS
+CLI acceptance covers snapshot/DDL, reload/policy drift and native cleanup.
+After source-bound checks, independent Claude review releases commit/finish.
+Ordinary-mode/native-RLS G3 work and protected federation G4 remain dependent
+work; the existing five dependency Clippy errors also need a scoped correction
+before aggregate integration gates.

@@ -19,7 +19,7 @@ pub(crate) async fn respond(
     budget: RequestBudget,
 ) -> Response {
     let form = plan.form.clone();
-    let generation = match generation {
+    let (generation, mysql_generation) = match generation {
         Some(VerifiedGenerationLease::Sqlite(lease)) => {
             if !matches!(backend, Backend::Sqlite(_)) {
                 return problem::response(problem::ProblemCode::Internal);
@@ -39,9 +39,13 @@ pub(crate) async fn respond(
                 .body(body)
                 .expect("fixed lineage response");
         }
-        Some(VerifiedGenerationLease::Postgres(lease)) => Some(lease),
-        None => None,
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
+        Some(VerifiedGenerationLease::Mysql(lease)) => (None, Some(lease)),
+        None => (None, None),
     };
+    if mysql_generation.is_some() && !matches!(backend, Backend::Mysql(_)) {
+        return problem::response(problem::ProblemCode::Internal);
+    }
     let body = match backend {
         Backend::Sqlite(pool) => {
             if generation.is_some() {
@@ -76,9 +80,12 @@ pub(crate) async fn respond(
             if generation.is_some() {
                 return problem::response(problem::ProblemCode::Internal);
             }
-            let query = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
-                Ok(query) => query,
-                Err(response) => return response,
+            let query = match mysql_generation {
+                Some(lease) => lease.into_query(),
+                None => match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
+                    Ok(query) => query,
+                    Err(response) => return response,
+                },
             };
             let control = budget.clone();
             stream::multiple_lineage_body(

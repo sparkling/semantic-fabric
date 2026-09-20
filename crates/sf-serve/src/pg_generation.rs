@@ -49,6 +49,7 @@ pub(crate) enum SourceGeneration {
     DirectPostgres(Arc<PostgresGeneration>),
     AuthoredPostgres(Arc<PostgresGeneration>),
     AuthoredSqlite(Arc<crate::sqlite_generation::SqliteGeneration>),
+    AuthoredMysql(Arc<crate::mysql_generation::MysqlGeneration>),
 }
 
 impl SourceGeneration {
@@ -63,6 +64,15 @@ impl SourceGeneration {
     ) -> Result<Option<GenerationRequirement>, PgGenerationError> {
         match self {
             Self::Unverified => Ok(None),
+            Self::AuthoredMysql(expected) => {
+                if !matches!(backend, crate::Backend::Mysql(_)) {
+                    return Err(PgGenerationError::Internal);
+                }
+                Ok(Some(GenerationRequirement::Mysql {
+                    expected: expected.clone(),
+                    binding_identity: binding_identity.clone(),
+                }))
+            }
             Self::AuthoredSqlite(expected) => {
                 if !matches!(backend, crate::Backend::Sqlite(_)) {
                     return Err(PgGenerationError::Internal);
@@ -94,6 +104,9 @@ impl SourceGeneration {
     pub(crate) fn verified_identity(&self) -> Option<GenerationObservation> {
         match self {
             Self::Unverified => None,
+            Self::AuthoredMysql(expected) => {
+                Some(GenerationObservation::Mysql(expected.schema().clone()))
+            }
             Self::AuthoredSqlite(expected) => {
                 Some(GenerationObservation::Sqlite(expected.schema().clone()))
             }
@@ -109,6 +122,7 @@ impl SourceGeneration {
     ) -> Result<(), SemanticAdmissionError> {
         let (expected, origin) = match self {
             Self::Unverified => return Ok(()),
+            Self::AuthoredMysql(expected) => return expected.ensure_mapping(mapping),
             Self::AuthoredSqlite(expected) => return expected.ensure_mapping(mapping),
             Self::DirectPostgres(expected) => (expected, MappingOrigin::Direct),
             Self::AuthoredPostgres(expected) => (expected, MappingOrigin::Authored),

@@ -15,7 +15,7 @@ pub(crate) async fn build_source(
     validate_options(opts)?;
     validate_source(opts, &prepared)?;
     let mapped = crate::pg_generation::authored::mapped_tables(&mapping)?;
-    // Both builders call this while the candidate's observed schema is held.
+    // Each builder calls this while the candidate's observed schema is held.
     // Fence drift first, then reject missing policy-only columns before activation.
     let mut observe_policy = |id, source: &crate::IntrospectedSource| {
         observe(id, source)?;
@@ -37,6 +37,17 @@ pub(crate) async fn build_source(
         let (source, mapping) = crate::sqlite_generation::build(
             path,
             opts.sqlite_pool_size,
+            mapping,
+            ontology,
+            &budget,
+            &mut observe_policy,
+        )
+        .await?;
+        return crate::RuntimeSource::admitted(source, mapping).map_err(|_| configuration());
+    }
+    if let PreparedSource::Mysql { options, .. } = prepared {
+        let (source, mapping) = crate::mysql_generation::build(
+            options,
             mapping,
             ontology,
             &budget,
@@ -77,6 +88,7 @@ pub(crate) fn control_budget(
             0,
             match source {
                 PreparedSource::Sqlite { .. } => crate::sqlite_generation::CONTROL_SOURCE_WORK,
+                PreparedSource::Mysql { .. } => crate::mysql_generation::CONTROL_SOURCE_WORK,
                 _ => crate::pg_generation::PG_DIRECT_CONTROL_SOURCE_WORK_V1,
             },
             0,
@@ -117,19 +129,11 @@ pub(crate) fn validate_source(
     {
         return Err(configuration());
     }
-    if opts.require_verified_generation
-        && !matches!(
-            source,
-            PreparedSource::Postgres { .. } | PreparedSource::Sqlite { .. }
-        )
-    {
-        return Err(configuration());
-    }
     Ok(())
 }
 
 fn configuration() -> ServeError {
     ServeError::new(StartupCause::Configuration {
-        error: "verified authored generation requires one PostgreSQL or file-backed SQLite source, authored base-table mappings, a nonzero reload interval and read-all or portable row admission".into(),
+        error: "verified authored generation requires one qualified PostgreSQL, MySQL or file-backed SQLite source, authored base-table mappings, a nonzero reload interval and read-all or portable row admission".into(),
     })
 }

@@ -2,7 +2,7 @@
 status: accepted
 date: 2026-09-02
 updated: 2026-09-20
-tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres, sqlite]
+tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres, sqlite, mysql]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
 implements: [ADR-0038]
@@ -296,7 +296,13 @@ The equality record includes exact schema object SQL, compiler column facts, sch
 
 `sqlite_generation` CLI tests exercise authenticated typed bags, all normal forms, lineage completion, semantic/schema refusal, automatic reload/recovery, source-work refusal and shutdown for WAL and DELETE. Backend and serving tests cover held snapshots, queued-worker ordering, cache drift refusal, terminal cleanup and exact runtime binding. Ordinary SQLite remains explicitly unverified; this opt-in profile does not close the remaining backend/policy programme. MySQL verified mode remains rejected until equivalent consistency and DDL-race evidence exists. Observed digests may still be emitted for both without promotion.
 
-Portable equality policies are authorized on the uncached preflight plan before shape admission or source acquisition, then reapplied to the authoritative plan under its lease. The immutable registry must contain only portable subjects; native RLS and mixed registries remain excluded, and Direct Mapping remains read-all-only. Candidate admission checks every policy column targeting a mapped table against the protected observation before activation; uncovered tables/sources remain intentional request denials. Existing opaque subject/cache and binding identities isolate cold/warm plans and reloads. Required SQLite WAL/DELETE and owned PostgreSQL 16.9/16.15 TLS CLI tests prove A/B isolation, denial before generation work, policy-column drift fencing/recovery, and mapping reload. PostgreSQL also proves a pinned A-only stream across activation and disconnect cleanup. Policy configuration remains immutable for the service lifetime; this does not close native RLS, ordinary-mode, MySQL or federated generation obligations.
+Portable equality policies are authorized on the uncached preflight plan before shape admission or source acquisition, then reapplied to the authoritative plan under its lease. The immutable registry must contain only portable subjects; native RLS and mixed registries remain excluded, and Direct Mapping remains read-all-only. Candidate admission checks every policy column targeting a mapped table against the protected observation before activation; uncovered tables/sources remain intentional request denials. Existing opaque subject/cache and binding identities isolate cold/warm plans and reloads. Required SQLite WAL/DELETE and owned PostgreSQL 16.9/16.15 TLS CLI tests prove A/B isolation, denial before generation work, policy-column drift fencing/recovery, and mapping reload. PostgreSQL also proves a pinned A-only stream across activation and disconnect cleanup. Policy configuration remains immutable for the service lifetime; this does not close native RLS, ordinary-mode or federated generation obligations. The MySQL extension is specified below.
+
+The explicit authored MySQL profile qualifies exact MySQL 8.4.11, one current database with `lower_case_table_names=0`, 1-256 unqualified base-table names and InnoDB only. It needs nonzero reload and read-all or portable equality-row admission; raw SQL, views and other engines reject. No primary key is required. Reset runs under the discard owner before the cancellation marker. The session fixes autocommit, READ ONLY / REPEATABLE READ, UTC, UTF8MB4 client/connection/results, `utf8mb4_bin` connection collation and the strict mode set plus `NO_BACKSLASH_ESCAPES`; emitted exact-comparison collation remains separate. Plain `START TRANSACTION READ ONLY` precedes a single constant-false UNION over all mapped tables. Exact MySQL source inspection and the pinned two-order positive/early-snapshot negative test establish that every table opens and acquires MDL before execution. An early consistent snapshot would retain stale data and dictionary facts and is prohibited.
+
+Only after that barrier does bounded observation capture the session, table engine/type/collation/options and every ordered column's full type, nullability, charset/collation, generated/invisible attributes and default. Native fields and row counts are capped before copies; the aggregate copied metadata cap is 4 MiB, with at most 1,024 columns per table. Compiler schemas retain columns only, without unverified keys/statistics. These are equality facts, not ObservedSchemaIdentity V1 authority. A separate unpooled control connection holds candidate validation; request pool settings remain native MySQL options. Requests compare the activated expectation, compile and execute all response forms on the same owned connection, recheck metadata/session and active read-only state, then acknowledge rollback before restoring timeout/releasing the marker/reuse. Failures and cancellation hard-discard through the existing native stop owner. This is local transaction consistency, not distributed atomicity or a hard native-allocation/I/O bound.
+
+`authored_generation::mysql::public_authored_mysql_generation_is_protected` qualifies the actual pinned TLS CLI: exact SELECT/ASK/CONSTRUCT/lineage, incompatible initial session defaults, authored backslash/apostrophe literals, invalid mapping/schema recovery, old streamed data across DML and activation, both-table DDL exclusion, partial-MDL deadline cleanup, disconnect/deadline/forced shutdown and cap-one recovery, portable A/B isolation and repeated policy-column drift fencing, and view/engine/raw-SQL/source-work refusal. Ordinary modes, native PostgreSQL RLS and federated generations remain open; no production admission is granted.
 
 ### 6. Make live Direct Mapping a leased lifecycle
 
@@ -486,13 +492,8 @@ names and values and require that none escape.
 
 ## Links
 
-[ADR-0006](ADR-0006-crate-layout-and-performance-model.md),
-[ADR-0007](ADR-0007-sparql-to-sql-rewriting-strategy.md),
-[ADR-0011](ADR-0011-observability-and-configuration.md),
-[ADR-0015](ADR-0015-datatype-dialect-correctness.md),
-[ADR-0038](ADR-0038-sota-application-completion-programme.md), and
-[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md).
+[ADR-0006](ADR-0006-crate-layout-and-performance-model.md), [ADR-0007](ADR-0007-sparql-to-sql-rewriting-strategy.md),
+[ADR-0011](ADR-0011-observability-and-configuration.md), [ADR-0015](ADR-0015-datatype-dialect-correctness.md),
+[ADR-0038](ADR-0038-sota-application-completion-programme.md), and [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md).
 The Phase 2 profile is [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md).
-Normative companions:
-[Appendix A](../design/ADR-0050-observed-schema-identity-v1-contract.md) and
-[Appendix B](../design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md).
+Normative companions: [Appendix A](../design/ADR-0050-observed-schema-identity-v1-contract.md) and [Appendix B](../design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md).

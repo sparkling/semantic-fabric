@@ -1,7 +1,7 @@
 //! Native MySQL cancellation with owned, session-bound control and hard discard.
 use crate::budget::RequestBudget;
 use mysql_async::{prelude::Queryable, Conn, Opts, OptsBuilder};
-use sf_core::query_control::QueryControl;
+use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_core::{Term, Triple};
 use sf_sparql::{Error, Plan, Result};
 use sf_sql::backend::mysql::MysqlBackend;
@@ -13,6 +13,7 @@ use std::{
 };
 
 const CLEANUP: Duration = Duration::from_secs(2);
+mod generation;
 
 // Pinned mysql_async disconnect sets its disconnected flag before the first
 // await. Poll once even on runtime shutdown/expired cleanup: merely dropping
@@ -43,6 +44,10 @@ pub(crate) struct MysqlQuery {
     original_timeout: u64,
     budget: RequestBudget,
     reusable: bool,
+    generation: Option<(
+        std::sync::Arc<[String]>,
+        std::sync::Arc<crate::mysql_generation::schema::Schema>,
+    )>,
 }
 impl Borrow<Conn> for MysqlQuery {
     fn borrow(&self) -> &Conn {
@@ -136,6 +141,10 @@ pub(crate) fn target_options(options: Opts) -> std::result::Result<Opts, &'stati
 
 impl MysqlQuery {
     pub(crate) async fn acquire(conn: Conn, budget: RequestBudget) -> Result<Self> {
+        Self::acquire_inner(conn, budget, false).await
+    }
+
+    async fn acquire_inner(conn: Conn, budget: RequestBudget, reset: bool) -> Result<Self> {
         // The discard owner is built before any fallible setup or first await.
         let target = Discard(Some(conn));
         let marker = nonce()?;
@@ -145,10 +154,17 @@ impl MysqlQuery {
             original_timeout: 0,
             budget,
             reusable: false,
+            generation: None,
         };
         let budget = query.budget.clone();
         budget
             .run(async {
+                if reset {
+                    budget.consume(QueryCharge::SourceWork, 16)?;
+                    if !query.target.conn().reset().await.map_err(|_| failure())? {
+                        return Err(failure());
+                    }
+                }
                 pin(query.target.conn(), &query.marker).await?;
                 query.original_timeout = query
                     .target
@@ -172,11 +188,12 @@ impl MysqlQuery {
         Ok(query)
     }
 
-    async fn finish<T>(mut self, result: Result<T>) -> Result<T> {
+    pub(crate) async fn finish<T>(mut self, result: Result<T>) -> Result<T> {
         let value = result?;
         let budget = self.budget.clone();
         budget
             .run(async {
+                self.close_generation().await?;
                 // query_first drains preceding unread results before this barrier.
                 self.target
                     .conn()
