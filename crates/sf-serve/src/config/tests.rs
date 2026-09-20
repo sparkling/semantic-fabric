@@ -1,4 +1,5 @@
 use super::*;
+use sf_core::query_control::{QueryControl, UncontrolledQueryControl};
 
 fn config() -> ServeConfig {
     ServeConfig::new_with_unverified_source(
@@ -89,5 +90,48 @@ fn exactly_one_postgres_direct_lifecycle_can_claim_a_runtime() {
     assert_eq!(
         config.claim_pg_direct_lifecycle(),
         Err(ReadinessCause::CapabilityDrift)
+    );
+}
+
+#[test]
+fn request_budgets_retain_the_runtime_identity_of_their_config_snapshot() {
+    let executable = std::env::current_exe().expect("current test executable");
+    let runtime_a = sf_sparql::ParserRuntime::prepare_identity_for_evidence(&executable)
+        .expect("first runtime identity");
+    let runtime_b = sf_sparql::ParserRuntime::prepare_identity_for_evidence(&executable)
+        .expect("second runtime identity");
+    assert!(!runtime_a.same_instance_for_evidence(&runtime_b));
+
+    let mut active = config();
+    active.set_parser_runtime(runtime_a.clone());
+    let budget_a = active.request_budget();
+    active.set_parser_runtime(runtime_b.clone());
+    let budget_b = active.request_budget();
+
+    fn held(budget: &RequestBudget) -> &sf_sparql::ParserRuntime {
+        budget
+            .capability(std::any::TypeId::of::<sf_sparql::ParserRuntime>())
+            .and_then(|value| value.downcast_ref::<sf_sparql::ParserRuntime>())
+            .expect("request runtime capability")
+    }
+    assert!(held(&budget_a).same_instance_for_evidence(&runtime_a));
+    assert!(held(&budget_b).same_instance_for_evidence(&runtime_b));
+    assert!(!held(&budget_a).same_instance_for_evidence(held(&budget_b)));
+
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| held(&budget_a).same_instance_for_evidence(&runtime_a));
+        let second = scope.spawn(|| held(&budget_b).same_instance_for_evidence(&runtime_b));
+        assert!(first.join().expect("first request identity thread"));
+        assert!(second.join().expect("second request identity thread"));
+    });
+
+    let raw = UncontrolledQueryControl;
+    assert!(raw
+        .capability(std::any::TypeId::of::<sf_sparql::ParserRuntime>())
+        .is_none());
+    assert_eq!(
+        sf_sparql::exercise_raw_sql_fallback_for_evidence(&raw)
+            .expect("raw emission uses the in-process fallback"),
+        "SELECT 1 AS c0"
     );
 }

@@ -34,14 +34,14 @@ fn run_edge(edge: usize, work: SourceWork<'_>) -> Result<String> {
                     term_map: TermMap::Column("sf_s".into(), sf_core::ir::TermSpec::iri()),
                 },
             );
-            emit_path_branch(
+            crate::exec_core::block_on(emit_path_branch(
                 &branch,
                 &pc,
                 Dialect::Sqlite,
                 &catalog,
                 BranchModifiers::stored(&branch),
                 work,
-            )?
+            ))?
             .sql
         }
         1 => render_cond_controlled(

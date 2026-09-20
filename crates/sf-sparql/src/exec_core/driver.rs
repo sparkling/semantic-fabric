@@ -15,6 +15,7 @@ use crate::iq::{Branch, OrderKey};
 use crate::{DedupScope, Error, Plan, PlanForm, Result};
 
 use super::batch::{reconstruct_batch, TERM_GEN_BATCH_SIZE, TERM_GEN_FIRST_BATCH_SIZE};
+use super::cooperative_yield;
 use super::expression::eval_expr;
 use super::forms::rust_group_execute;
 use super::order::{compact_to_window, sorted_indices};
@@ -23,47 +24,6 @@ use super::sql_error::map_sql_err;
 
 #[path = "source_prepare.rs"]
 pub(super) mod source_prepare;
-
-/// Drive an always-ready future to completion with no runtime (design §5 M2).
-/// SQLite's cooperative `Pending` checkpoint is immediately re-polled here.
-pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
-    use std::task::{Context, Poll, Waker};
-    let mut cx = Context::from_waker(Waker::noop());
-    let mut fut = std::pin::pin!(fut);
-    loop {
-        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
-            return v;
-        }
-    }
-}
-
-/// Yield once without tying this driver-agnostic crate to an async runtime.
-///
-/// Tokio-backed callers regain control at the next pull checkpoint, while the
-/// SQLite `block_on` shim simply polls again. This is cooperative scheduling;
-/// it does not cancel a source statement or pre-empt work within a batch.
-async fn cooperative_yield() {
-    struct YieldOnce(bool);
-
-    impl Future for YieldOnce {
-        type Output = ();
-
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<()> {
-            if self.0 {
-                std::task::Poll::Ready(())
-            } else {
-                self.0 = true;
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        }
-    }
-
-    YieldOnce(false).await;
-}
 
 fn accounting_overflow(control: &dyn QueryControl) -> Error {
     Error::QueryControl(control.terminate(QueryControlError::AccountingOverflow))
@@ -246,29 +206,33 @@ where
     )?;
     // Emission is part of the same preflight. A malformed later branch must fail
     // before an earlier branch can open a cursor or expose a partial result.
-    let emitted_branches = branches
-        .iter()
-        .enumerate()
-        .map(|(index, branch)| {
-            let work = sf_sql::source_work::SourceWork::new(Some(ctx.control));
-            let bindings = emit::BindingView::merged(
-                &branch.bindings,
-                ctx.dedup_scopes
-                    .get(index)
-                    .and_then(Option::as_ref)
-                    .map(|s| &s.key_bindings),
-                work,
-            )?;
-            emit::emit_branch_binding_view(
-                branch,
-                &bindings,
-                ctx.dialect,
-                &catalog,
-                modifiers(branch),
-                work,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // An explicit loop (not `.map().collect()`) so each branch's emission is
+    // genuinely awaited: when it reaches the isolated SQL-canonicalization
+    // peer, that peer's bounded child-I/O steps cooperatively yield here
+    // instead of blocking this task's own thread, so unrelated concurrent
+    // requests keep making progress on the same executor.
+    let mut emitted_branches = Vec::with_capacity(branches.len());
+    for (index, branch) in branches.iter().enumerate() {
+        let work = sf_sql::source_work::SourceWork::new(Some(ctx.control));
+        let bindings = emit::BindingView::merged(
+            &branch.bindings,
+            ctx.dedup_scopes
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(|s| &s.key_bindings),
+            work,
+        )?;
+        let emitted = emit::emit_branch_binding_view(
+            branch,
+            &bindings,
+            ctx.dialect,
+            &catalog,
+            modifiers(branch),
+            work,
+        )
+        .await?;
+        emitted_branches.push(emitted);
+    }
     let multi = branches.len() > 1;
     // Cross-branch DISTINCT precedes OFFSET/LIMIT; SQL only dedups within branches.
     let distinct_vars: Option<&[String]> = match (ctx.distinct && multi, ctx.form) {

@@ -390,3 +390,7 @@ mod linux_tests {
         assert_ne!(descriptor.revents & libc::POLLIN, 0);
     }
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[path = "io_bounds_tests.rs"]
+mod io_bounds_tests;

@@ -4,7 +4,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::{Child, ExitStatus};
 use std::time::Instant;
 
-use super::io::BoundedWorkerIo;
+use super::io::{BoundedWorkerIo, StepOutcome, StepTransfer};
 use super::SupervisorError;
 
 /// Live child ownership. The group leader is deliberately left unreaped until
@@ -36,6 +36,82 @@ impl ParserWorkerProcess {
     pub(super) fn ensure_can_receive(&mut self, additional: usize) -> Result<(), SupervisorError> {
         let result = self.io.ensure_can_receive(self.wall_deadline, additional);
         self.contain_io_result(result)
+    }
+
+    /// One bounded, contained write attempt (see [`BoundedWorkerIo::write_step`]).
+    /// `poll_timeout_ms` is the caller's own explicit short cap -- never the
+    /// legacy thread-local -- so this is safe to call from an async loop that
+    /// yields between `Pending` results.
+    pub(super) fn reserve_write(&self, bytes: &[u8]) -> Result<StepTransfer, SupervisorError> {
+        self.io.reserve_write(self.wall_deadline, bytes)
+    }
+
+    pub(super) fn reserve_read(&self, len: usize) -> Result<StepTransfer, SupervisorError> {
+        self.io.reserve_read(self.wall_deadline, len)
+    }
+
+    pub(super) fn verify_write_total(&self, transfer: StepTransfer) -> Result<(), SupervisorError> {
+        self.io.verify_write_total(transfer)
+    }
+
+    pub(super) fn verify_read_total(&self, transfer: StepTransfer) -> Result<(), SupervisorError> {
+        self.io.verify_read_total(transfer)
+    }
+
+    pub(super) fn write_step_contained(
+        &mut self,
+        bytes: &[u8],
+        transfer: &mut StepTransfer,
+        poll_cap_ms: i32,
+    ) -> Result<StepOutcome, SupervisorError> {
+        let result = self
+            .io
+            .write_step(&self.pidfd, bytes, transfer, Some(poll_cap_ms));
+        self.contain_step_result(result)
+    }
+
+    /// One bounded, contained read attempt (see [`BoundedWorkerIo::read_step`]).
+    pub(super) fn read_step_contained(
+        &mut self,
+        output: &mut [u8],
+        transfer: &mut StepTransfer,
+        poll_cap_ms: i32,
+    ) -> Result<StepOutcome, SupervisorError> {
+        let result = self
+            .io
+            .read_step(&self.pidfd, output, transfer, Some(poll_cap_ms));
+        self.contain_step_result(result)
+    }
+
+    /// One bounded, contained EOF-probe attempt (see
+    /// [`BoundedWorkerIo::expect_eof_step`]).
+    pub(super) fn expect_eof_step_contained(
+        &mut self,
+        poll_cap_ms: i32,
+    ) -> Result<StepOutcome, SupervisorError> {
+        let deadline = self.wall_deadline;
+        let result = self
+            .io
+            .expect_eof_step(&self.pidfd, deadline, Some(poll_cap_ms));
+        self.contain_step_result(result)
+    }
+
+    /// Route a caller-side failure (e.g. a request-control checkpoint) through
+    /// the same containment path as an I/O failure, so a cleanup error takes
+    /// precedence over the original cause instead of being suppressed by the
+    /// `Drop` backstop.
+    pub(super) fn contain_caller_failure(&mut self, primary: SupervisorError) -> SupervisorError {
+        self.contain_live_failure(primary)
+    }
+
+    fn contain_step_result(
+        &mut self,
+        result: Result<StepOutcome, SupervisorError>,
+    ) -> Result<StepOutcome, SupervisorError> {
+        match result {
+            Ok(outcome) => Ok(outcome),
+            Err(primary) => Err(self.contain_live_failure(primary)),
+        }
     }
 
     pub(super) fn observe_alive_and_silent_until(
@@ -80,6 +156,56 @@ impl ParserWorkerProcess {
     /// Waits only to the immutable V1 deadline established before spawn.
     pub(super) fn wait_until_deadline(&mut self) -> Result<ExitStatus, SupervisorError> {
         self.wait_until_deadline_with(poll_pidfd, inspect_exited_without_reaping)
+    }
+
+    /// One bounded pidfd-readiness poll, capped by the caller's own explicit
+    /// `timeout_ms` (not the legacy thread-local `poll_timeout`). The async
+    /// bounded-step wait loops this and cooperatively yields between
+    /// `Pending` results instead of blocking its own thread; once it
+    /// observes `Exited` it must call [`Self::finish_wait_after_exit`].
+    pub(super) fn wait_step(&mut self, poll_cap_ms: i32) -> Result<PidfdPollStep, SupervisorError> {
+        if self.child.is_none() {
+            return Err(SupervisorError::InvalidState("worker is already reaped"));
+        }
+        // Clamp to the remaining immutable lifetime and refuse to begin after
+        // expiry, exactly as the synchronous `poll_pidfd` loop does.
+        let deadline = self.wall_deadline;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(self.expire_and_reap());
+        }
+        let millis = remaining.as_millis().saturating_add(u128::from(
+            !remaining.subsec_nanos().is_multiple_of(1_000_000),
+        ));
+        let remaining_ms = i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX);
+        let step = match poll_pidfd_once(&self.pidfd, remaining_ms.min(poll_cap_ms)) {
+            Ok(step) => step,
+            Err(primary) => return Err(self.contain_live_failure(primary)),
+        };
+        // poll uses a millisecond ceiling: never accept an exit (and never
+        // proceed to sweep/reap as a success) observed only after the
+        // immutable deadline elapsed, matching `poll_pidfd`'s own recheck.
+        if Instant::now() >= deadline {
+            return Err(self.expire_and_reap());
+        }
+        Ok(step)
+    }
+
+    /// The immutable lifetime elapsed: terminate, sweep and reap the child
+    /// before reporting `DeadlineExceeded`, so no capacity is released before
+    /// terminal cleanup and a containment failure still takes precedence.
+    fn expire_and_reap(&mut self) -> SupervisorError {
+        match self.terminate_and_reap() {
+            Ok(_) => SupervisorError::DeadlineExceeded,
+            Err(containment) => containment,
+        }
+    }
+
+    /// Complete the wait after [`Self::wait_step`] observed `Exited`: sweep
+    /// the process group and reap exactly, the same terminal sequence
+    /// `wait_until_deadline` always ran once its own poll succeeded.
+    pub(super) fn finish_wait_after_exit(&mut self) -> Result<ExitStatus, SupervisorError> {
+        self.sweep_and_reap_with(inspect_exited_without_reaping)
     }
 
     fn wait_until_deadline_with<P, I>(
@@ -137,7 +263,7 @@ impl ParserWorkerProcess {
         Ok(status)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "sql-canonicalize-evidence"))]
     pub(super) fn duplicate_pidfd(&self) -> Result<OwnedFd, SupervisorError> {
         // SAFETY: fcntl duplicates the live pidfd and atomically sets CLOEXEC.
         let descriptor = unsafe { libc::fcntl(self.pidfd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
@@ -207,6 +333,47 @@ pub(super) fn open_pidfd(pid: u32) -> Result<OwnedFd, SupervisorError> {
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor as RawFd) })
 }
 
+/// Outcome of exactly one bounded pidfd-readiness poll: pure, no internal
+/// retry loop and no thread-local dependency. `poll_pidfd` (the synchronous
+/// wait, capped by the legacy thread-local `poll_timeout`) loops this
+/// exactly as it always polled; the async bounded-step wait calls it once
+/// per step with its own explicit short cap and cooperatively yields
+/// between `Pending` results.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PidfdPollStep {
+    Exited,
+    Pending,
+}
+
+pub(super) fn poll_pidfd_once(
+    pidfd: &OwnedFd,
+    timeout_ms: i32,
+) -> Result<PidfdPollStep, SupervisorError> {
+    let mut pollfd = libc::pollfd {
+        fd: pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pollfd is a valid one-element writable array.
+    let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+    if result > 0 {
+        if pollfd.revents & libc::POLLNVAL != 0 {
+            return Err(SupervisorError::InvalidState("parser pidfd became invalid"));
+        }
+        return Ok(PidfdPollStep::Exited);
+    }
+    if result == 0 {
+        return Ok(PidfdPollStep::Pending);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::Interrupted {
+        return Ok(PidfdPollStep::Pending);
+    }
+    Err(SupervisorError::operation("poll parser worker pidfd")(
+        error,
+    ))
+}
+
 fn poll_pidfd(pidfd: &OwnedFd, deadline: Instant) -> Result<bool, SupervisorError> {
     loop {
         crate::parser_isolation::runtime::checkpoint()?;
@@ -220,33 +387,19 @@ fn poll_pidfd(pidfd: &OwnedFd, deadline: Instant) -> Result<bool, SupervisorErro
         let timeout_ms = crate::parser_isolation::runtime::poll_timeout(
             i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX),
         );
-        let mut pollfd = libc::pollfd {
-            fd: pidfd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: pollfd is a valid one-element writable array.
-        let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-        if result > 0 {
-            if Instant::now() >= deadline {
-                return Ok(false);
+        match poll_pidfd_once(pidfd, timeout_ms)? {
+            PidfdPollStep::Pending => {
+                if Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                continue;
             }
-            if pollfd.revents & libc::POLLNVAL != 0 {
-                return Err(SupervisorError::InvalidState("parser pidfd became invalid"));
+            PidfdPollStep::Exited => {
+                if Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                return Ok(true);
             }
-            return Ok(true);
-        }
-        if result == 0 {
-            if Instant::now() >= deadline {
-                return Ok(false);
-            }
-            continue;
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(SupervisorError::operation("poll parser worker pidfd")(
-                error,
-            ));
         }
     }
 }
@@ -336,106 +489,5 @@ pub(super) fn terminate_unbound_child(child: &mut Child) -> Result<(), Superviso
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs::File;
-    use std::os::fd::{AsRawFd, OwnedFd};
-
-    use super::*;
-    use crate::parser_isolation::profile::v1_limits;
-    use crate::parser_isolation::supervisor::executable::PreparedParserExecutable;
-    use crate::parser_isolation::supervisor::linux::spawn_fixture;
-
-    #[test]
-    fn pidfd_poll_error_is_contained_and_reaped_before_recovery() {
-        let executable = prepared_cat();
-        let mut child = live_cat(&executable);
-        let pidfd = child.duplicate_pidfd().expect("duplicate pidfd");
-
-        let error = child
-            .wait_until_deadline_with(
-                |_, _| Err(SupervisorError::InvalidState("injected pidfd poll failure")),
-                |_| Ok(()),
-            )
-            .expect_err("poll failure must fail closed");
-
-        assert!(matches!(
-            error,
-            SupervisorError::InvalidState("injected pidfd poll failure")
-        ));
-        assert!(child.child.is_none());
-        assert!(!pidfd_targets_live_process(&pidfd));
-        successful_round_trip(&executable);
-    }
-
-    #[test]
-    fn exited_inspection_error_is_contained_and_reaped_before_recovery() {
-        let executable = prepared_cat();
-        let mut child = live_cat(&executable);
-        let pidfd = child.duplicate_pidfd().expect("duplicate pidfd");
-
-        let error = child
-            .wait_until_deadline_with(
-                |_, _| Ok(true),
-                |_| {
-                    Err(SupervisorError::InvalidState(
-                        "injected exited inspection failure",
-                    ))
-                },
-            )
-            .expect_err("inspection failure must fail closed");
-
-        assert!(matches!(
-            error,
-            SupervisorError::InvalidState("injected exited inspection failure")
-        ));
-        assert!(child.child.is_none());
-        assert!(!pidfd_targets_live_process(&pidfd));
-        successful_round_trip(&executable);
-    }
-
-    fn prepared_cat() -> PreparedParserExecutable {
-        PreparedParserExecutable::from_file_for_test(
-            File::open("/bin/cat").expect("open cat fixture"),
-            true,
-        )
-        .expect("prepare cat fixture")
-    }
-
-    fn live_cat(executable: &PreparedParserExecutable) -> ParserWorkerProcess {
-        spawn_fixture(executable, v1_limits(), &[b"cat", b"-"]).expect("launch cat fixture")
-    }
-
-    fn successful_round_trip(executable: &PreparedParserExecutable) {
-        let mut child = live_cat(executable);
-        child.write_all_until_deadline(b"R").expect("write byte");
-        let mut output = [0_u8; 1];
-        child
-            .read_exact_until_deadline(&mut output)
-            .expect("read echoed byte");
-        assert_eq!(output, [b'R']);
-        child.close_stdin();
-        assert!(child.wait_until_deadline().expect("reap cat").success());
-    }
-
-    fn pidfd_targets_live_process(pidfd: &OwnedFd) -> bool {
-        // SAFETY: signal zero only probes the process identified by this live pidfd.
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                pidfd.as_raw_fd(),
-                0,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if result == 0 {
-            true
-        } else {
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(libc::ESRCH)
-            );
-            false
-        }
-    }
-}
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;

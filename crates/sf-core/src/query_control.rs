@@ -209,6 +209,16 @@ pub trait QueryControl: Send + Sync {
     fn checkpoint(&self) -> Result<(), QueryControlError>;
     fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError>;
     fn terminate(&self, reason: QueryControlError) -> QueryControlError;
+
+    /// An optional, request-scoped capability port this control identity
+    /// carries alongside its budget/deadline -- e.g. a held isolated-parser
+    /// runtime, exposed only to the caller that already knows the concrete
+    /// downcast target. `sf-core` cannot name that type (it would invert the
+    /// crate dependency graph), so the port is type-erased; every existing
+    /// implementation keeps today's exact behavior via this default.
+    fn capability(&self, _type_id: std::any::TypeId) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 /// Explicit control for raw/diagnostic APIs; production supplies a real budget.

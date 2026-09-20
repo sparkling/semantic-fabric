@@ -55,6 +55,12 @@ pub(super) const V1_LIMIT_VALUES: ParserWorkerLimitValues = ParserWorkerLimitVal
 /// activation must replace it with the complete profile required by ADR-0053.
 /// The source-lock test only prevents these selected grammar sources and direct
 /// workspace features from drifting silently during the control-only slice.
+///
+/// The `sqlparser` line covers the SQL-canonicalization peer's own held
+/// grammar (governed SQL emission, this module's own `sql_canonicalize`);
+/// `sqlparser` is not exactly pinned in the workspace manifest the way
+/// `spargebra` is, so the lock test checks its recorded Cargo.lock checksum
+/// rather than an exact-version manifest line.
 const CONTROL_READY_PROFILE_CANDIDATE_V1_MATERIAL: &[u8] =
     b"semantic-fabric/control-ready-profile-candidate/v1\n\
 target=x86_64-unknown-linux-gnu\n\
@@ -62,7 +68,8 @@ spargebra=0.4.6;checksum=46715eb957d1fe960cbbc0b713da8f78e2cb19df315b48fb09c9467
 features=sep-0002,sep-0006,sparql-12,standard-unicode-escaping\n\
 peg=0.8.6;checksum=0aad070be5b63aa72103f2fcdd70a83adbd5e90112ce5b574171ff1c65501773\n\
 peg-macros=0.8.6;checksum=ddd8ef6825cae95355031ae26a99b616a2a21f22ba2de0197c43dfb05acbe7ee\n\
-peg-runtime=0.8.6;checksum=7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6\n";
+peg-runtime=0.8.6;checksum=7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6\n\
+sqlparser=0.62.0;checksum=13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec\n";
 
 pub(super) fn v1_limits() -> ParserWorkerLimits {
     ParserWorkerLimits::new(V1_LIMIT_VALUES).expect("the fixed V1 limits are valid")
@@ -87,12 +94,14 @@ mod tests {
 
     const WORKSPACE_MANIFEST: &str = include_str!("../../../../Cargo.toml");
     const WORKSPACE_LOCK: &str = include_str!("../../../../Cargo.lock");
+    const SF_SQL_MANIFEST: &str = include_str!("../../../sf-sql/Cargo.toml");
 
     #[test]
     fn control_ready_marker_is_bound_to_selected_sources_and_features() {
         assert!(WORKSPACE_MANIFEST.contains(
             "spargebra = { version = \"=0.4.6\", features = [\"sparql-12\", \"sep-0002\", \"sep-0006\", \"standard-unicode-escaping\"] }"
         ));
+        assert!(SF_SQL_MANIFEST.contains("sqlparser = { version = \"0.62\""));
         assert!(
             std::str::from_utf8(CONTROL_READY_PROFILE_CANDIDATE_V1_MATERIAL)
                 .unwrap()
@@ -103,6 +112,7 @@ mod tests {
             "name = \"peg\"\nversion = \"0.8.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0aad070be5b63aa72103f2fcdd70a83adbd5e90112ce5b574171ff1c65501773\"",
             "name = \"peg-macros\"\nversion = \"0.8.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ddd8ef6825cae95355031ae26a99b616a2a21f22ba2de0197c43dfb05acbe7ee\"",
             "name = \"peg-runtime\"\nversion = \"0.8.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6\"",
+            "name = \"sqlparser\"\nversion = \"0.62.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec\"",
         ] {
             assert!(WORKSPACE_LOCK.contains(locked_identity));
         }

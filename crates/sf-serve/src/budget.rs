@@ -33,6 +33,13 @@ struct RequestBudgetState {
     /// every budget clone into active producers and blocking workers, then
     /// returns only when the last such clone is dropped.
     admission: Option<OwnedSemaphorePermit>,
+    /// The exact held `ParserRuntime` this request's own `ServeConfig`
+    /// snapshot carried at admission (`ServeConfig::request_budget_for`),
+    /// exposed through `QueryControl::capability`. Deliberately request-
+    /// scoped, not a process-global: two requests admitted across a reload
+    /// each keep the runtime their own snapshot observed, and neither can
+    /// contaminate the other's isolated SQL emission.
+    sql_isolation: Option<sf_sparql::ParserRuntime>,
 }
 
 /// The single governance identity minted before request-body extraction. On the
@@ -46,17 +53,35 @@ pub(crate) struct CancellationGuard(Option<RequestBudget>);
 impl RequestBudget {
     #[cfg(test)]
     pub(crate) fn after(timeout: Duration, limits: QueryLimits) -> Self {
-        Self::build(timeout, limits, None, CorrelationId::generate(), false)
+        Self::build(
+            timeout,
+            limits,
+            None,
+            CorrelationId::generate(),
+            false,
+            None,
+        )
     }
 
     /// Mint a serving budget that observes only forced shutdown, not graceful drain.
+    /// `sql_isolation` is the exact `ParserRuntime` the caller's own `ServeConfig`
+    /// snapshot holds right now (see `ServeConfig::request_budget_for`) -- never a
+    /// process-global, so a concurrent reload cannot retarget an in-flight request.
     pub(crate) fn after_with_shutdown(
         timeout: Duration,
         limits: QueryLimits,
         shutdown: watch::Receiver<ShutdownPhase>,
         correlation: CorrelationId,
+        sql_isolation: Option<sf_sparql::ParserRuntime>,
     ) -> Self {
-        Self::build(timeout, limits, Some(shutdown), correlation, true)
+        Self::build(
+            timeout,
+            limits,
+            Some(shutdown),
+            correlation,
+            true,
+            sql_isolation,
+        )
     }
 
     fn build(
@@ -65,6 +90,7 @@ impl RequestBudget {
         shutdown: Option<watch::Receiver<ShutdownPhase>>,
         correlation: CorrelationId,
         emit_terminal_telemetry: bool,
+        sql_isolation: Option<sf_sparql::ParserRuntime>,
     ) -> Self {
         let now = Instant::now();
         let (terminal, _) = watch::channel(None);
@@ -83,6 +109,7 @@ impl RequestBudget {
             terminal_telemetry_recorded: AtomicBool::new(false),
             shutdown,
             admission: None,
+            sql_isolation,
         }));
         if deadline.is_none() {
             request.terminate(QueryControlError::AccountingOverflow);
@@ -96,7 +123,14 @@ impl RequestBudget {
         limits: QueryLimits,
         shutdown: Option<watch::Receiver<ShutdownPhase>>,
     ) -> Self {
-        Self::build(timeout, limits, shutdown, CorrelationId::generate(), false)
+        Self::build(
+            timeout,
+            limits,
+            shutdown,
+            CorrelationId::generate(),
+            false,
+            None,
+        )
     }
 
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {
@@ -115,6 +149,7 @@ impl RequestBudget {
             terminal_telemetry_recorded: AtomicBool::new(false),
             shutdown: None,
             admission: None,
+            sql_isolation: None,
         }))
     }
 
@@ -395,7 +430,7 @@ impl RequestBudget {
         limits: QueryLimits,
         correlation: CorrelationId,
     ) -> Self {
-        Self::build(timeout, limits, None, correlation, true)
+        Self::build(timeout, limits, None, correlation, true, None)
     }
 }
 
@@ -450,5 +485,16 @@ impl QueryControl for RequestBudget {
 
     fn terminate(&self, reason: QueryControlError) -> QueryControlError {
         RequestBudget::terminate(self, reason)
+    }
+
+    fn capability(&self, type_id: std::any::TypeId) -> Option<&dyn std::any::Any> {
+        if type_id == std::any::TypeId::of::<sf_sparql::ParserRuntime>() {
+            self.0
+                .sql_isolation
+                .as_ref()
+                .map(|runtime| runtime as &dyn std::any::Any)
+        } else {
+            None
+        }
     }
 }

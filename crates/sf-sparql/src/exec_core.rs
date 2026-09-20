@@ -15,6 +15,7 @@ mod lineage;
 mod literal_order;
 mod order;
 mod row;
+mod scheduling;
 mod sql_error;
 mod template;
 
@@ -33,7 +34,6 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
 #[allow(unused_imports)]
 pub(crate) use aggregation::rust_group_result_rows;
 pub(crate) use dedup_scope::lift_dedup_scopes;
-pub(crate) use driver::block_on;
 #[allow(unused_imports)]
 pub(crate) use expression::eval_expr;
 pub(crate) use forms::construct_may_need_cross_branch_dedup;
@@ -45,6 +45,7 @@ pub use forms::{
 pub use lineage::{lineage_each_async_controlled, LineageOutput, LineageSolution};
 #[allow(unused_imports)]
 pub(crate) use row::{reconstruct, Bindings, RawRow};
+pub(crate) use scheduling::{block_on, cooperative_yield};
 #[allow(unused_imports)]
 pub(crate) use template::instantiate;
 

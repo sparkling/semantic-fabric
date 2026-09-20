@@ -18,14 +18,128 @@ mod query_v1;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 mod query_v1_mutant;
 pub(crate) mod runtime;
+#[cfg(feature = "sql-canonicalize-evidence")]
+mod sql_canonicalize_evidence;
+mod sql_canonicalize_protocol;
 mod supervisor;
 mod worker;
 pub use runtime::ParserRuntime;
+#[cfg(feature = "sql-canonicalize-evidence")]
+pub use sql_canonicalize_evidence::{SqlCanonicalizeEvidenceMode, SqlCanonicalizeEvidenceState};
 
 #[cfg(feature = "parser-worker-evidence")]
 mod alpha_equivalence;
 
 pub use worker::dispatch_private_parser_worker_v1;
+
+/// Non-default evidence seam: run ONE real governed SQL-canonicalization
+/// round trip against a held executable, under the caller's own
+/// `QueryControl` and `SourceWork`.
+///
+/// This is the same code path production emission uses -- a real spawned
+/// child, the real bounded-step transport, real containment/reap -- exposed
+/// so focused tests can prove per-dialect canonical parity, cancellation,
+/// deadline, accounting and lifecycle behavior without standing up an HTTP
+/// server. It mints no admission witness and grants no cache, serving or
+/// release authority.
+#[cfg(all(
+    feature = "sql-canonicalize-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub async fn exercise_sql_canonicalize_for_evidence(
+    runtime: &ParserRuntime,
+    dialect: sf_sql::Dialect,
+    skeleton: &str,
+    control: &dyn sf_core::query_control::QueryControl,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> crate::Result<String> {
+    runtime
+        .canonicalize_sql_for_evidence(control, dialect, skeleton, work)
+        .await
+}
+
+#[cfg(all(
+    feature = "sql-canonicalize-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub async fn exercise_hostile_sql_canonicalize_for_evidence(
+    runtime: &ParserRuntime,
+    mode: SqlCanonicalizeEvidenceMode,
+    state: &SqlCanonicalizeEvidenceState,
+    control: &dyn sf_core::query_control::QueryControl,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> crate::Result<String> {
+    runtime
+        .canonicalize_hostile_sql_for_evidence(mode, state, control, work)
+        .await
+}
+
+#[cfg(all(
+    feature = "sql-canonicalize-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub async fn exercise_nested_sql_emission_for_evidence(
+    runtime: &ParserRuntime,
+    state: std::sync::Arc<SqlCanonicalizeEvidenceState>,
+    control: &dyn sf_core::query_control::QueryControl,
+) -> crate::Result<()> {
+    struct Control<'a> {
+        inner: &'a dyn sf_core::query_control::QueryControl,
+        runtime: ParserRuntime,
+    }
+    impl sf_core::query_control::QueryControl for Control<'_> {
+        fn checkpoint(&self) -> Result<(), sf_core::query_control::QueryControlError> {
+            self.inner.checkpoint()
+        }
+        fn terminate(
+            &self,
+            reason: sf_core::query_control::QueryControlError,
+        ) -> sf_core::query_control::QueryControlError {
+            self.inner.terminate(reason)
+        }
+        fn consume(
+            &self,
+            charge: sf_core::query_control::QueryCharge,
+            amount: u64,
+        ) -> Result<(), sf_core::query_control::QueryControlError> {
+            self.inner.consume(charge, amount)
+        }
+        fn capability(&self, type_id: std::any::TypeId) -> Option<&dyn std::any::Any> {
+            (type_id == std::any::TypeId::of::<ParserRuntime>())
+                .then_some(&self.runtime as &dyn std::any::Any)
+        }
+    }
+
+    let mut plan = crate::parse_and_translate("SELECT * WHERE {}", &[], sf_sql::Dialect::Sqlite)?;
+    plan.branches[0].subplan_joins.push(crate::iq::SubPlanJoin {
+        alias: 100,
+        plan: Box::new(crate::parse_and_translate(
+            "SELECT * WHERE {}",
+            &[],
+            sf_sql::Dialect::Sqlite,
+        )?),
+        on: Vec::new(),
+        left: false,
+    });
+    let control = Control {
+        inner: control,
+        runtime: runtime.with_sql_evidence(SqlCanonicalizeEvidenceMode::HoldAfterRequest, state),
+    };
+    let connection = std::sync::Arc::new(std::sync::Mutex::new(
+        rusqlite::Connection::open_in_memory()
+            .map_err(|error| crate::Error::Sql(error.to_string()))?,
+    ));
+    crate::exec::select_each_sqlite_owned_controlled(&plan, connection, &control, |_| async {
+        Ok(())
+    })
+    .await
+}
 
 #[cfg(feature = "parser-worker-evidence")]
 pub use parser_observation::ParserObservationSummaryV1;

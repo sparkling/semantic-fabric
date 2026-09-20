@@ -249,14 +249,14 @@ fn hidden_native_identity_and_order_match_explicit_binding_overlay() {
                     )
                     .unwrap();
                 let expected = emit_branch_with(&owned, dialect, &catalog).unwrap();
-                let actual = emit_branch_binding_view(
+                let actual = crate::exec_core::block_on(emit_branch_binding_view(
                     &b,
                     &view,
                     dialect,
                     &catalog,
                     BranchModifiers::stored(&b),
                     SourceWork::new(None),
-                )
+                ))
                 .unwrap();
                 assert_eq!(actual.sql, expected.sql);
                 assert_eq!(actual.metadata_sql, expected.metadata_sql);

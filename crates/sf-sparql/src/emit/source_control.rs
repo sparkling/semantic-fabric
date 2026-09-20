@@ -24,9 +24,17 @@ pub(super) fn numeric_lexical(value: &str, work: SourceWork<'_>) -> Result<()> {
     work.charge(1)
 }
 
-/// Prepay one SQL parser round trip over `sql`. The tokenizer and the
-/// regenerated text are each byte-linear; the recursive-descent parse and its
-/// AST are token-linear, and every token spans several bytes.
+/// Prepay one SQL parser round trip over `sql` as a *logical* work model
+/// (byte-linear tokenizer/regenerated text, token-linear AST), matching this
+/// module's existing prepay-by-shape convention elsewhere. This is a source-
+/// admission charge, not a wall-clock cost bound: a probe against the
+/// production `sqlparser` dependency independently confirmed genuine
+/// exponential-time parsing for adversarial nested-`NOT`/paren skeletons
+/// (release-mode parse time roughly 7-8x per two extra nesting levels past
+/// depth ~30), well before that library's own recursion-limit guard trips.
+/// This charge cannot and does not bound that; the isolated child's own OS
+/// rlimit/wall-deadline ceiling (`parser_isolation::sql_canonicalize`) is the
+/// actual backstop for the synchronous, uninterruptible native parse call.
 pub(super) fn sql_parse(sql: &str, work: SourceWork<'_>) -> Result<()> {
     work.product(sql.len(), 2)?;
     work.charge(1)

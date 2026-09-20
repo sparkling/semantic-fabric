@@ -43,6 +43,7 @@ metrics.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+sf-sparql = { workspace = true, features = ["runtime-identity-evidence"] }
 tower = { workspace = true, features = ["util"] }
 form_urlencoded.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

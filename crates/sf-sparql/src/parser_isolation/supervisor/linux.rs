@@ -26,6 +26,13 @@ use crate::parser_isolation::worker::{
 use crate::parser_isolation::worker::{
     PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE, PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
 };
+#[cfg(feature = "sql-canonicalize-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_SQL_CANONICALIZE_EVIDENCE_MODE, PRIVATE_SQL_CANONICALIZE_EVIDENCE_NAME,
+};
+use crate::parser_isolation::worker::{
+    PRIVATE_SQL_CANONICALIZE_MODE, PRIVATE_SQL_CANONICALIZE_NAME,
+};
 use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
 const MIN_DYNAMIC_LOADER_FDS: u64 = 16;
@@ -165,6 +172,35 @@ pub(super) fn spawn_query_v1_transport_mutant(
         &[
             PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME.as_bytes(),
             PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE.as_bytes(),
+        ],
+    )
+}
+
+pub(super) fn spawn_sql_canonicalize_v1(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_SQL_CANONICALIZE_NAME.as_bytes(),
+            PRIVATE_SQL_CANONICALIZE_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "sql-canonicalize-evidence")]
+pub(super) fn spawn_sql_canonicalize_evidence_v1(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_SQL_CANONICALIZE_EVIDENCE_NAME.as_bytes(),
+            PRIVATE_SQL_CANONICALIZE_EVIDENCE_MODE.as_bytes(),
         ],
     )
 }

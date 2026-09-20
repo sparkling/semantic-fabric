@@ -36,6 +36,7 @@ use crate::iq::{
     collect_cond_cols, AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey,
     PathClosure, PathKind, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef,
 };
+use crate::parser_isolation;
 use crate::{Error, Result};
 mod metadata;
 mod metadata_path;
@@ -1265,6 +1266,12 @@ pub(crate) fn emit_branch_with_modifiers(
     )
 }
 
+/// Synchronous entry point, preserved exactly for the raw/offline API and
+/// every existing test call site: bridges the async emission chain via the
+/// crate's existing `block_on` shim (`exec_core::driver`). When `work` has no
+/// isolation capability (the common case for these callers) nothing in the
+/// async chain ever actually awaits, so this is a plain, immediate call, not
+/// a real suspension.
 pub(crate) fn emit_branch_controlled(
     b: &Branch,
     dialect: Dialect,
@@ -1272,17 +1279,17 @@ pub(crate) fn emit_branch_controlled(
     modifiers: BranchModifiers,
     work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<EmittedBranch> {
-    emit_branch_binding_view(
+    crate::exec_core::block_on(emit_branch_binding_view(
         b,
         &BindingView::Direct(&b.bindings),
         dialect,
         catalog,
         modifiers,
         work,
-    )
+    ))
 }
 
-pub(crate) fn emit_branch_binding_view(
+pub(crate) async fn emit_branch_binding_view(
     b: &Branch,
     bindings: &BindingView<'_>,
     dialect: Dialect,
@@ -1296,11 +1303,12 @@ pub(crate) fn emit_branch_binding_view(
     emission_catalog.character_keys = Default::default();
     emission_catalog.lexical_keys = Default::default();
     let catalog = &emission_catalog;
-    let mut emitted = emit_branch_inner(b, bindings, dialect, catalog, modifiers, work)?;
+    let mut emitted = emit_branch_inner(b, bindings, dialect, catalog, modifiers, work).await?;
     if dialect == Dialect::Sqlite && !catalog.suppress_path_collation {
         let mut metadata_catalog = catalog.clone();
         metadata_catalog.suppress_path_collation = true;
-        let metadata = emit_branch_inner(b, bindings, dialect, &metadata_catalog, modifiers, work)?;
+        let metadata =
+            emit_branch_inner(b, bindings, dialect, &metadata_catalog, modifiers, work).await?;
         if metadata.projection != emitted.projection || metadata.params != emitted.params {
             return Err(Error::Sql(
                 "path metadata twin changed projection or parameters".into(),
@@ -1319,7 +1327,52 @@ pub(crate) fn emit_branch_binding_view(
     Ok(emitted)
 }
 
-fn emit_branch_inner(
+/// Parse and canonically re-render `skeleton` (ADR-0010 §A), governed by the
+/// isolated SQL-canonicalization peer when `work`'s control carries a
+/// `ParserRuntime` capability (see `QueryControl::capability`); otherwise the
+/// exact prior in-process `Dialect::emit_via_ast` behavior (raw/offline/CLI/
+/// test callers, matching `crate::parse_query`'s own `parse_in_scope`
+/// fallback precedent). `source_control::sql_parse`'s prepay charge always
+/// applies first, independent of which path renders the SQL. The isolated
+/// path's own request/result frame costs are charged prospectively inside
+/// the supervisor round trip itself (`parser_isolation::supervisor::
+/// sql_canonicalize::canonicalize`), at the exact point each length becomes
+/// known -- never approximated or charged after the fact here. Async so the
+/// isolated path's bounded child-I/O steps can cooperatively yield instead of
+/// blocking the caller's own thread; the synchronous raw/offline API
+/// (`emit_branch_controlled`) bridges this with the crate's existing
+/// `block_on` shim, unaffected by any of this when no capability is present.
+async fn emit_via_ast_governed(
+    dialect: Dialect,
+    skeleton: &str,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    source_control::sql_parse(skeleton, work).map_err(source_control::validation_error)?;
+    if let Some(control) = work.control() {
+        if let Some(result) =
+            parser_isolation::runtime::canonicalize_sql_in_scope(dialect, skeleton, control, work)
+                .await
+        {
+            return result;
+        }
+    }
+    dialect
+        .emit_via_ast(skeleton)
+        .map_err(|e| Error::Sql(e.to_string()))
+}
+
+#[cfg(feature = "runtime-identity-evidence")]
+pub(crate) fn exercise_raw_sql_fallback_for_evidence(
+    control: &dyn sf_core::query_control::QueryControl,
+) -> Result<String> {
+    crate::exec_core::block_on(emit_via_ast_governed(
+        Dialect::Sqlite,
+        "SELECT 1 AS c0",
+        sf_sql::source_work::SourceWork::new(Some(control)),
+    ))
+}
+
+async fn emit_branch_inner(
     b: &Branch,
     bindings: &BindingView<'_>,
     dialect: Dialect,
@@ -1336,9 +1389,10 @@ fn emit_branch_inner(
         modifiers,
         work,
     )
+    .await
 }
 
-fn emit_branch_keys(
+async fn emit_branch_keys(
     b: &Branch,
     bindings: &BindingView<'_>,
     dialect: Dialect,
@@ -1349,10 +1403,10 @@ fn emit_branch_keys(
 ) -> Result<EmittedBranch> {
     let actuals = branch_actuals_controlled(b, dialect, catalog, work)?;
     if let Some(pc) = &b.path {
-        return emit_path_branch(b, pc, dialect, catalog, modifiers, work);
+        return emit_path_branch(b, pc, dialect, catalog, modifiers, work).await;
     }
     if let Some(agg) = &b.agg {
-        return emit_agg_branch(b, agg, dialect, catalog, &actuals, modifiers, work);
+        return emit_agg_branch(b, agg, dialect, catalog, &actuals, modifiers, work).await;
     }
     // ADR-0025 (C.3): SQL `DISTINCT` dedups RAW columns, so it implements SPARQL DISTINCT
     // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
@@ -1386,15 +1440,18 @@ fn emit_branch_keys(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from_controlled(
-            b,
-            dialect,
-            catalog,
-            &actuals,
-            &mut params,
-            &mut pidx,
-            work,
-        )?)
+        Some(
+            render_from_async_controlled(
+                b,
+                dialect,
+                catalog,
+                &actuals,
+                &mut params,
+                &mut pidx,
+                work,
+            )
+            .await?,
+        )
     };
     let where_sql = render_where(
         &b.where_conds,
@@ -1507,10 +1564,7 @@ fn emit_branch_keys(
     }
     push_limit_offset(&mut skeleton, modifiers, dialect);
 
-    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
-    let sql = dialect
-        .emit_via_ast(&skeleton)
-        .map_err(|e| Error::Sql(e.to_string()))?;
+    let sql = emit_via_ast_governed(dialect, &skeleton, work).await?;
     Ok(EmittedBranch {
         sql,
         metadata_sql: None,
@@ -1648,7 +1702,7 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 /// Shared by [`emit_path_branch`] (a standalone path result) and the `PathExists`
 /// correlated-EXISTS emission (ADR-0025 Tier-2 gap 1); both reference `t{alias}.sf_s`/`.sf_o`.
 
-fn emit_path_branch(
+async fn emit_path_branch(
     b: &Branch,
     pc: &PathClosure,
     dialect: Dialect,
@@ -1694,10 +1748,7 @@ fn emit_path_branch(
     }
     push_limit_offset(&mut skeleton, modifiers, dialect);
 
-    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
-    let sql = dialect
-        .emit_via_ast(&skeleton)
-        .map_err(|e| Error::Sql(e.to_string()))?;
+    let sql = emit_via_ast_governed(dialect, &skeleton, work).await?;
     Ok(EmittedBranch {
         sql,
         metadata_sql: None,
@@ -1718,7 +1769,7 @@ fn emit_path_branch(
 /// reads each key/aggregate by position. The aggregate result columns are synthetic
 /// (computed in SQL), so their `§10` type is set explicitly at reconstruction (see
 /// [`TermDef::Agg`]), never read from a base column.
-fn emit_agg_branch(
+async fn emit_agg_branch(
     b: &Branch,
     agg: &Aggregation,
     dialect: Dialect,
@@ -1739,15 +1790,18 @@ fn emit_agg_branch(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from_controlled(
-            b,
-            dialect,
-            catalog,
-            actuals,
-            &mut params,
-            &mut pidx,
-            work,
-        )?)
+        Some(
+            render_from_async_controlled(
+                b,
+                dialect,
+                catalog,
+                actuals,
+                &mut params,
+                &mut pidx,
+                work,
+            )
+            .await?,
+        )
     };
     let where_sql = render_where(
         &b.where_conds,
@@ -1814,10 +1868,7 @@ fn emit_agg_branch(
     // branch were pushed by `Plan::prepared_branches` only when unordered.
     push_limit_offset(&mut skeleton, modifiers, dialect);
 
-    source_control::sql_parse(&skeleton, work).map_err(source_control::validation_error)?;
-    let sql = dialect
-        .emit_via_ast(&skeleton)
-        .map_err(|e| Error::Sql(e.to_string()))?;
+    let sql = emit_via_ast_governed(dialect, &skeleton, work).await?;
     Ok(EmittedBranch {
         sql,
         metadata_sql: None,
@@ -1865,7 +1916,31 @@ fn scan_ref(
     )
 }
 
+// Reference-atom validation guarantees exactly two base scans and no optional
+// or nested-plan joins, so that narrow path cannot suspend.
 fn render_from_controlled(
+    b: &Branch,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    _actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    let mut scans = b.core.iter();
+    let first = scans.next().expect("validated reference atom left scan");
+    let mut from = scan_ref_controlled(first, dialect, catalog, params, pidx, work)?;
+    for scan in scans {
+        from.push_str(" CROSS JOIN ");
+        let piece = scan_ref_controlled(scan, dialect, catalog, params, pidx, work)?;
+        work.charge(piece.len())
+            .map_err(source_control::validation_error)?;
+        from.push_str(&piece);
+    }
+    Ok(from)
+}
+
+async fn render_from_async_controlled(
     b: &Branch,
     dialect: Dialect,
     catalog: &ColumnCatalog,
@@ -1883,22 +1958,6 @@ fn render_from_controlled(
     // When `core` is non-empty the first core scan is the FROM anchor; SubPlan joins
     // follow as INNER/LEFT JOIN. When `core` is empty AND there are SubPlan joins the
     // first SubPlan becomes the FROM anchor (no CROSS JOIN keyword before it).
-    let emit_sp = |sp: &crate::iq::SubPlanJoin,
-                   params: &mut Vec<String>,
-                   pidx: &mut usize,
-                   join_kw: &str|
-     -> Result<String> {
-        let (nested_sql, nested_params) =
-            emit_subplan_sql_controlled(&sp.plan, dialect, catalog, work)?;
-        // Rebase Postgres $N placeholders in the nested SQL from $1.. to $(pidx+1)..
-        let rebased = rebase_placeholders_controlled(&nested_sql, dialect, *pidx, work)?;
-        // Splice nested params into the parent's param vector at this text position.
-        work.append_parameters(params, pidx, nested_params)
-            .map_err(source_control::validation_error)?;
-        work.charge(join_kw.len() + rebased.len() + 24)
-            .map_err(source_control::validation_error)?;
-        Ok(format!("{join_kw}({rebased}) t{}", sp.alias))
-    };
     // Pay each rendered piece before copying it into the FROM text.
     let append = |from: &mut String, piece: String| -> Result<()> {
         work.charge(piece.len())
@@ -1948,7 +2007,11 @@ fn render_from_controlled(
             } else {
                 " INNER JOIN "
             };
-            append(&mut from, emit_sp(sp, params, pidx, join_kw)?)?;
+            append(
+                &mut from,
+                emit_subplan_join_controlled(sp, dialect, catalog, params, pidx, join_kw, work)
+                    .await?,
+            )?;
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
@@ -1992,7 +2055,11 @@ fn render_from_controlled(
             } else {
                 " INNER JOIN "
             };
-            append(&mut from, emit_sp(sp, params, pidx, join_kw)?)?;
+            append(
+                &mut from,
+                emit_subplan_join_controlled(sp, dialect, catalog, params, pidx, join_kw, work)
+                    .await?,
+            )?;
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
@@ -2009,6 +2076,25 @@ fn render_from_controlled(
     Ok(from)
 }
 
+async fn emit_subplan_join_controlled(
+    sp: &crate::iq::SubPlanJoin,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    join_kw: &str,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
+    let (nested_sql, nested_params) =
+        emit_subplan_sql_async_controlled(&sp.plan, dialect, catalog, work).await?;
+    let rebased = rebase_placeholders_controlled(&nested_sql, dialect, *pidx, work)?;
+    work.append_parameters(params, pidx, nested_params)
+        .map_err(source_control::validation_error)?;
+    work.charge(join_kw.len() + rebased.len() + 24)
+        .map_err(source_control::validation_error)?;
+    Ok(format!("{join_kw}({rebased}) t{}", sp.alias))
+}
+
 /// Render all prepared branches of a nested [`Plan`] to a single SQL SELECT string
 /// (for embedding as a derived table). Recursively probed live names override the
 /// offline lexical fallback. Multi-branch plans become a `UNION ALL`. Returns
@@ -2019,82 +2105,98 @@ fn emit_subplan_sql(
     dialect: Dialect,
     live_catalog: &ColumnCatalog,
 ) -> Result<(String, Vec<String>)> {
-    emit_subplan_sql_controlled(
+    crate::exec_core::block_on(emit_subplan_sql_async_controlled(
         plan,
         dialect,
         live_catalog,
         sf_sql::source_work::SourceWork::new(None),
-    )
+    ))
 }
 
-fn emit_subplan_sql_controlled(
-    plan: &crate::Plan,
+#[cfg(test)]
+fn emit_subplan_sql_controlled<'a>(
+    plan: &'a crate::Plan,
     dialect: Dialect,
-    live_catalog: &ColumnCatalog,
-    work: sf_sql::source_work::SourceWork<'_>,
+    live_catalog: &'a ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'a>,
 ) -> Result<(String, Vec<String>)> {
-    work.charge(1).map_err(source_control::validation_error)?;
-    // Preparation changes only root scalar modifiers. Borrow the forest so a
-    // unary wrapper chain does not recursively copy every remaining subtree.
-    let branches = &plan.branches;
-    let mut catalog = synthetic_subplan_catalog_controlled(branches, work)?;
-    catalog.suppress_path_collation = live_catalog.suppress_path_collation;
-    catalog.character_keys = std::sync::Arc::clone(&live_catalog.character_keys);
-    catalog.lexical_keys = std::sync::Arc::clone(&live_catalog.lexical_keys);
-    // Live top-level execution has already probed every recursively reachable
-    // base source. Overlay those authoritative names so nested SubPlan emission
-    // does not depend on the offline lexical alias-folding heuristic. The
-    // synthetic entries remain only for dialect-neutral/offline emission and
-    // source-free derived columns.
-    let sources = match work.control() {
-        Some(control) => source_control::live_metadata_sources_controlled(branches, control)
-            .map_err(source_control::validation_error)?,
-        None => live_metadata_sources(branches),
-    };
-    for source in sources {
-        // One paid key copy per source, cloned once per overlaid map.
-        let text_len = match source {
-            LogicalSource::Table(table) => table.len(),
-            LogicalSource::Query(query) => query.len(),
+    crate::exec_core::block_on(emit_subplan_sql_async_controlled(
+        plan,
+        dialect,
+        live_catalog,
+        work,
+    ))
+}
+
+fn emit_subplan_sql_async_controlled<'a>(
+    plan: &'a crate::Plan,
+    dialect: Dialect,
+    live_catalog: &'a ColumnCatalog,
+    work: sf_sql::source_work::SourceWork<'a>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>>
+{
+    Box::pin(async move {
+        work.charge(1).map_err(source_control::validation_error)?;
+        // Preparation changes only root scalar modifiers. Borrow the forest so a
+        // unary wrapper chain does not recursively copy every remaining subtree.
+        let branches = &plan.branches;
+        let mut catalog = synthetic_subplan_catalog_controlled(branches, work)?;
+        catalog.suppress_path_collation = live_catalog.suppress_path_collation;
+        catalog.character_keys = std::sync::Arc::clone(&live_catalog.character_keys);
+        catalog.lexical_keys = std::sync::Arc::clone(&live_catalog.lexical_keys);
+        // Live top-level execution has already probed every recursively reachable
+        // base source. Overlay those authoritative names so nested SubPlan emission
+        // does not depend on the offline lexical alias-folding heuristic. The
+        // synthetic entries remain only for dialect-neutral/offline emission and
+        // source-free derived columns.
+        let sources = match work.control() {
+            Some(control) => source_control::live_metadata_sources_controlled(branches, control)
+                .map_err(source_control::validation_error)?,
+            None => live_metadata_sources(branches),
         };
-        work.product(text_len + 2, 6)
-            .map_err(source_control::validation_error)?;
-        let key = source_key(source);
-        let Some(columns) = live_catalog.by_source.get(&key) else {
-            continue;
-        };
-        work.product(columns.len(), std::mem::size_of::<String>())
-            .map_err(source_control::validation_error)?;
-        for column in columns {
-            work.charge(column.len())
-                .map_err(source_control::validation_error)?;
-        }
-        std::sync::Arc::make_mut(&mut catalog.by_source).insert(key.clone(), columns.clone());
-        macro_rules! overlay {
-            ($field:ident) => {
-                let map = std::sync::Arc::make_mut(&mut catalog.$field);
-                match live_catalog.$field.get(&key) {
-                    Some(live) => {
-                        source_control::map_copy(live, work)
-                            .map_err(source_control::validation_error)?;
-                        map.insert(key.clone(), live.clone());
-                    }
-                    None => {
-                        map.remove(&key);
-                    }
-                }
+        for source in sources {
+            // One paid key copy per source, cloned once per overlaid map.
+            let text_len = match source {
+                LogicalSource::Table(table) => table.len(),
+                LogicalSource::Query(query) => query.len(),
             };
+            work.product(text_len + 2, 6)
+                .map_err(source_control::validation_error)?;
+            let key = source_key(source);
+            let Some(columns) = live_catalog.by_source.get(&key) else {
+                continue;
+            };
+            work.product(columns.len(), std::mem::size_of::<String>())
+                .map_err(source_control::validation_error)?;
+            for column in columns {
+                work.charge(column.len())
+                    .map_err(source_control::validation_error)?;
+            }
+            std::sync::Arc::make_mut(&mut catalog.by_source).insert(key.clone(), columns.clone());
+            macro_rules! overlay {
+                ($field:ident) => {
+                    let map = std::sync::Arc::make_mut(&mut catalog.$field);
+                    match live_catalog.$field.get(&key) {
+                        Some(live) => {
+                            source_control::map_copy(live, work)
+                                .map_err(source_control::validation_error)?;
+                            map.insert(key.clone(), live.clone());
+                        }
+                        None => {
+                            map.remove(&key);
+                        }
+                    }
+                };
+            }
+            overlay!(text_by_source);
+            overlay!(sqlite_by_source);
+            overlay!(scalars_by_source);
+            overlay!(datatypes_by_source);
         }
-        overlay!(text_by_source);
-        overlay!(sqlite_by_source);
-        overlay!(scalars_by_source);
-        overlay!(datatypes_by_source);
-    }
-    pg_float::validate_union(branches, dialect, &catalog, plan.distinct, work)?;
-    mysql_float_value::identity::validate_union_controlled(branches, dialect, &catalog, work)?;
-    let emitted = branches
-        .iter()
-        .map(|branch| {
+        pg_float::validate_union(branches, dialect, &catalog, plan.distinct, work)?;
+        mysql_float_value::identity::validate_union_controlled(branches, dialect, &catalog, work)?;
+        let mut emitted = Vec::with_capacity(branches.len());
+        for branch in branches {
             let modifiers = BranchModifiers::prepared(
                 branch,
                 branches.len() == 1,
@@ -2103,74 +2205,77 @@ fn emit_subplan_sql_controlled(
                 plan.limit,
                 plan.offset,
             );
-            emit_branch_keys(
-                branch,
-                &BindingView::Direct(&branch.bindings),
-                dialect,
-                &catalog,
-                plan.distinct || modifiers.distinct,
-                modifiers,
-                work,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if emitted.is_empty() {
-        // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
-        // Use a dummy column so it is syntactically valid as a derived table.
-        return Ok(("SELECT 1 AS __sf_empty WHERE 1 = 0".to_owned(), Vec::new()));
-    }
-    if emitted.len() == 1 {
-        let e = emitted.into_iter().next().expect("one emitted branch");
-        return Ok((e.sql, e.params));
-    }
-    // Multiple branches: `UNION ALL` (bag semantics) by default, or `UNION` (dedup) when the
-    // plan carries a DISTINCT (a multi-branch DISTINCT SubPlan, ADR-0025 Tier-2 gap 2 — the
-    // pooling requires injective cross-arm reconstruction, so SQL `UNION`'s raw-column dedup
-    // equals SPARQL DISTINCT on the reconstructed terms). SQLite's compound-select grammar
-    // does NOT accept a parenthesised `select-core` as a UNION operand (`(SELECT …) UNION …`
-    // is a syntax error there — the q9 agg-pushdown wave's first live failure); PG/MySQL
-    // accept it. So SQLite joins the arms bare.
-    let mut all_sql = Vec::new();
-    let mut all_params = Vec::new();
-    let numeric_keys = if plan.distinct {
-        pg_numeric::union_keys(branches, dialect, &catalog, work)?
-    } else {
-        None
-    };
-    for e in emitted {
-        let sql = rebase_placeholders_controlled(&e.sql, dialect, all_params.len(), work)?;
-        if dialect == Dialect::Sqlite {
-            all_sql.push(sql);
+            emitted.push(
+                emit_branch_keys(
+                    branch,
+                    &BindingView::Direct(&branch.bindings),
+                    dialect,
+                    &catalog,
+                    plan.distinct || modifiers.distinct,
+                    modifiers,
+                    work,
+                )
+                .await?,
+            );
+        }
+        if emitted.is_empty() {
+            // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
+            // Use a dummy column so it is syntactically valid as a derived table.
+            return Ok(("SELECT 1 AS __sf_empty WHERE 1 = 0".to_owned(), Vec::new()));
+        }
+        if emitted.len() == 1 {
+            let e = emitted.into_iter().next().expect("one emitted branch");
+            return Ok((e.sql, e.params));
+        }
+        // Multiple branches: `UNION ALL` (bag semantics) by default, or `UNION` (dedup) when the
+        // plan carries a DISTINCT (a multi-branch DISTINCT SubPlan, ADR-0025 Tier-2 gap 2 — the
+        // pooling requires injective cross-arm reconstruction, so SQL `UNION`'s raw-column dedup
+        // equals SPARQL DISTINCT on the reconstructed terms). SQLite's compound-select grammar
+        // does NOT accept a parenthesised `select-core` as a UNION operand (`(SELECT …) UNION …`
+        // is a syntax error there — the q9 agg-pushdown wave's first live failure); PG/MySQL
+        // accept it. So SQLite joins the arms bare.
+        let mut all_sql = Vec::new();
+        let mut all_params = Vec::new();
+        let numeric_keys = if plan.distinct {
+            pg_numeric::union_keys(branches, dialect, &catalog, work)?
         } else {
-            work.charge(sql.len() + 2)
+            None
+        };
+        for e in emitted {
+            let sql = rebase_placeholders_controlled(&e.sql, dialect, all_params.len(), work)?;
+            if dialect == Dialect::Sqlite {
+                all_sql.push(sql);
+            } else {
+                work.charge(sql.len() + 2)
+                    .map_err(source_control::validation_error)?;
+                all_sql.push(format!("({sql})"));
+            }
+            let mut parameter_index = all_params.len();
+            work.append_parameters(&mut all_params, &mut parameter_index, e.params)
                 .map_err(source_control::validation_error)?;
-            all_sql.push(format!("({sql})"));
         }
-        let mut parameter_index = all_params.len();
-        work.append_parameters(&mut all_params, &mut parameter_index, e.params)
-            .map_err(source_control::validation_error)?;
-    }
-    let op = if plan.distinct && numeric_keys.is_none() {
-        " UNION "
-    } else {
-        " UNION ALL "
-    };
-    for sql in &all_sql {
-        work.charge(sql.len() + op.len())
-            .map_err(source_control::validation_error)?;
-    }
-    let raw = all_sql.join(op);
-    let sql = match numeric_keys {
-        Some(keys) => {
-            work.charge(raw.len())
+        let op = if plan.distinct && numeric_keys.is_none() {
+            " UNION "
+        } else {
+            " UNION ALL "
+        };
+        for sql in &all_sql {
+            work.charge(sql.len() + op.len())
                 .map_err(source_control::validation_error)?;
-            work.product(keys.len(), 96)
-                .map_err(source_control::validation_error)?;
-            pg_numeric::distinct_sql(raw, &keys)
         }
-        None => raw,
-    };
-    Ok((sql, all_params))
+        let raw = all_sql.join(op);
+        let sql = match numeric_keys {
+            Some(keys) => {
+                work.charge(raw.len())
+                    .map_err(source_control::validation_error)?;
+                work.product(keys.len(), 96)
+                    .map_err(source_control::validation_error)?;
+                pg_numeric::distinct_sql(raw, &keys)
+            }
+            None => raw,
+        };
+        Ok((sql, all_params))
+    })
 }
 
 /// Rebase positional `$N` placeholders in `sql` from base 1 to start at `base+1`,

@@ -16,6 +16,7 @@ development-tools = ["dep:sf-conformance", "dep:sf-bench"]
 parser-worker-evidence = ["sf-sparql/parser-worker-evidence"]
 query-v1-transport-evidence = ["sf-sparql/query-v1-transport-evidence"]
 query-v1-transport-mutant-evidence = ["sf-sparql/query-v1-transport-mutant-evidence"]
+sql-canonicalize-evidence = ["sf-sparql/sql-canonicalize-evidence"]
 
 [[test]]
 name = "private_worker_handshake"
@@ -50,6 +51,7 @@ libc.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+sf-sql.workspace = true
 oxjsonld.workspace = true
 oxrdf.workspace = true
 oxttl.workspace = true

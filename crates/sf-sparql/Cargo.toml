@@ -10,6 +10,8 @@ description = "semantic-fabric virtualizer: SPARQL→SQL OBDA rewriting (ADR-000
 parser-worker-evidence = []
 query-v1-transport-evidence = []
 query-v1-transport-mutant-evidence = []
+sql-canonicalize-evidence = []
+runtime-identity-evidence = []
 secure-spill-prototype = [
     "dep:chacha20poly1305",
     "dep:getrandom",

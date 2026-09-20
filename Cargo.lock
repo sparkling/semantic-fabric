@@ -5133,6 +5133,7 @@ dependencies = [
  "sf-core",
  "sf-serve",
  "sf-sparql",
+ "sf-sql",
  "tokio",
  "toml",
  "tower",

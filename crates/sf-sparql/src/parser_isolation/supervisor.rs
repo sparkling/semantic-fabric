@@ -37,6 +37,12 @@ mod handshake;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod io;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+mod io_bounds;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+mod io_eof;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+mod io_poll;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
@@ -58,6 +64,8 @@ mod query_v1_mutant;
 pub(super) mod query_v1_transport;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod seccomp;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+mod sql_canonicalize;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 pub(super) use executable::PreparedParserExecutable;
@@ -73,9 +81,13 @@ pub(crate) enum SupervisorError {
     Protocol(HandshakeError),
     #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     ParseFrame(ParseFrameError),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+    SqlFrame(super::sql_canonicalize_protocol::SqlFrameError),
     DeadlineExceeded,
     RequestControl(sf_core::query_control::QueryControlError),
     ParseRejected(super::parse_protocol::ParseRejectionV1),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+    SqlRejected(super::sql_canonicalize_protocol::SqlRejectionV1),
     Operation {
         operation: &'static str,
         source: std_io::Error,
@@ -93,6 +105,8 @@ impl fmt::Display for SupervisorError {
         match self {
             Self::RequestControl(_) => formatter.write_str("parser request terminated"),
             Self::ParseRejected(_) => formatter.write_str("parser rejected query"),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+            Self::SqlRejected(_) => formatter.write_str("SQL canonicalize peer rejected skeleton"),
             Self::UnsupportedPlatform => {
                 formatter.write_str("parser supervisor requires qualified GNU x86-64 Linux")
             }
@@ -107,6 +121,8 @@ impl fmt::Display for SupervisorError {
             Self::Protocol(error) => write!(formatter, "parser worker protocol: {error}"),
             #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
             Self::ParseFrame(error) => write!(formatter, "parser request preparation: {error}"),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+            Self::SqlFrame(error) => write!(formatter, "SQL canonicalize protocol: {error}"),
             Self::DeadlineExceeded => formatter.write_str("parser worker wall deadline exceeded"),
             Self::Operation { operation, source } => write!(formatter, "{operation}: {source}"),
         }
@@ -137,6 +153,13 @@ impl From<HandshakeError> for SupervisorError {
 impl From<ParseFrameError> for SupervisorError {
     fn from(error: ParseFrameError) -> Self {
         Self::ParseFrame(error)
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+impl From<super::sql_canonicalize_protocol::SqlFrameError> for SupervisorError {
+    fn from(error: super::sql_canonicalize_protocol::SqlFrameError) -> Self {
+        Self::SqlFrame(error)
     }
 }
 
@@ -177,6 +200,34 @@ impl PreparedParserExecutable {
         source: &str,
     ) -> Result<spargebra::Query, SupervisorError> {
         query_v1_transport::finish_public(self.launch_parser_query_v1(source)?)
+    }
+
+    /// Parse and canonically re-render `skeleton` under `dialect` inside a
+    /// fresh bounded child, reusing this held executable. This is the OS-
+    /// level backstop for `sf_sql::Dialect::emit_via_ast`'s synchronous,
+    /// uninterruptible native parse; see `sql_canonicalize::canonicalize`.
+    /// Async and bounded-step: never blocks the caller's own thread for the
+    /// child's full ceiling, and `control`/`work` are threaded explicitly
+    /// (never a thread-local held across an `.await`).
+    pub(in crate::parser_isolation) async fn canonicalize_sql_public(
+        &self,
+        dialect: super::sql_canonicalize_protocol::SqlDialectCodeV1,
+        skeleton: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<String, SupervisorError> {
+        sql_canonicalize::canonicalize(self, dialect, skeleton, control, work).await
+    }
+
+    #[cfg(feature = "sql-canonicalize-evidence")]
+    pub(in crate::parser_isolation) async fn canonicalize_hostile_sql_for_evidence(
+        &self,
+        mode: crate::parser_isolation::SqlCanonicalizeEvidenceMode,
+        state: &crate::parser_isolation::SqlCanonicalizeEvidenceState,
+        control: &dyn sf_core::query_control::QueryControl,
+        work: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<String, SupervisorError> {
+        sql_canonicalize::canonicalize_evidence(self, mode, state, control, work).await
     }
 
     #[cfg(feature = "query-v1-transport-evidence")]
@@ -328,6 +379,16 @@ impl PreparedParserExecutable {
     }
 
     pub(super) fn parse_public(&self, _: &str) -> Result<spargebra::Query, SupervisorError> {
+        Err(SupervisorError::UnsupportedPlatform)
+    }
+
+    pub(super) async fn canonicalize_sql_public(
+        &self,
+        _: super::sql_canonicalize_protocol::SqlDialectCodeV1,
+        _: &str,
+        _: &dyn sf_core::query_control::QueryControl,
+        _: sf_sql::source_work::SourceWork<'_>,
+    ) -> Result<String, SupervisorError> {
         Err(SupervisorError::UnsupportedPlatform)
     }
 }

@@ -132,6 +132,14 @@ pub use parser_isolation::dispatch_private_parser_worker_v1;
 #[doc(hidden)]
 pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 #[cfg(all(
+    feature = "sql-canonicalize-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::exercise_sql_canonicalize_for_evidence;
+#[cfg(all(
     feature = "query-v1-transport-evidence",
     target_os = "linux",
     target_arch = "x86_64",
@@ -140,9 +148,27 @@ pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 #[doc(hidden)]
 pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
 pub use parser_isolation::ParserRuntime;
+#[cfg(feature = "runtime-identity-evidence")]
+#[doc(hidden)]
+pub fn exercise_raw_sql_fallback_for_evidence(
+    control: &dyn sf_core::query_control::QueryControl,
+) -> Result<String> {
+    emit::exercise_raw_sql_fallback_for_evidence(control)
+}
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 #[doc(hidden)]
 pub use parser_isolation::QueryV1TransportMutant;
+#[cfg(all(
+    feature = "sql-canonicalize-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::{
+    exercise_hostile_sql_canonicalize_for_evidence, exercise_nested_sql_emission_for_evidence,
+    SqlCanonicalizeEvidenceMode, SqlCanonicalizeEvidenceState,
+};
 #[cfg(all(
     feature = "parser-worker-evidence",
     target_os = "linux",

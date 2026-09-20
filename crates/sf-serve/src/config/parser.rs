@@ -15,6 +15,21 @@ impl ServeConfig {
         self.parser = ParserSetup::Isolated(parser);
     }
 
+    /// The exact `ParserRuntime` this config snapshot currently holds, cheap
+    /// to clone (an `Arc` inside). Read once per request at admission
+    /// (`request_budget_for`) so a concurrent reload's fresh config cannot
+    /// retarget an in-flight request's isolated SQL emission, and a request
+    /// admitted under an older config keeps using the executable it started
+    /// with.
+    pub(crate) fn parser_runtime(&self) -> Option<sf_sparql::ParserRuntime> {
+        match &self.parser {
+            ParserSetup::Isolated(parser) => Some(parser.clone()),
+            ParserSetup::Missing => None,
+            #[cfg(test)]
+            ParserSetup::InProcessUnitFixture => None,
+        }
+    }
+
     pub(crate) fn with_parser<T>(
         &self,
         control: &RequestBudget,

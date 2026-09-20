@@ -15,11 +15,17 @@ use crate::parser_isolation::protocol::{
     FRAME_LEN,
 };
 
+mod io;
 #[cfg(feature = "parser-worker-evidence")]
 mod parser_observation;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 mod query_v1_mutant;
 mod query_v1_transport;
+mod sql_canonicalize;
+#[cfg(feature = "sql-canonicalize-evidence")]
+mod sql_canonicalize_evidence;
+
+use io::{read_exact, require_parent_eof, write_all};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct WorkerFailure;
@@ -71,6 +77,48 @@ pub(super) fn run_parser_query_v1() -> ! {
         Ok(prepared) => {
             let result = read_hello_and_emit_ready(&prepared)
                 .and_then(query_v1_transport::run_parser_query_v1);
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
+}
+
+pub(super) fn run_sql_canonicalize_v1() -> ! {
+    // `sqlparser`'s default `recursive-protection` feature lazily caches this
+    // thread's stack bound via `stacker`, whose Linux backend calls glibc's
+    // `pthread_getattr_np` -- which reads `/proc/self/maps` (`openat`) for
+    // the main thread specifically -- on the very first `#[recursive]`-
+    // guarded call, regardless of actual recursion depth. The control-ready
+    // policy candidate installed inside `prepare_for_hello` has no
+    // filesystem syscall in its allowlist at all, so that first call would
+    // otherwise be killed. Force the one-time cache fill now, on a fixed,
+    // harmless, self-contained skeleton, while stage-one's broader policy is
+    // still active; its outcome is discarded.
+    let _ = sf_sql::Dialect::Sqlite.emit_via_ast("SELECT 1");
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let result = read_hello_and_emit_ready(&prepared).and_then(sql_canonicalize::run);
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
+}
+
+#[cfg(feature = "sql-canonicalize-evidence")]
+pub(super) fn run_sql_canonicalize_evidence_v1() -> ! {
+    let _ = sf_sql::Dialect::Sqlite.emit_via_ast("SELECT 1");
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let mut directive = [0_u8; 1];
+            let result = read_exact(libc::STDIN_FILENO, &mut directive)
+                .and_then(|_| {
+                    crate::parser_isolation::sql_canonicalize_evidence::SqlCanonicalizeEvidenceMode::decode(directive)
+                        .ok_or(WorkerFailure)
+                })
+                .and_then(|mode| {
+                    read_hello_and_emit_ready(&prepared)
+                        .and_then(|nonce| sql_canonicalize_evidence::run(mode, nonce))
+                });
             exit_with_policy_owner_live(&prepared, result)
         }
         Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
@@ -438,69 +486,4 @@ fn observe_current_executable() -> Result<BuildIdentityDigest, WorkerFailure> {
     let identity = build_identity::observe(&file).ok_or(WorkerFailure)?;
     drop(file);
     Ok(identity)
-}
-
-fn read_exact(descriptor: libc::c_int, output: &mut [u8]) -> Result<(), WorkerFailure> {
-    let mut offset = 0;
-    while offset < output.len() {
-        let count = unsafe {
-            libc::read(
-                descriptor,
-                output[offset..].as_mut_ptr().cast(),
-                output.len() - offset,
-            )
-        };
-        if count > 0 {
-            offset += count as usize;
-        } else if count < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-        {
-            continue;
-        } else {
-            return Err(WorkerFailure);
-        }
-    }
-    Ok(())
-}
-
-fn write_all(descriptor: libc::c_int, input: &[u8]) -> Result<(), WorkerFailure> {
-    let mut offset = 0;
-    while offset < input.len() {
-        let count = unsafe {
-            libc::write(
-                descriptor,
-                input[offset..].as_ptr().cast(),
-                input.len() - offset,
-            )
-        };
-        if count > 0 {
-            offset += count as usize;
-        } else if count < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-        {
-            continue;
-        } else {
-            return Err(WorkerFailure);
-        }
-    }
-    Ok(())
-}
-
-fn require_parent_eof() -> Result<(), WorkerFailure> {
-    let mut unexpected = [0_u8; 1];
-    loop {
-        let count = unsafe {
-            libc::read(
-                libc::STDIN_FILENO,
-                unexpected.as_mut_ptr().cast(),
-                unexpected.len(),
-            )
-        };
-        if count == 0 {
-            return Ok(());
-        }
-        if count > 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            return Err(WorkerFailure);
-        }
-    }
 }

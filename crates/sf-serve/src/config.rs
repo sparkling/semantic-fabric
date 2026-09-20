@@ -402,6 +402,7 @@ impl ServeConfig {
             self.query_limits,
             self.shutdown.subscribe(),
             correlation,
+            self.parser_runtime(),
         );
         if *self.shutdown.borrow() != ShutdownPhase::Running {
             budget.cancel();
