@@ -64,8 +64,10 @@ fn take_postgres_generation(
     }
     generations
         .take(source_id, binding_identity)
+        .ok_or(GenerationMismatch)?
+        .into_postgres()
         .map(Some)
-        .ok_or(GenerationMismatch)
+        .map_err(|_| GenerationMismatch)
 }
 
 /// Acquire both participating sources before committing a success response,

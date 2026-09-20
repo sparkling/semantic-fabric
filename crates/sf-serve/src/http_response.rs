@@ -9,11 +9,19 @@ use super::*;
 pub(super) async fn respond_select(
     backend: Backend,
     plan: Arc<Plan>,
-    generation: Option<VerifiedPostgresGenerationLease>,
+    generation: Option<VerifiedGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
     fmt: stream::SelectFormat,
     budget: RequestBudget,
 ) -> Response {
+    let (generation, sqlite_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
+        None => (None, None),
+    };
+    if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
+    }
     let media_type = fmt.media_type();
     let PlanForm::Select { vars } = &plan.form else {
         return problem::response(ProblemCode::Internal);
@@ -21,6 +29,18 @@ pub(super) async fn respond_select(
     let vars = vars.clone();
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if let Some(lease) = sqlite_generation {
+                let control = budget.clone();
+                let body = stream::select_body_streaming_controlled(
+                    move |sink| {
+                        Box::pin(async move { lease.select_each(&plan, &control, sink).await })
+                    },
+                    fmt,
+                    vars,
+                    budget,
+                );
+                return ok_stream(media_type, body);
+            }
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }
@@ -81,13 +101,24 @@ pub(super) async fn respond_select(
 pub(super) async fn respond_ask(
     backend: Backend,
     plan: Arc<Plan>,
-    generation: Option<VerifiedPostgresGenerationLease>,
+    generation: Option<VerifiedGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
     if let Err(error) = budget.preflight_ask_result() {
+        if let Some(lease) = generation {
+            let _ = lease.close().await;
+        }
         return problem::response_for_control(error);
+    }
+    let (generation, sqlite_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
+        None => (None, None),
+    };
+    if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
     }
     let fmt = negotiate_results(accept);
     let value = match backend {
@@ -95,14 +126,19 @@ pub(super) async fn respond_ask(
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }
-            let lease = match sqlite_admission::acquire(&pool, &budget).await {
-                Ok(lease) => lease,
-                Err(response) => return response,
+            let run = if let Some(lease) = sqlite_generation {
+                let control = budget.clone();
+                deadline::spawn_request_task(async move { lease.ask(&plan, &control).await })
+            } else {
+                let lease = match sqlite_admission::acquire(&pool, &budget).await {
+                    Ok(lease) => lease,
+                    Err(response) => return response,
+                };
+                let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
+                deadline::spawn_request_task(async move {
+                    exec::ask_sqlite_owned_interruptible_leased(&plan, lease, task_control).await
+                })
             };
-            let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
-            let run = deadline::spawn_request_task(async move {
-                exec::ask_sqlite_owned_interruptible_leased(&plan, lease, task_control).await
-            });
             match deadline::join_task(budget.clone(), run).await {
                 Err(JoinedTaskError::Control(error)) => {
                     return problem::response_for_control(error)
@@ -176,14 +212,33 @@ pub(super) async fn respond_ask(
 pub(super) async fn respond_construct(
     backend: Backend,
     plan: Arc<Plan>,
-    generation: Option<VerifiedPostgresGenerationLease>,
+    generation: Option<VerifiedGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
     fmt: stream::GraphFormat,
     budget: RequestBudget,
 ) -> Response {
+    let (generation, sqlite_generation) = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => (None, Some(lease)),
+        Some(VerifiedGenerationLease::Postgres(lease)) => (Some(lease), None),
+        None => (None, None),
+    };
+    if sqlite_generation.is_some() && !matches!(backend, Backend::Sqlite(_)) {
+        return problem::response(ProblemCode::Internal);
+    }
     let media_type = fmt.media_type();
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if let Some(lease) = sqlite_generation {
+                let control = budget.clone();
+                let body = stream::construct_body_streaming_controlled(
+                    move |sink| {
+                        Box::pin(async move { lease.construct_each(&plan, &control, sink).await })
+                    },
+                    fmt,
+                    budget,
+                );
+                return ok_stream(media_type, body);
+            }
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }

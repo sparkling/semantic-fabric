@@ -160,7 +160,7 @@ impl QueryAdmission {
         self.permits_verified_generation()
     }
 
-    /// The qualified PostgreSQL generation profiles do not admit source row policies.
+    /// Qualified protected generation profiles do not admit source row policies.
     /// Every provisioned subject currently requires one of those policies.
     pub(crate) fn permits_verified_generation(&self) -> bool {
         match self {

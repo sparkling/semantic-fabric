@@ -170,7 +170,13 @@ fn generation_lease_is_pinned_to_the_exact_binding_identity() {
         direct_generation(source_id),
     );
     let mut generations = VerifiedGenerationLeases {
-        leases: BTreeMap::from([(source_id, (binding_identity, lease))]),
+        leases: BTreeMap::from([(
+            source_id,
+            (
+                binding_identity,
+                crate::generation::VerifiedGenerationLease::Postgres(lease),
+            ),
+        )]),
     };
 
     assert!(!generations.matches(source_id, &other_binding, true));
@@ -210,9 +216,9 @@ fn generation_requirement_preserves_the_binding_identity_without_io() {
         .unwrap()
         .unwrap();
 
-    assert!(requirement.binding_identity.ptr_eq(&binding_identity));
+    assert!(requirement.binding_identity().ptr_eq(&binding_identity));
     assert!(!requirement
-        .binding_identity
+        .binding_identity()
         .ptr_eq(&RuntimeBindingIdentity::fresh()));
 }
 

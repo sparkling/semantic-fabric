@@ -24,7 +24,7 @@ use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
 use crate::binding_identity::RuntimeBindingIdentity;
-use crate::pg_generation::{PgGenerationError, PgGenerationRequirement, SourceGeneration};
+use crate::pg_generation::{PgGenerationError, SourceGeneration};
 use crate::schema_observation::BoundSourceSchemaObservationV1;
 use crate::semantic_admission::ValidatedMapping;
 use crate::IntrospectedSource;
@@ -283,7 +283,7 @@ impl RuntimeBinding {
 
     pub(crate) fn generation_requirement(
         &self,
-    ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
+    ) -> Result<Option<crate::generation::GenerationRequirement>, PgGenerationError> {
         self.generation
             .requirement(&self.backend, &self.binding_identity)
     }

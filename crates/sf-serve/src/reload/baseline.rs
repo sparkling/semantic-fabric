@@ -8,7 +8,7 @@ use sf_core::{SourceId, TableSchema};
 #[derive(PartialEq)]
 pub(crate) struct Observation {
     tables: Vec<TableSchema>,
-    verified: Option<sf_core::schema_identity::ObservedSchemaIdentityV1>,
+    verified: Option<crate::generation::GenerationObservation>,
 }
 
 type Observations = BTreeMap<SourceId, Observation>;
@@ -139,14 +139,18 @@ mod tests {
         };
         let first = Observation {
             tables: vec![TableSchema::new("items")],
-            verified: Some(identity("test-one-v1")),
+            verified: Some(crate::generation::GenerationObservation::Postgres(
+                identity("test-one-v1"),
+            )),
         };
         let mut next = Observation {
             tables: first.tables.clone(),
-            verified: first.verified,
+            verified: first.verified.clone(),
         };
         assert!(first == next);
-        next.verified = Some(identity("test-two-v1"));
+        next.verified = Some(crate::generation::GenerationObservation::Postgres(
+            identity("test-two-v1"),
+        ));
         assert!(first != next);
         next.verified = None;
         assert!(

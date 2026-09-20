@@ -12,10 +12,10 @@ use crate::schema_observation::SourceSchemaObservationV1;
 ///
 /// Pairing prevents later constructors from independently mixing a handle and
 /// unrelated schema vector. PostgreSQL observes one coherent read-only,
-/// repeatable-read `public` catalogue snapshot; SQLite and MySQL do not yet
-/// observe a whole catalogue in one explicit transaction. The optional authored
-/// coordinator compares later observations, but supplies no protected DDL lease:
-/// this type deliberately says `Introspected`, not `VerifiedSnapshot`.
+/// repeatable-read `public` catalogue snapshot. Protected file-backed SQLite uses
+/// a transaction-local exact generation schema. Ordinary SQLite and MySQL
+/// observations remain unprotected; this common type does not itself confer
+/// verified-generation authority.
 pub struct IntrospectedSource {
     backend: Backend,
     schema: Vec<TableSchema>,
@@ -41,6 +41,18 @@ impl IntrospectedSource {
             schema,
             observation: SourceSchemaObservationV1::unavailable(),
             generation: SourceGeneration::Unverified,
+        }
+    }
+
+    pub(crate) fn observed_sqlite_generation(
+        backend: Backend,
+        generation: std::sync::Arc<crate::sqlite_generation::SqliteGeneration>,
+    ) -> Self {
+        Self {
+            backend,
+            schema: generation.schema().tables().to_vec(),
+            observation: SourceSchemaObservationV1::unavailable(),
+            generation: SourceGeneration::AuthoredSqlite(generation),
         }
     }
 
@@ -169,9 +181,7 @@ impl IntrospectedSource {
     }
 
     /// Non-authorizing equality input for the sole authored reload coordinator.
-    pub(crate) fn verified_identity(
-        &self,
-    ) -> Option<sf_core::schema_identity::ObservedSchemaIdentityV1> {
+    pub(crate) fn verified_identity(&self) -> Option<crate::generation::GenerationObservation> {
         self.generation.verified_identity()
     }
 

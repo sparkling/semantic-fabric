@@ -1,8 +1,8 @@
 ---
 status: accepted
 date: 2026-09-02
-updated: 2026-09-10
-tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
+updated: 2026-09-20
+tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres, sqlite]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
 implements: [ADR-0038]
@@ -290,10 +290,11 @@ Raw `rr:sqlQuery` is rejected in verified mode unless a future design extracts,
 validates and holds its complete relation/view/function/result-type dependency
 closure in the same lease. Base-table digests alone cannot authorize raw SQL.
 
-SQLite may be qualified later with a documented file/database generation and
-transaction law. MySQL verified mode remains rejected until equivalent
-consistency and DDL-race evidence exists. Observed digests may still be emitted
-for both without promotion.
+The explicit authored SQLite profile uses file-backed, fresh read-only sealed members opened from canonical filesystem paths (URI/VFS connection options are rejected), WAL or DELETE journaling, bounded unqualified base-table mappings, one source, nonzero reload and no source row policies. In-memory/attached/temporary schemas, virtual/shadow tables, read-uncommitted/writable-schema settings and other journal modes fail closed. A `BEGIN DEFERRED` read transaction owns the coherent schema observation, authoritative compilation/cache use, every metadata probe and response branch, final observation and acknowledged rollback. WAL preserves the old read snapshot across committed successor DDL; DELETE prevents DDL commit while that reader holds its shared lock. This is SQLite's local transaction law, not a distributed database snapshot or a hard I/O deadline.
+
+The equality record includes exact schema object SQL, compiler column facts, schema cookie and journal mode. It is not an ObservedSchemaIdentity V1 profile. Logical observation admits at most 8,192 objects, 4,096 tables, 65,536 columns and 4 MiB of copied text, with request source-work charges before copies/growth and sorting only after bounds. Native catalogue allocation and physical I/O are not measured by those logical bounds. Candidate semantic admission runs while its separate control transaction remains owned. Request acquisition compares the activated expectation on its own sealed physical member before authoritative compilation; legacy raw handles cannot expose that member. Queued operations register before blocking submission. Closing rejects new operations, drains registered workers and rolls back before success; cancellation retains cleanup ownership, and panic, uncertain rollback or lost runtime poisons member admission. The caller drops executor views before awaiting final cleanup. SELECT, ASK, CONSTRUCT and single/multiple-mapping lineage use this path.
+
+`sqlite_generation` CLI tests exercise authenticated typed bags, all normal forms, lineage completion, semantic/schema refusal, automatic reload/recovery, source-work refusal and shutdown for WAL and DELETE. Backend and serving tests cover held snapshots, queued-worker ordering, cache drift refusal, terminal cleanup and exact runtime binding. Ordinary SQLite remains explicitly unverified; this opt-in profile does not close the remaining backend/policy programme. MySQL verified mode remains rejected until equivalent consistency and DDL-race evidence exists. Observed digests may still be emitted for both without promotion.
 
 ### 6. Make live Direct Mapping a leased lifecycle
 

@@ -5,6 +5,7 @@
 //! the object and aborts its driver task; a possibly open transaction therefore
 //! never reaches the pool recycler.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::sync::Arc;
 #[cfg(test)]
@@ -16,6 +17,8 @@ use sf_sparql::MappingDigest;
 
 use crate::binding_identity::RuntimeBindingIdentity;
 use crate::budget::RequestBudget;
+pub(crate) use crate::generation::VerifiedGenerationLeases;
+use crate::generation::{GenerationObservation, GenerationRequirement};
 use crate::schema_observation::SourceSchemaObservationV1;
 use crate::semantic_admission::{MappingOrigin, SemanticAdmissionError, ValidatedMapping};
 use crate::telemetry::{self, Stage};
@@ -45,6 +48,7 @@ pub(crate) enum SourceGeneration {
     Unverified,
     DirectPostgres(Arc<PostgresGeneration>),
     AuthoredPostgres(Arc<PostgresGeneration>),
+    AuthoredSqlite(Arc<crate::sqlite_generation::SqliteGeneration>),
 }
 
 impl SourceGeneration {
@@ -56,15 +60,26 @@ impl SourceGeneration {
         &self,
         backend: &crate::Backend,
         binding_identity: &RuntimeBindingIdentity,
-    ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
+    ) -> Result<Option<GenerationRequirement>, PgGenerationError> {
         match self {
             Self::Unverified => Ok(None),
-            Self::DirectPostgres(expected) | Self::AuthoredPostgres(expected) => match backend {
-                crate::Backend::Pg(pool) => Ok(Some(PgGenerationRequirement {
-                    pool: pool.clone(),
-                    expected: Arc::clone(expected),
+            Self::AuthoredSqlite(expected) => {
+                if !matches!(backend, crate::Backend::Sqlite(_)) {
+                    return Err(PgGenerationError::Internal);
+                }
+                Ok(Some(GenerationRequirement::Sqlite {
+                    expected: expected.clone(),
                     binding_identity: binding_identity.clone(),
-                })),
+                }))
+            }
+            Self::DirectPostgres(expected) | Self::AuthoredPostgres(expected) => match backend {
+                crate::Backend::Pg(pool) => Ok(Some(GenerationRequirement::Postgres(
+                    PgGenerationRequirement {
+                        pool: pool.clone(),
+                        expected: Arc::clone(expected),
+                        binding_identity: binding_identity.clone(),
+                    },
+                ))),
                 crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
                     Err(PgGenerationError::Internal)
                 }
@@ -73,14 +88,17 @@ impl SourceGeneration {
     }
 
     pub(crate) const fn is_verified(&self) -> bool {
-        matches!(self, Self::DirectPostgres(_) | Self::AuthoredPostgres(_))
+        !matches!(self, Self::Unverified)
     }
 
-    pub(crate) fn verified_identity(&self) -> Option<ObservedSchemaIdentityV1> {
+    pub(crate) fn verified_identity(&self) -> Option<GenerationObservation> {
         match self {
             Self::Unverified => None,
+            Self::AuthoredSqlite(expected) => {
+                Some(GenerationObservation::Sqlite(expected.schema().clone()))
+            }
             Self::DirectPostgres(expected) | Self::AuthoredPostgres(expected) => {
-                Some(expected.identity)
+                Some(GenerationObservation::Postgres(expected.identity))
             }
         }
     }
@@ -91,6 +109,7 @@ impl SourceGeneration {
     ) -> Result<(), SemanticAdmissionError> {
         let (expected, origin) = match self {
             Self::Unverified => return Ok(()),
+            Self::AuthoredSqlite(expected) => return expected.ensure_mapping(mapping),
             Self::DirectPostgres(expected) => (expected, MappingOrigin::Direct),
             Self::AuthoredPostgres(expected) => (expected, MappingOrigin::Authored),
         };
@@ -136,85 +155,12 @@ impl std::fmt::Debug for PostgresGeneration {
 pub(crate) struct PgGenerationRequirement {
     pool: crate::PostgresPool,
     expected: Arc<PostgresGeneration>,
-    binding_identity: RuntimeBindingIdentity,
+    pub(crate) binding_identity: RuntimeBindingIdentity,
 }
 
 impl PgGenerationRequirement {
     pub(crate) fn source_id(&self) -> SourceId {
         self.expected.source_id
-    }
-}
-
-/// Request-owned verified transactions keyed by source and exact binding.
-type RuntimeBoundGenerationLease = (RuntimeBindingIdentity, VerifiedPostgresGenerationLease);
-
-#[derive(Default)]
-pub(crate) struct VerifiedGenerationLeases {
-    leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>,
-}
-
-impl VerifiedGenerationLeases {
-    pub(crate) async fn acquire(
-        mut requirements: Vec<PgGenerationRequirement>,
-        budget: &RequestBudget,
-    ) -> Result<Self, PgGenerationError> {
-        requirements.sort_by_key(PgGenerationRequirement::source_id);
-        if requirements
-            .windows(2)
-            .any(|pair| pair[0].source_id() == pair[1].source_id())
-        {
-            return Err(PgGenerationError::Internal);
-        }
-        let mut leases = BTreeMap::new();
-        for requirement in requirements {
-            let source_id = requirement.source_id();
-            let binding_identity = requirement.binding_identity.clone();
-            match acquire_expected(requirement, budget).await {
-                Ok(lease) => {
-                    leases.insert(source_id, (binding_identity, lease));
-                }
-                Err(error) => {
-                    close_leases(leases).await;
-                    return Err(error);
-                }
-            }
-        }
-        Ok(Self { leases })
-    }
-
-    pub(crate) fn take(
-        &mut self,
-        source_id: SourceId,
-        binding_identity: &RuntimeBindingIdentity,
-    ) -> Option<VerifiedPostgresGenerationLease> {
-        if !self.leases.get(&source_id)?.0.ptr_eq(binding_identity) {
-            return None;
-        }
-        let (_, lease) = self.leases.remove(&source_id)?;
-        debug_assert_eq!(lease.source_id(), source_id);
-        Some(lease)
-    }
-
-    pub(crate) fn matches(
-        &self,
-        source_id: SourceId,
-        binding_identity: &RuntimeBindingIdentity,
-        verified_generation: bool,
-    ) -> bool {
-        match self.leases.get(&source_id) {
-            Some((identity, _)) => verified_generation && identity.ptr_eq(binding_identity),
-            None => !verified_generation,
-        }
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.leases.is_empty()
-    }
-
-    /// Roll every still-owned transaction back, attempting all leases even if
-    /// one close fails. Dirty failures detach on final drop.
-    pub(crate) async fn finish(self) -> Result<(), PgGenerationError> {
-        finish_leases(self.leases).await
     }
 }
 
@@ -400,7 +346,7 @@ async fn build_direct_candidate(
     })
 }
 
-async fn acquire_expected(
+pub(crate) async fn acquire_expected(
     requirement: PgGenerationRequirement,
     budget: &RequestBudget,
 ) -> Result<VerifiedPostgresGenerationLease, PgGenerationError> {
@@ -434,23 +380,6 @@ fn postgres_direct_table_profile_is_unambiguous(tables: &[TableSchema]) -> bool 
             .iter()
             .all(|column| !column.name.eq_ignore_ascii_case("rowid"))
     })
-}
-
-async fn close_leases(leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>) {
-    let _ = finish_leases(leases).await;
-}
-
-async fn finish_leases(
-    leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>,
-) -> Result<(), PgGenerationError> {
-    let mut first_error = None;
-    for (_, (_, lease)) in leases {
-        let result = lease.rollback_bounded().await;
-        if first_error.is_none() {
-            first_error = result.err();
-        }
-    }
-    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

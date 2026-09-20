@@ -66,4 +66,6 @@ async fn acquire_with_budget(
     leases
         .take(source_id, binding)
         .expect("binding-matched generation lease")
+        .into_postgres()
+        .expect("PostgreSQL generation variant")
 }

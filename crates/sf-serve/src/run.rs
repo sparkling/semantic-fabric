@@ -44,7 +44,7 @@ pub struct ServeOptions {
     pub shutdown_timeout: Duration,
     /// Authored reload interval (zero disables); Direct observation (zero selects 5s).
     pub reload_interval: Duration,
-    /// Require the qualified, protected authored PostgreSQL source-generation profile.
+    /// Require a protected authored PostgreSQL or file-backed SQLite generation.
     /// Never falls back to observational serving when requested; requires authored reload.
     pub require_verified_generation: bool,
     /// Optional Prometheus renderer. `None` keeps `/metrics` absent.

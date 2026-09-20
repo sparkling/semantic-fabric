@@ -1,7 +1,7 @@
 //! Native owned execution for the typed bounded multi-origin sink.
 use crate::{
-    budget::RequestBudget, lineage::Lineage, pg_generation::VerifiedPostgresGenerationLease,
-    problem, stream, Backend,
+    budget::RequestBudget, generation::VerifiedGenerationLease, lineage::Lineage, problem, stream,
+    Backend,
 };
 use axum::response::Response;
 use sf_core::query_control::QueryControl;
@@ -13,12 +13,35 @@ pub(crate) async fn respond(
     backend: Backend,
     plan: Arc<Plan>,
     spec: Arc<LineageSpec>,
-    generation: Option<VerifiedPostgresGenerationLease>,
+    generation: Option<VerifiedGenerationLease>,
     rls_tables: Option<Arc<[String]>>,
     proof: Arc<Lineage>,
     budget: RequestBudget,
 ) -> Response {
     let form = plan.form.clone();
+    let generation = match generation {
+        Some(VerifiedGenerationLease::Sqlite(lease)) => {
+            if !matches!(backend, Backend::Sqlite(_)) {
+                return problem::response(problem::ProblemCode::Internal);
+            }
+            let control = budget.clone();
+            let body = stream::multiple_lineage_body(
+                move |sink| {
+                    Box::pin(async move { lease.lineage_each(&plan, &spec, &control, sink).await })
+                },
+                proof,
+                form,
+                budget,
+            );
+            return Response::builder()
+                .status(200)
+                .header(axum::http::header::CONTENT_TYPE, crate::lineage::MEDIA_TYPE)
+                .body(body)
+                .expect("fixed lineage response");
+        }
+        Some(VerifiedGenerationLease::Postgres(lease)) => Some(lease),
+        None => None,
+    };
     let body = match backend {
         Backend::Sqlite(pool) => {
             if generation.is_some() {

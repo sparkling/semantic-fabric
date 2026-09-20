@@ -20,7 +20,7 @@ use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
     RuntimeBinding,
 };
-use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
+use crate::pg_generation::PgGenerationError;
 #[cfg(test)]
 use crate::semantic_admission::MappingOrigin;
 use crate::semantic_admission::{SemanticAdmissionError, ValidatedMapping};
@@ -407,7 +407,7 @@ impl RuntimeSnapshot {
     pub(crate) fn generation_requirements(
         &self,
         source_ids: impl IntoIterator<Item = SourceId>,
-    ) -> Result<Vec<PgGenerationRequirement>, PgGenerationError> {
+    ) -> Result<Vec<crate::generation::GenerationRequirement>, PgGenerationError> {
         let mut requirements = Vec::new();
         for source_id in source_ids {
             let binding = self

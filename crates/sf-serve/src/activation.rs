@@ -9,8 +9,9 @@ use sf_core::SourceId;
 use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
 };
+use crate::generation::GenerationRequirement;
 use crate::pg_direct_lifecycle::{RuntimeTransitionAuthority, ValidatedRuntimeCandidate};
-use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
+use crate::pg_generation::PgGenerationError;
 use crate::snapshot::RuntimeSnapshot;
 #[path = "activation_reload.rs"]
 mod reload;
@@ -167,7 +168,7 @@ impl RuntimeSnapshotLease {
     pub(crate) fn generation_requirements(
         &self,
         source_ids: impl IntoIterator<Item = SourceId>,
-    ) -> Result<Vec<PgGenerationRequirement>, PgGenerationError> {
+    ) -> Result<Vec<GenerationRequirement>, PgGenerationError> {
         self.snapshot.generation_requirements(source_ids)
     }
 

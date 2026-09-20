@@ -148,7 +148,8 @@ async fn assert_exact_metadata_reservation(
     let request = RequestBudget::after(
         Duration::from_secs(5),
         QueryLimits::new(
-            10_000,
+            // This assertion isolates source metadata accounting, not compiler work.
+            u64::MAX,
             GENERATION_METADATA_PROBE_RESERVATION,
             10_000,
             1_000_000,
@@ -159,8 +160,10 @@ async fn assert_exact_metadata_reservation(
         .await
         .unwrap_or_else(|response| {
             panic!(
-                "exact metadata reservation admission failed: {}",
-                response.status()
+                "exact metadata reservation admission failed: {}; compiler={} source={}",
+                response.status(),
+                request.consumed(QueryCharge::CompilerWork),
+                request.consumed(QueryCharge::SourceWork)
             )
         });
     assert_eq!(
@@ -196,7 +199,9 @@ async fn assert_exact_metadata_reservation(
     assert!(generations.matches(source_id, &binding, verified));
     let lease = generations
         .take(source_id, &binding)
-        .expect("take exact-reservation generation");
+        .expect("take exact-reservation generation")
+        .into_postgres()
+        .expect("PostgreSQL generation variant");
     assert!(generations.is_empty());
     let client = lease.execution_client();
     let identity = backend_identity(&client).await;
@@ -245,7 +250,9 @@ async fn acquire_compile(
 ) {
     let request = RequestBudget::after(
         Duration::from_secs(5),
-        QueryLimits::new(10_000, 10_000, 10_000, 1_000_000),
+        // Execution lifecycle assertions are independent of logical work ceilings;
+        // assert_exact_metadata_reservation separately enforces the exact 34 units.
+        QueryLimits::new(u64::MAX, u64::MAX, 10_000, 1_000_000),
     );
     let admission = crate::request_generation::acquire(cfg.clone(), snapshot, query, &request)
         .await
@@ -289,7 +296,9 @@ async fn acquire_compile(
     assert!(matches!(backend, Backend::Pg(_)));
     let lease = generations
         .take(source_id, &binding)
-        .expect("take exact binding-matched generation");
+        .expect("take exact binding-matched generation")
+        .into_postgres()
+        .expect("PostgreSQL generation variant");
     assert!(generations.is_empty());
     let client = lease.execution_client();
     let identity = backend_identity(&client).await;

@@ -94,7 +94,9 @@ fn required_generation_rejects_unsupported_modes_before_source_or_file_io() {
         );
     }
     for source in [
-        "sqlite:/must/not/be/opened.db",
+        "sqlite::memory:",
+        "sqlite:file:/must/not/be/opened.db?immutable=1",
+        "sqlite:file:/must/not/be/opened.db?nolock=1",
         "mysql://test@database.invalid/db",
     ] {
         let mut opts = options(1);

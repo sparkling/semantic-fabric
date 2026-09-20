@@ -199,7 +199,7 @@ fn authored_requirement_retains_binding_identity_and_unverified_is_not_promoted(
         .requirement(source.backend(), &binding)
         .unwrap()
         .unwrap();
-    assert!(requirement.binding_identity.ptr_eq(&binding));
+    assert!(requirement.binding_identity().ptr_eq(&binding));
     assert_eq!(requirement.source_id(), id);
     let unverified = crate::IntrospectedSource::observed(
         source.backend().clone(),
@@ -224,12 +224,17 @@ async fn protected_reload_control_is_owned_until_last_worker_and_observes_shutdo
         crate::test_support::empty_ontology(),
     )
     .unwrap();
-    assert!(crate::startup_authored::control_budget(Some(&config)).is_err());
+    let prepared = crate::SourceRef::inline("pg:host=127.0.0.1")
+        .resolve()
+        .unwrap()
+        .prepare()
+        .unwrap();
+    assert!(crate::startup_authored::control_budget(Some(&config), &prepared).is_err());
     let gate = Arc::new(tokio::sync::Semaphore::new(1));
     config.control_work = Some(Arc::clone(&gate));
-    let budget = crate::startup_authored::control_budget(Some(&config)).unwrap();
+    let budget = crate::startup_authored::control_budget(Some(&config), &prepared).unwrap();
     assert_eq!(gate.available_permits(), 0);
-    assert!(crate::startup_authored::control_budget(Some(&config)).is_err());
+    assert!(crate::startup_authored::control_budget(Some(&config), &prepared).is_err());
     let worker = budget.clone();
     drop(budget);
     assert_eq!(gate.available_permits(), 0);

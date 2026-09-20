@@ -12,6 +12,10 @@ use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 
 mod cancellation;
+mod generation;
+mod generation_schema;
+pub use generation::{SqliteGenerationConnection, VerifiedSqliteGenerationLease};
+pub use generation_schema::SqliteGenerationSchema;
 mod iri_key;
 mod lexical_key;
 #[cfg(test)]

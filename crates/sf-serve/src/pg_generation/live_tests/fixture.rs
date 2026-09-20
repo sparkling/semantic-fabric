@@ -326,5 +326,7 @@ pub(super) async fn acquire(
     let mut leases = VerifiedGenerationLeases::acquire(vec![requirement], &budget()).await?;
     Ok(leases
         .take(source_id, binding)
-        .expect("binding-matched generation lease"))
+        .expect("binding-matched generation lease")
+        .into_postgres()
+        .expect("PostgreSQL generation variant"))
 }

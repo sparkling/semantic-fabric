@@ -123,7 +123,7 @@ impl Supervisor {
                     break;
                 }
                 let generation_budget = if opts.require_verified_generation {
-                    match crate::startup_authored::control_budget(Some(&worker_config)) {
+                    match crate::startup_authored::control_budget(Some(&worker_config), &source) {
                         Ok(budget) => Some(budget),
                         Err(_) => break,
                     }
@@ -207,7 +207,7 @@ async fn refresh(
                 use sf_core::query_control::QueryControl;
                 budget.checkpoint().map_err(|_| {
                     ServeError::new(StartupCause::SourceConnect {
-                        spec: "PostgreSQL".into(),
+                        spec: "verified source".into(),
                         error: "authored candidate control deadline exceeded".into(),
                     })
                 })?;

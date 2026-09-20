@@ -263,9 +263,11 @@ reuse, invalid-candidate rejection, a held pre-body request across activation,
 and bidirectional old/new plan rejection. This proves application-generation
 isolation, not a database DDL lease or policy hot reload. G3 stays open.
 
-Next: complete a transaction-backed SQLite generation path from coherent schema
-observation through request compilation and every response form, with DDL and
-terminal-cleanup proof. Retain ordinary PostgreSQL/policy, MySQL and federated
+The current task, `g3-sqlite-generation-qualified-20260920`, integrates the opt-in
+file-backed SQLite WAL/DELETE generation path. Backend, serving and actual CLI
+tests cover transaction ownership, queued cleanup, exact binding, typed results,
+lineage, schema refusal and automatic reload/recovery. Independent final review
+and harness verification gate the slice commit. Retain ordinary PostgreSQL/policy, MySQL and federated
 generation obligations in the queue; an initial SQLite slice cannot close G3.
 G1 receipts confirm the completed declared slices, but retained historical gap
 wording still needs reconciliation with source before a final programme verdict.
