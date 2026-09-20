@@ -415,8 +415,8 @@ pub(super) fn scan_ref_controlled(
         }
         ScanSource::Logical(LogicalSource::Query(query)) => Ok(format!("({query}) t{alias}")),
         ScanSource::Path { closure, cte_alias } => {
-            let sql = path_as_derived_table_sql(closure, *cte_alias, dialect, catalog)?;
-            Ok(format!("({sql}) t{alias}"))
+            let sql = path_sql::derived(closure, *cte_alias, dialect, catalog, work)?;
+            path_sql::format::render(work, format_args!("({sql}) t{alias}"))
         }
         ScanSource::Projection { .. } => {
             let sql = projection_sql(&scan.source, dialect, catalog, params, pidx, work)?;

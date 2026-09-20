@@ -27,22 +27,6 @@ fn source_text(source: &LogicalSource, column: &str, catalog: &ColumnCatalog) ->
         .copied()
 }
 
-pub(super) fn path_key_expression(
-    expression: String,
-    source: &LogicalSource,
-    column: &str,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> String {
-    let key = source_text(source, column, catalog);
-    let expression = decoded_text(expression, key, dialect, catalog);
-    if !catalog.suppress_path_collation && (dialect == Dialect::Sqlite || key.is_some()) {
-        exact_text(expression, dialect)
-    } else {
-        expression
-    }
-}
-
 #[cfg(test)]
 pub(super) fn hop_text(hop: &HopExpr, catalog: &ColumnCatalog) -> (bool, bool) {
     match hop {

@@ -44,6 +44,7 @@ mod metadata_ref_atom;
 mod metadata_source;
 mod metadata_subplan;
 use metadata::branch_actuals_controlled;
+mod path_sql;
 mod scan;
 mod source_control;
 #[cfg(test)]
@@ -87,7 +88,7 @@ mod ref_atom;
 use aggregate_projection::{aggregate_projection, AggregateProjection};
 #[cfg(test)]
 use path_comparison::subplan_actuals;
-use path_comparison::{path_actuals_controlled, path_key_expression, render_key_equality};
+use path_comparison::{path_actuals_controlled, render_key_equality};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
 /// regular-identifier column references resolve to the column the live DBMS truly
@@ -907,23 +908,6 @@ fn physical_row_identifier(source: &LogicalSource, raw: &str, dialect: Dialect) 
         && matches!(dialect, Dialect::Postgres | Dialect::Sqlite)
 }
 
-/// Render a raw property-path endpoint from its base scan. Direct Mapping uses
-/// the synthetic `rowid` key for no-primary-key table subjects; PostgreSQL's
-/// equivalent is `ctid`, exactly as for ordinary [`colref`] emission.
-fn path_endpoint_sql(
-    source: &LogicalSource,
-    raw: &str,
-    source_alias: &str,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> String {
-    if dialect == Dialect::Postgres && physical_row_identifier(source, raw, dialect) {
-        return format!("({source_alias}.ctid)::text");
-    }
-    let name = resolve_col(raw, catalog.columns(source));
-    format!("{source_alias}.{}", dialect.quote_ident(name))
-}
-
 /// A translate-time [`ColumnCatalog`] for offline SubPlan embedding
 /// ([`crate::Plan::emitted`]). Offline derived-table SQL has no live DB connection,
 /// so [`colref`]'s `actuals` lookup otherwise falls back to quoting every identifier
@@ -1637,7 +1621,7 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 /// (ADR-0007 *recursive paths compile to source-dialect recursive CTEs*).
 ///
 /// The hop relation ([`HopExpr`]) compiles to a subquery yielding the canonical
-/// **raw key columns** `sf_s` / `sf_o` (term-gen lifting; see [`hop_sql`]): a bare
+/// **raw key columns** `sf_s` / `sf_o` (term-gen lifting): a bare
 /// predicate is a base scan, and `^p`/`p/q`/`p|q`/`!p` are nested subqueries over
 /// the same keys. A second relation reduces it to the distinct reachable node
 /// pairs the outer projection reads as `t{alias}` — SPARQL paths are set-semantics
@@ -1660,75 +1644,6 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 /// `t{alias}(sf_s, sf_o)` — a plain CTE for length-1 shapes, a `WITH RECURSIVE` for `+`/`*`.
 /// Shared by [`emit_path_branch`] (a standalone path result) and the `PathExists`
 /// correlated-EXISTS emission (ADR-0025 Tier-2 gap 1); both reference `t{alias}.sf_s`/`.sf_o`.
-fn path_with_prelude(
-    pc: &PathClosure,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> Result<String> {
-    let cte = format!("t{}", pc.alias);
-    let hop = hop_sql(&pc.hop, dialect, catalog);
-    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
-    Ok(match pc.kind {
-        PathKind::One => {
-            let one_distinct = if matches!(pc.hop, HopExpr::Nps(_)) {
-                ""
-            } else {
-                "DISTINCT "
-            };
-            format!(
-                "WITH {cte}({sf_s}, {sf_o}) AS \
-                 (SELECT {one_distinct}{sf_s}, {sf_o} FROM ({hop}) hx)"
-            )
-        }
-        PathKind::ZeroOrOne => {
-            let refl = reflexive_sql(&pc.hop, dialect, catalog)?;
-            format!(
-                "WITH {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM \
-                 (SELECT {sf_s}, {sf_o} FROM ({hop}) hx UNION {refl}) z)"
-            )
-        }
-        PathKind::OneOrMore | PathKind::ZeroOrMore => {
-            let cte_raw = format!("t{}r", pc.alias);
-            let one_hop = format!("SELECT {sf_s}, {sf_o} FROM ({hop}) hx");
-            let anchor = if matches!(pc.kind, PathKind::ZeroOrMore) {
-                let refl = reflexive_sql(&pc.hop, dialect, catalog)?;
-                format!("{one_hop} UNION {refl}")
-            } else {
-                one_hop
-            };
-            let recursive = format!(
-                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o} \
-                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s}"
-            );
-            format!(
-                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}) AS ({anchor} UNION {recursive}), \
-                 {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
-            )
-        }
-    })
-}
-
-/// Render a path closure as a self-contained derived-table SQL string:
-/// `{with} SELECT sf_s, sf_o FROM t{cte_alias}` (ADR-0033). `cte_alias` is a
-/// FRESH alias for the closure's OWN internal CTE naming, distinct from
-/// `pc.alias` — the caller ([`crate::iq::lower::convert_path_branches`]) keeps
-/// `pc.alias` as the OUTER `Scan`'s alias, so every pre-existing
-/// `TermDef::Derived{alias: pc.alias, column: "sf_s"/"sf_o"}` binding keeps
-/// resolving unchanged against this derived table's identically-named output
-/// columns — zero cross-tree rewriting. Reuses [`path_with_prelude`] verbatim
-/// (only the closure's `alias` is rebased to `cte_alias` first).
-pub(crate) fn path_as_derived_table_sql(
-    pc: &PathClosure,
-    cte_alias: usize,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-) -> Result<String> {
-    let mut inner = pc.clone();
-    inner.alias = cte_alias;
-    let with = path_with_prelude(&inner, dialect, catalog)?;
-    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
-    Ok(format!("{with} SELECT {sf_s}, {sf_o} FROM t{cte_alias}"))
-}
 
 fn emit_path_branch(
     b: &Branch,
@@ -1749,7 +1664,7 @@ fn emit_path_branch(
     // columns, so the outer projection / WHERE resolve against an empty catalog.
     let cte = format!("t{}", pc.alias);
     let outer_actuals = HashMap::from([(pc.alias, path_actuals_controlled(pc, catalog, work)?)]);
-    let with = path_with_prelude(pc, dialect, catalog)?;
+    let with = path_sql::prelude(pc, pc.alias, dialect, catalog, work)?;
 
     let select_list = projection
         .iter()
@@ -1926,114 +1841,6 @@ fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &ActualColumns) -> String
         // COUNT(*) — the only argument-less form (DISTINCT is rejected upstream).
         None => format!("{func}(*)"),
         Some(col) => format!("{func}({d}{})", colref(col, dialect, actuals)),
-    }
-}
-
-/// Render a [`HopExpr`] to a relation expression yielding the canonical raw key
-/// columns `sf_s` / `sf_o` (term-construction lifting, ADR-0007): a bare predicate
-/// is a base scan; `^p` swaps the keys; `p/q` joins on the middle node; `p|q` /
-/// `!p` set-union the pairs. The result is a `SELECT …` body to be wrapped in
-/// `(…) alias` by the caller. Leaf base-column references are resolved against the
-/// live catalog (SQL:2008 identifier folding; see the module docs).
-///
-/// `HopExpr::Pred` is the ONLY arm that reads raw base columns directly, so it is
-/// the ONLY arm that needs a NULL guard: R2RML §11 generates no triple at all when
-/// a referenced column is NULL (matching what the non-path `atom()` triple-pattern
-/// emission already enforces via its `obj_null_guard`, `unfold.rs`) — without the
-/// guard, a NULL-valued subject or object column becomes a phantom one-hop pair
-/// that a recursive closure then chains through transitively, poisoning every node
-/// that can reach it. Every composite arm (`Inverse`/`Seq`/`Alt`/`Nps`) only ever
-/// recomposes an already-guarded inner `hop_sql`'s `sf_s`/`sf_o`, so the leaf guard
-/// alone makes every composite sound too — no separate guard needed there.
-fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
-    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
-    match hop {
-        HopExpr::Pred(rel) => {
-            let src = source_sql(&rel.source, dialect);
-            let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
-            let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
-            let s = path_key_expression(s, &rel.source, &rel.subj_col, dialect, catalog);
-            let o = path_key_expression(o, &rel.source, &rel.obj_col, dialect, catalog);
-            format!(
-                "SELECT {s} AS {sf_s}, {o} AS {sf_o} FROM {src} h0 \
-                 WHERE {s} IS NOT NULL AND {o} IS NOT NULL"
-            )
-        }
-        HopExpr::Inverse(inner) => {
-            let inner_sql = hop_sql(inner, dialect, catalog);
-            format!("SELECT x.{sf_o} AS {sf_s}, x.{sf_s} AS {sf_o} FROM ({inner_sql}) x")
-        }
-        HopExpr::Seq(a, b) => {
-            let a_sql = hop_sql(a, dialect, catalog);
-            let b_sql = hop_sql(b, dialect, catalog);
-            format!(
-                "SELECT a.{sf_s} AS {sf_s}, b.{sf_o} AS {sf_o} \
-                 FROM ({a_sql}) a JOIN ({b_sql}) b ON a.{sf_o} = b.{sf_s}"
-            )
-        }
-        HopExpr::Alt(parts) => parts
-            .iter()
-            .map(|p| {
-                let psql = hop_sql(p, dialect, catalog);
-                format!("SELECT {sf_s}, {sf_o} FROM ({psql}) u")
-            })
-            .collect::<Vec<_>>()
-            .join(" UNION "),
-        // NPS carries BAG semantics (one solution per matching triple): `UNION ALL`
-        // over the per-predicate DISTINCT pairs so a pair connected by two
-        // complement predicates yields two rows (matching the oracle), while a
-        // duplicate row WITHIN one predicate (the same virtual triple) stays
-        // collapsed by that predicate's `DISTINCT`. The `PathKind::One` wrapper
-        // omits its outer `DISTINCT` to preserve this bag (see `emit_path_branch`).
-        HopExpr::Nps(parts) => parts
-            .iter()
-            .map(|p| {
-                let psql = hop_sql(p, dialect, catalog);
-                format!("SELECT DISTINCT {sf_s}, {sf_o} FROM ({psql}) u")
-            })
-            .collect::<Vec<_>>()
-            .join(" UNION ALL "),
-    }
-}
-
-/// The reflexive `(x, x)` pairs over a bare-predicate hop's node set (its subjects
-/// ∪ objects) — the ZeroLengthPath component of `P*` / `p?`. `unfold` only emits
-/// reflexive kinds over a single-predicate bare leaf, so a composite hop here is a
-/// programming error surfaced as 501.
-///
-/// Reads `subj_col`/`obj_col` directly (like `hop_sql`'s `HopExpr::Pred` leaf, but
-/// NOT through it), so it needs the identical NULL guard: a row where EITHER
-/// column is NULL generates no triple at all (R2RML §11), hence contributes
-/// NEITHER a subject-node NOR an object-node to this predicate's graph — without
-/// the guard, a NULL-valued column would seed a phantom `(NULL, NULL)` reflexive
-/// pair. Both `UNION` halves share the SAME row-level guard (not a per-column
-/// guard on just the column each half projects): a row failing the OTHER column's
-/// NULL check still generates no triple, so its own column is not a valid node
-/// either.
-fn reflexive_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Result<String> {
-    let rel = hop.as_pred().ok_or_else(|| {
-        Error::Unsupported("reflexive (P*/p?) path over a composite hop → 501".to_owned())
-    })?;
-    let src = source_sql(&rel.source, dialect);
-    let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
-    let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
-    let s = path_key_expression(s, &rel.source, &rel.subj_col, dialect, catalog);
-    let o = path_key_expression(o, &rel.source, &rel.obj_col, dialect, catalog);
-    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
-    Ok(format!(
-        "SELECT {s} AS {sf_s}, {s} AS {sf_o} FROM {src} h0 \
-         WHERE {s} IS NOT NULL AND {o} IS NOT NULL \
-         UNION SELECT {o} AS {sf_s}, {o} AS {sf_o} FROM {src} h0 \
-         WHERE {s} IS NOT NULL AND {o} IS NOT NULL"
-    ))
-}
-
-/// A base source rendered **without** a binding alias (the CTE bodies attach their
-/// own `h` / `c` aliases): a quoted table name, or a parenthesised `rr:sqlQuery`.
-fn source_sql(source: &LogicalSource, dialect: Dialect) -> String {
-    match source {
-        LogicalSource::Table(t) => dialect.quote_ident(t),
-        LogicalSource::Query(q) => format!("({q})"),
     }
 }
 
@@ -2597,10 +2404,10 @@ fn render_cond_controlled(
         // CLOSURE — the recursive-CTE distinct-pairs table `t{pc.alias}(sf_s, sf_o)`. The
         // prelude resolves its own base columns against the live `catalog` (threaded through
         // this render chain), so ALL path kinds — including the reflexive `P*`/`P?`, whose
-        // prelude calls the fallible `reflexive_sql` — render here; the `?` propagates any
+        // prelude builds the fallible reflexive relation here; the `?` propagates any
         // prelude error soundly instead of the old empty-catalog `unwrap_or_default`.
         SqlCond::PathExists { pc, conds, negated } => {
-            let with = path_with_prelude(pc, dialect, catalog)?;
+            let with = path_sql::prelude(pc, pc.alias, dialect, catalog, work)?;
             let mut nested_actuals = actuals.clone();
             nested_actuals.insert(pc.alias, path_actuals_controlled(pc, catalog, work)?);
             let refs: Vec<&SqlCond> = conds.iter().collect();

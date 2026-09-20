@@ -69,6 +69,43 @@ async fn authenticated_path_preserves_case_distinct_nodes() {
 }
 
 #[tokio::test]
+async fn path_source_refusal_recovers_same_router_and_defaults_keep_cold_warm_results() {
+    let query = "SELECT ?s ?o WHERE { ?s <http://ex/reaches>+ ?o }";
+    let mut limited = config("INSERT INTO edge VALUES('a','b');");
+    limited.query_limits = QueryLimits::new(1_000_000, 1_000, 1_000_000, 1_000_000);
+    let app = router(Arc::new(limited));
+    for _ in 0..2 {
+        assert_budget_problem(
+            app.clone()
+                .oneshot(authenticated("ASK { ?s <http://ex/reaches>+ ?o }"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let response = app
+            .clone()
+            .oneshot(authenticated("SELECT ?x WHERE { VALUES ?x { 1 } } LIMIT 0"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["results"]["bindings"], serde_json::json!([]));
+    }
+    let app = router(Arc::new(config("INSERT INTO edge VALUES('a','b');")));
+    for _ in 0..2 {
+        let response = app.clone().oneshot(authenticated(query)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = json["results"]["bindings"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["s"]["value"], "http://ex/n/a");
+        assert_eq!(rows[0]["o"]["value"], "http://ex/n/b");
+    }
+}
+
+#[tokio::test]
 async fn outer_nocase_column_cannot_create_a_path_correlation() {
     for (pattern, expected) in [
         ("?s <http://ex/mark> ?m . ?s <http://ex/reaches>+ ?o", 0),
