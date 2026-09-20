@@ -62,6 +62,14 @@ pub(crate) enum VerifiedGenerationLease {
 }
 
 impl VerifiedGenerationLease {
+    fn backend_kind(&self) -> crate::BackendKind {
+        match self {
+            Self::Postgres(_) => crate::BackendKind::Postgres,
+            Self::Sqlite(_) => crate::BackendKind::Sqlite,
+            Self::Mysql(_) => crate::BackendKind::MySql,
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn into_postgres(
         self,
     ) -> Result<VerifiedPostgresGenerationLease, PgGenerationError> {
@@ -96,6 +104,19 @@ pub(crate) struct VerifiedGenerationLeases {
 }
 
 impl VerifiedGenerationLeases {
+    pub(crate) fn matches_backend(
+        &self,
+        source_id: SourceId,
+        identity: &RuntimeBindingIdentity,
+        verified: bool,
+        backend: crate::BackendKind,
+    ) -> bool {
+        self.matches(source_id, identity, verified)
+            && self
+                .leases
+                .get(&source_id)
+                .is_none_or(|(_, lease)| lease.backend_kind() == backend)
+    }
     pub(crate) async fn acquire(
         mut requirements: Vec<GenerationRequirement>,
         budget: &RequestBudget,

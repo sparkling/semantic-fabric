@@ -56,6 +56,9 @@ async fn drive_origin(
     sink: stream::OriginSink,
 ) -> sf_sparql::Result<()> {
     match fragment {
+        AcquiredFragment::VerifiedSqlite { lease, plan } => {
+            lease.lineage_each(&plan, spec, budget, sink).await
+        }
         AcquiredFragment::Sqlite { lease, plan } => {
             let mut backend =
                 SqliteOwnedBackend::new_controlled_leased(lease, Arc::new(budget.clone()));

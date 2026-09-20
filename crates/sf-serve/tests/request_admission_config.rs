@@ -55,7 +55,7 @@ fn invalid_reload_interval_fails_before_source_file_runtime_or_network_io() {
 
 #[test]
 fn required_generation_rejects_unsupported_modes_before_source_or_file_io() {
-    for mode in ["no-reload", "direct", "second-source", "row-policy"] {
+    for mode in ["no-reload", "direct", "second-direct", "row-policy"] {
         let mut opts = options(1);
         opts.require_verified_generation = true;
         if mode != "no-reload" {
@@ -63,10 +63,10 @@ fn required_generation_rejects_unsupported_modes_before_source_or_file_io() {
         }
         match mode {
             "direct" => opts.mapping = MappingRef::direct("http://example.test/"),
-            "second-source" => {
+            "second-direct" => {
                 opts.additional_source = Some(AdditionalSourceOptions {
                     source: SourceRef::environment("SF_GENERATION_MUST_NOT_BE_READ"),
-                    mapping: MappingRef::r2rml_file("/second/must/not/be/read.ttl"),
+                    mapping: MappingRef::direct("http://example.test/second/"),
                 })
             }
             "row-policy" => {

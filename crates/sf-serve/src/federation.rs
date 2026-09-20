@@ -11,6 +11,7 @@ use sparesults::QueryResultsFormat;
 use crate::backend::PgConn;
 use crate::binding::ExecutableFederatedPlan;
 use crate::budget::RequestBudget;
+use crate::generation::VerifiedGenerationLease;
 use crate::pg_generation::{VerifiedGenerationLeases, VerifiedPostgresGenerationLease};
 use crate::problem::{self, ProblemCode};
 use crate::{sqlite_admission, stream, Backend};
@@ -34,6 +35,10 @@ enum AcquiredFragment {
         lease: sf_sql::backend::sqlite::SqliteOwnedLease,
         plan: Arc<Plan>,
     },
+    VerifiedSqlite {
+        lease: crate::sqlite_generation::SqliteRequestLease,
+        plan: Arc<Plan>,
+    },
     Postgres {
         connection: Box<PgConn>,
         plan: Arc<Plan>,
@@ -50,13 +55,14 @@ enum AcquiredFragment {
 
 struct GenerationMismatch;
 
-fn take_postgres_generation(
+fn take_generation(
     generations: &mut VerifiedGenerationLeases,
     source_id: sf_core::SourceId,
     binding_identity: &crate::binding_identity::RuntimeBindingIdentity,
     verified_generation: bool,
-) -> Result<Option<VerifiedPostgresGenerationLease>, GenerationMismatch> {
-    if !generations.matches(source_id, binding_identity, verified_generation) {
+    backend: crate::BackendKind,
+) -> Result<Option<VerifiedGenerationLease>, GenerationMismatch> {
+    if !generations.matches_backend(source_id, binding_identity, verified_generation, backend) {
         return Err(GenerationMismatch);
     }
     if !verified_generation {
@@ -64,10 +70,8 @@ fn take_postgres_generation(
     }
     generations
         .take(source_id, binding_identity)
-        .ok_or(GenerationMismatch)?
-        .into_postgres()
         .map(Some)
-        .map_err(|_| GenerationMismatch)
+        .ok_or(GenerationMismatch)
 }
 
 /// Acquire both participating sources before committing a success response,
@@ -88,8 +92,12 @@ pub(crate) async fn select_union_body(
     let valid = fragments[0].0 != fragments[1].0
         && fragments.iter().all(
             |(source_id, binding_identity, backend, verified_generation, _)| {
-                generations.matches(*source_id, binding_identity, *verified_generation)
-                    && (!*verified_generation || matches!(backend, Backend::Pg(_)))
+                generations.matches_backend(
+                    *source_id,
+                    binding_identity,
+                    *verified_generation,
+                    backend.kind(),
+                )
             },
         );
     if !valid {
@@ -117,33 +125,59 @@ pub(crate) async fn select_union_body(
     for ((source_id, binding_identity, backend, verified_generation, plan), tables) in
         fragments.into_iter().zip(rls_tables)
     {
-        let source = match backend {
-            Backend::Sqlite(pool) => sqlite_admission::acquire(&pool, &budget)
+        let generation = match take_generation(
+            &mut generations,
+            source_id,
+            &binding_identity,
+            verified_generation,
+            backend.kind(),
+        ) {
+            Ok(generation) => generation,
+            Err(GenerationMismatch) => {
+                close_acquired(acquired).await;
+                let _ = generations.finish().await;
+                return Err(problem::response(ProblemCode::Internal));
+            }
+        };
+        let source = match (backend, generation) {
+            (Backend::Sqlite(_), Some(VerifiedGenerationLease::Sqlite(lease))) => {
+                Ok(AcquiredFragment::VerifiedSqlite { lease, plan })
+            }
+            (Backend::Pg(_), Some(VerifiedGenerationLease::Postgres(lease))) => {
+                Ok(AcquiredFragment::VerifiedPostgres { lease, plan })
+            }
+            (Backend::Mysql(_), Some(VerifiedGenerationLease::Mysql(lease))) => {
+                Ok(AcquiredFragment::MySql {
+                    connection: lease.into_query(),
+                    plan,
+                })
+            }
+            (Backend::Sqlite(pool), None) => sqlite_admission::acquire(&pool, &budget)
                 .await
                 .map(|lease| AcquiredFragment::Sqlite { lease, plan }),
-            Backend::Pg(pool) => match take_postgres_generation(
-                &mut generations,
-                source_id,
-                &binding_identity,
-                verified_generation,
-            ) {
-                Ok(Some(lease)) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
-                Ok(None) if budget.postgres_rls().is_some() => {
+            (Backend::Pg(pool), None) => {
+                if budget.postgres_rls().is_some() {
                     crate::pg_rls::PgRlsLease::acquire(&pool, tables, &budget)
                         .await
                         .map(|lease| AcquiredFragment::RlsPostgres { lease, plan })
+                } else {
+                    crate::source_acquisition::acquire_pg(&pool, budget.clone())
+                        .await
+                        .map(|connection| AcquiredFragment::Postgres {
+                            connection: Box::new(connection),
+                            plan,
+                        })
                 }
-                Ok(None) => crate::source_acquisition::acquire_pg(&pool, budget.clone())
+            }
+            (Backend::Mysql(pool), None) => {
+                crate::source_acquisition::acquire_mysql(&pool, &budget)
                     .await
-                    .map(|connection| AcquiredFragment::Postgres {
-                        connection: Box::new(connection),
-                        plan,
-                    }),
-                Err(GenerationMismatch) => Err(problem::response(ProblemCode::Internal)),
-            },
-            Backend::Mysql(pool) => crate::source_acquisition::acquire_mysql(&pool, &budget)
-                .await
-                .map(|connection| AcquiredFragment::MySql { connection, plan }),
+                    .map(|connection| AcquiredFragment::MySql { connection, plan })
+            }
+            (_, Some(lease)) => {
+                let _ = lease.close().await;
+                Err(problem::response(ProblemCode::Internal))
+            }
         };
         match source {
             Ok(source) => acquired.push(source),
@@ -183,7 +217,8 @@ pub(crate) async fn select_union_body(
         move |sink| {
             Box::pin(async move {
                 let sink = Arc::new(std::sync::Mutex::new(sink));
-                for (fragment, source) in acquired.into_iter().zip(source_ids) {
+                let mut remaining = acquired.into_iter().zip(source_ids);
+                while let Some((fragment, source)) = remaining.next() {
                     let sink = sink.clone();
                     let scope_budget = drive_budget.clone();
                     let mut peak = 0;
@@ -193,13 +228,17 @@ pub(crate) async fn select_union_body(
                         }
                         sink.lock().unwrap_or_else(|p| p.into_inner())(row)
                     });
-                    drive(
+                    if let Err(error) = drive(
                         fragment,
                         &drive_budget,
                         Arc::new(drive_budget.clone()),
                         &mut scoped,
                     )
-                    .await?;
+                    .await
+                    {
+                        close_acquired(remaining.map(|(fragment, _)| fragment).collect()).await;
+                        return Err(error);
+                    }
                 }
                 Ok(())
             })
@@ -247,6 +286,9 @@ async fn drive(
         AcquiredFragment::Sqlite { lease, plan } => {
             exec::select_each_sqlite_owned_interruptible_leased(&plan, lease, control, sink).await
         }
+        AcquiredFragment::VerifiedSqlite { lease, plan } => {
+            lease.select_each(&plan, control.as_ref(), sink).await
+        }
         AcquiredFragment::Postgres { connection, plan } => {
             let conn = Arc::new(*connection);
             let result = exec_pg::select_each_pg_controlled(
@@ -272,6 +314,7 @@ impl AcquiredFragment {
     fn plan_mut(&mut self) -> &mut Arc<Plan> {
         match self {
             Self::Sqlite { plan, .. }
+            | Self::VerifiedSqlite { plan, .. }
             | Self::Postgres { plan, .. }
             | Self::RlsPostgres { plan, .. }
             | Self::VerifiedPostgres { plan, .. }
@@ -288,6 +331,12 @@ async fn close_acquired(acquired: Vec<AcquiredFragment>) {
             }
             AcquiredFragment::RlsPostgres { lease, .. } => {
                 let _ = lease.finish().await;
+            }
+            AcquiredFragment::VerifiedSqlite { lease, .. } => {
+                let _ = lease.finish().await;
+            }
+            AcquiredFragment::MySql { connection, .. } => {
+                let _ = connection.finish(Ok(())).await;
             }
             _ => {}
         }
@@ -368,9 +417,13 @@ mod tests {
         let source_id = sf_core::SourceId::new(0).unwrap();
         let identity = RuntimeBindingIdentity::fresh();
 
-        let Err(GenerationMismatch) =
-            take_postgres_generation(&mut generations, source_id, &identity, true)
-        else {
+        let Err(GenerationMismatch) = take_generation(
+            &mut generations,
+            source_id,
+            &identity,
+            true,
+            crate::BackendKind::Postgres,
+        ) else {
             panic!("verified fragment must not fall through to ordinary acquisition");
         };
 

@@ -123,7 +123,11 @@ impl Supervisor {
                     break;
                 }
                 let generation_budget = if opts.require_verified_generation {
-                    match crate::startup_authored::control_budget(Some(&worker_config), &source) {
+                    match crate::startup_authored::control_budget_pair(
+                        Some(&worker_config),
+                        &source,
+                        additional.as_ref(),
+                    ) {
                         Ok(budget) => Some(budget),
                         Err(_) => break,
                     }

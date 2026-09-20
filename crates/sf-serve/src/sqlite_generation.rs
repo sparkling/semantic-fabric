@@ -175,7 +175,7 @@ impl SqliteRequestLease {
     pub(crate) async fn select_each<F, Fut>(
         self,
         plan: &Plan,
-        budget: &RequestBudget,
+        control: &dyn sf_core::query_control::QueryControl,
         sink: F,
     ) -> sf_sparql::Result<()>
     where
@@ -184,7 +184,7 @@ impl SqliteRequestLease {
     {
         let result = async {
             let mut backend = self.lease.backend().map_err(execution_error)?;
-            sf_sparql::exec_core::select_each_async_controlled(plan, &mut backend, budget, sink)
+            sf_sparql::exec_core::select_each_async_controlled(plan, &mut backend, control, sink)
                 .await
         }
         .await;

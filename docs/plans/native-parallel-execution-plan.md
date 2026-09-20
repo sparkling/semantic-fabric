@@ -290,3 +290,12 @@ After source-bound checks, independent Claude review releases commit/finish.
 Ordinary-mode/native-RLS G3 work and protected federation G4 remain dependent
 work; the existing five dependency Clippy errors also need a scoped correction
 before aggregate integration gates.
+
+The active `g4-protected-federation-20260920b` slice combines the three authored
+lease variants under the existing two-source path. Root owns integration; a
+read-only worker audits cleanup and designs six lifecycle cases while another
+reconciles G1 evidence. The latter found surviving path-SQL accounting and native
+row-decoding obligations; the handover closure inference is not a gate verdict.
+The live matrix covers all 25 ordered profiles, followed by bounded lifecycle
+sampling. Source-stable declared checks and independent native Claude review
+remain required before the scoped commit and exact-commit harness finish.

@@ -16,6 +16,8 @@ mod lineage;
 mod lineage_stop;
 #[path = "source_tls_live/multiple_lineage.rs"]
 mod multiple_lineage;
+#[path = "source_tls_live/protected_federation.rs"]
+mod protected_federation;
 #[path = "source_tls_live/query_profile.rs"]
 mod query_profile;
 #[path = "source_tls_live/reload.rs"]

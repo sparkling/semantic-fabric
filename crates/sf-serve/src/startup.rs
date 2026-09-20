@@ -91,6 +91,16 @@ pub(crate) async fn build_snapshot(
         additional.as_ref(),
     )?;
     if opts.require_verified_generation {
+        let startup_budget = if generation_budget.is_none() {
+            Some(crate::startup_authored::control_budget_pair(
+                None,
+                &primary,
+                additional.as_ref(),
+            )?)
+        } else {
+            None
+        };
+        let generation_budget = generation_budget.or(startup_budget.as_ref());
         let PreparedMapping::Authored(mapping) = primary_mapping else {
             return Err(configuration_error("verified authored mapping is required"));
         };
@@ -103,7 +113,29 @@ pub(crate) async fn build_snapshot(
             &mut observe,
         )
         .await?;
-        return RuntimeSnapshot::single(sf_sparql::Epoch::default(), ontology, primary)
+        let mut sources = vec![primary];
+        match (additional_mapping, additional) {
+            (None, None) => {}
+            (Some(PreparedMapping::Authored(mapping)), Some(additional)) => {
+                sources.push(
+                    crate::startup_authored::build_source(
+                        opts,
+                        additional,
+                        mapping,
+                        &ontology,
+                        generation_budget,
+                        &mut observe,
+                    )
+                    .await?,
+                );
+            }
+            _ => {
+                return Err(configuration_error(
+                    "verified authored mappings are required for both sources",
+                ))
+            }
+        }
+        return RuntimeSnapshot::new(sf_sparql::Epoch::default(), ontology, sources)
             .map_err(snapshot_error);
     }
     let primary = open_source(opts, primary).await?;
