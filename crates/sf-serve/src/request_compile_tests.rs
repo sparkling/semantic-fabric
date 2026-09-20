@@ -23,6 +23,9 @@ mod cache_operations;
 #[path = "request_resource_admission_tests.rs"]
 mod resource_admission;
 
+#[path = "request_generation_policy_tests.rs"]
+mod generation_policy;
+
 #[path = "request_resolve_tests.rs"]
 mod resolve_work;
 

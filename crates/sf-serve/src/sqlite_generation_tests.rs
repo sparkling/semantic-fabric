@@ -342,3 +342,91 @@ async fn abandoned_public_bodies_release_the_verified_member() {
         .unwrap();
     }
 }
+
+#[tokio::test]
+async fn portable_subjects_deny_before_held_generation_and_bind_exact_identity() {
+    use crate::{
+        PortableRowPolicy, PortableRowRule, ProvisionedBearerAdmission, ProvisionedBearerSubject,
+    };
+    use sf_core::query_control::QueryCharge;
+    const A: &str = "fixture-only-generation-subject-a-0123456789";
+    const B: &str = "fixture-only-generation-subject-b-0123456789";
+    const DENIED: &str = "fixture-only-generation-subject-denied-0123456789";
+    let fixture = Fixture::new();
+    fixture
+        .writer
+        .execute_batch("ALTER TABLE items ADD COLUMN tenant TEXT DEFAULT 'a'")
+        .unwrap();
+    let (mut config, generation) = fixture.config().await;
+    config.set_query_admission(crate::QueryAdmission::ProvisionedBearers(
+        ProvisionedBearerAdmission::new(
+            [
+                (A, "a", "items"),
+                (B, "b", "items"),
+                (DENIED, "denied", "other"),
+            ]
+            .into_iter()
+            .map(|(token, subject, table)| {
+                ProvisionedBearerSubject::portable_rows(
+                    subject,
+                    token,
+                    PortableRowPolicy::new(vec![
+                        PortableRowRule::new(0, table, "tenant", subject).unwrap()
+                    ])
+                    .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect(),
+        )
+        .unwrap(),
+    ));
+    let config = Arc::new(config);
+    let authenticated = |token: &str| {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let mut request = budget();
+        request
+            .retain_authenticated(config.query_admission.admit(&headers).unwrap())
+            .unwrap();
+        request
+    };
+    let snapshot = config.runtime_lease().unwrap();
+    let held = generation.acquire(&budget()).await.unwrap();
+    let denied = authenticated(DENIED);
+    let rejected = tokio::time::timeout(
+        Duration::from_secs(1),
+        crate::request_generation::acquire(config.clone(), &snapshot, SELECT, &denied),
+    )
+    .await
+    .expect("authorization must not wait for held source")
+    .err()
+    .unwrap();
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    assert_eq!(denied.consumed(QueryCharge::SourceWork), 0);
+    held.finish().await.unwrap();
+    let a = authenticated(A);
+    let b = authenticated(B);
+    assert_eq!(
+        a.security_context().unwrap().policy_snapshot(),
+        b.security_context().unwrap().policy_snapshot()
+    );
+    let policy = config.query_admission.policy().unwrap();
+    let first = snapshot
+        .compile_secured(generation.source_id(), SELECT, &a, policy)
+        .unwrap();
+    let hit = snapshot
+        .compile_secured(generation.source_id(), SELECT, &a, policy)
+        .unwrap();
+    let other = snapshot
+        .compile_secured(generation.source_id(), SELECT, &b, policy)
+        .unwrap();
+    assert!(std::ptr::eq(first.plan(), hit.plan()));
+    assert!(!std::ptr::eq(first.plan(), other.plan()));
+    assert!(snapshot.prepare_request_execution(first, &b).is_err());
+    assert!(snapshot.prepare_request_execution(other, &a).is_err());
+    assert!(snapshot.prepare_request_execution(hit, &a).is_ok());
+}

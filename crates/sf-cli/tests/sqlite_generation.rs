@@ -39,6 +39,9 @@ impl Fixture {
         }
     }
     fn command(&self) -> (Command, SocketAddr) {
+        self.command_with_admission(&["--auth-token-env", "SF_SQLITE_GENERATION_BEARER"])
+    }
+    fn command_with_admission(&self, admission: &[&str]) -> (Command, SocketAddr) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
@@ -50,9 +53,8 @@ impl Fixture {
             .arg(self.0.join("mapping.ttl"))
             .arg("--ontology")
             .arg(self.0.join("ontology.ttl"))
+            .args(admission)
             .args([
-                "--auth-token-env",
-                "SF_SQLITE_GENERATION_BEARER",
                 "--require-verified-generation",
                 "--reload-interval-secs",
                 "1",
@@ -302,4 +304,166 @@ fn protected_sqlite_source_work_refusal_has_no_unverified_fallback() {
     )
     .unwrap();
     assert_eq!(status, 429);
+}
+
+const TOKEN_B: &str = "fixture-only-sqlite-generation-b-0123456789";
+const TOKEN_DENIED: &str = "fixture-only-sqlite-generation-denied-0123456789";
+
+fn portable_command(fixture: &Fixture) -> (Command, SocketAddr) {
+    let (mut command, address) =
+        fixture.command_with_admission(&["--auth-subjects-env", "SF_SUBJECTS"]);
+    let subjects: Vec<_> = [("a", "SF_A", "items"), ("b", "SF_B", "items"), ("denied", "SF_DENIED", "other")]
+        .into_iter().map(|(subject, credential, table)| serde_json::json!({
+            "subjectRef":subject,"credentialEnv":credential,
+            "portableRows":[{"sourceIndex":0,"table":table,"column":"tenant","valueEnv":format!("{credential}_VALUE")}]
+        })).collect();
+    command
+        .env(
+            "SF_SUBJECTS",
+            serde_json::json!({"schemaVersion":2,"subjects":subjects}).to_string(),
+        )
+        .env("SF_A", TOKEN)
+        .env("SF_B", TOKEN_B)
+        .env("SF_DENIED", TOKEN_DENIED)
+        .env("SF_A_VALUE", "a")
+        .env("SF_B_VALUE", "b")
+        .env("SF_DENIED_VALUE", "denied");
+    (command, address)
+}
+
+fn policy_values(address: SocketAddr, token: &str) -> Option<Vec<String>> {
+    let (status, body) = request(
+        address,
+        "/sparql",
+        Some(SELECT),
+        "application/sparql-results+json",
+        Some(token),
+    )?;
+    if status != 200 {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let mut values: Vec<_> = json["results"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["value"]["value"].as_str().unwrap().to_owned())
+        .collect();
+    values.sort();
+    Some(values)
+}
+
+#[test]
+fn protected_sqlite_portable_subjects_remain_isolated_across_reload_and_denial() {
+    for journal in ["WAL", "DELETE"] {
+        let fixture = Fixture::new(journal);
+        fixture.sql("ALTER TABLE items ADD COLUMN tenant TEXT NOT NULL DEFAULT 'a'; INSERT INTO items VALUES(3,8,'b'),(4,8,'b')");
+        let (command, address) = portable_command(&fixture);
+        let mut server = start(&fixture, command, address);
+        for _ in 0..2 {
+            assert_eq!(
+                policy_values(address, TOKEN),
+                Some(vec!["7".into(), "7".into()])
+            );
+            assert_eq!(
+                policy_values(address, TOKEN_B),
+                Some(vec!["8".into(), "8".into()])
+            );
+        }
+        let ordered = format!("{SELECT} ORDER BY ?value");
+        for query in [SELECT, ordered.as_str()] {
+            assert_eq!(
+                request(
+                    address,
+                    "/sparql",
+                    Some(query),
+                    "application/sparql-results+json",
+                    Some(TOKEN_DENIED)
+                )
+                .unwrap()
+                .0,
+                403
+            );
+        }
+        assert_eq!(
+            request(
+                address,
+                "/sparql",
+                Some(&ordered),
+                "application/sparql-results+json",
+                Some(TOKEN)
+            )
+            .unwrap()
+            .0,
+            501
+        );
+        fixture.write(
+            "mapping.ttl",
+            &MAPPING.replace("rr:column \"value\"", "rr:column \"successor\""),
+        );
+        wait(&fixture, &mut server, || ready(address) == Some(503));
+        fixture.sql("ALTER TABLE items ADD COLUMN successor INTEGER; UPDATE items SET successor=CASE tenant WHEN 'a' THEN 17 ELSE 18 END");
+        wait(&fixture, &mut server, || {
+            policy_values(address, TOKEN) == Some(vec!["17".into(), "17".into()])
+        });
+        assert_eq!(
+            policy_values(address, TOKEN_B),
+            Some(vec!["18".into(), "18".into()])
+        );
+        fixture.write("mapping.ttl", MAPPING);
+        wait(&fixture, &mut server, || {
+            policy_values(address, TOKEN) == Some(vec!["7".into(), "7".into()])
+        });
+        assert_eq!(
+            policy_values(address, TOKEN_B),
+            Some(vec!["8".into(), "8".into()])
+        );
+        fixture.sql("ALTER TABLE items RENAME COLUMN tenant TO tenant_drift");
+        wait(&fixture, &mut server, || ready(address) == Some(503));
+        let fenced_until = Instant::now() + Duration::from_millis(2500);
+        while Instant::now() < fenced_until {
+            assert_eq!(ready(address), Some(503));
+            assert_eq!(
+                request(
+                    address,
+                    "/sparql",
+                    Some(SELECT),
+                    "application/sparql-results+json",
+                    Some(TOKEN)
+                )
+                .unwrap()
+                .0,
+                503
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        fixture.sql("ALTER TABLE items RENAME COLUMN tenant_drift TO tenant");
+        wait(&fixture, &mut server, || {
+            policy_values(address, TOKEN) == Some(vec!["7".into(), "7".into()])
+        });
+        assert_eq!(
+            policy_values(address, TOKEN_B),
+            Some(vec!["8".into(), "8".into()])
+        );
+        drop(server);
+
+        // A denied caller cannot spend even the first generation-observation unit.
+        let (mut command, address) = portable_command(&fixture);
+        command.args(["--max-source-work", "0"]);
+        let _server = start(&fixture, command, address);
+        for (token, status) in [(TOKEN_DENIED, 403), (TOKEN, 429)] {
+            assert_eq!(
+                request(
+                    address,
+                    "/sparql",
+                    Some(SELECT),
+                    "application/sparql-results+json",
+                    Some(token)
+                )
+                .unwrap()
+                .0,
+                status
+            );
+        }
+    }
 }

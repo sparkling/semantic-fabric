@@ -14,7 +14,21 @@ pub(crate) async fn build_source(
 ) -> Result<crate::RuntimeSource, ServeError> {
     validate_options(opts)?;
     validate_source(opts, &prepared)?;
-    crate::pg_generation::authored::mapped_tables(&mapping)?;
+    let mapped = crate::pg_generation::authored::mapped_tables(&mapping)?;
+    // Both builders call this while the candidate's observed schema is held.
+    // Fence drift first, then reject missing policy-only columns before activation.
+    let mut observe_policy = |id, source: &crate::IntrospectedSource| {
+        observe(id, source)?;
+        if !opts
+            .query_admission
+            .portable_columns_exist(id, &mapped, source.observed_schema())
+        {
+            return Err(crate::pg_generation::authored::generation_error(
+                crate::pg_generation::PgGenerationError::CapabilityDrift,
+            ));
+        }
+        Ok(())
+    };
     let budget = match control {
         Some(control) => control.clone(),
         None => control_budget(None, &prepared)?,
@@ -26,7 +40,7 @@ pub(crate) async fn build_source(
             mapping,
             ontology,
             &budget,
-            observe,
+            &mut observe_policy,
         )
         .await?;
         return crate::RuntimeSource::admitted(source, mapping).map_err(|_| configuration());
@@ -41,8 +55,14 @@ pub(crate) async fn build_source(
         *tls,
     )
     .map_err(|_| configuration())?;
-    let (source, mapping) =
-        crate::pg_generation::authored::build(&pools, mapping, ontology, &budget, observe).await?;
+    let (source, mapping) = crate::pg_generation::authored::build(
+        &pools,
+        mapping,
+        ontology,
+        &budget,
+        &mut observe_policy,
+    )
+    .await?;
     crate::RuntimeSource::admitted(source, mapping).map_err(|_| configuration())
 }
 
@@ -110,6 +130,6 @@ pub(crate) fn validate_source(
 
 fn configuration() -> ServeError {
     ServeError::new(StartupCause::Configuration {
-        error: "verified authored generation requires one PostgreSQL or file-backed SQLite source, authored base-table mappings, a nonzero reload interval and no source row policies".into(),
+        error: "verified authored generation requires one PostgreSQL or file-backed SQLite source, authored base-table mappings, a nonzero reload interval and read-all or portable row admission".into(),
     })
 }

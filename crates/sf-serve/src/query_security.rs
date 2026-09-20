@@ -155,18 +155,57 @@ fn configuration_error() -> ServeError {
 }
 
 impl QueryAdmission {
-    /// Direct and authored generations share the same closed row-policy boundary.
+    /// Direct Mapping retains its read-all-only policy boundary.
     pub(crate) fn permits_direct_mapping(&self) -> bool {
-        self.permits_verified_generation()
-    }
-
-    /// Qualified protected generation profiles do not admit source row policies.
-    /// Every provisioned subject currently requires one of those policies.
-    pub(crate) fn permits_verified_generation(&self) -> bool {
         match self {
             Self::Deny | Self::UnrestrictedDevelopment => true,
             Self::Bearer(principal) => principal.rls.is_none() && principal.portable_rows.is_none(),
             Self::ProvisionedBearers(_) => false,
+        }
+    }
+
+    /// Authored generations apply portable predicates inside the held lease.
+    /// Native RLS still requires its separately qualified transaction profile.
+    pub(crate) fn permits_verified_generation(&self) -> bool {
+        match self {
+            Self::Deny | Self::UnrestrictedDevelopment => true,
+            Self::Bearer(principal) => principal.rls.is_none(),
+            Self::ProvisionedBearers(registry) => registry.only_portable_rows(),
+        }
+    }
+
+    pub(crate) fn portable_columns_exist(
+        &self,
+        source: sf_core::SourceId,
+        mapped: &[String],
+        schema: &[sf_core::TableSchema],
+    ) -> bool {
+        let mapped: std::collections::BTreeSet<_> = mapped.iter().map(String::as_str).collect();
+        let tables: crate::portable_rows::MappedPolicyColumns<'_> = schema
+            .iter()
+            .filter(|table| mapped.contains(table.name.as_str()))
+            .map(|table| {
+                (
+                    table.name.as_str(),
+                    table
+                        .columns
+                        .iter()
+                        .map(|column| column.name.as_str())
+                        .collect(),
+                )
+            })
+            .collect();
+        // Missing mapped tables are also rejected by the generation builder.
+        if tables.len() != mapped.len() {
+            return false;
+        }
+        match self {
+            Self::Bearer(principal) => principal
+                .portable_rows
+                .as_ref()
+                .is_none_or(|policy| policy.mapped_columns_exist(source, &tables)),
+            Self::ProvisionedBearers(registry) => registry.portable_columns_exist(source, &tables),
+            Self::Deny | Self::UnrestrictedDevelopment => true,
         }
     }
 

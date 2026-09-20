@@ -31,7 +31,7 @@ pub(crate) fn charge_input(
 }
 
 /// Perform semantic and resource-shape admission without reading or populating
-/// a plan cache. Verified Direct Mapping uses this before any source I/O, then
+/// a plan cache. Protected generations use this before any source I/O, then
 /// discards the result and compiles authoritatively only under its lease.
 pub(crate) async fn preflight(
     cfg: Arc<ServeConfig>,
@@ -46,34 +46,54 @@ pub(crate) async fn preflight(
     let mode = cfg.query_mode();
     let max_order_rows = cfg.max_order_rows();
     let permits = cfg.compiler_permits();
+    let portable_rows = budget.portable_rows().cloned();
     let (compiled, reservation) =
         deadline::run_compiler_retaining(budget, permits, move |worker_budget| {
             cfg.with_parser(&worker_budget, || match mode {
                 QueryMode::Single(source_id) => {
-                    let plan = snapshot.preflight_compile(source_id, &query, &worker_budget)?;
+                    let mut plan = snapshot.preflight_compile(source_id, &query, &worker_budget)?;
+                    if let Some(policy) = portable_rows.as_deref() {
+                        if policy
+                            .authorize(source_id, Arc::make_mut(&mut plan))
+                            .is_err()
+                        {
+                            return Ok(false);
+                        }
+                    }
                     traced_sync(Stage::ShapeAdmission, || {
                         crate::admission::admit(&plan, max_order_rows, &worker_budget)
                     })?;
                     if matches!(plan.form, sf_sparql::PlanForm::Ask) {
                         worker_budget.preflight_ask_result()?;
                     }
-                    Ok(())
+                    Ok(true)
                 }
                 QueryMode::SourceAffineUnion(source_ids) => {
-                    let plan =
+                    let mut plan =
                         snapshot.preflight_federated_union(source_ids, &query, &worker_budget)?;
+                    if let Some(policy) = portable_rows.as_deref() {
+                        if plan
+                            .try_for_each_plan_mut(|source, plan| policy.authorize(source, plan))
+                            .is_err()
+                        {
+                            return Ok(false);
+                        }
+                    }
                     for fragment in plan.fragments() {
                         traced_sync(Stage::ShapeAdmission, || {
                             crate::admission::admit(fragment.plan(), max_order_rows, &worker_budget)
                         })?;
                     }
-                    Ok(())
+                    Ok(true)
                 }
             })
         })
         .await
         .map_err(map_compiler_run_error)?;
-    map_compiler_result(Ok(compiled))?;
+    if !map_compiler_result(Ok(compiled))? {
+        crate::access_telemetry::record(crate::access_telemetry::AccessDecision::Deny);
+        return Err(problem::response(ProblemCode::AccessDenied));
+    }
     Ok(reservation)
 }
 

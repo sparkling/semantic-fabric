@@ -138,6 +138,25 @@ impl ProvisionedBearerAdmission {
         self.policy
     }
 
+    pub(super) fn only_portable_rows(&self) -> bool {
+        self.subjects
+            .iter()
+            .all(|subject| subject.rls.is_none() && subject.portable_rows.is_some())
+    }
+
+    pub(super) fn portable_columns_exist(
+        &self,
+        source: sf_core::SourceId,
+        tables: &crate::portable_rows::MappedPolicyColumns<'_>,
+    ) -> bool {
+        self.subjects.iter().all(|subject| {
+            subject
+                .portable_rows
+                .as_ref()
+                .is_none_or(|policy| policy.mapped_columns_exist(source, tables))
+        })
+    }
+
     pub(super) fn match_credential(&self, digest: &[u8; 32]) -> Option<&BearerQueryAdmission> {
         let mut selected = None;
         // Visit every bounded entry: do not short-circuit on a matching position.

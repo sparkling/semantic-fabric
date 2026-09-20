@@ -415,6 +415,7 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
             "e-postgresql-verified-generation-live",
             "e-postgresql-verified-generation-request-route",
             "e-postgresql-verified-generation-runtime-role",
+            "e-protected-portable-generation-cli",
             "e-public-authored-generation-ci",
             "e-public-authored-generation-cleanup",
             "e-public-authored-generation-cli",

@@ -18,7 +18,7 @@ pub(super) fn await_value(server: &mut Server, address: SocketAddr, token: &str,
     }
 }
 
-fn generation_session(database: &Database) -> u64 {
+pub(super) fn generation_session(database: &Database) -> u64 {
     let until = Instant::now() + Duration::from_secs(3);
     loop {
         let result = database.sql("SELECT DISTINCT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE a.usename='sf_tls' AND l.relation='public.items'::regclass AND l.mode='AccessShareLock' AND l.granted AND a.query LIKE 'SELECT%' AND a.query LIKE '%\"items\"%'");
@@ -34,7 +34,7 @@ fn generation_session(database: &Database) -> u64 {
     }
 }
 
-fn held_request(address: SocketAddr, token: &str) -> (TcpStream, Vec<u8>) {
+pub(super) fn held_request(address: SocketAddr, token: &str) -> (TcpStream, Vec<u8>) {
     let mut stream = cancellation::begin(address, SINGLE, token);
     let mut headers = Vec::new();
     while !headers.ends_with(b"\r\n\r\n") {
@@ -50,7 +50,7 @@ fn held_request(address: SocketAddr, token: &str) -> (TcpStream, Vec<u8>) {
     (stream, headers)
 }
 
-fn await_stopped(database: &Database, pid: u64) {
+pub(super) fn await_stopped(database: &Database, pid: u64) {
     let until = Instant::now() + Duration::from_secs(3);
     // Closing through the acknowledged rollback is safe too. Detachment is
     // mandatory only when cancellation/error prevented that clean close.

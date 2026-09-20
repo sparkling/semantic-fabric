@@ -17,6 +17,8 @@ const MAX_TABLE_BYTES: usize = 256;
 const MAX_COLUMN_BYTES: usize = 128;
 const MAX_VALUE_BYTES: usize = 16 * 1024;
 
+pub(crate) type MappedPolicyColumns<'a> = std::collections::BTreeMap<&'a str, BTreeSet<&'a str>>;
+
 /// One exact equality predicate for one snapshot-local source table.
 ///
 /// The value is sensitive configuration and is never exposed by `Debug`; SQL
@@ -123,6 +125,19 @@ impl PortableRowPolicy {
 
     pub(crate) const fn identity(&self) -> &[u8; 32] {
         &self.identity
+    }
+
+    pub(crate) fn mapped_columns_exist(
+        &self,
+        source: SourceId,
+        tables: &MappedPolicyColumns<'_>,
+    ) -> bool {
+        self.rules.iter().all(|rule| {
+            rule.source != source
+                || tables
+                    .get(rule.table.as_ref())
+                    .is_none_or(|columns| columns.contains(rule.column.as_ref()))
+        })
     }
 
     pub(crate) fn authorize(&self, source: SourceId, plan: &mut Plan) -> sf_sparql::Result<()> {

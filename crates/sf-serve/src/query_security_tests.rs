@@ -242,3 +242,68 @@ fn direct_mapping_admits_read_all_but_never_row_policy_profiles() {
         assert!(!QueryAdmission::Bearer(principal).permits_direct_mapping());
     }
 }
+
+#[test]
+fn authored_generation_admits_portable_subjects_but_no_native_rls_member() {
+    let rows = || {
+        crate::PortableRowPolicy::new(vec![crate::PortableRowRule::new(
+            0, "people", "tenant", "a",
+        )
+        .unwrap()])
+        .unwrap()
+    };
+    let claims = || {
+        crate::PostgresRlsClaims::new(std::collections::BTreeMap::from([(
+            "app.tenant_id".into(),
+            "a".into(),
+        )]))
+        .unwrap()
+    };
+    for admission in [
+        QueryAdmission::Deny,
+        QueryAdmission::UnrestrictedDevelopment,
+        profile(TOKEN),
+    ] {
+        assert!(admission.permits_verified_generation());
+        assert!(admission.permits_direct_mapping());
+    }
+    let portable = QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN)
+            .unwrap()
+            .with_portable_rows(rows())
+            .unwrap(),
+    );
+    assert!(portable.permits_verified_generation());
+    assert!(!portable.permits_direct_mapping());
+    let native = QueryAdmission::Bearer(
+        BearerQueryAdmission::for_service_principal(TOKEN)
+            .unwrap()
+            .with_postgres_rls(claims())
+            .unwrap(),
+    );
+    assert!(!native.permits_verified_generation());
+    for kinds in [[false, false], [false, true], [true, false], [true, true]] {
+        let mut subjects: Vec<_> = kinds
+            .into_iter()
+            .zip([("a", TOKEN), ("b", OTHER)])
+            .map(|(native, (subject, token))| {
+                if native {
+                    ProvisionedBearerSubject::postgres_rls(subject, token, claims()).unwrap()
+                } else {
+                    ProvisionedBearerSubject::portable_rows(subject, token, rows()).unwrap()
+                }
+            })
+            .collect();
+        for _ in 0..2 {
+            let admission = QueryAdmission::ProvisionedBearers(
+                ProvisionedBearerAdmission::new(subjects.clone()).unwrap(),
+            );
+            assert_eq!(
+                admission.permits_verified_generation(),
+                !kinds.contains(&true)
+            );
+            assert!(!admission.permits_direct_mapping());
+            subjects.reverse();
+        }
+    }
+}

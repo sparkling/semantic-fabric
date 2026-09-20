@@ -2,6 +2,8 @@
 use super::*;
 #[path = "authored_generation_checks.rs"]
 mod checks;
+#[path = "authored_generation_policy.rs"]
+mod portable_policy;
 
 fn profile(fixture: &Fixture, database: &Database) -> (Command, SocketAddr) {
     let (mut command, address) = command(fixture, database, None);
@@ -204,4 +206,6 @@ fn public_authored_postgres_generation_is_protected() {
         checks::deadline_and_shutdown(&fixture, &database);
         checks::rejected_profiles(&fixture, &database, &mapping);
     }
+    // Keep the existing exact CI entrypoint inclusive of portable qualification.
+    portable_policy::public_authored_postgres_portable_policies();
 }
