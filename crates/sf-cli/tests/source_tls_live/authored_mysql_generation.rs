@@ -98,7 +98,48 @@ fn public_authored_mysql_generation_is_protected() {
     stop(&mut server);
     lifecycle::qualify(&fixture, &database, &mapping);
     portable::qualify(&fixture, &database, &mapping);
+    decoding_boundary(&fixture, &database);
     boundaries(&fixture, &database, &mapping);
+}
+
+fn decoding_boundary(fixture: &Fixture, database: &Database) {
+    // A single text cell exceeds the unchanged one-million-unit source limit.
+    // ASK buffers its answer, so decoder refusal must be an HTTP429, not true.
+    database.sql("ALTER TABLE sf_tls.items MODIFY value LONGTEXT NOT NULL; TRUNCATE sf_tls.items; INSERT INTO sf_tls.items(value) VALUES(REPEAT('x',1100000))");
+    database.sql("SET GLOBAL sort_buffer_size = 16777216");
+    let (command, address) = profile(fixture, database);
+    let mut server = start(fixture, command, address);
+    for _ in 0..2 {
+        let (status, body) = request(
+            address,
+            "ASK { ?s <http://example.test/left> ?value }",
+            Some(&fixture.token),
+        )
+        .unwrap();
+        assert_eq!(
+            status,
+            429,
+            "{}; server: {}",
+            String::from_utf8_lossy(&body),
+            std::fs::read_to_string(fixture.root.join("authored.stderr")).unwrap_or_default()
+        );
+        let problem: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|e| {
+            panic!(
+                "json parse failed: {e}; body_len={}; server: {}",
+                body.len(),
+                std::fs::read_to_string(fixture.root.join("authored.stderr")).unwrap_or_default()
+            )
+        });
+        assert_eq!(problem["code"], "query-budget-exceeded");
+        database.sql("UPDATE sf_tls.items SET value='same'");
+        value(address, &fixture.token, "same");
+        value(address, &fixture.token, "same");
+        database.sql("UPDATE sf_tls.items SET value=REPEAT('x',1100000)");
+    }
+    stop(&mut server);
+    database.sql(
+        "UPDATE sf_tls.items SET value='same'; ALTER TABLE sf_tls.items MODIFY value TEXT NOT NULL",
+    );
 }
 
 fn boundaries(fixture: &Fixture, database: &Database, mapping: &str) {

@@ -1,21 +1,16 @@
 //! Request-budget boundary proofs over the backend-generic executor.
-
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
+use super::row::Bindings;
+use super::{ask_controlled, construct_each_async_controlled, select_each_async_controlled};
+use crate::iq::{Branch, OrderKey, RustGroup, Scan, TermDef};
+use crate::{Error, Plan, PlanForm};
 use sf_core::ir::{LogicalSource, TermMap, TermSpec};
 use sf_core::query_control::{QueryBudget, QueryCharge, QueryControlError, QueryLimits};
 use sf_core::{Literal, NamedNode, Term};
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
-
-use crate::iq::{Branch, OrderKey, RustGroup, Scan, TermDef};
-use crate::{Error, Plan, PlanForm};
-
-use super::row::Bindings;
-use super::{ask_controlled, construct_each_async_controlled, select_each_async_controlled};
-
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 #[derive(Default)]
 struct Calls {
     probes: AtomicUsize,
@@ -35,6 +30,14 @@ struct BudgetStream {
 
 impl BranchStream for BudgetStream {
     async fn next_row(&mut self) -> sf_sql::Result<Option<RawTuple>> {
+        panic!("controlled executor must dispatch next_row_controlled")
+    }
+
+    async fn next_row_controlled(
+        &mut self,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> sf_sql::Result<Option<RawTuple>> {
+        control.checkpoint()?;
         self.calls.pulls.fetch_add(1, Ordering::Relaxed);
         Ok(self.rows.next())
     }
@@ -118,8 +121,7 @@ fn assert_calls(calls: &Calls, probes: usize, opens: usize, pulls: usize) {
     assert_eq!(calls.pulls.load(Ordering::Relaxed), pulls);
 }
 
-// These tests isolate cursor/result boundaries. Pay the independently measured
-// preparation prerequisite, retaining their original probe/open/pull allowance.
+// Pay preparation independently to isolate cursor/result boundaries.
 fn preparation_work(plan: &Plan) -> u64 {
     let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
     let work = sf_sql::source_work::SourceWork::new(Some(&control));

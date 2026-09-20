@@ -235,13 +235,19 @@ pub(crate) fn finalize(
 ) -> Option<FailureKind> {
     let pending = response.extensions_mut().remove::<PendingProblem>()?;
     debug_assert_eq!(response.status(), pending.code.status());
-    *response.body_mut() = if pending.include_body {
+    let body = if pending.include_body {
         let details = ProblemDetails::new(pending.code, correlation_id);
-        let body = serde_json::to_vec(&details).expect("fixed problem details must serialize");
-        Body::from(body)
+        serde_json::to_vec(&details).expect("fixed problem details must serialize")
     } else {
-        Body::empty()
+        Vec::new()
     };
+    // Axum may have framed the empty placeholder before this outer finalizer.
+    response.headers_mut().remove(header::TRANSFER_ENCODING);
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&body.len().to_string()).expect("body length is ASCII"),
+    );
+    *response.body_mut() = Body::from(body);
     response.headers_mut().insert(
         "x-correlation-id",
         HeaderValue::from_str(correlation_id.as_str())

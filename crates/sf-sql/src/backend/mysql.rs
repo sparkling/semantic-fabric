@@ -129,23 +129,33 @@ pub struct MysqlBranch<'s> {
     codes: Vec<Option<XsdTypeCode>>,
 }
 
-impl BranchStream for MysqlBranch<'_> {
-    async fn next_row(&mut self) -> Result<Option<RawTuple>> {
-        let Some(mut row) = self.result.next().await? else {
+impl MysqlBranch<'_> {
+    async fn next_with_work(
+        &mut self,
+        work: crate::source_work::SourceWork<'_>,
+    ) -> Result<Option<RawTuple>> {
+        work.checkpoint()?;
+        let row = self.result.next().await?;
+        work.checkpoint()?;
+        let Some(mut row) = row else {
             return Ok(None);
         };
-        let ncols = row.len();
-        ensure_row_arity(ncols, self.codes.len())?;
-        let mut values = Vec::with_capacity(ncols);
-        for (i, code) in self.codes.iter().copied().enumerate() {
-            // exec_mysql.rs:146 VERBATIM.
-            let v: Value = row.take(i).ok_or_else(|| {
-                Error::Marshal("MySQL result row column is unavailable".to_owned())
-            })?;
-            values.push(mysql_value_to_string(v, code)?);
-        }
-        let codes = self.codes.clone();
-        Ok(Some(RawTuple { values, codes }))
+        decode::row(row.len(), &self.codes, |i| row.take::<Value, _>(i), work).map(Some)
+    }
+}
+
+impl BranchStream for MysqlBranch<'_> {
+    async fn next_row(&mut self) -> Result<Option<RawTuple>> {
+        self.next_with_work(crate::source_work::SourceWork::new(None))
+            .await
+    }
+
+    async fn next_row_controlled(
+        &mut self,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Option<RawTuple>> {
+        self.next_with_work(crate::source_work::SourceWork::new(Some(control)))
+            .await
     }
 }
 
@@ -265,52 +275,11 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
     }
 }
 
-/// Convert a single MySQL [`Value`] cell to a raw lexical [`String`] (NULL → `None`).
-/// All wire types are converted via their natural Rust representation and then
-/// formatted as strings — the same principle as the PostgreSQL text-protocol path.
-///
-/// Prepared-statement metadata supplies the natural XSD code. Binary values are
-/// uppercase-hex encoded only for a binary column; invalid UTF-8 in a text column
-/// is a hard marshalling error. The same metadata distinguishes DATE from a
-/// DATETIME/TIMESTAMP whose value happens to be midnight.
+#[path = "mysql/decode.rs"]
+mod decode;
+#[cfg(test)]
 fn mysql_value_to_string(v: Value, code: Option<XsdTypeCode>) -> Result<Option<String>> {
-    use mysql_async::Value::*;
-    Ok(match v {
-        NULL => None,
-        Bytes(bytes) if code == Some(XsdTypeCode::HexBinary) => {
-            let mut encoded = String::new();
-            datatype::hex_binary_upper(&bytes, &mut encoded);
-            Some(encoded)
-        }
-        Bytes(bytes) => Some(
-            String::from_utf8(bytes)
-                .map_err(|error| Error::Marshal(format!("non-UTF8 MySQL text column: {error}")))?,
-        ),
-        Int(i) => Some(i.to_string()),
-        UInt(u) => Some(u.to_string()),
-        Float(f) => Some(f.to_string()),
-        Double(d) => Some(d.to_string()),
-        Date(y, mo, d, h, mi, s, us) => {
-            if code == Some(XsdTypeCode::Date) {
-                Some(format!("{y:04}-{mo:02}-{d:02}"))
-            } else if us == 0 {
-                Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"))
-            } else {
-                Some(format!(
-                    "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{us:06}"
-                ))
-            }
-        }
-        Time(neg, days, h, mi, s, us) => {
-            let sign = if neg { "-" } else { "" };
-            let total_h = days * 24 + u32::from(h);
-            if us == 0 {
-                Some(format!("{sign}{total_h:02}:{mi:02}:{s:02}"))
-            } else {
-                Some(format!("{sign}{total_h:02}:{mi:02}:{s:02}.{us:06}"))
-            }
-        }
-    })
+    decode::value(v, code, crate::source_work::SourceWork::new(None))
 }
 
 fn mysql_xsd_code(column: &Column, profile: MysqlTypeProfile) -> Result<Option<XsdTypeCode>> {

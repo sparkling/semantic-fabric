@@ -356,7 +356,11 @@ where
                 // EOF attempt is work too, and a zero budget therefore rejects
                 // before metadata/open/pull can touch the source.
                 ctx.control.consume(QueryCharge::SourceWork, 1)?;
-                match s.next_row().await.map_err(map_sql_err)? {
+                match s
+                    .next_row_controlled(ctx.control)
+                    .await
+                    .map_err(map_sql_err)?
+                {
                     Some(t) => raw_batch.push(t),
                     None => break,
                 }

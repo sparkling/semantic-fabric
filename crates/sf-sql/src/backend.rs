@@ -108,6 +108,18 @@ pub trait BranchStream {
     /// (never a silent short read): the SQLite bridge forwards `Result<RawTuple>`
     /// so an `Err` surfaces here rather than closing as clean EOF (design A2).
     async fn next_row(&mut self) -> Result<Option<RawTuple>>;
+
+    /// Govern application-side decoding where supported by the adapter.
+    /// Native driver allocation is outside this logical source-work boundary.
+    async fn next_row_controlled(
+        &mut self,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Option<RawTuple>> {
+        control.checkpoint()?;
+        let row = self.next_row().await?;
+        control.checkpoint()?;
+        Ok(row)
+    }
 }
 
 /// One driver's prepare / typed-bind / server-side-cursor surface (ADR-0024).

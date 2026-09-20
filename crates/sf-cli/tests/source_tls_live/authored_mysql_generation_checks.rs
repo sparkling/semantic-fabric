@@ -35,6 +35,8 @@ fn stopped(database: &Database, id: u64) {
     }
 }
 
+// Deliberate32MiB backpressure fixtures use an explicit source allowance;
+// small-profile acceptance in the parent retains the product defaults.
 fn fill(database: &Database) {
     database.sql("TRUNCATE sf_tls.items; SET SESSION cte_max_recursion_depth=1100; INSERT INTO sf_tls.items(value) WITH RECURSIVE n AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM n WHERE n<1024) SELECT CONCAT(REPEAT('x',32760),LPAD(n,8,'0')) FROM n");
 }
@@ -70,7 +72,8 @@ fn exact_old(stream: TcpStream, mut wire: Vec<u8>) {
 pub(super) fn qualify(fixture: &Fixture, database: &Database, mapping: &str) {
     eprintln!("MySQL protected old snapshot across activation and DML");
     fill(database);
-    let (command, address) = profile(fixture, database);
+    let (mut command, address) = profile(fixture, database);
+    command.args(["--max-source-work", "100000000"]);
     let mut server = start(fixture, command, address);
     let (stream, wire) = held(address, &fixture.token);
     let id = owner(database);
@@ -103,7 +106,8 @@ pub(super) fn qualify(fixture: &Fixture, database: &Database, mapping: &str) {
     fixture.write("first.ttl", &format!("{mapping}\n{second}"));
     fixture.write("ontology.ttl", "<http://example.test/left> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .\n<http://example.test/right> a <http://www.w3.org/2002/07/owl#DatatypeProperty> .");
     fill(database);
-    let (command, address) = profile_interval(fixture, database, "60");
+    let (mut command, address) = profile_interval(fixture, database, "60");
+    command.args(["--max-source-work", "100000000"]);
     let mut server = start(fixture, command, address);
     let (stream, wire) = held(address, &fixture.token);
     let id = owner(database);
@@ -140,6 +144,8 @@ pub(super) fn qualify(fixture: &Fixture, database: &Database, mapping: &str) {
         fill(database);
         let (mut command, address) = profile(fixture, database);
         command.args([
+            "--max-source-work",
+            "100000000",
             "--timeout-secs",
             if mode == "deadline" { "2" } else { "30" },
         ]);

@@ -113,7 +113,13 @@ pub(super) fn qualify(fixture: &Fixture, pair: [&Endpoint; 2]) {
 
     pair[0].fill_stream();
     let (mut command, address) = profile(fixture, pair, false, "2000");
-    command.args(["--reload-interval-secs", "86400"]);
+    // The32MiB unread arm tests retained leases, with explicitly funded decoding.
+    command.args([
+        "--reload-interval-secs",
+        "86400",
+        "--max-source-work",
+        "100000000",
+    ]);
     let server = start(fixture, command, address);
     let mut stream = cancellation::begin(address, UNION, &fixture.token);
     let mut headers = Vec::new();

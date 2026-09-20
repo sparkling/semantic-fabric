@@ -134,6 +134,47 @@ fn pending_problem_can_only_be_materialized_once() {
     assert_eq!(finalize(&mut response, &correlation), None);
 }
 
+#[tokio::test]
+async fn router_placeholder_framing_is_replaced_with_final_problem_length() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    for include_body in [true, false] {
+        let app = axum::Router::new().route(
+            "/problem",
+            axum::routing::get(move || async move {
+                pending_response(ProblemCode::QueryBudgetExceeded, include_body)
+            }),
+        );
+        let mut response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/problem")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Axum sees the empty placeholder before the outer coordinator finalizes.
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "0");
+        let correlation = generated_correlation_id();
+        finalize(&mut response, &correlation);
+        let length: usize = response.headers()[header::CONTENT_LENGTH]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(length, body.len());
+        if include_body {
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["code"], "query-budget-exceeded");
+            assert_eq!(json["correlationId"], correlation.as_str());
+        } else {
+            assert!(body.is_empty());
+        }
+    }
+}
+
 #[test]
 fn startup_public_formats_redact_the_retained_typed_cause() {
     let sentinel = "startup_secret_cause";
