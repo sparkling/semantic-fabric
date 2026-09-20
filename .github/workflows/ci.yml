@@ -302,11 +302,11 @@ jobs:
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --nocapture
           done
-      - name: qualify protected native generations and MySQL snapshot ordering
+      - name: qualify protected generations and native authority prerequisites
         timeout-minutes: 6
         run: |
           set -euo pipefail
-          for test_name in authored_generation::public_authored_postgres_generation_is_protected support::mysql_ordering::all_table_locks_precede_the_read_view authored_generation::mysql::public_authored_mysql_generation_is_protected; do
+          for test_name in authored_generation::public_authored_postgres_generation_is_protected support::mysql_ordering::all_table_locks_precede_the_read_view authored_generation::mysql::public_authored_mysql_generation_is_protected support::pg_rls_authority::policy_locks_and_role_changes_have_distinct_authority; do
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --list | grep -Fx "$test_name: test"
             cargo test --locked -p sf-cli --no-default-features --test source_tls_live -- --ignored --exact "$test_name" --test-threads=1 --nocapture
           done

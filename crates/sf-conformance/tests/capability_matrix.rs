@@ -406,6 +406,9 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
         generation.evidence_ids,
         [
             "e-architecture-schema-lifecycle",
+            "e-pg-rls-authority-ci",
+            "e-pg-rls-authority-native",
+            "e-pg-rls-authority-session",
             "e-postgresql-observation-qualification-pair",
             "e-postgresql-verified-generation-budget",
             "e-postgresql-verified-generation-budget-expiry",

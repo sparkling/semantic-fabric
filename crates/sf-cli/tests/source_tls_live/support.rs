@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 #[path = "mysql_ordering.rs"]
 mod mysql_ordering;
+#[path = "pg_rls_authority.rs"]
+mod pg_rls_authority;
 
 const POSTGRES: &str =
     "postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8";
