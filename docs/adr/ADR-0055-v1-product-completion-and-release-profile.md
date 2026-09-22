@@ -293,8 +293,8 @@ An immutable v1 release candidate must have all of the following:
 - locked dependency and licence review, reachable critical/high advisory
   disposition with owner and expiry, an SBOM, checksums, signature, and
   provenance bound to the exact packed artifact; and
-- independent native Codex and Claude review of the exact release delta. Model
-  review is corroboration; deterministic product evidence remains authority.
+- independent native review of the exact release delta by two distinct executor
+  identities: Codex and Claude when both are active, a second distinct Claude Code executor while Codex is paused (2026-09-22). Model review is corroboration; deterministic product evidence remains authority.
 
 One clean, controlled release build is the v1 minimum. A second independent
 byte-identical builder, transparency service, exhaustive dynamic-loader proof,
