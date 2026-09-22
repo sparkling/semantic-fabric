@@ -52,10 +52,15 @@ fn start(fixture: &Fixture, database: &Database) -> (Server, SocketAddr) {
     start_command(fixture, command, address)
 }
 
-fn start_command(
+fn start_command(fixture: &Fixture, command: Command, address: SocketAddr) -> (Server, SocketAddr) {
+    start_command_with_source_work(fixture, command, address, "20000000")
+}
+
+fn start_command_with_source_work(
     fixture: &Fixture,
     mut command: Command,
     address: SocketAddr,
+    max_source_work: &str,
 ) -> (Server, SocketAddr) {
     command.args([
         "--pg-pool-size",
@@ -92,7 +97,7 @@ fn start_command(
         // real headroom above the largest measured case rather than creeping
         // up per variant.
         "--max-source-work",
-        "20000000",
+        max_source_work,
     ]);
     let log = fixture.root.join("query-profile.stderr");
     let mut server = Server(

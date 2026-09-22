@@ -402,7 +402,9 @@ pub(super) fn assert_large_decoder(fixture: &Fixture, database: &Database) {
         "ontology.ttl",
         "<http://example.test/edge> a <http://www.w3.org/2002/07/owl#ObjectProperty> .",
     );
-    sql(database, "DELETE FROM items; ALTER TABLE items ALTER COLUMN src TYPE NUMERIC USING src::NUMERIC; INSERT INTO items(src,value) VALUES ((repeat('1',131072) || '.00')::NUMERIC,'same')");
+    sql(database, "DELETE FROM items; ALTER TABLE items ALTER COLUMN src TYPE NUMERIC USING src::NUMERIC; INSERT INTO items(src,value) VALUES ((repeat('1',131072) || '.00')::NUMERIC,'same'),(12345.678,'probe')");
+    database.assert_postgres_decoder_control();
+    sql(database, "DELETE FROM items WHERE value='probe'");
     let (server, address) = start(fixture, database);
     let query = format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}");
     let (status, body) = request_format_bounded(
@@ -422,6 +424,69 @@ pub(super) fn assert_large_decoder(fixture: &Fixture, database: &Database) {
         bindings[0]["o"]["value"],
         format!("http://example.test/n/{}.00", "1".repeat(131072))
     );
+    database.assert_encrypted_sessions();
+    drop(server);
+    assert_controlled_refusal_and_recovery(fixture, database);
+}
+
+fn assert_controlled_refusal_and_recovery(fixture: &Fixture, database: &Database) {
+    sql(
+        database,
+        "DELETE FROM items; INSERT INTO items(src,value) VALUES (1.25,'small')",
+    );
+    let (command, address) = command(fixture, database, None);
+    let (server, address) = start_command_with_source_work(fixture, command, address, "100000");
+    let select = format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}");
+    for _ in 0..2 {
+        let result = rows(address, fixture, &select);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["o"]["value"], "http://example.test/n/1.25");
+    }
+    let (_, ask) = request(
+        address,
+        &format!("ASK {{ ?s <{EDGE}> ?o }}"),
+        Some(&fixture.token),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&ask).unwrap()["boolean"],
+        true
+    );
+    assert_eq!(
+        graph(
+            address,
+            fixture,
+            &format!("CONSTRUCT {{ ?s <{EDGE}> ?o }} WHERE {{ ?s <{EDGE}> ?o }}"),
+            "application/n-triples",
+        ),
+        [format!(
+            "<http://example.test/item> <{EDGE}> <http://example.test/n/1.25>"
+        )]
+        .into_iter()
+        .collect()
+    );
+
+    sql(
+        database,
+        "INSERT INTO items(src,value) VALUES ((repeat('1',131072) || '.00')::NUMERIC,'large')",
+    );
+
+    let failed = stop_matrix::wire(cancellation::begin(
+        address,
+        &format!("SELECT ?o WHERE {{ ?s <{EDGE}> ?o }}"),
+        &fixture.token,
+    ));
+    assert!(failed.starts_with(b"HTTP/1.1 200 "));
+    stop_matrix::assert_no_complete_union_success(&failed);
+    let log = std::fs::read_to_string(fixture.root.join("query-profile.stderr")).unwrap();
+    assert!(
+        log.contains("\"outcome\":\"source_work_exceeded\""),
+        "exact terminal cause missing: {log}"
+    );
+    sql(database, "DELETE FROM items WHERE value='large'");
+    let recovered = rows(address, fixture, &select);
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0]["o"]["value"], "http://example.test/n/1.25");
     database.assert_encrypted_sessions();
     drop(server);
 }

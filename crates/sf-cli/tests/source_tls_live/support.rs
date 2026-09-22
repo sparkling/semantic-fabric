@@ -275,7 +275,7 @@ impl Database {
     fn start_image(fixture: &Fixture, postgres: bool, postgres_image: &str) -> Self {
         let prefix = if postgres { "pg" } else { "mysql" };
         let roots = fixture.certificates(prefix);
-        fixture.write("pg_hba.conf", "local all all trust\nhostssl all all 0.0.0.0/0 scram-sha-256\nhost all all 0.0.0.0/0 reject\nhostssl all all ::/0 scram-sha-256\nhost all all ::/0 reject\n");
+        fixture.write("pg_hba.conf", "local all all trust\nhostssl all all 0.0.0.0/0 scram-sha-256\nhost all sf_decoder_probe 0.0.0.0/0 scram-sha-256\nhost all all 0.0.0.0/0 reject\nhostssl all all ::/0 scram-sha-256\nhost all sf_decoder_probe ::/0 scram-sha-256\nhost all all ::/0 reject\n");
         let password = uuid::Uuid::new_v4().simple().to_string();
         let name = format!("sf-source-tls-{prefix}-{}", uuid::Uuid::new_v4());
         let bind = format!(
@@ -363,7 +363,7 @@ impl Database {
         }
         let password = &database.password;
         if postgres {
-            database.sql(&format!("CREATE ROLE sf_tls LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT; CREATE TABLE public.items(value TEXT NOT NULL); INSERT INTO public.items VALUES ('same'); GRANT USAGE ON SCHEMA public TO sf_tls; GRANT SELECT ON public.items TO sf_tls;"));
+            database.sql(&format!("CREATE ROLE sf_tls LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT; CREATE ROLE sf_decoder_probe LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT; CREATE TABLE public.items(value TEXT NOT NULL); INSERT INTO public.items VALUES ('same'); GRANT USAGE ON SCHEMA public TO sf_tls, sf_decoder_probe; GRANT SELECT ON public.items TO sf_tls, sf_decoder_probe;"));
             database.source = format!(
                 "pg:host=127.0.0.1 port={port} user=sf_tls password={password} dbname=postgres"
             );
@@ -412,6 +412,38 @@ impl Database {
         } else {
             self.mysql(sql, false)
         })
+    }
+
+    pub fn postgres_decoder_probe_url(&self) -> String {
+        assert!(self.postgres);
+        self.source
+            .strip_prefix("pg:")
+            .unwrap_or(&self.source)
+            .replace("user=sf_tls", "user=sf_decoder_probe")
+    }
+
+    pub fn assert_postgres_decoder_control(&self) {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let result = output(
+            Command::new("cargo")
+                .current_dir(workspace)
+                .env("SF_PG_URL", self.postgres_decoder_probe_url())
+                .args([
+                    "test", "--locked", "-p", "sf-sql", "--lib",
+                    "backend::pg::decode::tests::controlled_numeric_row_uses_the_supplied_source_budget",
+                    "--", "--ignored", "--exact", "--nocapture",
+                ]),
+            Duration::from_secs(120),
+        );
+        assert!(
+            result.status.success(),
+            "direct PostgreSQL decoder control witness failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     pub fn assert_encrypted_sessions(&self) {

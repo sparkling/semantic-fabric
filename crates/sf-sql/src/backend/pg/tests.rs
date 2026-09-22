@@ -1,5 +1,7 @@
 use super::timetz::decode_pg_timetz;
 use super::*;
+use crate::source_work::SourceWork;
+use tokio_postgres::types::FromSql;
 use tokio_postgres::{Client, NoTls};
 
 #[derive(Debug)]
@@ -236,9 +238,12 @@ fn decode_pg_numeric_unsigned_digit_count_preserves_large_finite_values() {
     let digits = vec![1111; 32768];
     let wire = numeric_wire(32768, 32767, 0x0000, 2, &digits);
     let expected = format!("{}.00", "1111".repeat(32768));
-    assert_eq!(decode_pg_numeric(&wire).unwrap(), expected);
+    assert_eq!(
+        decode::decode_numeric(&wire, SourceWork::new(None)).unwrap(),
+        expected
+    );
     assert!(matches!(
-        decode_pg_numeric(&wire[..wire.len() - 2]),
+        decode::decode_numeric(&wire[..wire.len() - 2], SourceWork::new(None)),
         Err(Error::Marshal(message)) if message.contains("digit array truncated")
     ));
 }
@@ -246,7 +251,7 @@ fn decode_pg_numeric_unsigned_digit_count_preserves_large_finite_values() {
 #[test]
 fn decode_pg_numeric_zero() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(0, 0, 0x0000, 0, &[])).unwrap(),
+        decode::decode_numeric(&numeric_wire(0, 0, 0x0000, 0, &[]), SourceWork::new(None)).unwrap(),
         "0"
     );
 }
@@ -254,7 +259,8 @@ fn decode_pg_numeric_zero() {
 #[test]
 fn decode_pg_numeric_one() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(1, 0, 0x0000, 0, &[1])).unwrap(),
+        decode::decode_numeric(&numeric_wire(1, 0, 0x0000, 0, &[1]), SourceWork::new(None))
+            .unwrap(),
         "1"
     );
 }
@@ -262,7 +268,8 @@ fn decode_pg_numeric_one() {
 #[test]
 fn decode_pg_numeric_negative_one() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(1, 0, 0x4000, 0, &[1])).unwrap(),
+        decode::decode_numeric(&numeric_wire(1, 0, 0x4000, 0, &[1]), SourceWork::new(None))
+            .unwrap(),
         "-1"
     );
 }
@@ -270,7 +277,11 @@ fn decode_pg_numeric_negative_one() {
 #[test]
 fn decode_pg_numeric_12345_678() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(3, 1, 0x0000, 3, &[1, 2345, 6780])).unwrap(),
+        decode::decode_numeric(
+            &numeric_wire(3, 1, 0x0000, 3, &[1, 2345, 6780]),
+            SourceWork::new(None)
+        )
+        .unwrap(),
         "12345.678"
     );
 }
@@ -278,7 +289,8 @@ fn decode_pg_numeric_12345_678() {
 #[test]
 fn decode_pg_numeric_0_0001() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(1, -1, 0x0000, 4, &[1])).unwrap(),
+        decode::decode_numeric(&numeric_wire(1, -1, 0x0000, 4, &[1]), SourceWork::new(None))
+            .unwrap(),
         "0.0001"
     );
 }
@@ -286,7 +298,8 @@ fn decode_pg_numeric_0_0001() {
 #[test]
 fn decode_pg_numeric_weight_exceeds_stored_digits_trailing_zeros() {
     assert_eq!(
-        decode_pg_numeric(&numeric_wire(1, 2, 0x0000, 0, &[1])).unwrap(),
+        decode::decode_numeric(&numeric_wire(1, 2, 0x0000, 0, &[1]), SourceWork::new(None))
+            .unwrap(),
         "100000000"
     );
 }
@@ -294,7 +307,8 @@ fn decode_pg_numeric_weight_exceeds_stored_digits_trailing_zeros() {
 #[test]
 fn decode_pg_numeric_nan_is_unsupported_not_a_wrong_value() {
     assert!(matches!(
-        decode_pg_numeric(&numeric_wire(0, 0, 0xC000, 0, &[])).unwrap_err(),
+        decode::decode_numeric(&numeric_wire(0, 0, 0xC000, 0, &[]), SourceWork::new(None))
+            .unwrap_err(),
         Error::Unsupported(_)
     ));
 }
@@ -302,7 +316,8 @@ fn decode_pg_numeric_nan_is_unsupported_not_a_wrong_value() {
 #[test]
 fn decode_pg_numeric_positive_infinity_is_unsupported() {
     assert!(matches!(
-        decode_pg_numeric(&numeric_wire(0, 0, 0xD000, 0, &[])).unwrap_err(),
+        decode::decode_numeric(&numeric_wire(0, 0, 0xD000, 0, &[]), SourceWork::new(None))
+            .unwrap_err(),
         Error::Unsupported(_)
     ));
 }
@@ -310,7 +325,8 @@ fn decode_pg_numeric_positive_infinity_is_unsupported() {
 #[test]
 fn decode_pg_numeric_negative_infinity_is_unsupported() {
     assert!(matches!(
-        decode_pg_numeric(&numeric_wire(0, 0, 0xF000, 0, &[])).unwrap_err(),
+        decode::decode_numeric(&numeric_wire(0, 0, 0xF000, 0, &[]), SourceWork::new(None))
+            .unwrap_err(),
         Error::Unsupported(_)
     ));
 }
@@ -331,24 +347,27 @@ fn timetz_is_admitted_as_xsd_time() {
 fn decode_pg_timetz_preserves_offset_sign_local_time_and_fraction() {
     let micros = 49_530_123_400;
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(micros, -19_800)).unwrap(),
+        decode_pg_timetz(&timetz_wire(micros, -19_800), SourceWork::new(None)).unwrap(),
         "13:45:30.1234+05:30"
     );
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(micros, 14_400)).unwrap(),
+        decode_pg_timetz(&timetz_wire(micros, 14_400), SourceWork::new(None)).unwrap(),
         "13:45:30.1234-04:00"
     );
 }
 
 #[test]
 fn decode_pg_timetz_emits_canonical_zero_offset_and_midnight() {
-    assert_eq!(decode_pg_timetz(&timetz_wire(0, 0)).unwrap(), "00:00:00Z");
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(86_400_000_000, 0)).unwrap(),
+        decode_pg_timetz(&timetz_wire(0, 0), SourceWork::new(None)).unwrap(),
         "00:00:00Z"
     );
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(86_400_000_000, -19_800)).unwrap(),
+        decode_pg_timetz(&timetz_wire(86_400_000_000, 0), SourceWork::new(None)).unwrap(),
+        "00:00:00Z"
+    );
+    assert_eq!(
+        decode_pg_timetz(&timetz_wire(86_400_000_000, -19_800), SourceWork::new(None)).unwrap(),
         "00:00:00+05:30"
     );
 }
@@ -356,11 +375,11 @@ fn decode_pg_timetz_emits_canonical_zero_offset_and_midnight() {
 #[test]
 fn decode_pg_timetz_accepts_exact_xsd_offset_boundaries() {
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(0, -50_400)).unwrap(),
+        decode_pg_timetz(&timetz_wire(0, -50_400), SourceWork::new(None)).unwrap(),
         "00:00:00+14:00"
     );
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(0, 50_400)).unwrap(),
+        decode_pg_timetz(&timetz_wire(0, 50_400), SourceWork::new(None)).unwrap(),
         "00:00:00-14:00"
     );
 }
@@ -368,7 +387,7 @@ fn decode_pg_timetz_accepts_exact_xsd_offset_boundaries() {
 #[test]
 fn decode_pg_timetz_does_not_shift_across_the_arbitrary_day_boundary() {
     assert_eq!(
-        decode_pg_timetz(&timetz_wire(82_800_000_000, 10_800)).unwrap(),
+        decode_pg_timetz(&timetz_wire(82_800_000_000, 10_800), SourceWork::new(None)).unwrap(),
         "23:00:00-03:00"
     );
 }
@@ -377,7 +396,7 @@ fn decode_pg_timetz_does_not_shift_across_the_arbitrary_day_boundary() {
 fn decode_pg_timetz_rejects_valid_postgres_offsets_outside_xsd() {
     for seconds_west in [1, -1, 50_460, -50_460, 57_599, -57_599] {
         assert!(matches!(
-            decode_pg_timetz(&timetz_wire(0, seconds_west)).unwrap_err(),
+            decode_pg_timetz(&timetz_wire(0, seconds_west), SourceWork::new(None)).unwrap_err(),
             Error::Unsupported(_)
         ));
     }
@@ -386,20 +405,20 @@ fn decode_pg_timetz_rejects_valid_postgres_offsets_outside_xsd() {
 #[test]
 fn decode_pg_timetz_rejects_malformed_wire_values() {
     assert!(matches!(
-        decode_pg_timetz(&[0; 11]).unwrap_err(),
+        decode_pg_timetz(&[0; 11], SourceWork::new(None)).unwrap_err(),
         Error::Marshal(_)
     ));
     assert!(matches!(
-        decode_pg_timetz(&timetz_wire(-1, 0)).unwrap_err(),
+        decode_pg_timetz(&timetz_wire(-1, 0), SourceWork::new(None)).unwrap_err(),
         Error::Marshal(_)
     ));
     assert!(matches!(
-        decode_pg_timetz(&timetz_wire(86_400_000_001, 0)).unwrap_err(),
+        decode_pg_timetz(&timetz_wire(86_400_000_001, 0), SourceWork::new(None)).unwrap_err(),
         Error::Marshal(_)
     ));
     for seconds_west in [57_600, -57_600] {
         assert!(matches!(
-            decode_pg_timetz(&timetz_wire(0, seconds_west)).unwrap_err(),
+            decode_pg_timetz(&timetz_wire(0, seconds_west), SourceWork::new(None)).unwrap_err(),
             Error::Marshal(_)
         ));
     }

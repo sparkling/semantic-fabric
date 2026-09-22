@@ -6,6 +6,7 @@ use tokio_postgres::Row;
 
 use super::recover_pg_from_sql_error;
 use crate::error::{Error, Result};
+use crate::source_work::SourceWork;
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const SECONDS_PER_MINUTE: i64 = 60;
@@ -14,14 +15,14 @@ const MICROS_PER_DAY: i64 = 24 * SECONDS_PER_HOUR * MICROS_PER_SECOND;
 const PG_MAX_OFFSET_SECONDS: u32 = (16 * SECONDS_PER_HOUR - 1) as u32;
 const XSD_MAX_OFFSET_MINUTES: i32 = 14 * 60;
 
-struct PgTimeTz(String);
+struct PgTimeTz<'a>(&'a [u8]);
 
-impl<'a> FromSql<'a> for PgTimeTz {
+impl<'a> FromSql<'a> for PgTimeTz<'a> {
     fn from_sql(
         _ty: &Type,
         raw: &'a [u8],
     ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        Ok(Self(decode_pg_timetz(raw)?))
+        Ok(Self(raw))
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -35,7 +36,8 @@ impl<'a> FromSql<'a> for PgTimeTz {
 /// resolution and a ±14:00 bound. The XSD `time` value retains its local fields
 /// and timezone offset, so valid PostgreSQL values outside that XSD domain are
 /// rejected rather than shifted to a different value.
-pub(super) fn decode_pg_timetz(raw: &[u8]) -> Result<String> {
+pub(super) fn decode_pg_timetz(raw: &[u8], work: SourceWork<'_>) -> Result<String> {
+    work.charge(raw.len())?;
     if raw.len() != 12 {
         return Err(Error::Marshal(format!(
             "PG TIMETZ: expected 12-byte payload, got {} bytes",
@@ -84,7 +86,16 @@ pub(super) fn decode_pg_timetz(raw: &[u8]) -> Result<String> {
     let hour = seconds / SECONDS_PER_HOUR;
     let minute = seconds / SECONDS_PER_MINUTE % SECONDS_PER_MINUTE;
     let second = seconds % SECONDS_PER_MINUTE;
-    let mut lexical = format!("{hour:02}:{minute:02}:{second:02}");
+    // One bounded allowance covers both the intermediate lexical buffer and
+    // canonical output produced by the shared datatype formatter.
+    work.charge(128)?;
+    let mut lexical = String::new();
+    lexical
+        .try_reserve_exact(32)
+        .map_err(|_| Error::Marshal("PostgreSQL TIMETZ allocation failed".into()))?;
+    use std::fmt::Write as _;
+    write!(&mut lexical, "{hour:02}:{minute:02}:{second:02}")
+        .map_err(|_| Error::Marshal("PG TIMETZ: output formatting failed".into()))?;
     if fractional_micros != 0 {
         let fraction = format!("{fractional_micros:06}");
         lexical.push('.');
@@ -95,22 +106,26 @@ pub(super) fn decode_pg_timetz(raw: &[u8]) -> Result<String> {
     } else {
         let magnitude = minutes_east.unsigned_abs();
         let sign = if minutes_east < 0 { '-' } else { '+' };
-        lexical.push_str(&format!(
+        write!(
+            &mut lexical,
             "{sign}{:02}:{:02}",
             magnitude / 60,
             magnitude % 60
-        ));
+        )
+        .map_err(|_| Error::Marshal("PG TIMETZ: output formatting failed".into()))?;
     }
 
     // Keep the adapter contract honest at its boundary.
     let mut canonical = String::new();
     datatype::canonical_lexical(&lexical, XsdTypeCode::Time, &mut canonical)
         .map_err(|e| Error::Marshal(format!("PG TIMETZ: invalid decoded xsd:time: {e}")))?;
+    work.checkpoint()?;
     Ok(canonical)
 }
 
-pub(super) fn pg_timetz_value(row: &Row, idx: usize) -> Result<Option<String>> {
-    row.try_get::<_, Option<PgTimeTz>>(idx)
-        .map(|value| value.map(|value| value.0))
-        .map_err(recover_pg_from_sql_error)
+pub(super) fn value(row: &Row, idx: usize, work: SourceWork<'_>) -> Result<Option<String>> {
+    row.try_get::<_, Option<PgTimeTz<'_>>>(idx)
+        .map_err(recover_pg_from_sql_error)?
+        .map(|value| decode_pg_timetz(value.0, work))
+        .transpose()
 }
