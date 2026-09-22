@@ -260,6 +260,9 @@ pub(super) fn character(
     if let Some(control) = control {
         let input = match value {
             ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
+            // f64::to_string()'s exact worst case (signed subnormal near zero),
+            // not the 32-byte catch-all below, which undercharges by ~10x.
+            ValueRef::Real(_) => 327,
             _ => 32,
         };
         let work = input
@@ -270,7 +273,7 @@ pub(super) fn character(
             ))?;
         control.consume(QueryCharge::SourceWork, work)?;
     }
-    let mut text = super::lexical(value)?;
+    let mut text = super::decode::lexical(value)?;
     if let Some(text) = text.as_mut() {
         let padding = width.saturating_sub(text.chars().count());
         text.try_reserve(padding)

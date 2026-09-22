@@ -1,17 +1,19 @@
-//! SQLite pull adapters (ADR-0024 §2/§4.1), sharing [`marshal_row`].
+//! SQLite pull adapters (ADR-0024 §2/§4.1), sharing per-cell decoding via
+//! [`decode::row`].
 //! [`SqliteBackend`] borrows a connection and keeps one lazy row in flight.
 //! [`SqliteOwnedBackend`] keeps its connection on a blocking worker behind a
 //! cap-one channel (one buffered and one live row), preserving backpressure.
 //! Both propagate marshalling errors as hard failures, never silent short reads.
 
-use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Rows, Statement};
 use sf_core::datatype::{self, XsdTypeCode};
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
+use crate::source_work::SourceWork;
 
 mod cancellation;
+mod decode;
 mod generation;
 mod generation_schema;
 pub use generation::{SqliteGenerationConnection, VerifiedSqliteGenerationLease};
@@ -58,8 +60,9 @@ pub struct SqliteBranch<'s> {
     lexical_key: text_key::CharacterKeyGuard<'s>,
 }
 
-impl BranchStream for SqliteBranch<'_> {
-    async fn next_row(&mut self) -> Result<Option<RawTuple>> {
+impl SqliteBranch<'_> {
+    async fn next_with_work(&mut self, work: SourceWork<'_>) -> Result<Option<RawTuple>> {
+        work.checkpoint()?;
         let Some(row) = self
             .rows
             .next()
@@ -69,41 +72,31 @@ impl BranchStream for SqliteBranch<'_> {
             self.lexical_key.finish()?;
             return Ok(None);
         };
-        Ok(Some(marshal_row(
+        work.checkpoint()?;
+        Ok(Some(decode::row(
             row,
             &self.decl_codes,
             &self.pads,
             self.nproj,
+            work,
         )?))
     }
 }
 
-/// Marshal one `rusqlite` `&Row` into a driver-agnostic [`RawTuple`] (design §2 —
-/// the single SQLite per-cell marshalling home, shared by the borrowing
-/// [`SqliteBranch`] and the owned [`SqliteOwnedBackend`] bridge): per projected
-/// column, resolve the §10 type (declared code, else storage-class fallback), read
-/// the lexical value ([`lexical_typed`], `hexBinary` blob → uppercase-hex), then
-/// blank-pad a fixed-length `CHARACTER(n)` value to `n` (R2RML §10 / ADR-0015).
-fn marshal_row(
-    row: &rusqlite::Row<'_>,
-    decl_codes: &[Option<XsdTypeCode>],
-    pads: &[Option<usize>],
-    nproj: usize,
-) -> Result<RawTuple> {
-    let mut values = Vec::with_capacity(nproj);
-    let mut codes = Vec::with_capacity(nproj);
-    for (i, &decl_code) in decl_codes.iter().enumerate() {
-        let v = row.get_ref(i)?;
-        // §10 type: the declared decl type, else the value's storage class.
-        let code = decl_code.or_else(|| storage_class_code(&v));
-        let text = match pads[i] {
-            Some(width) => text_key::character(v, width, None)?,
-            None => lexical_typed(v, code)?,
-        };
-        values.push(text);
-        codes.push(code);
+impl BranchStream for SqliteBranch<'_> {
+    async fn next_row(&mut self) -> Result<Option<RawTuple>> {
+        self.next_with_work(SourceWork::new(None)).await
     }
-    Ok(RawTuple { values, codes })
+
+    /// Overrides the trait default (checkpoint-only) so a supplied control is
+    /// actually threaded into `marshal_row`'s per-cell charging, mirroring the
+    /// PostgreSQL adapter's `next_row_controlled` / `next_with_work` split.
+    async fn next_row_controlled(
+        &mut self,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> Result<Option<RawTuple>> {
+        self.next_with_work(SourceWork::new(Some(control))).await
+    }
 }
 
 impl<'c> SqlBackend for SqliteBackend<'c> {
@@ -296,18 +289,6 @@ fn result_columns_with_control(
 
 // --- per-cell marshalling (moved VERBATIM from sf-sparql::exec, design §2) -----
 
-/// The §10 type implied by a value's SQLite storage class — the affinity fallback
-/// for a column with no declared type (ADR-0015): `INTEGER → xsd:integer`,
-/// `REAL → xsd:double`, `BLOB → xsd:hexBinary`; text / NULL carry no implied type.
-fn storage_class_code(v: &ValueRef<'_>) -> Option<XsdTypeCode> {
-    match v {
-        ValueRef::Integer(_) => Some(XsdTypeCode::Integer),
-        ValueRef::Real(_) => Some(XsdTypeCode::Double),
-        ValueRef::Blob(_) => Some(XsdTypeCode::HexBinary),
-        ValueRef::Text(_) | ValueRef::Null => None,
-    }
-}
-
 /// The fixed `CHARACTER(n)` pad length, if `decl` is a fixed-length char type
 /// (`CHAR` / `CHARACTER` / `NCHAR`) with an explicit `(n)` — never a *varying* type.
 fn char_pad_len(decl: &str) -> Option<usize> {
@@ -324,73 +305,9 @@ fn char_pad_len(decl: &str) -> Option<usize> {
     decl[open + 1..close].trim().parse::<usize>().ok()
 }
 
-/// Read a SQLite value as its lexical string (NULL ⇒ `None`). Datatype
-/// canonicalisation (R2RML §10) is `sf-core`'s concern; this is the raw lexical
-/// extraction. A non-UTF-8 text column / an unhandled BLOB is a hard [`Error::Marshal`].
-fn lexical(v: ValueRef<'_>) -> Result<Option<String>> {
-    Ok(match v {
-        ValueRef::Null => None,
-        ValueRef::Integer(i) => Some(i.to_string()),
-        ValueRef::Real(f) => Some(f.to_string()),
-        ValueRef::Text(t) => Some(
-            std::str::from_utf8(t)
-                .map_err(|e| Error::Marshal(format!("non-UTF8 text column: {e}")))?
-                .to_owned(),
-        ),
-        ValueRef::Blob(_) => return Err(Error::Marshal("BLOB column reconstruction".to_owned())),
-    })
-}
-
-/// Extract a column value with its target §10 type in view: a `BLOB` feeding an
-/// `xsd:hexBinary` column is uppercase-hex-encoded here (ADR-0015); every other
-/// storage class is read by [`lexical`]. A blob in a non-hexBinary position is a
-/// hard [`Error::Marshal`].
-fn lexical_typed(v: ValueRef<'_>, code: Option<XsdTypeCode>) -> Result<Option<String>> {
-    if let ValueRef::Blob(bytes) = v {
-        if code == Some(XsdTypeCode::HexBinary) {
-            let mut out = String::new();
-            datatype::hex_binary_upper(bytes, &mut out);
-            return Ok(Some(out));
-        }
-    }
-    lexical(v)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- storage_class_code -----------------------------------------------
-
-    #[test]
-    fn storage_class_code_integer_maps_to_xsd_integer() {
-        assert_eq!(
-            storage_class_code(&ValueRef::Integer(42)),
-            Some(XsdTypeCode::Integer)
-        );
-    }
-
-    #[test]
-    fn storage_class_code_real_maps_to_xsd_double() {
-        assert_eq!(
-            storage_class_code(&ValueRef::Real(1.5)),
-            Some(XsdTypeCode::Double)
-        );
-    }
-
-    #[test]
-    fn storage_class_code_blob_maps_to_hex_binary() {
-        assert_eq!(
-            storage_class_code(&ValueRef::Blob(&[1, 2, 3])),
-            Some(XsdTypeCode::HexBinary)
-        );
-    }
-
-    #[test]
-    fn storage_class_code_text_and_null_carry_no_implied_type() {
-        assert_eq!(storage_class_code(&ValueRef::Text(b"hi")), None);
-        assert_eq!(storage_class_code(&ValueRef::Null), None);
-    }
 
     // --- char_pad_len -------------------------------------------------------
 
@@ -419,81 +336,5 @@ mod tests {
         assert_eq!(char_pad_len("CHAR"), None); // no parens at all
         assert_eq!(char_pad_len("CHAR()"), None); // empty parens
         assert_eq!(char_pad_len("TEXT"), None);
-    }
-
-    // --- lexical --------------------------------------------------------------
-
-    #[test]
-    fn lexical_null_is_none() {
-        assert_eq!(lexical(ValueRef::Null).unwrap(), None);
-    }
-
-    #[test]
-    fn lexical_integer_and_real_render_via_to_string() {
-        assert_eq!(lexical(ValueRef::Integer(7)).unwrap(), Some("7".to_owned()));
-        assert_eq!(
-            lexical(ValueRef::Real(1.5)).unwrap(),
-            Some("1.5".to_owned())
-        );
-    }
-
-    #[test]
-    fn lexical_valid_utf8_text_passes_through() {
-        assert_eq!(
-            lexical(ValueRef::Text(b"hello")).unwrap(),
-            Some("hello".to_owned())
-        );
-    }
-
-    #[test]
-    fn lexical_non_utf8_text_is_a_hard_marshal_error() {
-        let invalid = &[0xff, 0xfe][..];
-        let err = lexical(ValueRef::Text(invalid)).unwrap_err();
-        assert!(
-            matches!(err, Error::Marshal(_)),
-            "expected Marshal, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn lexical_bare_blob_is_a_hard_marshal_error() {
-        // lexical() (unlike lexical_typed()) has no target-type context, so it
-        // can never soundly decide a BLOB is hexBinary — always errors.
-        let err = lexical(ValueRef::Blob(&[1, 2, 3])).unwrap_err();
-        assert!(
-            matches!(err, Error::Marshal(_)),
-            "expected Marshal, got {err:?}"
-        );
-    }
-
-    // --- lexical_typed --------------------------------------------------------
-
-    #[test]
-    fn lexical_typed_blob_with_hexbinary_target_encodes_uppercase_hex() {
-        let out = lexical_typed(
-            ValueRef::Blob(&[0xde, 0xad, 0xbe, 0xef]),
-            Some(XsdTypeCode::HexBinary),
-        )
-        .unwrap();
-        assert_eq!(out, Some("DEADBEEF".to_owned()));
-    }
-
-    #[test]
-    fn lexical_typed_blob_without_hexbinary_target_still_errors() {
-        // A BLOB feeding a non-hexBinary-typed column (or no declared type) has
-        // no sound rendering — falls through to lexical()'s hard error.
-        let err = lexical_typed(ValueRef::Blob(&[1, 2, 3]), None).unwrap_err();
-        assert!(matches!(err, Error::Marshal(_)));
-        let err2 =
-            lexical_typed(ValueRef::Blob(&[1, 2, 3]), Some(XsdTypeCode::String)).unwrap_err();
-        assert!(matches!(err2, Error::Marshal(_)));
-    }
-
-    #[test]
-    fn lexical_typed_non_blob_delegates_to_lexical_regardless_of_code() {
-        assert_eq!(
-            lexical_typed(ValueRef::Integer(9), Some(XsdTypeCode::HexBinary)).unwrap(),
-            Some("9".to_owned())
-        );
     }
 }

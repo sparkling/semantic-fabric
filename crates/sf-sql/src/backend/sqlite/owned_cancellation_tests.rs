@@ -416,3 +416,41 @@ async fn checkpoint_runs_before_clean_eof() {
     assert_control_error(error, QueryControlError::Cancelled);
     assert_eq!(recorder.last(), Some(SqliteCancellationEvent::BeforeEof));
 }
+
+/// Real owned-worker-thread evidence that row decoding itself (not any SQL-level
+/// UDF's own separate charge) is charged against the backend's control: a bare
+/// `SELECT -0.0` exercises `decode::row`'s Real-value bound (327) directly.
+/// Manually reverted (worker's `decode::row` call passed `SourceWork::new(None)`
+/// instead of the real control) and confirmed both boundaries below fail for the
+/// wrong reason (cap-1 succeeds; exact cap under-reports `consumed`), then
+/// restored, as part of this change's review.
+#[tokio::test]
+async fn owned_worker_charges_row_decoding_against_the_supplied_control() {
+    // 450 is the exact measured SourceWork cost of opening the branch (real,
+    // control-threaded `column_meta` preparation) plus decoding this one Real
+    // row (`decode::row`'s row/code-vector admission, per-cell visit, and the
+    // 327-unit Real bound) -- unlike `SqliteBackend::open_branch`, which never
+    // threads a control into `column_meta` at all.
+    let units = 450u64;
+    for cap in [units - 1, units] {
+        let control = Arc::new(QueryBudget::new(QueryLimits::new(
+            u64::MAX,
+            cap,
+            u64::MAX,
+            u64::MAX,
+        )));
+        let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let mut backend = SqliteOwnedBackend::new_controlled(conn, control.clone());
+        let mut rows = backend.open_branch("SELECT -0.0", &[]).await.unwrap();
+        let result = rows.next_row().await;
+        if cap == units {
+            assert!(result.unwrap().is_some());
+            assert_eq!(control.consumed(QueryCharge::SourceWork), units);
+        } else {
+            assert!(matches!(
+                result,
+                Err(Error::QueryControl(QueryControlError::SourceWorkExceeded))
+            ));
+        }
+    }
+}

@@ -151,7 +151,12 @@ fn lexical_callback_does_not_replace_application_callbacks() {
 
 #[tokio::test]
 async fn owned_lexical_budget_and_drop_release_callback_and_request() {
-    for work in [31, 1000] {
+    // 1027 is the exact measured SourceWork cost of draining both SQL rows
+    // (the lexical UDF's own internal charge plus marshal_row's per-cell
+    // charge when the resulting row is read back); 31 stays well under the
+    // first row's cost alone and must still refuse before any row is
+    // returned.
+    for work in [31, 1027] {
         for drain in [false, true] {
             let owned = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
             let budget = Arc::new(QueryBudget::new(QueryLimits::new(

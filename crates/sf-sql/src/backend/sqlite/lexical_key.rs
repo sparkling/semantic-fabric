@@ -70,7 +70,7 @@ pub(super) fn evaluate(
             )?;
         }
         let effective = code
-            .or_else(|| super::storage_class_code(&args.get_raw(0)))
+            .or_else(|| super::decode::storage_class_code(&args.get_raw(0)))
             .unwrap_or(XsdTypeCode::String);
         let mut canonical = String::new();
         sf_core::datatype::natural_lexical(&value, effective, &mut canonical)
@@ -96,6 +96,10 @@ pub(super) fn lexical(
         let input = match value {
             ValueRef::Text(bytes) => bytes.len(),
             ValueRef::Blob(bytes) => bytes.len().checked_mul(2).ok_or_else(exceeded)?,
+            // f64::to_string()'s exact worst case (signed subnormal near zero,
+            // e.g. -5e-324), not the 32-byte catch-all below, which undercharges
+            // by ~10x.
+            ValueRef::Real(_) => 327,
             _ => 32,
         };
         control.consume(
@@ -105,8 +109,11 @@ pub(super) fn lexical(
     }
     let code = decode
         .declared
-        .or_else(|| super::storage_class_code(&value));
-    let result = super::lexical_typed(value, code)?;
+        .or_else(|| super::decode::storage_class_code(&value));
+    // Already charged above (this function's own bound), so pass an
+    // uncontrolled SourceWork here to avoid double-charging.
+    let result =
+        super::decode::lexical_typed(value, code, crate::source_work::SourceWork::new(None))?;
     if let Some(control) = control {
         control.checkpoint()?;
     }

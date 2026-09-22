@@ -8,11 +8,12 @@ use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
+use crate::source_work::SourceWork;
 
 use super::cancellation::{
     SqliteCancellationEvent, SqliteCancellationGuard, SqliteCancellationObserver,
 };
-use super::{column_meta, marshal_row};
+use super::{column_meta, decode};
 
 #[cfg(test)]
 #[path = "owned_admission_tests.rs"]
@@ -176,8 +177,7 @@ fn send_error(
     control: Option<&dyn QueryControl>,
     error: Error,
 ) {
-    // Preserve an already-classified driver/marshalling error. The checkpoint is
-    // still mandatory immediately before every potentially blocking send.
+    // Preserve an already-classified error; checkpoint stays mandatory before send.
     if let Some(control) = control {
         let _ = control.checkpoint();
     }
@@ -251,8 +251,7 @@ impl SqlBackend for SqliteOwnedBackend {
         let operation = self.generation.as_ref().map(|g| g.register()).transpose()?;
         let control = self.control.clone();
         let observer = self.observer.clone();
-        let probe_sql =
-            crate::source_work::SourceWork::new(control.as_deref()).string(probe_sql)?;
+        let probe_sql = SourceWork::new(control.as_deref()).string(probe_sql)?;
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
             let _operation = operation;
@@ -444,7 +443,8 @@ impl SqlBackend for SqliteOwnedBackend {
             loop {
                 match rows.next() {
                     Ok(Some(row)) => {
-                        let item = marshal_row(row, &decl_codes, &pads, nproj);
+                        let work = SourceWork::new(control.as_deref());
+                        let item = decode::row(row, &decl_codes, &pads, nproj, work);
                         observer.observe(SqliteCancellationEvent::BeforeRowSend);
                         let checkpoint = control.as_ref().map(|control| control.checkpoint());
                         let item = match (item, checkpoint) {
