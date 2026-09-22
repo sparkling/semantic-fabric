@@ -187,13 +187,18 @@ async fn ref_atom_source_work(query: &str) -> u64 {
 /// Pins `ref_atom.rs`'s own single call site that passes `work` into
 /// `literal_roles::resolved_controlled`, distinct from the callee's own
 /// exact/scaling tests in `literal_roles.rs`. The exact total below was
-/// measured with the real call in place, then re-measured (46139, a 1332-unit
+/// measured with the real call in place, then re-measured (48037, a 1332-unit
 /// drop) after temporarily changing that one call's `work` argument to
 /// `SourceWork::new(None)` and restoring it — proving this assertion would
 /// fail if that specific call site regressed, not just that some SourceWork
 /// is charged somewhere in a reference-atom join.
+///
+/// Re-pinned 2026-09-23 from 47471 (drop to 46139): `0f23b44f` moved
+/// condition rendering into `emit/condition_control.rs` with prepaid per-node
+/// charges, adding 1898 legitimate units to this query. The call-site delta is
+/// unchanged at 1332, so this still isolates the same call.
 #[tokio::test]
 async fn resolved_controlled_call_site_in_ref_atom_sql_is_pinned() {
     let total = ref_atom_source_work("SELECT ?o WHERE { ?s <http://example.test/edge> ?o }").await;
-    assert_eq!(total, 47471);
+    assert_eq!(total, 49369);
 }
