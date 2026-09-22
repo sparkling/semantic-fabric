@@ -174,8 +174,8 @@ mechanical work, Terra medium for patterns, Sol medium for implementation, Sol
 high for a correctness proof, Astra high for difficult work. Default Claude
 routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
 may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
-Fable is the bounded escalation (ADR-0055) and, like Astra max, requires an
-explicit `requested` route. These are explicit project policy, not learned
+Opus high is the bounded top-tier escalation (ADR-0055; it replaced Fable on
+2026-09-23) and, like Astra max, requires an explicit `requested` route. These are explicit project policy, not learned
 quality estimates. **Claude-only build (2026-09-22 user correction, Codex
 paused):** the host is `claude-code` for both implementation and review;
 review defaults to a second Claude Code executor at the normal implementation

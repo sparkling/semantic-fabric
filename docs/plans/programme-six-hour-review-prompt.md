@@ -90,7 +90,8 @@ This target never truncates necessary implementation or correctness checks.
    Haiku for mechanical work, Sonnet for established patterns and normal
    implementation/bounded review; Sonnet high for a specific correctness
    proof. Escalate to Opus only for a named unresolved cross-component
-   problem. Fable needs a bounded hard task; Codex-only ultra-tier effort is
+   problem; Opus high is the top Claude tier for a bounded hard task (Fable
+   is no longer routed, 2026-09-23). Codex-only ultra-tier effort is
    unavailable while Codex is paused (2026-09-22). Route each next task
    afresh; stop escalations when their question is answered.
    Keep the writer/reviewer pair as two distinct Claude Code executor

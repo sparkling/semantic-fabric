@@ -57,7 +57,7 @@ describe('mandatory main-only delivery harness', () => {
     expect(selectDeliveryRoute({ ...task, taskClass: 'correctness' }).effort).toBe('high');
     expect(selectDeliveryRoute({ ...task, host: 'claude-code' })).toEqual({ host: 'claude-code', model: 'sonnet', effort: 'default' });
     const claude = { ...task, host: 'claude-code' as const, selectionReason: 'main session' };
-    expect(selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'fable', effort: 'xhigh' } }).effort).toBe('xhigh');
+    expect(selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'opus', effort: 'xhigh' } }).effort).toBe('xhigh');
     expect(() => selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'opus', effort: 'ultra' }, explicitUltra: true })).toThrow('EFFORT_NOT_NATIVE');
     expect(() => selectDeliveryRoute({ ...task, preserveMainModel: true })).toThrow('CURRENT_MAIN_ROUTE_REQUIRED');
     const explicit = { ...task, requested: { host: 'codex' as const, model: 'gpt-6-astra', effort: 'ultra' as const }, selectionReason: 'named problem' };

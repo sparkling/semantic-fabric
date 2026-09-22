@@ -116,7 +116,8 @@ Preserve the selected main model and explicitly requested routes. Claude default
 use native default effort unless a task explicitly specifies supported effort.
 Escalate for a demonstrated reasoning gap or unresolved high-impact question;
 return descendant tasks to their own appropriate tier once it is answered.
-Exceptional max/Fable use needs a bounded justification; ultra needs an explicit
+Exceptional max or top-tier Opus high use (Opus replaced Fable, 2026-09-23)
+needs a bounded justification; ultra needs an explicit
 user request. Transport/configuration failures are not reasoning failures.
 
 Send relevant source and concise context rather than full conversation history.

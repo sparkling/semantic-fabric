@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-19
+updated: 2026-09-23
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -402,10 +402,10 @@ unresolved defect, not accumulated context or reviewer habit. This is a routing 
 | Established-pattern implementation | Sonnet native default; no competing integration writer (historical: Terra medium) |
 | Normal implementation, test repair and bounded review | Sonnet native default; Sonnet high for a specific correctness proof (historical: Sol medium/high) |
 | Difficult cross-component reasoning/review | Opus only with an identified uncertainty the normal tier cannot resolve (historical: Astra high) |
-| Hard unresolved semantics, concurrency or integration | Fable for a bounded escalation with its own acceptance check (historical: Astra max) |
+| Hard unresolved semantics, concurrency or integration | Opus high for a bounded escalation with its own acceptance check (Fable before 2026-09-23; historical: Astra max) |
 | Ultra | Codex-only; unavailable while Codex is paused |
 
-Select effort explicitly at assignment; omission uses the native default. An escalation records the failing behavior or unresolved proof, owner and focused check; stop it when answered and route the next task afresh. Keep prompts limited to the relevant delta and acceptance criteria. Do not run duplicate reviews or assign models to deterministic polling, Git or test execution. Claude Code's native subscription transport in this repository runs through the user-authorized local `9router` gateway already configured in `~/.claude/settings.json`; this is a transport substitution, not a provider-API-key exception.
+Select effort explicitly at assignment; omission uses the native default. Since 2026-09-23 Fable is no longer routed and Opus high is the top Claude tier; routing code already sent `difficult` Claude tasks to Opus and never named Fable, so that correction changed policy text only. An escalation records the failing behavior or unresolved proof, owner and focused check; stop it when answered and route the next task afresh. Keep prompts limited to the relevant delta and acceptance criteria. Do not run duplicate reviews or assign models to deterministic polling, Git or test execution. Claude Code's native subscription transport in this repository runs through the user-authorized local `9router` gateway already configured in `~/.claude/settings.json`; this is a transport substitution, not a provider-API-key exception.
 
 Observed programme delta: the existing V5/V6 harness and gate-contract defaults already name Sol/Sonnet, but successive live native numeric assignments reused Astra Ultra; its difficult rounding proof was useful, but continued bounded follow-up did not justify retaining Ultra by default. On 2026-09-10 the user requested faster allocation: the Ultra reviewer was stopped and the remaining identity review assigned to native Sol high. The available history lacks comparable per-model integration timings; no speedup, cost saving or programme ETA is inferred.
 

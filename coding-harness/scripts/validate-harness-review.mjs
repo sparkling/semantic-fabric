@@ -51,7 +51,7 @@ if (mode === 'acceptance') {
   });
   check('review snapshot has model policy, limits and hold', () => {
     for (const text of ['Luna · low','Terra · medium','Sol · medium','Sol · high','Astra · high',
-      'Haiku','Sonnet','Opus','Fable','not cryptographic provider attestation',
+      'Haiku','Sonnet','Opus','not cryptographic provider attestation',
       'not a learned prediction','Application build remains paused','not been pushed']) assert(html.includes(text), text);
     assert.match(html, /color-scheme/); assert.match(html, /@media\(max-width:850px\)/);
   });

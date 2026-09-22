@@ -2,7 +2,7 @@
 
 - **Status:** In progress — ADR-0055 v1 completion profile active
 - **Date:** 2026-08-26
-- **Updated:** 2026-09-12
+- **Updated:** 2026-09-23
 - **Controlling decision:** [ADR-0055](../adr/ADR-0055-v1-product-completion-and-release-profile.md) (accepted v1 profile)
 - **Historical programme:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md) (superseded; post-1.0 SOTA backlog retained)
 - **Supporting decisions:** [ADR-0037](../adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md), [ADR-0039](../adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](../adr/ADR-0040-bounded-federated-global-operators-and-spill.md), [ADR-0048](../adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md), [ADR-0049](../adr/ADR-0049-exact-recursive-property-path-fixed-points.md), [ADR-0050](../adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md), [ADR-0051](../adr/ADR-0051-postgresql-16-public-observed-schema-profile.md), [ADR-0052](../adr/ADR-0052-sparql-compilation-safety-envelope-and-versioned-logical-work-accounting.md), [ADR-0053](../adr/ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md), and [ADR-0054](../adr/ADR-0054-bounded-stable-root-order-windows.md)
@@ -442,7 +442,7 @@ Ruflo records coordination and evidence identity; deterministic Rust tests and
 release checks remain product authority. Native subscription transport only is
 permitted; OpenRouter and provider API-key fallback remain prohibited. No subscription spend/token/request/invocation/quota ceiling is permitted.
 Native subscription/model unavailability pauses execution with its exact error.
-**Model correction (2026-09-10; Claude-only 2026-09-22, Codex paused):** repeated Ultra follow-up is no longer the default, and Ultra itself is Codex-only and unavailable while Codex is paused. Ordinary tools handle Git/build/test/polling; Haiku handles bounded mechanical tasks, Sonnet handles established patterns and normal implementation/review, Sonnet high the current bounded identity proof (historical Codex equivalents: Luna low, Terra medium, Sol medium/high). Escalate to Opus only for a named unresolved cross-component problem; Fable needs a bounded exceptional task. Retain the selected main model and explicit requested effort. Once a hard question is answered, route subsequent tasks afresh rather than keeping its strongest reviewer. ADR-0055 records the policy and qualification boundary.
+**Model correction (2026-09-10; Claude-only 2026-09-22, Codex paused):** repeated Ultra follow-up is no longer the default, and Ultra itself is Codex-only and unavailable while Codex is paused. Ordinary tools handle Git/build/test/polling; Haiku handles bounded mechanical tasks, Sonnet handles established patterns and normal implementation/review, Sonnet high the current bounded identity proof (historical Codex equivalents: Luna low, Terra medium, Sol medium/high). Escalate to Opus only for a named unresolved cross-component problem; Opus high is the top Claude tier for a bounded exceptional task (Fable is no longer routed, 2026-09-23). Retain the selected main model and explicit requested effort. Once a hard question is answered, route subsequent tasks afresh rather than keeping its strongest reviewer. ADR-0055 records the policy and qualification boundary.
 
 Historical harness receipts remain valid for their exact claims. MetaHarness V7,
 Darwin/GEPA, AVO, generic score improvement and retrieval-policy evolution are
