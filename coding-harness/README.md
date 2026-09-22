@@ -18,19 +18,25 @@ publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 
 ### Native parallel execution
 
-The programme coordinator is native Codex `gpt-6-astra` at `xhigh` effort,
-configured in `.agents/config.toml` and required by `AGENTS.md`. When resuming
-the existing conversation explicitly, use
-`codex --model gpt-6-astra -c model_reasoning_effort=xhigh resume <UUID>`.
-Configuration edits do not change a running host: bind its observed model/effort
-only after the host adopts the selection. Worker/reviewer routes remain task-specific.
+**Claude-only build (2026-09-22 user correction, Codex paused):** the
+programme coordinator is Claude Code at Sonnet high effort, using the
+user-authorized local `9router` subscription transport already configured in
+`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`,
+`cc/claude-*` aliases) — a native-subscription transport substitution, not a
+provider-API-key exception. `.agents/config.toml`'s Codex `gpt-6-astra`
+`xhigh` coordinator entry is historical/dormant while Codex is paused; do not
+resume it or `codex --model gpt-6-astra ... resume <UUID>` without explicit
+user re-authorization. Worker/reviewer routes remain task-specific, all on
+`claude-code`.
 
-The operating plan is [native parallel execution](../docs/plans/native-parallel-execution-plan.md).
-The existing native conversation coordinates and remains the sole integration
-writer. There is no repository-wide native session cap or new scheduler.
-Independent Codex/Claude sessions may investigate ready tasks concurrently;
-native per-session subagent limits still apply. `.agents/config.toml` does not
-set native session capacity. The delivery CLI returns requests, not workers.
+The operating plan is [native parallel execution](../docs/plans/native-parallel-execution-plan.md),
+whose per-task tables predate this pause and are read as historical
+Codex/Claude comparison evidence, not a currently active Codex dispatch
+instruction. The existing native conversation coordinates and remains the sole
+integration writer. There is no repository-wide native session cap or new
+scheduler. Independent Claude sessions may investigate ready tasks
+concurrently; native per-session subagent limits still apply. The delivery CLI
+returns requests, not workers.
 
 Before dispatch, record dependencies, source revision, owned scope, read-only
 status, deliverable, acceptance checks, native model/effort and result recipient
@@ -170,12 +176,24 @@ routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
 may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
 Fable is the bounded escalation (ADR-0055) and, like Astra max, requires an
 explicit `requested` route. These are explicit project policy, not learned
-quality estimates. The selected host writes; review defaults to the other native
-provider at the normal implementation tier (Codex Sol medium or Claude Sonnet
-native default). An explicit `reviewer` route must remain cross-provider. If
-either required subscription is unavailable, pause with the exact native error;
-never replace the missing review with a same-provider reviewer, keys or another
-provider. `requested: {host, model, effort}` plus
+quality estimates. **Claude-only build (2026-09-22 user correction, Codex
+paused):** the host is `claude-code` for both implementation and review;
+review defaults to a second Claude Code executor at the normal implementation
+tier (Sonnet native default), using a distinct `executorId` from every
+implementation handoff (`DELIVERY_INDEPENDENT_REVIEW_REQUIRED` rejects a
+repeated executor). An explicit `reviewer` route may name a stronger Claude
+route (e.g. Opus, or Sonnet high) but stays on `claude-code` while Codex is
+paused. Claude Code's native subscription transport for this repository runs
+through the user-authorized local `9router` gateway already configured in
+`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`,
+`cc/claude-*` model aliases); this is a native-subscription transport
+substitution, not a provider-API-key or OpenRouter exception, and that token
+must never be printed, logged, or committed. If the Claude subscription is
+unavailable, pause with the exact native error; never replace the missing
+review with keys or another provider. When Codex is re-authorized, its prior
+cross-provider-reviewer requirement (`DELIVERY_CROSS_HOST_REVIEW_REQUIRED`)
+governed here 2026-09-19 through 2026-09-22 and would need explicit
+reinstatement, not silent revival. `requested: {host, model, effort}` plus
 `selectionReason` preserves an explicit choice; `preserveMainModel: true`
 retains the active main model and requires its explicit `requested` route.
 Ultra otherwise requires `explicitUltra: true`.

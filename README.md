@@ -381,15 +381,21 @@ exist.
 ## Engineering MetaHarness status
 
 Native Codex/ChatGPT and Claude Code subscription agents perform the normal
-edit/test/inspect loop. One integration owner writes and commits on `main`;
-read-only investigation/review and compatible tests may run concurrently.
-Ruflo is accessed through structured MCP for useful coordination and individual
-memory updates; unavailable or malformed recall is not a delivery gate.
+edit/test/inspect loop. **Claude-only build (2026-09-22 user correction,
+Codex paused):** Claude Code is currently the sole executor and reviewer,
+via the user-authorized local 9router subscription transport already
+configured in `~/.claude/settings.json`; Codex is not dispatched for build
+or review until the user explicitly re-authorizes it. One integration owner
+writes and commits on `main`; read-only investigation/review and compatible
+tests may run concurrently. Ruflo is accessed through structured MCP for
+useful coordination and individual memory updates; unavailable or malformed
+recall is not a delivery gate.
 
 [ADR-0055](docs/adr/ADR-0055-v1-product-completion-and-release-profile.md) sets
-task-based model allocation and proportional verification. The adapter forwards
-explicit Codex effort unchanged, including Astra `max` and `ultra`; omission
-uses the native default. No provider API keys, OpenRouter or subscription
+task-based model allocation and proportional verification. While Codex is
+paused (2026-09-22), only `claude-code` routes are dispatched; the adapter's
+Codex-effort forwarding (including Astra `max` and `ultra`) is dormant
+capability, not active routing. No provider API keys, OpenRouter or subscription
 spend/token/request/invocation/quota ceilings are permitted. Native subscription
 or requested-model failure is reported, not silently routed around.
 

@@ -69,10 +69,12 @@ This target never truncates necessary implementation or correctness checks.
 
 6. Choose one primary implementation outcome and at most two independent
    supporting outcomes. State owner, dependency, next action, observable
-   acceptance test and what is intentionally outside that slice. Native Codex
-   and Claude subscription agents execute through the mandatory main-only
-   delivery harness (coding-harness/README.md): the selected host writes and the
-   other native provider reviews. Ruflo MCP coordinates and records.
+   acceptance test and what is intentionally outside that slice. Claude Code
+   subscription agents execute through the mandatory main-only delivery
+   harness (coding-harness/README.md), via the user-authorized local 9router
+   transport: the host writes and a second, distinct Claude Code executor
+   identity reviews. Codex is paused (2026-09-22 user correction) and is not
+   dispatched for build or review. Ruflo MCP coordinates and records.
    Audit prerequisite test callsites before freezing scope. Group compatible work
    by whole phase/public outcome, not one task per helper. Preserve precise negative
    cutpoints and unchanged default-admitted queries; no weakened controls for speed.
@@ -85,14 +87,15 @@ This target never truncates necessary implementation or correctness checks.
    and the current scope authorizes it.
 
 7. Prefer faster supporting models: ordinary tools for deterministic work,
-   Luna low/Haiku for mechanical work, Terra medium for established patterns,
-   Sol medium/Sonnet for normal implementation and bounded review; Sol high
-   for a specific correctness proof. Escalate to Astra high/Opus only for a
-   named unresolved cross-component problem. Max/Fable needs a bounded hard
-   task; Ultra is not a routine worker and requires a specific user request.
-   Route each next task afresh; stop escalations when their question is answered.
-   Keep the writer/reviewer pair cross-provider; if either required subscription
-   is unavailable, pause and report its exact native client/model error.
+   Haiku for mechanical work, Sonnet for established patterns and normal
+   implementation/bounded review; Sonnet high for a specific correctness
+   proof. Escalate to Opus only for a named unresolved cross-component
+   problem. Fable needs a bounded hard task; Codex-only ultra-tier effort is
+   unavailable while Codex is paused (2026-09-22). Route each next task
+   afresh; stop escalations when their question is answered.
+   Keep the writer/reviewer pair as two distinct Claude Code executor
+   identities while Codex is paused; if the required subscription is
+   unavailable, pause and report its exact native client/model error.
    Retain the selected main model and explicit requested effort; never clamp. Measure
    verified integrated outcomes, elapsed time and rework, not invented savings.
    Use no subscription spend/token/request/quota ceilings and no API keys or

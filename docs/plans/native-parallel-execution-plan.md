@@ -1,7 +1,15 @@
 # Native parallel execution and model usage
 
-Date: 2026-09-19. Updated: 2026-09-20. Status: execution authorized by the user's
-goal "complete the programme using the harness"; G3 work is active.
+Date: 2026-09-19. Updated: 2026-09-20. **2026-09-22 correction: Codex is
+paused (user instruction; application work also remains paused).** The
+coordinator and every worker/reviewer route below is Claude Code, via the
+user-authorized local 9router subscription transport, until the user
+explicitly re-authorizes Codex. Everything below that names Codex, `codex
+exec`, or a Codex model tier is historical evidence from the dual-provider
+period (2026-09-19 through 2026-09-22) and comparison data, not a currently
+active dispatch instruction; do not launch a Codex process from this plan.
+Status: execution authorized by the user's goal "complete the programme using
+the harness"; G3 work is active, subject to the separate 2026-09-22 pause.
 Scope: native Codex/ChatGPT and Claude subscription agents, using the existing
 delivery harness. Based on the three-worker design discussion in Ruflo swarm
 `swarm-1789853768325-0ps4xv` and repository evidence through `f2d2a469`.
