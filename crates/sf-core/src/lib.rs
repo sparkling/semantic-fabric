@@ -41,6 +41,7 @@ pub mod schema;
 pub mod schema_identity;
 pub mod security_context;
 pub mod term;
+pub mod term_work;
 
 pub use affinity::{SourceId, SourceIdError, SourceMapping};
 pub use schema::{Column, ForeignKey, FunctionalDep, SideStats, TableSchema};
@@ -60,6 +61,11 @@ pub enum Error {
     /// A value could not be cast to its target XSD datatype (R2RML §10).
     #[error("datatype error: {0}")]
     Datatype(String),
+    /// The governing request became terminal (budget, deadline, cancellation)
+    /// during term generation. Carries the control's own sticky cause, so an
+    /// in-row stop stays distinguishable from a mapping or data error.
+    #[error(transparent)]
+    Control(#[from] query_control::QueryControlError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

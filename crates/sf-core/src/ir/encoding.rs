@@ -22,6 +22,12 @@ pub const UCSCHAR_RANGES: &[(u32, u32)] = &[
     (0xE1000, 0xEFFFD),
 ];
 
+/// The worst-case encoded width of one source byte: a byte outside
+/// `iunreserved` becomes `%XX`, three output bytes. No input can exceed this,
+/// so `value.len() * 3` is a sound prepaid bound on [`percent_encode_iri`]'s
+/// output growth for a caller charging before it encodes.
+pub const PERCENT_ENCODED_WORST_CASE_WIDTH: usize = 3;
+
 /// Append the R2RML IRI-safe form, escaping UTF-8 bytes outside `iunreserved`.
 /// The caller owns/clears `out`; fixed mapping slugs and row substitutions use
 /// this same function. This encodes a component, not a complete IRI.

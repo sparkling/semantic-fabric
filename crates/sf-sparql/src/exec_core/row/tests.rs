@@ -330,14 +330,19 @@ fn explicit_matching_datatype_uses_the_resolved_natural_constructor() {
             "value".into(),
             TermSpec::typed_literal(code.iri().into_owned()),
         );
-        let term = derived_term(&term_map, 0, &raw).unwrap().unwrap();
+        let term = derived_term(&term_map, 0, &raw, TermWork::uncontrolled())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             term,
             Term::Literal(Literal::new_typed_literal(expected, code.iri())),
             "{code:?}"
         );
         let natural = TermMap::Column("value".into(), TermSpec::plain_literal());
-        assert_eq!(derived_term(&natural, 0, &raw).unwrap(), Some(term));
+        assert_eq!(
+            derived_term(&natural, 0, &raw, TermWork::uncontrolled()).unwrap(),
+            Some(term)
+        );
     }
 }
 
@@ -358,6 +363,7 @@ fn blank(graph: R2rmlGraphScope, graph_value: &str) -> Term {
             graph,
         },
         &raw,
+        TermWork::uncontrolled(),
     )
     .unwrap()
     .unwrap()
@@ -413,7 +419,9 @@ fn explicit_rr_datatype_overrides_compatibility_type_for_value_two() {
         TermSpec::typed_literal(sf_core::NamedNode::from(sf_core::vocab::xsd::INTEGER)),
     );
 
-    let term = derived_term(&term_map, 0, &raw).unwrap().unwrap();
+    let term = derived_term(&term_map, 0, &raw, TermWork::uncontrolled())
+        .unwrap()
+        .unwrap();
     let Term::Literal(literal) = term else {
         panic!("explicit rr:datatype did not produce a literal");
     };
@@ -437,7 +445,9 @@ fn explicit_rr_datetime_preserves_adapter_canonical_lexical_form() {
         TermSpec::typed_literal(sf_core::NamedNode::from(sf_core::vocab::xsd::DATE_TIME)),
     );
 
-    let term = derived_term(&term_map, 0, &raw).unwrap().unwrap();
+    let term = derived_term(&term_map, 0, &raw, TermWork::uncontrolled())
+        .unwrap()
+        .unwrap();
     let Term::Literal(literal) = term else {
         panic!("explicit rr:datatype did not produce a literal");
     };

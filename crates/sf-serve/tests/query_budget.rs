@@ -32,6 +32,9 @@ mod null_terms;
 mod ordinary_identity;
 #[path = "query_budget/path_identity.rs"]
 mod path_identity;
+
+#[path = "query_budget/reconstruction.rs"]
+mod reconstruction;
 mod support;
 
 const TOKEN: &str = "test-only-compiler-budget-credential-123456";

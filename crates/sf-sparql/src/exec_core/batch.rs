@@ -175,6 +175,15 @@ pub(super) const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 /// construction (ADR-0006 pool separation), since it is a wholly different set
 /// of OS threads.
 ///
+/// Charging: `work` is one request-scoped control shared by every chunk.
+/// `QueryBudget::consume` commits through an atomic CAS loop, and each row's
+/// charge is independent of the order rows are visited in, so a batch
+/// reconstructed in parallel chunks accrues exactly the same total as the
+/// sequential pass — `parallel_allowed` changes throughput, never accounting.
+/// A row whose charge is refused fails that row (its `Err` keeps the refusing
+/// row's position); the control's terminal cause is sticky, so every later row
+/// in the batch observes it too.
+///
 /// Ordering: `par_chunks` is an `IndexedParallelIterator`, so mapping each chunk
 /// to its own `Vec` and collecting preserves chunk order exactly; flattening
 /// those chunk-`Vec`s then reproduces the sequential per-row order with no extra
@@ -188,6 +197,7 @@ pub(super) fn reconstruct_batch(
     batch: &[RawTuple],
     col_index: &ColIndex<'_>,
     parallel_allowed: bool,
+    work: TermWork<'_>,
 ) -> Vec<Result<Bindings>> {
     let one_row = |t: &RawTuple| {
         let raw = RawRow {
@@ -195,7 +205,7 @@ pub(super) fn reconstruct_batch(
             codes: &t.codes,
             index: col_index,
         };
-        reconstruct(interned, &raw)
+        reconstruct_controlled(interned, &raw, work)
     };
     if !parallel_allowed || batch.len() < TERM_GEN_MIN_PARALLEL_ROWS {
         return batch.iter().map(one_row).collect();
@@ -215,4 +225,5 @@ use sf_sql::RawTuple;
 
 use crate::Result;
 
-use super::row::{reconstruct, Bindings, ColIndex, InternedBindings, RawRow};
+use super::row::{reconstruct_controlled, Bindings, ColIndex, InternedBindings, RawRow};
+use sf_core::term_work::TermWork;

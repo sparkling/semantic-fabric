@@ -170,6 +170,35 @@ fn preparation_work(plan: &Plan) -> u64 {
     control.consumed(QueryCharge::SourceWork)
 }
 
+/// The SourceWork ONE reconstructed row of `column_branch`'s single `?v`
+/// binding costs, measured against an unbounded control rather than restated as
+/// a literal: `reconstruct_controlled` charges a per-row checkpoint, one unit
+/// per candidate binding, and the generated term's own width. The tests below
+/// pin `preparation_work + pulls + rows * reconstruction_work(..)`, so they
+/// stay exact boundaries while remaining readable as "setup, pulls, rows".
+fn reconstruction_work(plan: &Plan, alias: usize, value: &str) -> u64 {
+    let control = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let branch = &plan.branches[0];
+    let work = sf_sql::source_work::SourceWork::new(Some(&control));
+    let interned = super::row::intern_bindings_controlled(branch, work).unwrap();
+    let before = control.consumed(QueryCharge::SourceWork);
+    let schema = vec![crate::iq::ColRef::new(alias, "value")];
+    let col_index = super::row::build_col_index(&schema);
+    let tuple = row(value);
+    let raw = super::row::RawRow {
+        values: &tuple.values,
+        codes: &tuple.codes,
+        index: &col_index,
+    };
+    super::row::reconstruct_controlled(
+        &interned,
+        &raw,
+        sf_core::term_work::TermWork::new(Some(&control)),
+    )
+    .unwrap();
+    control.consumed(QueryCharge::SourceWork) - before
+}
+
 #[test]
 fn zero_source_budget_rejects_before_metadata_or_branch_io() {
     let plan = plan(
@@ -212,7 +241,12 @@ fn offset_discarded_rows_charge_every_pull_attempt() {
     );
     plan.offset = usize::MAX;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")], Vec::new()]);
-    let source = preparation_work(&plan) + 7;
+    // Both rows are reconstructed before OFFSET discards them (reconstruction
+    // precedes slicing), so their term-generation work is charged too.
+    let source = preparation_work(&plan)
+        + 7
+        + reconstruction_work(&plan, 0, "one")
+        + reconstruction_work(&plan, 0, "two");
     let budget = QueryBudget::new(QueryLimits::new(u64::MAX, source, 0, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
@@ -242,9 +276,16 @@ fn select_result_budget_rejects_before_over_limit_sink() {
         vec![column_branch(0)],
     );
     let (mut backend, _) = backend(vec![vec![row("one"), row("two"), row("three")]]);
+    // The whole first batch is reconstructed before the per-row sink runs, so
+    // all three rows' term work is charged even though the result-item limit
+    // cuts the sink at two.
     let budget = QueryBudget::new(QueryLimits::new(
         u64::MAX,
-        preparation_work(&plan) + 10,
+        preparation_work(&plan)
+            + 10
+            + reconstruction_work(&plan, 0, "one")
+            + reconstruction_work(&plan, 0, "two")
+            + reconstruction_work(&plan, 0, "three"),
         2,
         u64::MAX,
     ));
@@ -291,8 +332,13 @@ fn ordered_retained_payload_has_an_exact_typed_high_water_limit() {
     let exact = expected.retained_payload_bytes().unwrap();
 
     let (mut exact_backend, _) = backend(vec![vec![row("payload")]]);
-    let limits = QueryLimits::new(u64::MAX, preparation_work(&plan) + 10, 1, u64::MAX)
-        .with_max_retained_bytes(exact);
+    let limits = QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 10 + reconstruction_work(&plan, 0, "payload"),
+        1,
+        u64::MAX,
+    )
+    .with_max_retained_bytes(exact);
     let budget = QueryBudget::new(limits);
     super::block_on(select_each_async_controlled(
         &plan,
@@ -304,8 +350,15 @@ fn ordered_retained_payload_has_an_exact_typed_high_water_limit() {
     assert_eq!(budget.consumed(QueryCharge::RetainedBytes), exact);
 
     let (mut backend, _) = backend(vec![vec![row("payload")]]);
-    let limits = QueryLimits::new(u64::MAX, preparation_work(&plan) + 10, 1, u64::MAX)
-        .with_max_retained_bytes(exact - 1);
+    // Source work must still admit the row's reconstruction, so the retained
+    // limit is what this half proves, not an incidental source refusal.
+    let limits = QueryLimits::new(
+        u64::MAX,
+        preparation_work(&plan) + 10 + reconstruction_work(&plan, 0, "payload"),
+        1,
+        u64::MAX,
+    )
+    .with_max_retained_bytes(exact - 1);
     let budget = QueryBudget::new(limits);
     let error = super::block_on(select_each_async_controlled(
         &plan,
@@ -390,7 +443,9 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
 fn ask_stops_after_the_first_solution_and_its_pull() {
     let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let source = preparation_work(&plan) + 3;
+    // ASK pulls one row at a time and stops after the first solution, so
+    // exactly one row is ever reconstructed.
+    let source = preparation_work(&plan) + 3 + reconstruction_work(&plan, 0, "one");
     let budget = QueryBudget::new(QueryLimits::new(u64::MAX, source, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
@@ -409,19 +464,17 @@ fn ask_does_not_truncate_the_inner_rows_of_rust_group() {
         post_exprs: Vec::new(),
     });
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
-    let budget = QueryBudget::new(QueryLimits::new(
-        u64::MAX,
-        preparation_work(&plan) + 5,
-        1,
-        u64::MAX,
-    ));
+    // The grouped inner collection reconstructs every inner row before the
+    // outer ASK answers, so both rows' term work is charged.
+    let expected = preparation_work(&plan)
+        + 5
+        + reconstruction_work(&plan, 0, "one")
+        + reconstruction_work(&plan, 0, "two");
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, expected, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 3);
-    assert_eq!(
-        budget.consumed(QueryCharge::SourceWork),
-        preparation_work(&plan) + 5
-    );
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), expected);
 }
 
 #[test]
@@ -434,9 +487,14 @@ fn ask_ignores_order_but_still_applies_a_single_branch_offset() {
     }];
     plan.offset = 3;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
+    // Both rows are reconstructed before the offset discards them and the
+    // stream ends without a solution.
     let budget = QueryBudget::new(QueryLimits::new(
         u64::MAX,
-        preparation_work(&plan) + 5,
+        preparation_work(&plan)
+            + 5
+            + reconstruction_work(&plan, 0, "one")
+            + reconstruction_work(&plan, 0, "two"),
         1,
         u64::MAX,
     ));
@@ -455,9 +513,14 @@ fn ordered_ask_stops_after_the_first_post_offset_solution() {
     }];
     plan.offset = 1;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
+    // Two rows are reconstructed: the one the offset discards, and the first
+    // post-offset solution the ASK stops on.
     let budget = QueryBudget::new(QueryLimits::new(
         u64::MAX,
-        preparation_work(&plan) + 4,
+        preparation_work(&plan)
+            + 4
+            + reconstruction_work(&plan, 0, "one")
+            + reconstruction_work(&plan, 0, "two"),
         1,
         u64::MAX,
     ));

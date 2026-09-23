@@ -12,9 +12,11 @@
 
 use oxrdf::{NamedNode, Term};
 
+use crate::query_control::QueryControlError;
+use crate::term_work::TermWork;
 use crate::{Error, Result, Row};
 pub mod encoding;
-use encoding::percent_encode_iri;
+use encoding::{percent_encode_iri, PERCENT_ENCODED_WORST_CASE_WIDTH};
 
 /// One R2RML `rr:TriplesMap` (§6): one logical table, one subject, N
 /// predicate-object maps. Every row of the logical table is processed once.
@@ -311,18 +313,50 @@ impl Template {
     /// SQL `NULL`/absent (R2RML §6.4/§11: no value ⇒ no term). No allocation:
     /// fixed segments are pushed by reference, column values are written through.
     pub fn expand<R: Row + ?Sized>(&self, row: &R, encode_iri: bool, out: &mut String) -> bool {
+        self.expand_controlled(row, encode_iri, out, TermWork::uncontrolled())
+            .unwrap_or(false)
+    }
+
+    /// [`expand`](Self::expand) under a request's term-generation budget.
+    ///
+    /// Charges each segment's own output growth *before* producing it: a fixed
+    /// segment costs its byte length, a pass-through column value its own, and
+    /// an IRI-encoded value its worst-case encoded length (3 bytes per source
+    /// byte, the all-escaped bound — [`percent_encode_iri`] never exceeds it).
+    /// A template is the one reconstruction step whose output is not bounded by
+    /// its inputs alone, so the growth is prepaid rather than measured after the
+    /// fact. `Err` propagates the request's terminal cause; `Ok(false)` remains
+    /// the unchanged NULL/absent-column answer.
+    pub fn expand_controlled<R: Row + ?Sized>(
+        &self,
+        row: &R,
+        encode_iri: bool,
+        out: &mut String,
+        work: TermWork<'_>,
+    ) -> std::result::Result<bool, QueryControlError> {
         out.clear();
         for segment in &self.segments {
+            work.charge(1)?;
             match segment {
-                Segment::Literal(text) => out.push_str(text),
+                Segment::Literal(text) => {
+                    work.charge(text.len())?;
+                    out.push_str(text);
+                }
                 Segment::Column(column) => match row.value(column) {
-                    None => return false,
-                    Some(value) if encode_iri => percent_encode_iri(value, out),
-                    Some(value) => out.push_str(value),
+                    None => return Ok(false),
+                    Some(value) if encode_iri => {
+                        work.product(value.len(), PERCENT_ENCODED_WORST_CASE_WIDTH)?;
+                        percent_encode_iri(value, out);
+                    }
+                    Some(value) => {
+                        work.charge(value.len())?;
+                        out.push_str(value);
+                    }
                 },
             }
         }
-        true
+        work.checkpoint()?;
+        Ok(true)
     }
 }
 

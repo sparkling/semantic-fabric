@@ -7,6 +7,7 @@ use std::sync::Arc;
 use sf_core::query_control::{
     QueryCharge, QueryControl, QueryControlError, UncontrolledQueryControl,
 };
+use sf_core::term_work::TermWork;
 use sf_core::Term;
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 
@@ -344,8 +345,17 @@ where
             // Reconstruct before DISTINCT and slicing; release raw values before
             // the sink. Peak memory remains inside reconstruction, where both raw
             // and reconstructed batches coexist (see Bindings/TERM_GEN_BATCH_SIZE).
-            let reconstructed =
-                reconstruct_batch(&interned, &raw_batch, &col_index, ctx.parallel_term_gen);
+            // Term generation is charged per row against the same request
+            // control that admitted the source pull, so a batch cannot spend
+            // unbounded CPU/allocation past its budget, and a terminated
+            // request stops within the batch rather than at its end.
+            let reconstructed = reconstruct_batch(
+                &interned,
+                &raw_batch,
+                &col_index,
+                ctx.parallel_term_gen,
+                TermWork::new(Some(ctx.control)),
+            );
             drop(raw_batch);
             for bindings in reconstructed {
                 let bindings = bindings?;

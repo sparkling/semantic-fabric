@@ -19,6 +19,7 @@
 use oxrdf::{BlankNodeRef, LiteralRef, NamedNodeRef, Term};
 
 use crate::ir::{TermMap, TermSpec, TermType};
+use crate::term_work::TermWork;
 use crate::{Error, Result, Row};
 
 /// A generated RDF term, borrowing from the mapping IR, the source row, or the
@@ -31,6 +32,19 @@ pub enum GenTerm<'a> {
 }
 
 impl GenTerm<'_> {
+    /// The lexical width this term copies when owned: the bound a caller
+    /// charges before [`into_owned`](Self::into_owned) allocates. Literals
+    /// include their datatype/language tag, which is copied with the value.
+    pub fn lexical_width(self) -> usize {
+        match self {
+            GenTerm::NamedNode(n) => n.as_str().len(),
+            GenTerm::BlankNode(b) => b.as_str().len(),
+            GenTerm::Literal(l) => {
+                l.value().len() + l.language().map_or(0, str::len) + l.datatype().as_str().len()
+            }
+        }
+    }
+
     /// Copy into an owned `oxrdf::Term` (the SELECT / serialiser convenience).
     pub fn into_owned(self) -> Term {
         match self {
@@ -52,6 +66,26 @@ pub fn generate_into<'a, R: Row + ?Sized>(
     row: &'a R,
     buf: &'a mut String,
 ) -> Result<Option<GenTerm<'a>>> {
+    generate_into_controlled(term_map, row, buf, TermWork::uncontrolled())
+}
+
+/// [`generate_into`] under a request's term-generation budget.
+///
+/// Charges the work each arm actually performs, before performing it: a
+/// constant is a borrow (unit cost), a column value costs its own length, and a
+/// template delegates to [`Template::expand_controlled`], which prepays each
+/// segment's output growth. A terminal request surfaces as
+/// [`Error::Control`] — the same cause the caller's control already holds — so
+/// an in-row stop is not mistaken for a data error. Unbound/NULL still answers
+/// `Ok(None)` and every produced term is byte-identical to the uncontrolled
+/// path; this charges work, it does not change values.
+pub fn generate_into_controlled<'a, R: Row + ?Sized>(
+    term_map: &'a TermMap,
+    row: &'a R,
+    buf: &'a mut String,
+    work: TermWork<'_>,
+) -> Result<Option<GenTerm<'a>>> {
+    work.charge(1)?;
     match term_map {
         TermMap::Constant(term) => constant(term).map(Some),
         TermMap::Column(column, spec) => match row.value(column) {
@@ -59,14 +93,23 @@ pub fn generate_into<'a, R: Row + ?Sized>(
             // R2RML §11.2 prefixes relative IRI values with the processor base
             // and validates per row; other term types pass through.
             Some(value) if spec.term_type == TermType::Iri => {
+                // `column_iri` may write `base + value` through `buf`; charge
+                // that combined width before it is built.
+                work.charge(value.len())?;
+                work.charge(spec.base.as_deref().map_or(0, str::len))?;
                 column_iri(value, spec.base.as_deref(), buf).map(Some)
             }
-            Some(value) => Ok(Some(from_value(value, spec))),
+            Some(value) => {
+                work.charge(value.len())?;
+                Ok(Some(from_value(value, spec)))
+            }
         },
         TermMap::Template(template, spec) => {
-            if template.expand(row, spec.term_type == TermType::Iri, buf) {
+            if template.expand_controlled(row, spec.term_type == TermType::Iri, buf, work)? {
                 if spec.term_type == TermType::Iri {
                     if let Some(base) = spec.base.as_deref() {
+                        // `finalize_template_iri` may prefix the base in place.
+                        work.charge(base.len())?;
                         finalize_template_iri(buf, base)?;
                     }
                 }
@@ -128,8 +171,23 @@ pub fn column_iri<'a>(
 /// Owned convenience over [`generate_into`] (allocates; for SELECT / serialisers
 /// that require an `oxrdf::Term`).
 pub fn generate<R: Row + ?Sized>(term_map: &TermMap, row: &R) -> Result<Option<Term>> {
+    generate_controlled(term_map, row, TermWork::uncontrolled())
+}
+
+/// [`generate`] under a request's term-generation budget. The owned wrapper
+/// copies the borrowed form, so it charges that copy's width in addition to
+/// [`generate_into_controlled`]'s own charges.
+pub fn generate_controlled<R: Row + ?Sized>(
+    term_map: &TermMap,
+    row: &R,
+    work: TermWork<'_>,
+) -> Result<Option<Term>> {
     let mut buf = String::new();
-    Ok(generate_into(term_map, row, &mut buf)?.map(GenTerm::into_owned))
+    let Some(generated) = generate_into_controlled(term_map, row, &mut buf, work)? else {
+        return Ok(None);
+    };
+    work.charge(generated.lexical_width())?;
+    Ok(Some(generated.into_owned()))
 }
 
 /// Borrow a pre-built constant term out of the IR (by reference, zero-copy).

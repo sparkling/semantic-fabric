@@ -107,16 +107,17 @@ impl Row for AliasRow<'_> {
 
 /// Materialise a term definition into an `oxrdf` term, or `None` if a referenced
 /// column is NULL/absent (R2RML §11: no value ⇒ no term ⇒ unbound).
-fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
+fn build_term(def: &TermDef, raw: &RawRow<'_>, work: TermWork<'_>) -> Result<Option<Term>> {
+    work.charge(1)?;
     match def {
         TermDef::Const(t) => Ok(Some(t.clone())),
-        TermDef::Derived { term_map, alias } => derived_term(term_map, *alias, raw),
+        TermDef::Derived { term_map, alias } => derived_term(term_map, *alias, raw, work),
         TermDef::R2rmlBlank {
             term_map,
             alias,
             graph,
         } => {
-            let Some(base) = derived_term(term_map, *alias, raw)? else {
+            let Some(base) = derived_term(term_map, *alias, raw, work)? else {
                 return Ok(None);
             };
             let Term::BlankNode(blank) = base else {
@@ -127,7 +128,7 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             let graph_iri = match graph {
                 R2rmlGraphScope::Default => None,
                 R2rmlGraphScope::Mapped { term_map, alias } => {
-                    let Some(graph_term) = derived_term(term_map, *alias, raw)? else {
+                    let Some(graph_term) = derived_term(term_map, *alias, raw, work)? else {
                         return Ok(None);
                     };
                     let Term::NamedNode(graph) = graph_term else {
@@ -142,9 +143,14 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
                 String::from("sfr1d_")
             };
             if let Some(graph) = graph_iri {
+                // Hex labelling doubles each source byte; charge that growth
+                // before the label is built, plus the separator.
+                work.product(graph.as_str().len(), HEX_LABEL_WIDTH)?;
+                work.charge(1)?;
                 super::push_hex(&mut label, graph.as_str().as_bytes());
                 label.push('_');
             }
+            work.product(blank.as_str().len(), HEX_LABEL_WIDTH)?;
             super::push_hex(&mut label, blank.as_str().as_bytes());
             Ok(Some(Term::BlankNode(sf_core::BlankNode::new_unchecked(
                 label,
@@ -153,9 +159,9 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
         // R2 COALESCE: the preserved (left) side wins when bound; otherwise the
         // optional (right) value (ADR-0007). `None` from `left` = its source
         // columns were NULL (the optional did not match), so fall back to `right`.
-        TermDef::Coalesce(l, r) => match build_term(l, raw)? {
+        TermDef::Coalesce(l, r) => match build_term(l, raw, work)? {
             Some(t) => Ok(Some(t)),
-            None => build_term(r, raw),
+            None => build_term(r, raw, work),
         },
         // BIND(CONCAT(…)) — SPARQL §17.4.5.4. Every operand must be a string literal
         // (xsd:string, simple, or lang-tagged); an unbound / IRI / blank-node operand
@@ -166,13 +172,14 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             let mut s = String::new();
             let mut common_lang: Option<Option<String>> = None; // unset | mixed | lang
             for p in parts {
-                let Some(Term::Literal(l)) = build_term(p, raw)? else {
+                let Some(Term::Literal(l)) = build_term(p, raw, work)? else {
                     return Ok(None);
                 };
                 let lang = l.language();
                 if lang.is_none() && l.datatype() != sf_core::vocab::xsd::STRING {
                     return Ok(None); // a non-string typed literal ⇒ type error
                 }
+                work.charge(l.value().len())?;
                 s.push_str(l.value());
                 let this = lang.map(str::to_owned);
                 common_lang = Some(match common_lang {
@@ -219,6 +226,7 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
                 // `rust_agg` C.4/C.5). Pre-C.6 this branch conflated the two for AVG.
                 return match kind {
                     AggKind::Sum | AggKind::Count | AggKind::Avg => {
+                        work.charge(1 + natural_lexical_growth_allowance(XsdTypeCode::Integer))?;
                         Ok(Some(natural_literal("0", XsdTypeCode::Integer)?))
                     }
                     AggKind::Min | AggKind::Max => Ok(None),
@@ -237,6 +245,7 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
                     .or_else(|| raw.code_for(col.alias, &col.column))
                     .unwrap_or(XsdTypeCode::String),
             };
+            work.charge(value.len() + natural_lexical_growth_allowance(code))?;
             Ok(Some(natural_literal(value, code)?))
         }
         // ADR-0032 D2 — the ONLY route by which this engine ever produces a native
@@ -254,9 +263,9 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             object,
         } => {
             let (Some(s), Some(p), Some(o)) = (
-                build_term(subject, raw)?,
-                build_term(predicate, raw)?,
-                build_term(object, raw)?,
+                build_term(subject, raw, work)?,
+                build_term(predicate, raw, work)?,
+                build_term(object, raw, work)?,
             ) else {
                 return Ok(None);
             };
@@ -269,7 +278,12 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
 /// (ADR-0015) to column literals without an override, including an explicit
 /// datatype equal to the resolved source datatype (R2RML §11.2). Templates,
 /// IRIs, blank nodes, different datatypes and language retain their own path.
-fn derived_term(term_map: &TermMap, alias: usize, raw: &RawRow<'_>) -> Result<Option<Term>> {
+fn derived_term(
+    term_map: &TermMap,
+    alias: usize,
+    raw: &RawRow<'_>,
+    work: TermWork<'_>,
+) -> Result<Option<Term>> {
     if let TermMap::Column(col, spec) = term_map {
         if spec.uses_natural_type(raw.code_for(alias, col)) {
             let row = AliasRow { raw, alias };
@@ -277,11 +291,12 @@ fn derived_term(term_map: &TermMap, alias: usize, raw: &RawRow<'_>) -> Result<Op
                 return Ok(None);
             };
             let code = raw.code_for(alias, col).unwrap_or(XsdTypeCode::String);
+            work.charge(value.len() + natural_lexical_growth_allowance(code))?;
             return Ok(Some(natural_literal(value, code)?));
         }
     }
     let row = AliasRow { raw, alias };
-    sf_core::term::generate(term_map, &row).map_err(|e| Error::Core(e.to_string()))
+    sf_core::term::generate_controlled(term_map, &row, work).map_err(map_core_err)
 }
 
 /// Produce the RDF literal for a value under its §10 natural XSD type, in the
@@ -471,12 +486,43 @@ pub(super) fn intern_binding_view<'a>(
 
 /// Reconstruct all bound variables of one raw row from `interned` — a
 /// branch's [`intern_bindings`] output, built ONCE per branch (see its doc
-/// comment). `pub(crate)` so the PostgreSQL executor reuses the identical
-/// reconstruction (ADR-0003 R3).
+/// comment).
+///
+/// The uncontrolled reference shape, kept as
+/// [`reconstruct_controlled`]'s oracle in `batch_reconstruct_tests`. Production
+/// execution — including the PostgreSQL executor, which reaches this path
+/// through the backend-generic controlled driver (ADR-0003 R3) — goes through
+/// [`reconstruct_controlled`] so a request's budget and cancellation govern
+/// per-row term generation.
+#[cfg_attr(not(test), expect(dead_code, reason = "uncontrolled test oracle"))]
 pub(crate) fn reconstruct(interned: &InternedBindings<'_>, raw: &RawRow<'_>) -> Result<Bindings> {
+    reconstruct_controlled(interned, raw, TermWork::uncontrolled())
+}
+
+/// [`reconstruct`] under the governing request's term-generation budget.
+///
+/// The per-row half of source governance: the branch's column index and
+/// interned binding names are charged once per branch at setup
+/// ([`build_col_index_controlled`], [`intern_binding_view`]), and this charges
+/// what every row then costs — one unit per candidate binding plus each term's
+/// own generated width, through [`build_term`]. The leading `checkpoint` is the
+/// in-batch stop point: a request cancelled or past its deadline stops at the
+/// next row, not only at the next batch boundary.
+///
+/// Charging is per row and order-independent, so a batch reconstructed in
+/// parallel chunks accrues exactly the total a sequential pass would
+/// (`QueryBudget::consume` is a CAS loop over atomics, and
+/// [`super::batch::reconstruct_batch`] preserves row order either way).
+pub(crate) fn reconstruct_controlled(
+    interned: &InternedBindings<'_>,
+    raw: &RawRow<'_>,
+    work: TermWork<'_>,
+) -> Result<Bindings> {
+    work.checkpoint()?;
     let mut out = Bindings::new();
     for (var, def) in interned {
-        if let Some(term) = build_term(def, raw)? {
+        work.charge(1)?;
+        if let Some(term) = build_term(def, raw, work)? {
             // `push`, not `insert`: `interned` comes from a `BTreeMap` (unique
             // keys), so `var` can never already be bound in `out`.
             out.push(var.clone(), term);
@@ -488,9 +534,68 @@ use std::sync::Arc;
 
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::TermMap;
+use sf_core::term_work::TermWork;
 use sf_core::{Literal, Row, Term, Triple};
 
 use crate::graph_map::RR_DEFAULT_GRAPH;
+
+/// Hex labelling writes two characters per source byte ([`super::push_hex`]);
+/// the prepaid bound on an `R2rmlBlank` label's growth.
+const HEX_LABEL_WIDTH: usize = 2;
+
+/// A prepaid upper bound on the width [`natural_literal`] actually BUILDS for a
+/// value of `code`, which is NOT its raw input width: §10 canonicalization
+/// (`sf_core::datatype::canonical_lexical`) can EXPAND a value, so charging
+/// `value.len()` alone would undercharge the literal that gets allocated.
+/// `sf_core::datatype`'s own tests show it: `"0"` becomes `"false"` (1 -> 5) and
+/// `"100"` becomes `"1.0E2"` (3 -> 5). This mirrors the decode-side discipline
+/// in `sf_sql::backend::pg::decode`, which charges a fixed worst case per SQL
+/// type (`Type::BOOL => 5`) rather than the raw byte width.
+///
+/// Returned as an ADDEND charged on top of `value.len()`, not a replacement:
+/// codes that pass through or shrink (String verbatim, HexBinary already
+/// uppercase-encoded, Integer/Decimal which only strip zeros and signs) stay
+/// bounded by the input and add nothing, while a code that can grow adds the
+/// most its canonical form can exceed a one-byte input by.
+///
+/// - `Boolean`: `"false"` is the widest canonical form (5).
+/// - `Double`: canonical E-notation with a mandatory fractional digit; the
+///   widest `{:E}` rendering of any finite `f64` plus the `.0` pad is 26
+///   (measured at `-2.2250738585072014E-308`); `NaN`/`INF`/`-INF` are shorter.
+/// - `Date`/`Time`/`DateTime`: `oxsdatatypes` canonical forms carry an optional
+///   timezone and an expanded year, so allow the widest such rendering (32).
+pub(super) const fn natural_lexical_growth_allowance(code: XsdTypeCode) -> usize {
+    match code {
+        // Verbatim or already-encoded: output is exactly the input.
+        XsdTypeCode::String | XsdTypeCode::HexBinary => 0,
+        // `cast_display::<Integer>` only strips a leading `+`/`-0` and leading
+        // zeros, so the output never exceeds the input.
+        XsdTypeCode::Integer => 0,
+        // `decimal::write_canonical` trims leading integral zeros and trailing
+        // fraction zeros, but SUPPLIES a leading `0` when the integral part is
+        // empty: `".5"` becomes `"0.5"` and `"-.5"` becomes `"-0.5"`, one byte
+        // wider than the input. That single inserted digit is the only way this
+        // path can grow (measured across leading-dot, signed and zero forms).
+        XsdTypeCode::Decimal => 1,
+        XsdTypeCode::Boolean => 5,
+        XsdTypeCode::Double => 26,
+        // `cast_display` re-renders the parsed value; measured across expanded
+        // years, timezones and fractional seconds these never exceed their
+        // input, so this is a deliberately generous bound rather than a tight
+        // one — it may overcharge slightly, and must never undercharge.
+        XsdTypeCode::Date | XsdTypeCode::Time | XsdTypeCode::DateTime => 32,
+    }
+}
+
+/// Map a `sf-core` term-generation failure, preserving a governing control's
+/// terminal cause as this crate's own control error instead of flattening it
+/// into an opaque core-error string.
+fn map_core_err(error: sf_core::Error) -> Error {
+    match error {
+        sf_core::Error::Control(cause) => Error::QueryControl(cause),
+        other => Error::Core(other.to_string()),
+    }
+}
 use crate::iq::{AggKind, ColRef, R2rmlGraphScope, TermDef};
 use crate::{Error, Result};
 
