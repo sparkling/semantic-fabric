@@ -15,6 +15,9 @@ use crate::{
 #[cfg(test)]
 use crate::BackendKind;
 
+#[path = "startup/ordinary.rs"]
+mod ordinary;
+
 pub(crate) async fn build_config(
     opts: &ServeOptions,
     primary: PreparedSource,
@@ -384,106 +387,23 @@ async fn open_ordinary(
     generation_budget: Option<&crate::budget::RequestBudget>,
     observe: &mut impl FnMut(SourceId, &IntrospectedSource) -> Result<(), ServeError>,
 ) -> Result<RuntimeSource, ServeError> {
-    if let (PreparedSource::Sqlite { path, .. }, PreparedMapping::Authored(authored)) =
-        (&source, &mapping)
-    {
-        if ordinary_sqlite_generation_eligible(path, authored) {
-            let budget = match generation_budget {
-                Some(budget) => budget.clone(),
-                None => crate::startup_authored::control_budget(None, &source)?,
-            };
-            let attempt = crate::sqlite_generation::build(
-                path.clone(),
-                opts.sqlite_pool_size,
-                authored.clone(),
-                ontology,
-                &budget,
-                observe,
-            )
-            .await;
-            match attempt {
-                Ok((source, mapping)) => {
-                    return RuntimeSource::admitted(source, mapping)
-                        .map_err(semantic_admission_error);
-                }
-                // The request control itself stopped: surface it, never mask it.
-                Err(error)
-                    if sf_core::query_control::QueryControl::checkpoint(&budget).is_err() =>
-                {
-                    return Err(error)
-                }
-                // The sealed profile declined this source: keep the old path.
-                Err(_) => {}
-            }
-        }
-    }
-    if let (PreparedSource::Postgres { config, tls, .. }, PreparedMapping::Authored(authored)) =
-        (&source, &mapping)
-    {
-        // Native RLS bearers keep the unverified path: the binding applies
-        // RLS only to unverified PostgreSQL generations.
-        if opts.query_admission.permits_verified_generation()
-            && crate::pg_rls::mapped_tables(authored).is_some()
+    if let PreparedMapping::Authored(authored) = &mapping {
+        if let Some(admitted) = ordinary::try_verified(
+            opts,
+            &source,
+            authored,
+            ontology,
+            generation_budget,
+            observe,
+        )
+        .await?
         {
-            let budget = match generation_budget {
-                Some(budget) => budget.clone(),
-                None => crate::startup_authored::control_budget(None, &source)?,
-            };
-            if let Ok(pools) = crate::pg_direct_lifecycle::PgDirectPools::with_tls(
-                (**config).clone(),
-                opts.pg_pool_size,
-                opts.pg_pool_wait,
-                (**tls).clone(),
-            ) {
-                let attempt = crate::pg_generation::authored::build(
-                    &pools,
-                    authored.clone(),
-                    ontology,
-                    &budget,
-                    observe,
-                )
-                .await;
-                match attempt {
-                    Ok((source, mapping)) => {
-                        return RuntimeSource::admitted(source, mapping)
-                            .map_err(semantic_admission_error);
-                    }
-                    Err(error)
-                        if sf_core::query_control::QueryControl::checkpoint(&budget).is_err() =>
-                    {
-                        return Err(error)
-                    }
-                    // The protected profile declined this source: keep the old path.
-                    Err(_) => {}
-                }
-            }
+            return Ok(admitted);
         }
     }
     let source = open_source(opts, source).await?;
     observe(id, &source)?;
     mapping.finish(opts, source, ontology).await
-}
-
-/// A cheap pre-filter for the sealed SQLite generation: file-backed databases
-/// in WAL or DELETE journal mode with bounded unqualified base-table mappings.
-/// In-memory, URI and other journal modes never attempt it. Passing this is
-/// not admission: [`open_ordinary`] still falls back if the builder declines.
-fn ordinary_sqlite_generation_eligible(path: &str, mapping: &sf_core::SourceMapping) -> bool {
-    if path == ":memory:" || path.starts_with("file:") {
-        return false;
-    }
-    if crate::pg_rls::mapped_tables(mapping).is_none() {
-        return false;
-    }
-    let flags =
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
-        return false;
-    };
-    conn.query_row("PRAGMA main.journal_mode", [], |row| {
-        row.get::<_, String>(0)
-    })
-    .is_ok_and(|mode| matches!(mode.to_ascii_lowercase().as_str(), "wal" | "delete"))
 }
 
 async fn open_source(
@@ -500,130 +420,5 @@ async fn open_source(
 }
 
 #[cfg(test)]
-mod tests {
-    use sf_core::{Column, TableSchema};
-
-    use super::*;
-    use crate::SourceRef;
-
-    const BASE: &str = "http://example.com/live/";
-
-    fn table(primary_key: bool) -> TableSchema {
-        let mut table = TableSchema::new("items");
-        table.columns = vec![Column::new("id", "integer", true)];
-        if primary_key {
-            table.primary_key = vec!["id".to_owned()];
-        }
-        table
-    }
-
-    fn direct() -> PreparedMapping {
-        PreparedMapping::new(
-            &MappingRef::direct(BASE),
-            source_id(0),
-            &crate::test_support::empty_ontology(),
-        )
-        .unwrap()
-    }
-
-    fn authored_empty(index: usize) -> PreparedMapping {
-        PreparedMapping::Authored(sf_core::SourceMapping::new(source_id(index), Vec::new()))
-    }
-
-    #[test]
-    fn direct_mapping_base_is_validated_before_source_open() {
-        let error = PreparedMapping::new(
-            &MappingRef::direct("not an absolute IRI"),
-            source_id(0),
-            &crate::test_support::empty_ontology(),
-        )
-        .expect_err("invalid base must fail during mapping preparation");
-        assert_eq!(error.code(), "startup-configuration");
-    }
-
-    #[test]
-    fn postgres_direct_mapping_rejects_no_primary_key_tables() {
-        let error = direct()
-            .finish_for(BackendKind::Postgres, &[table(false)])
-            .expect_err("PostgreSQL no-PK identity is not admitted for live serving");
-        assert_eq!(error.code(), "startup-configuration");
-    }
-
-    #[test]
-    fn postgres_direct_mapping_accepts_declared_primary_keys() {
-        let mapping = direct()
-            .finish_for(BackendKind::Postgres, &[table(true)])
-            .expect("declared primary key does not need a physical row identity");
-        assert_eq!(mapping.len(), 1);
-    }
-
-    #[test]
-    fn authored_assembler_rejects_direct_mapping_before_connector_io() {
-        let sqlite = SourceRef::inline("sqlite:/path/that/must/not/be/created.db")
-            .resolve()
-            .unwrap()
-            .prepare()
-            .unwrap();
-        let postgres = SourceRef::inline("pg:host=database.invalid user=test")
-            .resolve()
-            .unwrap()
-            .prepare()
-            .unwrap();
-        let mysql = SourceRef::inline("mysql://test@database.invalid/db")
-            .resolve()
-            .unwrap()
-            .prepare()
-            .unwrap();
-
-        for source in [sqlite, mysql] {
-            let error = admit_mapping_profile(&direct(), &source, None, None)
-                .expect_err("non-PostgreSQL Direct Mapping must reject without connecting");
-            assert_eq!(error.code(), "startup-configuration");
-        }
-        let error = admit_mapping_profile(&direct(), &postgres, None, None)
-            .expect_err("Direct requires its dedicated leased lifecycle assembler");
-        assert_eq!(error.code(), "startup-configuration");
-
-        let postgres = SourceRef::inline("pg:host=database.invalid user=test")
-            .resolve()
-            .unwrap()
-            .prepare()
-            .unwrap();
-        let error = admit_mapping_profile(
-            &direct(),
-            &postgres,
-            Some(&authored_empty(1)),
-            Some(
-                &SourceRef::inline("pg:host=other.invalid user=test")
-                    .resolve()
-                    .unwrap()
-                    .prepare()
-                    .unwrap(),
-            ),
-        )
-        .expect_err("Direct Mapping federation must reject without connecting");
-        assert_eq!(error.code(), "startup-configuration");
-
-        let primary_authored = authored_empty(0);
-        let additional_direct = PreparedMapping::new(
-            &MappingRef::direct(BASE),
-            source_id(1),
-            &crate::test_support::empty_ontology(),
-        )
-        .unwrap();
-        let error = admit_mapping_profile(
-            &primary_authored,
-            &postgres,
-            Some(&additional_direct),
-            Some(
-                &SourceRef::inline("pg:host=additional.invalid user=test")
-                    .resolve()
-                    .unwrap()
-                    .prepare()
-                    .unwrap(),
-            ),
-        )
-        .expect_err("an authored plus Direct profile must reject without connecting");
-        assert_eq!(error.code(), "startup-configuration");
-    }
-}
+#[path = "startup/tests.rs"]
+mod tests;

@@ -2,6 +2,8 @@
 use super::*;
 #[path = "authored_mysql_generation_checks.rs"]
 mod lifecycle;
+#[path = "ordinary_mysql_generation.rs"]
+mod ordinary;
 #[path = "authored_mysql_generation_policy.rs"]
 mod portable;
 
