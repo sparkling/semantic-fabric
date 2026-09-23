@@ -33,9 +33,8 @@ fn ordinary_authored_mysql_refuses_replaced_table() {
          GRANT SELECT ON sf_tls.items TO 'sf_tls'@'%';",
     );
     let (status, body) = request(address, SINGLE, Some(&fixture.token)).unwrap();
-    assert_ne!(
-        String::from_utf8_lossy(&body).contains("replaced") && status == 200,
-        true,
+    assert!(
+        !(status == 200 && String::from_utf8_lossy(&body).contains("replaced")),
         "ordinary mode answered from a replaced table"
     );
     assert_eq!(
