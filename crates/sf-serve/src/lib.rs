@@ -88,6 +88,8 @@ mod telemetry_body;
 mod terminal_body;
 
 #[cfg(test)]
+mod ordinary_sqlite_generation_tests;
+#[cfg(test)]
 mod sqlite_admission_tests;
 
 #[cfg(test)]

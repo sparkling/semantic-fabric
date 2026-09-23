@@ -138,18 +138,30 @@ pub(crate) async fn build_snapshot(
         return RuntimeSnapshot::new(sf_sparql::Epoch::default(), ontology, sources)
             .map_err(snapshot_error);
     }
-    let primary = open_source(opts, primary).await?;
-    observe(source_id(0), &primary)?;
-    let primary = primary_mapping.finish(opts, primary, &ontology).await?;
+    let primary = open_ordinary(
+        opts,
+        primary,
+        primary_mapping,
+        &ontology,
+        source_id(0),
+        generation_budget,
+        &mut observe,
+    )
+    .await?;
 
     match (additional_mapping, additional) {
         (None, None) => RuntimeSnapshot::single(sf_sparql::Epoch::default(), ontology, primary),
         (Some(additional_mapping), Some(additional)) => {
-            let additional = open_source(opts, additional).await?;
-            observe(source_id(1), &additional)?;
-            let additional = additional_mapping
-                .finish(opts, additional, &ontology)
-                .await?;
+            let additional = open_ordinary(
+                opts,
+                additional,
+                additional_mapping,
+                &ontology,
+                source_id(1),
+                generation_budget,
+                &mut observe,
+            )
+            .await?;
             RuntimeSnapshot::new(
                 sf_sparql::Epoch::default(),
                 ontology,
@@ -344,6 +356,92 @@ fn snapshot_error(error: crate::SnapshotError) -> ServeError {
     ServeError::new(StartupCause::Configuration {
         error: error.to_string(),
     })
+}
+
+/// Open one ordinary (non-`--require-verified-generation`) source.
+///
+/// G3, user decision 2026-09-23: an authored mapping over file-backed SQLite
+/// now holds the same per-request schema lease as the protected profile
+/// ([`crate::sqlite_generation::build`]) whenever that sealed builder admits
+/// the source. A schema change after activation then refuses with a typed
+/// problem instead of answering against a replaced table. Unlike the protected
+/// profile this needs no reload interval: with reload disabled, a changed
+/// source keeps refusing until restart.
+///
+/// This must never make a previously working ordinary source fail to start.
+/// The sealed builder refuses more than any pre-filter can cheaply predict
+/// (virtual or shadow tables anywhere in `main`, a `rr:tableName` naming a
+/// view, exact-case names, schema bounds, non-UTF-8 schema text), so a refusal
+/// here falls back to the unchanged unverified path rather than propagating.
+/// Only a request-control failure (deadline, cancellation, shutdown) during the
+/// attempt is surfaced, because falling back would hide it.
+async fn open_ordinary(
+    opts: &ServeOptions,
+    source: PreparedSource,
+    mapping: PreparedMapping,
+    ontology: &SemanticOntology,
+    id: SourceId,
+    generation_budget: Option<&crate::budget::RequestBudget>,
+    observe: &mut impl FnMut(SourceId, &IntrospectedSource) -> Result<(), ServeError>,
+) -> Result<RuntimeSource, ServeError> {
+    if let (PreparedSource::Sqlite { path, .. }, PreparedMapping::Authored(authored)) =
+        (&source, &mapping)
+    {
+        if ordinary_sqlite_generation_eligible(path, authored) {
+            let budget = match generation_budget {
+                Some(budget) => budget.clone(),
+                None => crate::startup_authored::control_budget(None, &source)?,
+            };
+            let attempt = crate::sqlite_generation::build(
+                path.clone(),
+                opts.sqlite_pool_size,
+                authored.clone(),
+                ontology,
+                &budget,
+                observe,
+            )
+            .await;
+            match attempt {
+                Ok((source, mapping)) => {
+                    return RuntimeSource::admitted(source, mapping)
+                        .map_err(semantic_admission_error);
+                }
+                // The request control itself stopped: surface it, never mask it.
+                Err(error)
+                    if sf_core::query_control::QueryControl::checkpoint(&budget).is_err() =>
+                {
+                    return Err(error)
+                }
+                // The sealed profile declined this source: keep the old path.
+                Err(_) => {}
+            }
+        }
+    }
+    let source = open_source(opts, source).await?;
+    observe(id, &source)?;
+    mapping.finish(opts, source, ontology).await
+}
+
+/// A cheap pre-filter for the sealed SQLite generation: file-backed databases
+/// in WAL or DELETE journal mode with bounded unqualified base-table mappings.
+/// In-memory, URI and other journal modes never attempt it. Passing this is
+/// not admission: [`open_ordinary`] still falls back if the builder declines.
+fn ordinary_sqlite_generation_eligible(path: &str, mapping: &sf_core::SourceMapping) -> bool {
+    if path == ":memory:" || path.starts_with("file:") {
+        return false;
+    }
+    if crate::pg_rls::mapped_tables(mapping).is_none() {
+        return false;
+    }
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
+        return false;
+    };
+    conn.query_row("PRAGMA main.journal_mode", [], |row| {
+        row.get::<_, String>(0)
+    })
+    .is_ok_and(|mode| matches!(mode.to_ascii_lowercase().as_str(), "wal" | "delete"))
 }
 
 async fn open_source(
