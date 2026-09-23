@@ -127,7 +127,9 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
       }
       if (argv[0] === 'node') normalizeWorkspacePath(nonempty(argv[1], 'node script'), 'node script');
     } else if (argv[0] !== 'cargo') throw new Error('DELIVERY_BUILD_TOOL_REQUIRED');
-    if (argv[0] === 'cargo' && !['build', 'check', 'test', 'clippy', 'fmt'].includes(argv[1])) {
+    // `cargo nextest run` is the faster parallel test runner; other nextest subcommands stay refused.
+    if (argv[0] === 'cargo' && !['build', 'check', 'test', 'clippy', 'fmt'].includes(argv[1])
+      && !(argv[1] === 'nextest' && argv[2] === 'run')) {
       throw new Error('DELIVERY_NO_PUBLICATION');
     }
     const limits: { timeoutMs?: number; maxOutputBytes?: number } = {};

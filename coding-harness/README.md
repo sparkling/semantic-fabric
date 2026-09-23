@@ -120,6 +120,15 @@ npm run delivery -- /absolute/repo finish task-id owner FULL_COMMIT_SHA
 npm run delivery -- /absolute/repo status task-id
 ```
 
+`scripts/slice.sh` in the repository root wraps the same steps (`start`, `impl`,
+`checks`, `review`, `verdict`, `close`) and retries transient `index.lock` races.
+It commits only the task scope and never pushes. A check may use
+`cargo nextest run`, which ran the `sf-serve` library tests in half the time of
+`cargo test` on 2026-09-23; other `nextest` subcommands are refused. After editing
+a file that the capability catalogue hashes, run
+`scripts/refresh-capability-digests.py` to refresh only the stale digests and
+regenerate the matrix.
+
 Example task (paths/checks must match the actual change, not this example):
 
 ```json

@@ -76,9 +76,14 @@ describe('mandatory main-only delivery harness', () => {
       { ...task, checks: [{ ...task.checks[0], argv: ['cargo', 'yank'] }] },
       { ...task, checks: [{ ...task.checks[0], timeoutMs: 86_400_001 }] },
       { ...task, checks: [{ ...task.checks[0], maxOutputBytes: 100_000_001 }] },
-      { ...task, checks: [{ ...task.checks[0], argv: ['cargo', 'publish'] }] }]) {
+      { ...task, checks: [{ ...task.checks[0], argv: ['cargo', 'publish'] }] },
+      { ...task, checks: [{ ...task.checks[0], argv: ['cargo', 'nextest', 'archive'] }] },
+      { ...task, checks: [{ ...task.checks[0], argv: ['cargo', 'nextest'] }] }]) {
       expect(() => parseDeliveryTask(bad)).toThrow();
     }
+    const nextest = ['cargo', 'nextest', 'run', '--locked', '-p', 'sf-serve', '--lib'];
+    const cargoCheck = { ...task.checks[1], argv: nextest, cwd: '.' };
+    expect(parseDeliveryTask({ ...task, checks: [task.checks[0], cargoCheck] }).checks[1].argv).toEqual(nextest);
   });
   it('blocks a second writer and checks before matching native subscription handoff', async () => {
     const { task, harness } = fixture(); await harness.begin(task);
