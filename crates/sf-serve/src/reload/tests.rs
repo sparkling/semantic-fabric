@@ -401,13 +401,13 @@ async fn schema_drift_fences_before_remaining_candidate_validation() {
     let source = crate::run::open_backend(fixture.source.clone(), 1, Duration::from_secs(1), 1)
         .await
         .unwrap();
-    attempt
-        .observe(
-            &mut Default::default(),
-            sf_core::SourceId::new(0).unwrap(),
-            &source,
-        )
-        .unwrap();
+    // This hand-opened source is unverified, so the verified baseline also
+    // refuses it as a downgrade; either way the fence precedes validation.
+    let _ = attempt.observe(
+        &mut Default::default(),
+        sf_core::SourceId::new(0).unwrap(),
+        &source,
+    );
     assert_eq!(
         crate::router(Arc::clone(&config))
             .oneshot(request(Body::from(QUERY), true))
@@ -432,6 +432,52 @@ async fn schema_drift_fences_before_remaining_candidate_validation() {
         )
         .await,
         "old"
+    );
+}
+
+/// A source admitted on the sealed SQLite generation must never be republished
+/// unverified. An FTS5 table makes the builder decline, so ordinary startup's
+/// fallback would open the source unverified; reload must refuse it instead.
+#[tokio::test]
+async fn verified_source_never_reloads_unverified() {
+    let fixture = Fixture::new();
+    let config = fixture.config().await;
+    let runtime = config.lifecycle_runtime();
+    let baseline = fixture.baseline.lock().unwrap().clone().unwrap();
+    assert!(
+        baseline.is_verified(sf_core::SourceId::new(0).unwrap()),
+        "ordinary file-backed SQLite starts on the verified generation"
+    );
+    rusqlite::Connection::open(fixture.root.join("source.db"))
+        .unwrap()
+        .execute_batch("CREATE VIRTUAL TABLE notes USING fts5(body);")
+        .unwrap();
+    fixture.refresh(&config).await;
+    assert!(
+        matches!(
+            runtime.readiness().unwrap(),
+            RuntimeReadiness::NotReady {
+                cause: ReadinessCause::CapabilityDrift,
+                ..
+            }
+        ),
+        "a declined verified source must stay fenced, not republish unverified"
+    );
+    assert_eq!(
+        crate::router(Arc::clone(&config))
+            .oneshot(request(Body::from(QUERY), true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    fixture.refresh(&config).await;
+    assert!(
+        matches!(
+            runtime.readiness().unwrap(),
+            RuntimeReadiness::NotReady { .. }
+        ),
+        "a later refresh of the same shape still refuses"
     );
 }
 

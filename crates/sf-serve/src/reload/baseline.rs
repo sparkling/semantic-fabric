@@ -51,6 +51,15 @@ impl Baseline {
     }
 }
 
+#[cfg(test)]
+impl Baseline {
+    pub(super) fn is_verified(&self, id: SourceId) -> bool {
+        self.observations
+            .get(&id)
+            .is_some_and(|observation| observation.verified.is_some())
+    }
+}
+
 pub(super) struct Attempt {
     runtime: Arc<RuntimeManager>,
     baseline: Arc<Baseline>,
@@ -102,7 +111,19 @@ impl Attempt {
         source: &crate::IntrospectedSource,
     ) -> Result<(), ServeError> {
         Baseline::record(next, id, source);
-        if next.get(&id) != self.baseline.observations.get(&id) {
+        let previous = self.baseline.observations.get(&id);
+        if previous.is_some_and(|prior| prior.verified.is_some())
+            && next.get(&id).is_some_and(|now| now.verified.is_none())
+        {
+            // A verified source never downgrades on reload: refuse the
+            // unverified fallback so readiness stays fenced until a verified
+            // candidate or restart (G3, user decision 2026-09-23).
+            self.fence(ReadinessCause::CapabilityDrift)?;
+            return Err(crate::pg_generation::authored::generation_error(
+                crate::pg_generation::PgGenerationError::CapabilityDrift,
+            ));
+        }
+        if next.get(&id) != previous {
             // This precedes mapping validation and observation of the next source.
             self.fence(ReadinessCause::SchemaDrift)?;
         }
