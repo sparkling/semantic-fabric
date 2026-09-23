@@ -22,6 +22,8 @@ mod budget_expiry;
 mod fixture;
 #[path = "live_tests/lifecycle_profile.rs"]
 mod lifecycle_profile;
+#[path = "live_tests/ordinary_startup.rs"]
+mod ordinary_startup;
 #[path = "live_tests/request_route.rs"]
 mod request_route;
 #[path = "live_tests/rls.rs"]
@@ -192,7 +194,9 @@ async fn verified_generation_lifecycle_is_coherent_and_fail_closed() {
         lifecycle_profile::exercise(&work_fixture).await;
         runtime_role::exercise(&work_fixture).await;
         request_route::exercise(&work_fixture).await;
-        exercise_verified_generation_lifecycle(work_fixture).await;
+        exercise_verified_generation_lifecycle(Arc::clone(&work_fixture)).await;
+        // Last: it replaces the fixture tables.
+        ordinary_startup::exercise(&work_fixture).await;
     })
     .await;
     let fixture = match Arc::try_unwrap(fixture) {

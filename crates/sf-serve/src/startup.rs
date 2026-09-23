@@ -417,6 +417,48 @@ async fn open_ordinary(
             }
         }
     }
+    if let (PreparedSource::Postgres { config, tls, .. }, PreparedMapping::Authored(authored)) =
+        (&source, &mapping)
+    {
+        // Native RLS bearers keep the unverified path: the binding applies
+        // RLS only to unverified PostgreSQL generations.
+        if opts.query_admission.permits_verified_generation()
+            && crate::pg_rls::mapped_tables(authored).is_some()
+        {
+            let budget = match generation_budget {
+                Some(budget) => budget.clone(),
+                None => crate::startup_authored::control_budget(None, &source)?,
+            };
+            if let Ok(pools) = crate::pg_direct_lifecycle::PgDirectPools::with_tls(
+                (**config).clone(),
+                opts.pg_pool_size,
+                opts.pg_pool_wait,
+                (**tls).clone(),
+            ) {
+                let attempt = crate::pg_generation::authored::build(
+                    &pools,
+                    authored.clone(),
+                    ontology,
+                    &budget,
+                    observe,
+                )
+                .await;
+                match attempt {
+                    Ok((source, mapping)) => {
+                        return RuntimeSource::admitted(source, mapping)
+                            .map_err(semantic_admission_error);
+                    }
+                    Err(error)
+                        if sf_core::query_control::QueryControl::checkpoint(&budget).is_err() =>
+                    {
+                        return Err(error)
+                    }
+                    // The protected profile declined this source: keep the old path.
+                    Err(_) => {}
+                }
+            }
+        }
+    }
     let source = open_source(opts, source).await?;
     observe(id, &source)?;
     mapping.finish(opts, source, ontology).await
