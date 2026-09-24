@@ -135,8 +135,11 @@ Cargo.lock, strict checks and dependency-security controls remain independent.
 Both Codex and Claude Code are supported interface targets. Only currently authorized
 hosts may execute. Current policy permits Claude Code through the configured 9router
 subscription route and pauses Codex. Keep disabled-host contract tests offline.
-Record requested and resolved native model, effort, host/client version and distinct
-executor ID; preserve an explicit requested model and the selected main model.
+Record typed requested route, observed provider resolution, effort, client and executor
+without conflating schemas. `DeliveryRoute.model` admits aliases such as `sonnet` and
+`opus`, rejects `/`, and `bind` requires exact alias equality. Keep `cc/claude-*` or
+other provider-reported identity in bounded observation until a tested typed resolved-
+identity field exists. Never strip its prefix or claim alias equality proves resolution.
 
 Retain authorized `CLAUDE_CONFIG_DIR`, `ANTHROPIC_BASE_URL` and
 `ANTHROPIC_AUTH_TOKEN` handling without reading token values into logs or evidence.
@@ -311,14 +314,6 @@ connection's repository binding before storing ADR graphs or project facts.
 each promoted key. Never use CLI wrappers, direct SQL or memory database files.
 A memory outage is reported once and cannot block local product delivery.
 
-This session's user-memory search/list worked. Exact retrieval of
-`metaharness-phase-gating-proportionality` and `documentation-system-quality-rules`
-failed with `Mcp error: -32603: Failed to execute MCP tool 'memory_retrieve':
-policy-state-lock-timeout`; `ruflo/guidance_brain` returned the same failure.
-Operational-harness and Flywheel-boundary patterns were retrieved. The current
-project MCP served Semantic Builder, so Fabric ADR graph registration is deferred
-to a Fabric-bound connection. Changing a namespace does not change its database.
-
 ### 8. Defer evolution and gate future promotion
 
 ADR-0055 forbids expanding Darwin/GEPA/AVO, retrieval tuning and benchmark trains
@@ -371,8 +366,8 @@ candidate owners. Correct scope once, not a new task for every review finding.
 
 | Slice / owner | Exact files and decision | Required exit evidence |
 | --- | --- | --- |
-| F0 integrator + verifier | `__tests__/delivery-runtime.test.ts`, `delivery-workflow.test.ts`, fixtures; freeze assertions for Claude-only admission before candidate edits. | Red: Codex task, explicit Codex reviewer and resumed old Codex run cannot execute. Historical records still inspect. No native/API calls in tests. |
-| F1 existing native writer | `src/delivery-contracts.ts`, `delivery-runtime.ts`, `delivery-workflow.ts`; retain `delivery-stage.ts` kernel seam and `delivery-cli.ts` lifecycle. | Guard before `begin` writes state and before bind/resume/submit; same-provider distinct reviewer identity preserved; no silent route conversion. |
+| F0 integrator + verifier | `__tests__/delivery-runtime.test.ts`, `delivery-workflow.test.ts`, fixtures; freeze assertions for Claude-only admission before candidate edits. | Red: Codex task, explicit Codex reviewer and resumed old Codex run cannot execute. Tests also prove `sonnet`/`opus` are typed route aliases, `cc/claude-*` is rejected in `DeliveryRoute.model`, exact alias equality is required at bind, and provider resolution remains separate observation. Historical records still inspect. No native/API calls in tests. |
+| F1 existing native writer | `src/delivery-contracts.ts`, `delivery-runtime.ts`, `delivery-workflow.ts`; retain `delivery-stage.ts` kernel seam and `delivery-cli.ts` lifecycle. | Guard before `begin` writes state and before bind/resume/submit; same-provider distinct reviewer identity preserved; no silent route conversion. Preserve requested-alias versus observed-provider identity, or add a typed resolved field only with strict schema/backward-compatibility tests. |
 | F2 writer + verifier | `src/delivery-workspace.ts`, `workspace.ts`, `delivery-process.ts` only for reproduced safety/recovery defects; same two test suites. | Existing missing-leaf admission, denied symlink/hardlink paths, source/prerequisite drift, interrupted check, no-progress pause and exact-lock recovery tests. Scope hashes are not a process sandbox. |
 | F3 integrator + independent Claude review | Build/test complete patch; `package.json`/lock only for proven dependency fixes. Keep output synchronizers, not legacy programme execution, in build closure. | Current green candidate, exact separate review executor, scoped main commit and `finish`; no unresolved failed check hidden by baseline failures. |
 | F4 current product owner | One already admitted ready G1-G6 outcome and its frozen Cargo checks; no new product scope from harness repair. | Public behavior and meaningful negative oracle, declared build, separate review and exact committed evidence. |
@@ -385,7 +380,8 @@ evaluator-revision field, red acceptance or separate maintenance exception is ne
 Use task checks with `cwd:"coding-harness"`: build argv `["npm","run","build"]`;
 acceptance argv `["npm","test","--","__tests__/delivery-runtime.test.ts",
 "__tests__/delivery-workflow.test.ts"]`. Set host/reviewer `claude-code`, bind actual
-model/effort/executor, and name exact existing source/test files in `scope`.
+typed route alias/effort/executor plus observed provider identity, and name exact
+existing source/test files in `scope`.
 
 Existing command surfaces below must be filled with real task/evidence paths. They
 do not invent a new CLI or authorize execution of a stopped application programme:
@@ -395,32 +391,34 @@ cd /home/claude/src/hm/semantic-fabric
 pwd -P
 git branch --show-current
 git status --short
-npm --prefix coding-harness run build
-npm --prefix coding-harness test -- __tests__/delivery-runtime.test.ts __tests__/delivery-workflow.test.ts
 cd coding-harness
 npm run delivery -- /home/claude/src/hm/semantic-fabric begin /absolute/task.json
 npm run delivery -- /home/claude/src/hm/semantic-fabric bind task-id owner /absolute/native.json
 npm run delivery -- /home/claude/src/hm/semantic-fabric advance task-id owner
 npm run delivery -- /home/claude/src/hm/semantic-fabric submit task-id owner /absolute/response.json
-# Continue returned implementation/check/repair/review stages, then:
+# Continue advance/submit. Advance runs declared build and acceptance checks.
+# Use `check task-id owner check-id` only for an explicitly selected declared check.
 npm run delivery -- /home/claude/src/hm/semantic-fabric verify task-id owner
 # Sole integration owner makes the scoped commit before finish.
 npm run delivery -- /home/claude/src/hm/semantic-fabric finish task-id owner FULL_COMMIT_SHA
 ```
 
-Run `npm ci` only in the separate dependency-resolution stage when necessary.
-Build invokes `scripts/sync-harness-manifest.mjs` and `scripts/harden-build.mjs`:
-inspect `.harness/manifest.json`, `.harness/controller-build.json` and `dist/` output.
-Declare tracked generated changes in scope. `harden-build.mjs` still records
-`dist/issue-8-program.js`; that legacy digest is not proof of delivery execution.
-For Rust slices declare affected `cargo build`
-and focused `cargo test`/supported `cargo nextest run` commands. Use full workspace
-checks at the integration/release boundary required by ADR-0055, not every ADR edit.
+`npm run delivery` requires built `dist/delivery-cli.js`. Before `begin`, verify it
+and `.harness/controller-build.json` match source/lock. If absent or stale, obtain
+explicit authorization for one harness-only bootstrap build, record and adopt every
+changed path in the repair task before native dispatch or source editing. Bootstrap
+is not acceptance; after `begin`, checks run only through `advance`/`check`.
+
+Run `npm ci` only in a dependency-resolution stage. Build invokes the manifest sync
+and hardening scripts; inspect `.harness/manifest.json`, controller build record and
+`dist/`, declaring tracked outputs in scope. Legacy `dist/issue-8-program.js` digest
+does not prove delivery. Rust slices declare affected build/focused test commands;
+reserve full workspace checks for ADR-0055 integration/release boundaries.
 
 ### Validation and acceptance criteria
 
-- Offline tests prove existing upstream stage API use, permitted native route
-  admission, unavailable-model pause and no fallback. CLI launches no native model.
+- Offline tests prove upstream stage use, route-alias/provider-observation separation,
+  unavailable-model pause and no fallback. CLI launches no native model.
 - Existing kernel seam runs once per submitted response; task custody and repair
   remain in the outer controller. No API transport or duplicate state is added.
 - Delivery acceptance tests keep focused frozen checks per attempt and require
