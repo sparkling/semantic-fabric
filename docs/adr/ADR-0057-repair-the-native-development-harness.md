@@ -1,6 +1,7 @@
 ---
 status: proposed
 date: 2026-09-24
+updated: 2026-09-24
 tags: [dev-process, metaharness, native-subscriptions, routing, frozen-evaluators]
 depends-on:
   - ADR-0037
@@ -12,6 +13,7 @@ depends-on:
 
 - **Status**: proposed
 - **Date**: 2026-09-24
+- **Updated**: 2026-09-24 (verified shared-runtime contract)
 - **Deciders**:
 - **Tags**:
 
@@ -62,10 +64,25 @@ its own evidence at its actual boundary.
 
 ## Decision
 
-Repair the existing mandatory delivery harness, drawing on Semantic Builder's
-customised upstream runtime without copying its application gates or operating
-policy. Keep one source integration owner, the current native conversation, direct
-Cargo/product evaluators, immutable outcomes and proportional per-outcome checks.
+Keep the project entrypoint a thin adapter over the existing/customised shared
+`@metaharness/harness` runtime in `coding-harness/`. Use Semantic Builder's verified
+delegation contract without copying its product gates or operating authorization.
+Keep one source integration owner, direct Cargo/product evaluators, immutable
+outcomes and proportional per-outcome checks.
+
+The shared runtime owns Router selection/escalation, API/native transports,
+workspaces, receipts, repair/review, GEPA/evolution and learning. Fabric owns tasks,
+frozen evaluators, mutation/ownership bindings, transport policy and sole integration.
+The project entrypoint must not add a local Router, retry state machine, workspace
+manager, receipt reducer, GEPA, Flywheel or AgenticOW controller. Reuse the existing
+delivery lifecycle behind this boundary, not a second controller beside it.
+
+Semantic Builder verified this boundary on main at
+`df74b4911cf05fa7ecdcdfe13c5e0d8533e97b12`, run
+`run-2026-09-24T18-24-37-723Z-4f9af644`, receipt
+`sha256:2f2c08d4008bd7100f152056b0172157ad034783a9a7fa3561e6110b87a6c8a2`.
+The successful receipt is Development evidence, not release authority or proof
+that Fabric has implemented this Proposed ADR.
 
 This Proposed ADR authorizes no implementation, scheduler restart, Codex restoration,
 publication or deployment. It specifies a reviewable repair contract for a subsequent
@@ -83,10 +100,14 @@ fake-worker exercise against each API actually selected before designing around 
 | --- | --- | --- |
 | `metaharness` factory | Scaffold and diagnostics | Inspect CLI help and generated artifacts in a temporary non-Git directory. A generated kernel/host scaffold is not a running delivery control plane. |
 | `@metaharness/harness` | Ready-stage control plane | Prove installed `HarnessKernel`, `AlgorithmRouter`, `AgentPool`, `VerifierRegistry`, `PolicyGate` and receipt APIs on pass, fail and policy-denied cases. |
-| `@metaharness/router` | Quality-first model/effort ranking | Verify actual selection/training exports and connect them to ordinary delivery only with downstream-verifier labels. |
+| `@metaharness/router` | Shared-runtime model/effort ranking | Verify delegation and downstream-verifier labels, not another adapter-local Router or route ledger. |
 | Host adapters | Native host integration | Verify their actual configuration/output role; retain repository native callbacks and actual executor binding. Adapter presence is not invocation proof. |
 | Darwin/GEPA | Deferred policy evolution | Verify application evaluator/native reflection injection before use; no stock `real`/synthetic score can promote Fabric policy. |
-| AVO/Ruflo Flywheel | Optional later variation/retrieval learning | Require a named objective and actual recorded runtime use; do not expand these during v1 completion. |
+| AVO/Flywheel/AgenticOW | Deferred shared-runtime variation/learning | Require a named authorized objective and recorded runtime use; no adapter-local controller or v1 expansion. |
+
+This table describes shared-runtime responsibilities, not dependencies to wire again
+inside the adapter. Test its public delegation boundary and the runtime's actual
+callbacks; an installed package or copied scaffold does not establish execution.
 
 Source-grounded Brain results inspected for this ADR are
 `metaharness/packages/harness/src/kernel.ts`,
@@ -117,11 +138,15 @@ generic no-proxy prose, not permission for arbitrary API fallback. Use the worki
 repository launcher/host contract; verify native readiness when a new invocation
 needs it, and never replace transport silently.
 
-OpenRouter, Requesty and provider API-key routes are forbidden. Historical
-`semantic-fabric-harness/scripts/evolve-openrouter.mjs` and Semantic Builder's
-separate API allowance provide no authority here. No cost, token, request,
+Current AGENTS.md forbids OpenRouter, Requesty and provider API-key routes. The
+prospective author route is isolated OpenRouter `deepseek/deepseek-v4.1-flash`,
+followed on confirmed output rejection by declared native subscription repair.
+It stays disabled until explicit repository authorization and transport-policy
+amendment admit it. Neither historical `evolve-openrouter.mjs` nor Semantic Builder's
+API allowance transfers authority. Native repair/review remains separate from API
+authoring, with current native-host restrictions intact. No cost, token, request,
 invocation, seat or provider-quota budget may gate, retry, route or score native
-subscription execution. Reported tokens may describe efficiency, never availability.
+subscription work. Reported tokens describe efficiency, never availability.
 
 If the requested native client/model is unavailable, preserve task state and report
 its exact client/model/error for account recovery. Do not substitute another host,
@@ -133,9 +158,11 @@ subscription route; the actual native client result is authoritative.
 
 Retain the existing conversation as executor/coordinator and sole integration writer
 on canonical `main`. Never create/switch branches, new worktrees or detached checkouts.
-Historical recovery worktrees are read-only evidence. One native response goes through
-the current `begin`/`bind`/`advance`/`submit`/`verify`/`finish` lifecycle; there is no
-second implementation host or automatically resumed background loop.
+Historical recovery worktrees are read-only evidence. Responses go through the
+existing `begin`/`bind`/`advance`/`submit`/`verify`/`finish` lifecycle. Any future
+authorized API author is isolated and owned by that runtime, not a second integration
+writer or automatically resumed background loop. Native-only execution remains
+current policy until that separate authorization exists.
 
 Register coherent public outcomes using `DeliveryTask`, exact scope, source identity,
 owner/thread, declared build/acceptance argv and review route. Keep frozen evaluator
@@ -155,7 +182,9 @@ and formal review need stable source, including unrelated files; agree a stable
 interval with other owners before collecting evidence. Do not claim a moving
 worktree is the reviewed candidate.
 
-Retain kernel verification per ready stage and outer durable request sequencing.
+Retain kernel verification per ready stage and the runtime's durable request sequencing.
+The entrypoint supplies task/configuration and returns runtime evidence references;
+it does not implement retry, escalation, workspace management or another state store.
 The upstream kernel's sequential loop is not a dependency scheduler, crash-resume
 store or failure-feedback transport. A replay of the same submitted response is
 not a repair. A fresh repair request carries the precise failed commands/review
@@ -192,11 +221,10 @@ Do not equate Oxigraph/library support with Fabric's supported surface or import
 Semantic Builder's Jena/ontology-creation gates wholesale. Fabric's actual native
 oracles and public query behavior remain fitness authority.
 
-### 5. Add measured routing only where it changes delivery
+### 5. Delegate routing and escalation to the shared runtime
 
-Connect eligible routing to `selectDeliveryRoute` or its explicit replacement,
-with one source of selection policy. Reuse existing model modules where their
-contracts fit; do not add an unused Router dependency or parallel route ledger.
+Pass authorized task/transport policy through the runtime's existing route boundary.
+Do not add a project-entrypoint Router, parallel route ledger or local escalation loop.
 Candidate identity includes host, exact model, effort, adapter/client version and
 task class. Separate `low`, `medium`, `high`, `xhigh`, `max` and supported `ultra`
 identities; never clamp an explicit native effort to fit stale code.
@@ -207,17 +235,18 @@ the current user restrictions and main model. Disabled Codex candidates may have
 offline contract coverage, but cannot gain fabricated availability/performance
 evidence. If reauthorized, admit their actual native model/effort identities.
 
-Require all deterministic checks and the declared independent review before a
-route earns successful outcome quality. Among capable qualifying routes, prefer
-measured accepted-outcome speed; include context, queue, tool, review and repair
-time. Keep model-only latency separate. Cold-start bootstrap is explicit and
-untrained, with a stable vendor-neutral tie-break among authorized peers.
+After explicit API authorization, the shared runtime selects DeepSeek V4.1 Flash
+authoring and declared native subscription repair/review. No same-task model race
+or GLM intermediate tier is introduced. Confirmed output rejection carries exact
+verifier feedback to declared repair; API account/authentication failure and unknown
+completion stop that lane. Native subscription/requested-model failure pauses for
+account recovery, not fallback. Structured-output failure is not native unavailability.
 
-Escalation follows a diagnosed unresolved failure, preserves a non-decreasing
-capability floor and excludes the failed route where required. Do not restart
-architecture or registration after ordinary review findings. Normal outcomes
-inform rejection/reliability; paired same-task/evaluator measurements are required
-for comparative learning. Infrastructure-invalid runs never train model quality.
+The runtime preserves capability floors, failed-route exclusions and outcome
+attribution. All required checks and review precede successful quality evidence;
+whole-outcome time remains distinct from model latency. Ordinary different-input
+outcomes do not become comparative training pairs. The adapter neither trains a
+separate Router nor restarts architecture/registration after routine findings.
 
 ### 6. Review, repair and finish the exact outcome
 
@@ -233,7 +262,8 @@ a registered policy to evade an outage. Per-outcome review is sufficient unless
 scope or risk requires more; do not repeat release-level ceremony per small commit.
 
 Retain each failed run and add the smallest useful regression. Attribute failures:
-application defect to native repair; evaluator mutation/defect to verifier owner;
+confirmed author/output defect to declared runtime repair; evaluator mutation/defect
+to verifier owner;
 missing artifact or inconclusive process execution to integrator; unavailable model
 to account recovery. A plain exit 1 stays unlabelled until diagnosed. No-progress
 repair pauses for a concrete diagnosis rather than consuming repeated identical turns.
@@ -245,7 +275,8 @@ Preserve incremental commits; no push, tag, deployment or publication is implied
 
 ### 7. Keep immutable evidence and optional memory
 
-Extend existing delivery records only where needed. Preserve task/evaluator/source
+Consume existing shared-runtime delivery records rather than creating adapter
+receipts. Preserve task/evaluator/source
 digests, requested/actual routes, client and executor identities, prerequisite
 hashes, commands/exits/durations, private output witnesses, review findings,
 repair parentage, integration commit and unavailable-host state. Actual native
@@ -258,10 +289,10 @@ must survive restart. Latest-status indexes may change; immutable receipts may n
 Hash-chain verification checks evidence integrity, not product correctness or
 remote-memory synchronization.
 
-Emit immutable routing outcome deltas and reduce them serially, exactly once,
-using one integration owner. Never let concurrent workers overwrite a shared
-Router snapshot. Freeze selection policy per run; revalidate mutable read
-dependencies before accepting external/sibling evidence.
+The shared runtime emits and reduces immutable routing outcomes exactly once;
+the project entrypoint must not maintain its own reducer or Router snapshot.
+Keep one integration owner and freeze selection policy per run. Revalidate mutable
+read dependencies before accepting external/sibling evidence.
 
 Use structured Ruflo MCP for optional recall and outcome/task state. Confirm the
 connection's repository binding before storing ADR graphs or project facts.
@@ -283,25 +314,18 @@ ADR-0055 forbids expanding Darwin/GEPA/AVO, retrieval tuning and benchmark train
 during v1 completion. Keep that restriction. Ordinary delivery repair does not
 require an evolution experiment or minimum training-set ceremony.
 
-When explicitly authorized later, GEPA/Darwin may mutate allowlisted harness
-policy through native reflection and the frozen Fabric evaluator. Product source,
-required tests, requirements, safety clauses, Cargo dependencies and sealed
-holdouts are outside the mutation surface. Use epoch-local opaque task IDs;
-freeze route/model/effort/toolchain/corpus identity. Synthetic bug-file ranking,
-stock `real` scores and another project's benchmark cannot authorize promotion.
+Any later explicitly authorized evolution delegates to the shared runtime's
+GEPA/evolution/learning path. Fabric supplies frozen native evaluators, admitted
+tasks and policy constraints, never a local GEPA, Flywheel, AgenticOW, AVO or
+promotion controller. Its product source, requirements, tests, safety clauses,
+Cargo dependencies and holdouts stay outside harness-policy mutation surfaces.
 
-At least five genuine training tasks and five sealed holdouts, reliable baseline
-comparisons, no correctness/security regression, clean replay and separate reviewed
-promotion are required. Small smoke runs remain diagnostic. Keep rejected and
-contaminated epochs as negative evidence; never relabel them or train from invalid
-results. Stop on a verified winner and retain a null outcome honestly.
-
-AVO requires a named multi-action objective and the same authority boundary.
-Ruflo Flywheel must expose its actual live workers, corpus and embedding identity
-through MCP, use a balanced frozen anchor and evaluation-only evidence, then a
-separate signed confirmed promotion transaction with rollback. Counts alone do
-not prove learning or safe activation. No autonomous generation is enabled by
-installing a package or writing this ADR.
+The runtime owns train/selection/holdout isolation, frozen execution identity,
+negative evidence, promotion and rollback. Synthetic ranking, stock `real` scores,
+small smoke runs or another project's benchmark cannot establish Fabric promotion.
+Runtime `@metaharness/flywheel` evolution is distinct from optional Ruflo memory
+learning; neither gets independent acceptance or integration authority. Package
+installation and this Proposed ADR enable no evolution or autonomous generation.
 
 ### 9. Preserve security and real resource limits
 
@@ -338,8 +362,10 @@ local build concurrency are distinct. Resource ceilings are not provider quotas.
 3. Freeze discriminating evaluator tests under separate ownership. Register one
    scoped repair outcome using the existing delivery contract and an acceptance
    plus build check; fix stale scope once before dispatch.
-4. Bind actual authorized native execution, repair through the current delivery
-   lifecycle, verify focused checks/build and obtain independent read-only review.
+4. Make the entrypoint delegate to the existing shared runtime; prove injected API
+   rejection/native repair without enabling a real API route. Bind authorized native
+   execution through the current lifecycle, verify focused checks/build and obtain
+   independent read-only review.
    Commit the verified slice and finish against its exact commit.
 5. Prove one real admitted Fabric outcome through that path, including a meaningful
    negative oracle and restart/failure evidence. Report accepted behavior and elapsed
@@ -379,6 +405,12 @@ checks at the integration/release boundary required by ADR-0055, not every ADR e
 
 - Offline tests prove upstream API use, exact native route forwarding, configured
   transport retention, API-key isolation, unavailable-model pause and no fallback.
+- Adapter tests prove shared-runtime delegation, prospective DeepSeek rejection to
+  declared native repair, no same-task race and no duplicate routing, workspace,
+  receipt or evolution state. Real API calls remain separately unauthorized.
+- Shared-runtime acceptance tests keep focused frozen checks per attempt and require
+  impacted build/regression/review joins before integration. Green tests cannot hide
+  failed native execution, invalid structured output or an empty patch.
 - Delivery tests reject wrong branch/path, unowned mutations, stale/replayed
   submissions, forged review identity and missing/failed build or acceptance evidence.
 - Recovery tests preserve failures, pending requests and locks, stop/reap child
@@ -387,8 +419,8 @@ checks at the integration/release boundary required by ADR-0055, not every ADR e
   behavior; live-source skips remain not-run. Existing Rust/runtime safety survives.
 - Routing tests preserve explicit choices/capability, separate effort identities,
   require verifier quality before latency and reduce immutable learning once.
-- One real authorized native outcome is reviewed, committed and finished against
-  exact evidence. Same-vendor review is recorded accurately while Codex is paused.
+- One real outcome through an authorized author route is reviewed, committed and
+  finished against exact evidence. Same-vendor review stays explicit while Codex is paused.
 - Harness dependencies stay outside deployable Cargo artifacts; optional memory,
   plugins and evolution cannot change acceptance or become new v1 gates.
 - Documentation-only validation checks ADR syntax, sequential number, links and
@@ -431,7 +463,7 @@ unrun proposals and current accepted evidence.
 
 ### Neutral
 
-- Claude-only execution and deferred v1 evolution remain explicit policy.
+- Claude-only native repair/review, prospective API authorization and deferred v1 evolution remain explicit.
 - Harness, native workers, deterministic evaluators and publication retain separate authority.
 
 ## Links
@@ -445,5 +477,6 @@ unrun proposals and current accepted evidence.
 - [G1-G6 application ledger](../plans/sota-application-completion-programme.md)
 - [Dated session handover](../plans/session-handover-2026-09-23.md)
 - Reference: Semantic Builder `docs/adr/ADR-0051-upstream-metaharness-application-delivery.md`
-  and `src/tools/application-development-harness/`, inspected at
-  `f3390f73b02223b9bb99602bbb792ecf15e99784`; verify current APIs before reuse.
+  and `src/tools/semantic-builder-harness/` delegating to
+  `src/tools/application-development-harness/`, verified at
+  `df74b4911cf05fa7ecdcdfe13c5e0d8533e97b12`; run/receipt identity is recorded above.
