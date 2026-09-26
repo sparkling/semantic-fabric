@@ -64,6 +64,12 @@ export function route(value: unknown): DeliveryRoute {
   if (r.host === 'claude-code' && r.effort === 'ultra') throw new Error('DELIVERY_EFFORT_NOT_NATIVE');
   return { host: r.host, model, effort: r.effort as DeliveryRoute['effort'] };
 }
+/** Currently authorized execution hosts. Structural parsing above stays independent of this so
+ * historical records for a disabled host remain readable; only execution entry points recheck it. */
+export const ENABLED_HOSTS: readonly NativeHost[] = ['claude-code'];
+export function assertHostEnabled(host: NativeHost): void {
+  if (!ENABLED_HOSTS.includes(host)) throw new Error(`DELIVERY_HOST_PAUSED:${host}`);
+}
 export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
   if (task.preserveMainModel && !task.requested) throw new Error('DELIVERY_CURRENT_MAIN_ROUTE_REQUIRED');
   if (task.taskClass === 'difficult' && !task.selectionReason?.trim()) throw new Error('DELIVERY_NAMED_DIFFICULTY_REQUIRED');
