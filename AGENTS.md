@@ -20,7 +20,8 @@ amendment, parallel-execution policy) describe that later, now-paused period
 and are retained as history, not current instruction.
 
 Native subscription transport for Claude Code in this repository runs through
-the user-authorized local `9router` gateway (`ANTHROPIC_BASE_URL=http://127.0.0.1:20128/v1`,
+the user-authorized `9router` gateway on the Mac
+(`ANTHROPIC_BASE_URL=http://macbook-pro.tail448fa.ts.net:20128/v1`,
 already configured in `~/.claude/settings.json` with its own
 `ANTHROPIC_AUTH_TOKEN` and `cc/claude-*` model aliases). This is a native
 subscription transport substitution, not a provider-API-key or OpenRouter
