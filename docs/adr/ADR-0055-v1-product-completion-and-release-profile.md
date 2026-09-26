@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-23
+updated: 2026-09-26
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -22,6 +22,19 @@ implements: []
 ---
 
 # V1 product completion and release profile
+
+## 2026-09-26 model access and spending amendment
+
+The owner authorizes Claude Code and Codex through the configured 9router gateway
+and direct OpenRouter access through the existing private environment credentials.
+This supersedes earlier access prohibitions. Existing task model assignments and
+native harness adapters remain configured; access authorization does not claim
+that an automatic OpenRouter dispatcher has been implemented here.
+Each metered OpenRouter request is limited to $1. There is no task or cumulative
+spending cap. Retain spend accounting, unknown-charge records and protection
+against replaying the same request. Subscription-covered frontier models continue
+through their subscription routes. Every API dispatcher must enforce the $1
+maximum before dispatch; credentials alone are not enforcement.
 
 ## Status boundary
 
