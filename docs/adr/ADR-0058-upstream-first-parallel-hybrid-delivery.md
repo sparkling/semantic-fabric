@@ -58,10 +58,21 @@ Validation: strict build/manifest hardening passes; 138 tests across 13 injected
 functional suites pass (runner, learning, policy, ready/candidate/API/workflow,
 manifest, native adapters/client/process/runtime ledger). Activated policy reaches
 ordinary worker context without evaluation override. Earlier pool slice passed
-84 tests. No performance tests, paid calls, application tasks or publication ran.
+84 tests. This implementation validation used injected tests; live proof follows.
 Exact Flywheel 0.1.12 validation exposed an existing output-ceiling test race:
 the child can exit zero before termination. The test now checks refusal through
 the real success predicate, bounded output and termination evidence, not OS timing.
+
+### September 28 live whole-outcome proof
+Command: `node coding-harness/scripts/live-delivery-pool-proof.mjs --whole-outcome`.
+At `3ce6c2be`, two isolated fixtures passed real DeepSeek/high planning, authoring, frozen checks and fresh independent review through ordinary ready pool.
+Evidence: `.metaharness/delivery/whole-outcome-proof-Oe3Dyf/result.json`; accepted candidates are not integrated application outcomes.
+Proof digest: `0a84c877162780e561ead164221be7b98503649e8fad7fd3171a337c99531d4c`; both saved outcome hashes and upstream receipt chains verify.
+Six confirmed API calls cost $0.002079054; maximum pre-dispatch request bound $0.2650685. Planner overlap was 5661ms; no speedup claim.
+Earlier `whole-outcome-proof-wOy3Lr` remains negative ($0.00163645): unsupported fixture build argv stopped both outcomes; one real Opus/high planner repair succeeded.
+Correction `3ce6c2be` preflights exact build/acceptance argv through the harness boundary; build and 18 focused tests pass. No model blame or blind replay.
+Read-only restart shows no Fabric/scratch canonical active writer or operation; source unchanged. Initial/final host samples show 74.3% interval CPU idle; checks bounded to two.
+Dependent live proof is blocked: no production candidate-integration seam; historical accepted API source returns `DELIVERY_ACCEPTED_INPUT_CHANGED`. No acceptance was fabricated, programme resumed, policy activated or artefact published.
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness
