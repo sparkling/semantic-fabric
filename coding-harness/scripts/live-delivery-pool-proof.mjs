@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Explicit local harness proof; paid read-only reviews, never application work.
+// Explicit local harness proof; paid fixture outcomes or read-only reviews, never application work.
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash } from '@metaharness/harness';
@@ -14,8 +14,15 @@ import { createDeliveryApi } from '../dist/delivery-api.js';
 import { verifyNativeStage } from '../dist/delivery-stage.js';
 import { atomicJson } from '../dist/delivery-workspace.js';
 import { buildCheckEnvironment } from '../dist/delivery-process.js';
+import { dispatchDeliveryReady } from '../dist/delivery-ready.js';
+import { runDeliveryOutcome } from '../dist/delivery-runner.js';
+import { createDeliveryExecutor } from '../dist/delivery-executor.js';
 
 const directory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+if (process.argv[2] === '--whole-outcome') {
+  if (process.argv.length > 4 || (process.argv[3] && process.argv[3] !== '--preflight')) throw new Error('usage: live-delivery-pool-proof.mjs --whole-outcome [--preflight]');
+  await wholeOutcomeProof(process.argv[3] === '--preflight');
+} else {
 const sourceOnly = process.argv[2] === '--source-review-only';
 if (process.argv.length > (sourceOnly ? 3 : 2)) throw new Error('usage: live-delivery-pool-proof.mjs [--source-review-only]');
 const harness = new DeliveryHarness(resolve(directory, '..'));
@@ -104,3 +111,101 @@ console.log(JSON.stringify({ proofPath: join(proofDirectory, 'result.json'), pas
   knownActualUsd: proof.knownActualUsd, unknownChargeTasks: proof.unknownChargeTasks,
   outcomes: result.results.map(row => ({ id: row.id, status: row.status, accepted: row.value?.accepted, issues: row.value?.issues })) }));
 process.exitCode = passed ? 0 : 1;
+}
+
+async function wholeOutcomeProof(preflight) {
+  const canonical = new DeliveryHarness(resolve(directory, '..'));
+  if (canonical.inspect().active !== null || canonical.inspect().operation !== null) throw new Error('ACTIVE_WRITER');
+  if (!preflight && !process.env.OPENROUTER_API_KEY) throw new Error('API_KEY_UNAVAILABLE');
+  if (existsSync(join(canonical.directory, 'api/unknown-charge.json'))) throw new Error('CANONICAL_UNKNOWN_CHARGE_HOLD');
+  const original = canonical.snapshot(), proofRoot = mkdtempSync(join(canonical.directory, 'whole-outcome-proof-'));
+  const fixture = mkdtempSync(join(tmpdir(), 'fabric-live-outcomes-'));
+  const root = join(fixture, 'canonical'), parentDirectory = join(fixture, 'candidates');
+  mkdirSync(root); mkdirSync(parentDirectory); mkdirSync(join(root, 'coding-harness'));
+  writeFileSync(join(root, '.gitignore'), '.metaharness/\n');
+  const paths = ['product.txt', 'other.txt'];
+  for (const path of paths) writeFileSync(join(root, path), 'before\n');
+  writeFileSync(join(root, 'coding-harness/check.mjs'),
+    "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst path = process.argv[2];\nassert.ok(['product.txt', 'other.txt'].includes(path));\nassert.equal(readFileSync(new URL('../' + path, import.meta.url), 'utf8'), 'fixed\\n');\n");
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: buildCheckEnvironment(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git('init', '-b', 'main'); git('config', 'user.name', 'Fabric live harness proof'); git('config', 'user.email', 'harness@example.invalid');
+  git('add', '.'); git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: frozen live harness fixture');
+  const harness = new DeliveryHarness(root), source = harness.snapshot();
+  const route = { host: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', effort: 'high' };
+  const outcomes = paths.map((path, index) => ({ task: {
+    schemaVersion: 1, id: `fabric-live-fixture-${index}`, owner: 'fabric-proof-integrator', thread: 'fabric-live-whole-outcome',
+    requirement: `Harness fixture only: replace the entire contents of ${path} with exactly fixed followed by one newline. Preserve all other files. This is transport/lifecycle proof, not product work. Plan against declared build and acceptance check IDs.`,
+    taskClass: 'implementation', host: route.host, scope: [path], checks: [
+      { id: 'build', kind: 'build', argv: ['node', '--check', 'check.mjs'], cwd: 'coding-harness' },
+      { id: 'acceptance', kind: 'acceptance', argv: ['node', 'check.mjs', path], cwd: 'coding-harness' },
+    ] }, handoff: { ...route, executorId: `live-api-author-${index}`, authentication: 'openrouter-api', observation: 'Actual isolated OpenRouter executor; provider request evidence retained' }, resources: [`private-fixture-${index}`] }));
+  const manifest = { schemaVersion: 1, parentDirectory, maxConcurrency: 2, mode: 'run', outcomes };
+  atomicJson(join(proofRoot, 'manifest.json'), manifest);
+  const baseline = paths.map(path => ({ path, exitCode: spawnSync(process.execPath, ['check.mjs', path],
+    { cwd: join(root, 'coding-harness'), env: buildCheckEnvironment(), stdio: 'ignore' }).status }));
+  if (baseline.some(row => row.exitCode !== 1)) throw new Error('LIVE_FIXTURE_BASELINE_NOT_RED');
+  const excluded = [];
+  for (const conflict of ['path', 'resource']) {
+    const blocked = structuredClone(manifest);
+    if (conflict === 'path') blocked.outcomes[1].task.scope = blocked.outcomes[0].task.scope;
+    else blocked.outcomes[1].resources = blocked.outcomes[0].resources;
+    try { await dispatchDeliveryReady(harness, blocked, async () => { throw new Error('CONFLICT_DISPATCHED'); }); }
+    catch (error) { if (!String(error).includes('RESOURCE_CONFLICT')) throw error; excluded.push(conflict); }
+  }
+  if (excluded.length !== 2 || readdirSync(parentDirectory).length) throw new Error('CONFLICT_PROOF_FAILED');
+  const events = [], samples = [], completed = [];
+  let previousCpu;
+  const safeRead = path => { try { return readFileSync(path, 'utf8').trim(); } catch { return null; } };
+  const sample = () => {
+    const counters = safeRead('/proc/stat').split('\n')[0].trim().split(/\s+/).slice(1).map(Number);
+    const cpu = { total: counters.slice(0, 8).reduce((sum, value) => sum + value, 0), idle: counters[3] + counters[4] };
+    const idleFraction = previousCpu ? (cpu.idle - previousCpu.idle) / (cpu.total - previousCpu.total) : null; previousCpu = cpu;
+    const row = { at: Date.now(), availableParallelism: availableParallelism(), cpuMax: safeRead('/sys/fs/cgroup/cpu.max'),
+      cpusAllowed: safeRead('/proc/self/status').split('\n').find(line => line.startsWith('Cpus_allowed_list:')),
+      idleFraction, memory: safeRead('/proc/meminfo').split('\n').filter(line => /^(MemAvailable|SwapFree):/.test(line)),
+      pressure: Object.fromEntries(['cpu', 'memory', 'io'].map(name => [name, safeRead(`/proc/pressure/${name}`)])),
+      heavyCheckConcurrency: 2 };
+    samples.push(row); atomicJson(join(proofRoot, 'capacity.json'), samples);
+    console.log(JSON.stringify({ phase: 'capacity', at: row.at, idleFraction, heavyCheckConcurrency: 2 }));
+  };
+  sample();
+  const prerequisites = { sourceDigest: original.digest, fabricCommit: canonical.context.head(), fixtureRoot: root, fixtureCommit: git('rev-parse', 'HEAD'),
+    baseline, excluded, model: route, apiKeyPresent: Boolean(process.env.OPENROUTER_API_KEY), preflight,
+    dependentProof: { status: 'blocked', reason: 'No production candidate integration seam; historical accepted delivery-api.ts input is stale. No fabricated acceptance or extra model join.' } };
+  atomicJson(join(proofRoot, 'prerequisites.json'), prerequisites);
+  console.log(JSON.stringify({ phase: preflight ? 'preflight-complete' : 'live-start', pid: process.pid, proofRoot, fixtureRoot: root, model: route.model }));
+  if (preflight) return;
+  const controller = new AbortController(), timer = setInterval(sample, 30000);
+  const stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  try {
+    const result = await dispatchDeliveryReady(harness, manifest, async (candidate, mode, id, owner, signal) => {
+      if (mode !== 'run') throw new Error('WHOLE_OUTCOME_MODE_REQUIRED');
+      const task = candidate.read(id).task, actual = createDeliveryExecutor(candidate, hash(task));
+      const outcome = await runDeliveryOutcome(candidate, id, owner, { signal, execute: async (request, files, checks, signal) => {
+        const mark = phase => {
+          const event = { at: Date.now(), taskId: id, phase, stage: request.stage, requestId: request.id, route: request.route };
+          events.push(event); atomicJson(join(proofRoot, 'events.json'), events); console.log(JSON.stringify(event));
+        };
+        mark('start'); try { return await actual(request, files, checks, signal); } finally { mark('settled'); }
+      } });
+      completed.push({ taskId: id, success: outcome.success, failure: outcome.failure, receiptPath: outcome.receiptPath,
+        sourceDigest: outcome.sourceAfter, actualUsd: outcome.knownActualUsd, receiptDigest: hash(JSON.parse(readFileSync(outcome.receiptPath, 'utf8'))) });
+      atomicJson(join(proofRoot, 'outcomes.json'), completed);
+      return outcome.success;
+    }, controller.signal);
+    const first = outcomes.map(({ task }) => ({ id: task.id,
+      start: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'start')?.at,
+      end: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'settled')?.at }));
+    const overlapMs = Math.max(0, Math.min(...first.map(row => row.end ?? 0)) - Math.max(...first.map(row => row.start ?? Infinity)));
+    const unchanged = harness.snapshot().digest === source.digest && canonical.snapshot().digest === original.digest;
+    const passed = unchanged && overlapMs > 0 && completed.length === 2 && completed.every(row => row.success)
+      && result.results.every(row => row.status === 'fulfilled');
+    const proof = { ...prerequisites, result, completed, events, first, overlapMs, unchanged, passed,
+      pool: deliveryPoolIdentity(), restart: { fabric: canonical.inspect(), scratch: harness.inspect() },
+      knownActualUsd: completed.reduce((sum, row) => sum + row.actualUsd, 0) };
+    atomicJson(join(proofRoot, 'result.json'), proof);
+    console.log(JSON.stringify({ phase: 'live-complete', proofRoot, passed, overlapMs, knownActualUsd: proof.knownActualUsd,
+      outcomes: completed.map(({ taskId, success, failure }) => ({ taskId, success, failure })), dependentProof: prerequisites.dependentProof }));
+    process.exitCode = passed ? 0 : 1;
+  } finally { clearInterval(timer); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); sample(); }
+}
