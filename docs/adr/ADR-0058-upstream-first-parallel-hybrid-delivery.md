@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: implemented
 date: 2026-09-26
 updated: 2026-09-28
 tags: [dev-process, metaharness, ruflo, parallel-delivery, openrouter]
@@ -8,11 +8,11 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 
 # ADR-0058: Upstream-first parallel hybrid delivery
 
-- **Status**: Proposed; review and repair plan only
+- **Status**: Implemented for bounded optional transport, pool and source custody
 - **Date**: 2026-09-26
 - **Deciders**:
 
-## September 28 implemented transport slice
+## September 28 implemented scope and exact evidence
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness
@@ -29,23 +29,69 @@ reservations stop dispatch. Live process-owned reservations permit concurrent
 calls. Source application, checks and acceptance stay with the existing main-only
 integrator and MetaHarness verifier seam. No second scheduler was introduced.
 
-Node 24 engines/declarations and strict library checking are active. Validation
-passed the existing build (TypeScript, manifest sync, runtime hardening) and all
-46 focused delivery API/runtime/workflow tests. Generated outputs require non-group-writable
-modes; the runtime hardening guard remains unchanged.
+Node 24 engines/declarations and strict library checking are active. Commits
+`acec0d71` and `1197b258` add bounded API proposals, exact application binding,
+repair prerequisites and process custody. `a3d8c8d9` completes the real
+`known-http-classification-20260928` outcome: DeepSeek/high author and fresh
+DeepSeek/high review, exact proposed bytes, build and 55 tests, valid MetaHarness
+receipts and exact-commit finish. Known charged HTTP failures keep confirmed cost;
+they never become unknown completion or a credit fallback. Author/review cost was
+$0.0440979; terminal run digest is
+`86e38ed69b955828d1b9f655e03bee3ccb34c138eea9322b0d280d9913293fe7`.
 
-This is partial transport evidence, not full ADR completion. Native fallback,
-shared native/API planning, initial live cascade, compatible pool/source handoff
-and restart admission still require proof. Failed native attempts remain evidence;
-injected transport tests do not stand in for real model execution.
+`e20781fe` adds the actual `@claude-flow/cli` 3.47.0 bounded-pool leaf,
+`dist/src/services/bounded-worker-pool.js`, SHA-256
+`757824847c1b3a394f78441f84e519a0edcdf6731d39fdfcd7fb2ed37a00fce0`.
+It invokes no Ruflo CLI or MCP server. Thin adapters preserve path/resource
+exclusions, pre-abort checks, noncooperative drain and retained failed evidence.
+Non-Git candidates reuse the ordinary lifecycle, require external parent roots
+and exact-file scopes, reject tracked runtime artifacts, and enforce original
+out-of-scope source before begin as well as afterward. Only main can integrate.
+Accepted-parent input requires a completed integrated outcome and unchanged file
+bytes/mode; unrelated later commits do not invalidate unchanged selected inputs.
+
+Final validation: `npm run build` and 77 tests across delivery candidate, API,
+runtime, workflow and manifest suites. The existing manifest regression exposed
+missing ADR-0056/0057/0058 protection entries; the independently reviewed fix adds
+only those three paths and generated metadata. Build retains production hash coverage
+and runtime hardening. The optional pool needs the full development install; its
+standalone leaf has no imports and is absent from the frozen controller's 92-module
+closure. Existing Router/learning paths stay intact; no new promotion is claimed.
+The full development dependency audit reported 35 advisories (24 moderate, 10 high,
+one critical); this slice does not claim broad dependency remediation or release safety.
+
+Live proof records are local under `.metaharness/delivery/pool-proof-<digest>/`:
+
+- `b4e89dbd1fbe7e65e74b075e86351e0d91415e7f35363009a4ac60fd95543c09`
+  records 124202ms actual API overlap, $0.0872046 known cost and accepted custody
+  review. Its source review rejected a pre-begin baseline gap; the batch stays negative.
+- `7a54367acc4da800473ea079d83b5029617a55fa89f53d7112faad379d6620a6`
+  records accepted fresh source-only review after repair, valid kernel receipt,
+  65 tests/build and $0.0567822 known cost. It claims no new parallel overlap.
+- The join reuses custody claims only for byte-identical pool/context/process/API
+  and package files. Changed candidate code is covered by the final source review,
+  never by the earlier receipt. Earlier rejected batches remain untouched.
+- Both review packets consumed `coding-harness/src/delivery-api.ts` from the
+  retained external child snapshot, accepted from `a3d8c8d9`; SHA-256
+  `e4de48b7c0348fed7d866ff50b0a40a6dc07d2596b9e322ed6651439363a90e4`.
+  Final child root is `/tmp/fabric-pool-proof-Np2cYj/delivery-candidate-OqKGGQ`.
+  No unknown charges occurred in these proofs.
+
+Read-only restart inspection after acceptance found no active writer or operation:
+90 completed, 88 superseded and five paused historical task records. Paused SQLite
+demand-driven work still needs owner resumption and source reconciliation; older
+scope-amendment/native-stall records are history, not ready dispatch. No application
+task is authorized ready by this audit. Direct execution remains available after
+resumption; harness use is optional. Native fallback admission is tested, not a new
+live native-repair claim. No application concurrency, speedup, GCP parity, broader
+evolution or product/release completion follows from this bounded implementation.
 
 ## September 28 implementation handoff (current plan)
 
 This section supersedes conflicting September 26 proposals below. Those sections
-remain historical source findings, not another executable checklist. Status remains
-Proposed: documentation refresh does not claim this repository implemented Builder.
-Implement only after the owner authorizes this ADR; reconcile explicit local host
-and concurrency restrictions in the same first slice. No publication or application
+remain historical source findings, not another executable checklist. The owner
+authorized the bounded implementation evidenced above; this is not a claim that
+Fabric copied every Builder capability. No publication or application
 programme resumption follows from documentation or harness acceptance.
 
 ### Finish criteria and scope discipline
@@ -58,10 +104,9 @@ contract; reuse the existing implementation when it already satisfies the contra
 Keep one task/outcome through repair; no new task, calibration, inventory or repin
 for each finding. Focused regression, independent review and impacted build once
 per coherent slice; broader join at acceptance, not between every small repair.
-Propose removal of mandatory worker-only maintenance repair where it causes
-self-hosting loops; amend local instructions with owner approval before using direct
-scoped repair. Application execution still uses the project harness. Direct edits
-never inherit old worker acceptance receipts.
+Direct implementation, repair, builds and tests are allowed for application and
+harness work. Optional orchestration retains parallelism and learning; no compulsory
+harness gate remains. Direct edits never inherit old worker acceptance receipts.
 
 Completion means: configured routes work, deterministic checks and independent
 review pass, failure/repair and source-handoff contracts are proved, and restart
@@ -178,7 +223,7 @@ Acceptance in this repository, within one repair outcome:
    installed versions, exact commands, source/receipt identities, costs and limits.
    Update this ADR to Implemented only for proven scope; leave programme stopped.
 
-## Fabric-specific implementation map (September 28)
+## Historical Fabric baseline gap map (September 28)
 
 Rechecked clean main `99af9439121ea0879496b8bac61a349a3caa1cf2`.
 Fabric is Rust semantic-data delivery; preserve public-query and conformance
@@ -207,9 +252,8 @@ acceptance plus SQLite/PostgreSQL/MySQL isolation. Harness is development-only.
 - Package engines currently admit Node20 and `@types/node: latest` is not a
   Node24 guarantee. Pin major24 declarations and prove strict dependency closure.
 
-Future implementer validation: commands below are check payloads under the existing
-delivery task, not permission to bypass it. Direct maintenance commands require the
-explicit scoped maintenance amendment first.
+Validation commands may run directly or through an optional delivery task. Scope,
+source ownership, meaningful acceptance and independent review remain required.
 ```bash
 npm --prefix coding-harness run build
 npm --prefix coding-harness test -- --run __tests__/delivery-runtime.test.ts __tests__/delivery-workflow.test.ts

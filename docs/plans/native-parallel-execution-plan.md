@@ -1,18 +1,19 @@
 # Native parallel execution and model usage
 
-Date: 2026-09-19. Updated: 2026-09-20. **2026-09-22 correction: Codex is
-paused (user instruction; application work also remains paused).** The
-coordinator and every worker/reviewer route below is Claude Code, via the
-user-authorized local 9router subscription transport, until the user
-explicitly re-authorizes Codex. Everything below that names Codex, `codex
-exec`, or a Codex model tier is historical evidence from the dual-provider
-period (2026-09-19 through 2026-09-22) and comparison data, not a currently
-active dispatch instruction; do not launch a Codex process from this plan.
-Status: execution authorized by the user's goal "complete the programme using
-the harness"; G3 work is active, subject to the separate 2026-09-22 pause.
-Scope: native Codex/ChatGPT and Claude subscription agents, using the existing
-delivery harness. Based on the three-worker design discussion in Ruflo swarm
-`swarm-1789853768325-0ps4xv` and repository evidence through `f2d2a469`.
+Date: 2026-09-19. Updated: 2026-09-28.
+
+**Current policy:** Direct application and harness implementation, repair, builds
+and tests are authorized methods. Harness orchestration, parallelism and learning
+are optional, never compulsory gates. Both configured native hosts and the isolated
+bounded OpenRouter adapter are authorized under [ADR-0058](../adr/ADR-0058-upstream-first-parallel-hybrid-delivery.md).
+Preserve one main integrator, source/resource isolation and independent review.
+Application work remains paused pending separate owner resumption; this plan does
+not dispatch it. Native transport and exact-client failure rules remain in force.
+
+**Historical plan below:** September 19-23 assignments, Claude-only restrictions,
+mandatory-harness wording and queue snapshots retain their dated evidence only.
+They do not override current policy or establish present readiness. The original
+plan used Ruflo swarm `swarm-1789853768325-0ps4xv` and source through `f2d2a469`.
 
 ## Objective and evidence
 

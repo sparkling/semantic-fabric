@@ -8,13 +8,14 @@
 > it via `@AGENTS.md` at the top of `CLAUDE.md`. Edit SHARED instructions HERE.
 > Claude-Code-only guidance lives in `CLAUDE.md` (below its `@AGENTS.md` line).
 
-## Harness repair authorization (2026-09-28 owner amendment)
+## Engineering execution policy (2026-09-28 owner amendment)
 
 The owner authorizes ADR-0058 implementation with the same model access and
 limits as Semantic Builder. The Claude-only restriction below is historical and
 revoked. Native Codex and Claude Code may execute and independently review
-implementation, repair and review. Direct edits, tests and builds are authorized;
-the harness is available orchestration, never a compulsory authoring/test gate.
+implementation, repair and review. Direct implementation, repair, builds and tests
+are authorized for application and harness work. Harness orchestration, parallelism
+and learning remain optional; harness execution is never a compulsory gate.
 Keep one integrator on canonical `main`, source-bound acceptance and independent
 review. Application work remains paused until separately resumed by the owner.
 
