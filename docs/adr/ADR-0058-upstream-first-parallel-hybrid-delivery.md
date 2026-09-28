@@ -72,7 +72,7 @@ Six confirmed API calls cost $0.002079054; maximum pre-dispatch request bound $0
 Earlier `whole-outcome-proof-wOy3Lr` remains negative ($0.00163645): unsupported fixture build argv stopped both outcomes; one real Opus/high planner repair succeeded.
 Correction `3ce6c2be` preflights exact build/acceptance argv through the harness boundary; build and 18 focused tests pass. No model blame or blind replay.
 Read-only restart shows no Fabric/scratch canonical active writer or operation; source unchanged. Initial/final host samples show 74.3% interval CPU idle; checks bounded to two.
-Dependent live proof is blocked: no production candidate-integration seam; historical accepted API source returns `DELIVERY_ACCEPTED_INPUT_CHANGED`. No acceptance was fabricated, programme resumed, policy activated or artefact published.
+Manual accepted-source handoff passes in the same scratch fixture: `manual-handoff.json` beside that result verifies both review/receipt chains, four canonical checks, scratch-main commit `7e63869b735c106a2d2790f4e88d6e6061319934`, and exact committed-byte readback through existing candidate creation (proof digest `ff9e24e262b84a1e84e2ca41d10c86cca79c5205d537675c82da1a56c4484693`). Remaining gap is automated production candidate receipt/state adoption, not root manual acceptance. Historical API input still returned `DELIVERY_ACCEPTED_INPUT_CHANGED`; no receipt import, `finish`, automatic accepted-parent gate, live child, extra model call, programme resumption, policy activation or publication is claimed.
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness
