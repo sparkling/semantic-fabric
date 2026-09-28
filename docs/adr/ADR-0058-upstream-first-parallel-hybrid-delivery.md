@@ -14,6 +14,41 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 
 ## September 28 implemented scope and exact evidence
 
+Ordinary `delivery <root> ready <manifest.json>` now reaches the existing upstream
+pool, not only the proof script. Explicit ready cohorts reuse candidate source
+custody and ordinary begin/bind plus packet/propose handling, with exact accepted
+parent validation, path/resource exclusions, cancellation drain and retained
+evidence roots. No second scheduler, automatic programme start or candidate
+acceptance was added. Packets await external execution; proposals await sole-root
+application/check/review/integration. Functional barrier tests establish callback
+overlap without performance testing or speed claims.
+
+Run `npm --prefix coding-harness run delivery -- /absolute/repository ready /absolute/ready.json`.
+Manifest fields: `schemaVersion: 1`, existing external absolute `parentDirectory`,
+positive `maxConcurrency`, `mode: "packet"` or `"propose"`, and `outcomes`. Each
+outcome contains ordinary `task`, actual executor `handoff`, explicit `resources`,
+and optional `acceptedParent`/`acceptedInputs`. Packet mode awaits execution;
+proposal mode requires the isolated API route. Continue using the returned
+`candidateRoot` with ordinary CLI status/submit/advance/verify commands. Context
+reload reads canonical-owned scope/baseline custody and rejects source drift;
+candidate finish remains forbidden. Shared canonical API accounting prevents
+candidate isolation from bypassing unknown-charge holds. A real subprocess test
+continues ready output through implementation, checks, independent review and
+verification without claiming a real model invocation.
+
+Validation for this entry: `npm --prefix coding-harness run build` passes strict
+TypeScript, manifest synchronization and hardening; `npm --prefix coding-harness
+test -- --run __tests__/delivery-ready.test.ts __tests__/delivery-candidate.test.ts
+__tests__/delivery-api.test.ts __tests__/delivery-runtime.test.ts
+__tests__/delivery-workflow.test.ts __tests__/manifest.test.ts` passes 84 tests.
+No performance tests, paid calls, application tasks or publication ran.
+
+Architecture assessment remains scoped: ordinary delivery does not consume the
+historical `PersistentRoutedAgentPool` learning history. Installed Router and the
+older programme/controller callsites are not ordinary-delivery learning proof.
+This entry closes pool reachability, not full Builder learning or autonomous
+whole-outcome parity. Learning promotion and application resumption remain held.
+
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness
 remains optional orchestration/learning, not a compulsory application gate.

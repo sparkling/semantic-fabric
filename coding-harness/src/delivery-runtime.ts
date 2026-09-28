@@ -145,7 +145,7 @@ export class DeliveryHarness {
         || previous.sourceDigest !== source || previous.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_PENDING_API_REQUEST_REQUIRED');
       await this.assertPrerequisites(run, previous);
       const path = resolve(evidencePath);
-      if (dirname(path) !== join(this.directory, 'api') || !/^request-[a-f0-9]{64}\.json$/.test(basename(path))) throw new Error('DELIVERY_API_EVIDENCE_PATH');
+      if (dirname(path) !== (this.context.apiDirectory ?? join(this.directory, 'api')) || !/^request-[a-f0-9]{64}\.json$/.test(basename(path))) throw new Error('DELIVERY_API_EVIDENCE_PATH');
       const evidence = readJson(path) as DeliveryApiEvidence;
       if (evidence.stageRequestId !== requestId || evidence.taskDigest !== hash(run.task)
         || evidence.packet !== previous.stage || evidence.requestedModel !== previous.route.model

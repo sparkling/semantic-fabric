@@ -6,6 +6,7 @@ export interface DeliveryContext {
   readonly kind: 'main' | 'candidate';
   readonly root: string;
   readonly directory: string;
+  readonly apiDirectory?: string;
   assert(): void;
   head(): string;
   snapshot(): SourceSnapshot;

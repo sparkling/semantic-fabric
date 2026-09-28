@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { resolve, join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { hash } from '@metaharness/harness';
 import { fileURLToPath } from 'node:url';
 import { DeliveryHarness } from './delivery-runtime.js';
@@ -9,17 +9,27 @@ import { resolveWorkspacePath } from './workspace.js';
 import { createDeliveryApi, renderDeliveryPrompt } from './delivery-api.js';
 import type { NativeHandoff } from './delivery-contracts.js';
 import { bindAppliedProposal } from './delivery-proposal.js';
+import { dispatchDeliveryReady } from './delivery-ready.js';
+import { reopenDeliveryCandidate } from './delivery-candidate.js';
 
 /** API proposals never edit source or imply acceptance. Native handoffs and
  * optional Ruflo mirroring remain owned by the active integration host. */
-export async function deliveryCli(args: string[], signal?: AbortSignal): Promise<boolean> {
+export async function deliveryCli(args: string[], signal?: AbortSignal, candidate?: DeliveryHarness): Promise<boolean> {
   const [root, command, ...rest] = args;
   const counts: Record<string, number> = { begin: 1, status: 1, inspect: 0, bind: 3, check: 3, verify: 2, finish: 3,
-    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3 };
+    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3, ready: 1 };
   if (!root || !(command in counts) || rest.length !== counts[command]) {
-    throw new Error('usage: delivery <repository-root> begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
+    throw new Error('usage: delivery <repository-root> ready <manifest.json> | begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
   }
-  const harness = new DeliveryHarness(resolve(root));
+  if (candidate && (candidate.context.kind !== 'candidate' || candidate.root !== resolve(root))) throw new Error('DELIVERY_CANDIDATE_IDENTITY');
+  const reopened = !candidate && existsSync(join(resolve(root), '.metaharness/delivery/candidate.json')) ? reopenDeliveryCandidate(resolve(root)) : undefined;
+  const harness = candidate ?? reopened?.harness ?? new DeliveryHarness(resolve(root));
+  if (command === 'ready') {
+    const result = await dispatchDeliveryReady(harness, readJson(resolve(rest[0])),
+      (selected, mode, id, owner, signal) => deliveryCli([selected.root, mode, id, owner], signal, selected), signal);
+    console.log(JSON.stringify(result, null, 2));
+    return result.results.every(row => row.status === 'fulfilled');
+  }
   if (command === 'inspect') { console.log(JSON.stringify(harness.inspect(), null, 2)); return true; }
   const [id, owner, extra] = rest;
   if (command === 'submit') {
@@ -52,7 +62,7 @@ export async function deliveryCli(args: string[], signal?: AbortSignal): Promise
       writeFileSync(path, JSON.stringify({ request: action.request, prompt: renderDeliveryPrompt(action.request, files, checks) }), { flag: 'wx', mode: 0o600 });
       console.log(JSON.stringify({ packetPath: path, status: 'awaiting-executor' })); return true;
     }
-    const proposal = await createDeliveryApi({ directory: join(harness.directory, 'api') })(action.request, files, checks, hash(run.task), signal);
+    const proposal = await createDeliveryApi({ directory: harness.context.apiDirectory ?? join(harness.directory, 'api') })(action.request, files, checks, hash(run.task), signal);
     if (harness.snapshot().digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     const path = join(harness.directory, `proposal-${proposal.evidence.requestId}.json`);
     writeFileSync(path, JSON.stringify({ ...proposal, sourceBefore }), { flag: 'wx', mode: 0o600 });

@@ -17,7 +17,7 @@ export function bindAppliedProposal(harness: DeliveryHarness, id: string, input:
   const request = run.workflow?.requests.find(request => request.id === response.requestId);
   if (!request || request.route.host !== 'openrouter') throw new Error('DELIVERY_PENDING_API_REQUEST_REQUIRED');
   const path = resolve(String(proposal.evidencePath));
-  if (dirname(path) !== join(harness.directory, 'api') || !/^request-[a-f0-9]{64}\.json$/.test(basename(path))) throw new Error('DELIVERY_API_EVIDENCE_PATH');
+  if (dirname(path) !== (harness.context.apiDirectory ?? join(harness.directory, 'api')) || !/^request-[a-f0-9]{64}\.json$/.test(basename(path))) throw new Error('DELIVERY_API_EVIDENCE_PATH');
   const evidence = readJson(path) as DeliveryApiEvidence;
   if (deliveryApiDigest(evidence) !== deliveryApiDigest(proposal.evidence)
     || response.metering?.evidenceDigest !== deliveryApiDigest(evidence)

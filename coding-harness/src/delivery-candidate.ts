@@ -6,7 +6,7 @@ import { hash } from '@metaharness/harness';
 import { createImmutablePrivateRuntime } from './immutable-private-runtime.js';
 import { type DeliveryContext } from './delivery-context.js';
 import { DeliveryHarness } from './delivery-runtime.js';
-import { git, mainRoot, outsideDigest, type SourceSnapshot } from './delivery-workspace.js';
+import { atomicJson, git, mainRoot, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
 import { normalizeWorkspacePath } from './contracts.js';
 
 export interface DeliveryCandidate {
@@ -14,6 +14,47 @@ export interface DeliveryCandidate {
   sourceBefore: SourceSnapshot;
   acceptedSource?: { taskId: string; commit: string; inputs: Record<string, string | null> };
   cleanup(): void;
+}
+
+const artifactRoots = new Set(['.metaharness', 'coding-harness/dist', 'coding-harness/node_modules', 'target']);
+
+function candidateContext(root: string, canonical: DeliveryHarness, sourceBefore: SourceSnapshot, baseCommit: string, scope: string[]): DeliveryContext {
+  const snapshot = (): SourceSnapshot => {
+    const files: Record<string, string> = {};
+    const walk = (path: string): void => {
+      if (artifactRoots.has(path)) return;
+      const absolute = join(root, path), stat = lstatSync(absolute);
+      if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()) || (stat.isFile() && stat.nlink !== 1)) throw new Error('DELIVERY_NONREGULAR_CANDIDATE');
+      if (stat.isDirectory()) for (const child of readdirSync(absolute).sort()) walk(path ? `${path}/${child}` : child);
+      else files[path] = `${stat.mode & 0o111 ? '100755' : '100644'}:${createHash('sha256').update(readFileSync(absolute)).digest('hex')}`;
+    };
+    walk('');
+    const ordered = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+    return { files: ordered, digest: hash(ordered) };
+  };
+  const assert = (): void => {
+    mainRoot(canonical.root);
+    if (canonical.context.head() !== baseCommit || canonical.snapshot().digest !== sourceBefore.digest
+      || existsSync(join(root, '.git'))) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
+    if (outsideDigest(snapshot(), scope) !== outsideDigest(sourceBefore, scope)) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
+  };
+  return { kind: 'candidate', root, directory: join(root, '.metaharness/delivery'), apiDirectory: join(canonical.directory, 'api'), assert,
+    head: () => baseCommit, snapshot,
+    dirty: paths => { const now = snapshot(); return paths.filter(path => now.files[path] !== sourceBefore.files[path]); } };
+}
+
+/** Candidate pointer is not authority: scope and baseline come from canonical custody. */
+export function reopenDeliveryCandidate(root: string): { harness: DeliveryHarness; canonical: DeliveryHarness } {
+  root = realpathSync(root);
+  const pointer = readJson(join(root, '.metaharness/delivery/candidate.json')) as { canonicalRoot: string };
+  const canonical = new DeliveryHarness(pointer.canonicalRoot);
+  const record = readJson(join(canonical.directory, `candidate-${hash(root)}.json`)) as {
+    root: string; sourceBefore: SourceSnapshot; baseCommit: string; scope: string[];
+  };
+  if (record.root !== root || hash(record.sourceBefore.files) !== record.sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_IDENTITY');
+  const context = candidateContext(root, canonical, record.sourceBefore, record.baseCommit, record.scope);
+  context.assert();
+  return { harness: new DeliveryHarness(root, context), canonical };
 }
 
 /** Exact accepted files, not a successful but unintegrated candidate, release children. */
@@ -55,7 +96,6 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
     if (Object.entries(acceptedSource.inputs).some(([path, value]) => (sourceBefore.files[path] ?? null) !== value)) throw new Error('DELIVERY_ACCEPTED_INPUT_CHANGED');
   }
   const scope = input.scope.map(path => normalizeWorkspacePath(path, 'candidate scope'));
-  const artifactRoots = new Set(['.metaharness', 'coding-harness/dist', 'coding-harness/node_modules', 'target']);
   if (scope.some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_ARTIFACT_SCOPE_REFUSED');
   if (Object.keys(sourceBefore.files).some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_TRACKED_ARTIFACT_SOURCE_REFUSED');
   if (scope.some(path => existsSync(join(canonical.root, path)) && lstatSync(join(canonical.root, path)).isDirectory())) throw new Error('DELIVERY_EXACT_FILE_SCOPE_REQUIRED');
@@ -79,30 +119,10 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
     for (const [path, value] of Object.entries(sourceBefore.files)) if (scope.some(root => path === root || path.startsWith(`${root}/`))) {
       chmodSync(join(runtime.root, path), value.startsWith('100755:') ? 0o700 : 0o600);
     }
-    const snapshot = (): SourceSnapshot => {
-      const files: Record<string, string> = {};
-      const walk = (path: string): void => {
-        if (artifactRoots.has(path)) return;
-        const absolute = join(runtime.root, path), stat = lstatSync(absolute);
-        if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()) || (stat.isFile() && stat.nlink !== 1)) throw new Error('DELIVERY_NONREGULAR_CANDIDATE');
-        if (stat.isDirectory()) for (const child of readdirSync(absolute).sort()) walk(path ? `${path}/${child}` : child);
-        else files[path] = `${stat.mode & 0o111 ? '100755' : '100644'}:${createHash('sha256').update(readFileSync(absolute)).digest('hex')}`;
-      };
-      walk('');
-      const ordered = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
-      return { files: ordered, digest: hash(ordered) };
-    };
-    const assert = (): void => {
-      mainRoot(canonical.root);
-      if (canonical.context.head() !== baseCommit || canonical.snapshot().digest !== sourceBefore.digest
-        || existsSync(join(runtime.root, '.git'))) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
-      if (outsideDigest(snapshot(), scope) !== outsideDigest(sourceBefore, scope)) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
-    };
-    const context: DeliveryContext = { kind: 'candidate', root: runtime.root, directory: join(runtime.root, '.metaharness/delivery'),
-      assert, head: () => baseCommit, snapshot,
-      dirty: paths => { const now = snapshot(); return paths.filter(path => now.files[path] !== sourceBefore.files[path]); },
-    };
-    if (snapshot().digest !== sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
+    const context = candidateContext(runtime.root, canonical, sourceBefore, baseCommit, scope);
+    if (context.snapshot().digest !== sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
+    atomicJson(join(canonical.directory, `candidate-${hash(runtime.root)}.json`), { root: runtime.root, sourceBefore, baseCommit, scope });
+    atomicJson(join(context.directory, 'candidate.json'), { canonicalRoot: canonical.root });
     return { harness: new DeliveryHarness(runtime.root, context), sourceBefore, ...(acceptedSource ? { acceptedSource } : {}), cleanup: runtime.cleanup };
   } catch (error) { runtime.cleanup(); throw error; }
 }
