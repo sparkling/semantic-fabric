@@ -344,7 +344,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
         '--model',
         request.model,
         '--effort',
-        'high',
+        request.reasoningEffort ?? 'high',
         '--input-format',
         'text',
         '--output-format',

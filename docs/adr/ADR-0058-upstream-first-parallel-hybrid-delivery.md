@@ -8,24 +8,24 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 
 # ADR-0058: Upstream-first parallel hybrid delivery
 
-- **Status**: Implemented for bounded optional transport, pool and source custody
+- **Status**: Implemented for optional whole-outcome delivery, learning and policy custody
 - **Date**: 2026-09-26
 - **Deciders**:
 
 ## September 28 implemented scope and exact evidence
 
-Ordinary `delivery <root> ready <manifest.json>` now reaches the existing upstream
-pool, not only the proof script. Explicit ready cohorts reuse candidate source
-custody and ordinary begin/bind plus packet/propose handling, with exact accepted
-parent validation, path/resource exclusions, cancellation drain and retained
-evidence roots. No second scheduler, automatic programme start or candidate
-acceptance was added. Packets await external execution; proposals await sole-root
-application/check/review/integration. Functional barrier tests establish callback
-overlap without performance testing or speed claims.
+Ordinary `delivery <root> ready <manifest.json>` reaches the upstream pool.
+`mode: "run"` now invokes an upstream HarnessKernel whole-outcome driver:
+architecture, scoped authoring, deterministic checks, capable repair, fresh review
+and verification. Native calls reuse subscription adapters and process-group
+custody; API calls reuse the bounded transport and exact proposal binding.
+Ready cohorts preserve accepted-parent validation, path/resource exclusions,
+cancellation drain and retained candidate evidence. Candidate success awaits
+sole-root integration; no automatic main write or programme resumption occurs.
 
 Run `npm --prefix coding-harness run delivery -- /absolute/repository ready /absolute/ready.json`.
 Manifest fields: `schemaVersion: 1`, existing external absolute `parentDirectory`,
-positive `maxConcurrency`, `mode: "packet"` or `"propose"`, and `outcomes`. Each
+positive `maxConcurrency`, `mode: "packet"`, `"propose"` or `"run"`, and `outcomes`. Each
 outcome contains ordinary `task`, actual executor `handoff`, explicit `resources`,
 and optional `acceptedParent`/`acceptedInputs`. Packet mode awaits execution;
 proposal mode requires the isolated API route. Continue using the returned
@@ -36,18 +36,29 @@ candidate isolation from bypassing unknown-charge holds. A real subprocess test
 continues ready output through implementation, checks, independent review and
 verification without claiming a real model invocation.
 
-Validation for this entry: `npm --prefix coding-harness run build` passes strict
-TypeScript, manifest synchronization and hardening; `npm --prefix coding-harness
-test -- --run __tests__/delivery-ready.test.ts __tests__/delivery-candidate.test.ts
-__tests__/delivery-api.test.ts __tests__/delivery-runtime.test.ts
-__tests__/delivery-workflow.test.ts __tests__/manifest.test.ts` passes 84 tests.
-No performance tests, paid calls, application tasks or publication ran.
+Native-only verified author observations now publish immutable deltas and reduce
+serially into the existing PersistentRoutedAgentPool/Router. Assigned routes stay
+pinned; persisted native evidence selects between eligible Sonnet/Sol medium only
+after confirmed nonexecuted API 402. Mixed/API and infrastructure outcomes never
+train native quality. Policy digests isolate learning regimes. Repair defaults to
+two rounds, matching Builder's outer controller; this is not a subscription budget.
 
-Architecture assessment remains scoped: ordinary delivery does not consume the
-historical `PersistentRoutedAgentPool` learning history. Installed Router and the
-older programme/controller callsites are not ordinary-delivery learning proof.
-This entry closes pool reachability, not full Builder learning or autonomous
-whole-outcome parity. Learning promotion and application resumption remain held.
+Explicit `evaluateDeliveryPolicies` uses upstream flywheel with ordinary isolated
+native outcomes, frozen guidance-only levers, disjoint suites, per-task regression
+checks and independent clean replay. Promotion requires at least five cases in
+each suite. Signed activation binds policy bytes, suites, saved kernel receipts,
+base/runtime/lockfile inputs and trusted signer/root. Local compare-and-swap keeps
+previous activations for validated rollback. Ordinary delivery fully verifies
+artifacts; unrelated task IDs retain seed guidance. Evaluation never updates
+production routing, changes assigned models or installs policy automatically.
+`config/delivery-policy.json` supplies operator-controlled signer/root pins;
+without it ordinary delivery uses seed guidance. No policy was activated here.
+
+Validation: strict build/manifest hardening passes; 138 tests across 13 injected
+functional suites pass (runner, learning, policy, ready/candidate/API/workflow,
+manifest, native adapters/client/process/runtime ledger). Activated policy reaches
+ordinary worker context without evaluation override. Earlier pool slice passed
+84 tests. No performance tests, paid calls, application tasks or publication ran.
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness

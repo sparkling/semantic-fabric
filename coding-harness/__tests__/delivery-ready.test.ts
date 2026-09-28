@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { deliveryCli } from '../src/delivery-cli.js';
 import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
+import * as executor from '../src/delivery-executor.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -20,6 +21,23 @@ function fixture() {
     })) };
   return { ...f, manifest, parentDirectory };
 }
+
+it('ordinary ready run reaches complete candidate lifecycle through CLI without model calls', async () => {
+  const f = fixture(), before = f.harness.snapshot().digest;
+  vi.spyOn(executor, 'createDeliveryExecutor').mockReturnValue(async request => ({
+    response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, ...request.route, executorId: request.executorId ?? 'fresh-reviewer' }, outcome: 'completed', summary: 'Injected CLI executor', issues: [] },
+    changes: request.stage === 'implementation' ? [{ path: request.scope[0], content: 'fixed\n' }] : [],
+    ...(request.stage === 'architecture' ? { plan: { summary: 'Fix admitted source', files: request.scope, tests: ['build', 'public'] } } : {}),
+  }));
+  const manifest = join(f.parentDirectory, 'run.json'); writeFileSync(manifest, JSON.stringify({ ...f.manifest, mode: 'run' }));
+  const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const success = await deliveryCli([f.root, 'ready', manifest]);
+  expect(success, JSON.stringify(output.mock.calls)).toBe(true);
+  const result = JSON.parse(output.mock.calls.at(-1)![0]);
+  expect(result.results.every((row: { value: { status: string } }) => row.value.status === 'candidate-awaiting-integration')).toBe(true);
+  expect(f.harness.snapshot().digest).toBe(before); expect(f.harness.inspect().active).toBeNull();
+});
 
 it('ordinary CLI prepares independent source-bound packets through the upstream pool', async () => {
   const f = fixture(), before = f.harness.snapshot().digest;

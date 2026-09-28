@@ -38,7 +38,7 @@ function candidateContext(root: string, canonical: DeliveryHarness, sourceBefore
       || existsSync(join(root, '.git'))) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
     if (outsideDigest(snapshot(), scope) !== outsideDigest(sourceBefore, scope)) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
   };
-  return { kind: 'candidate', root, directory: join(root, '.metaharness/delivery'), apiDirectory: join(canonical.directory, 'api'), assert,
+  return { kind: 'candidate', root, directory: join(root, '.metaharness/delivery'), apiDirectory: join(canonical.directory, 'api'), canonicalRoot: canonical.root, assert,
     head: () => baseCommit, snapshot,
     dirty: paths => { const now = snapshot(); return paths.filter(path => now.files[path] !== sourceBefore.files[path]); } };
 }

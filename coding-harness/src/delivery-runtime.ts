@@ -194,7 +194,7 @@ export class DeliveryHarness {
       const run = this.read(id); this.own(run, owner); const source = this.source(run), workflow = run.workflow;
       const pending = workflow?.requests.find(request => !workflow.invalidated.includes(request.id)
         && !workflow.results.some(result => result.request.id === request.id));
-      if (!pending?.repair || pending.stage !== 'implementation' || pending.route.host !== 'openrouter'
+      if (!pending?.repair || pending.stage !== 'implementation'
         || pending.sourceDigest !== source || pending.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_CAPABILITY_REPAIR_REQUIRED');
       await this.assertPrerequisites(run, pending);
       const native = parseDeliveryHandoff(handoff);

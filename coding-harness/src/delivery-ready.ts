@@ -8,17 +8,17 @@ import type { DeliveryHarness } from './delivery-runtime.js';
 
 /** Explicit ready cohort only: accepted main outcomes, never candidate success, release dependencies. */
 export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: unknown,
-  execute: (candidate: DeliveryHarness, command: 'packet' | 'propose', id: string, owner: string, signal: AbortSignal) => Promise<boolean>,
+  execute: (candidate: DeliveryHarness, command: 'packet' | 'propose' | 'run', id: string, owner: string, signal: AbortSignal) => Promise<boolean>,
   signal?: AbortSignal) {
   const manifest = asRecord(input, 'ready manifest');
   assertExactKeys(manifest, ['schemaVersion', 'parentDirectory', 'maxConcurrency', 'mode', 'outcomes'], 'ready manifest');
   if (manifest.schemaVersion !== 1 || !Number.isSafeInteger(manifest.maxConcurrency) || (manifest.maxConcurrency as number) < 1
-    || !['packet', 'propose'].includes(String(manifest.mode)) || !Array.isArray(manifest.outcomes) || !manifest.outcomes.length) {
+    || !['packet', 'propose', 'run'].includes(String(manifest.mode)) || !Array.isArray(manifest.outcomes) || !manifest.outcomes.length) {
     throw new Error('DELIVERY_INVALID_READY_MANIFEST');
   }
   const parentDirectory = nonempty(manifest.parentDirectory, 'parentDirectory');
   if (!isAbsolute(parentDirectory)) throw new Error('DELIVERY_ABSOLUTE_CANDIDATE_PARENT_REQUIRED');
-  const mode = manifest.mode as 'packet' | 'propose';
+  const mode = manifest.mode as 'packet' | 'propose' | 'run';
   const outcomes = manifest.outcomes.map(value => {
     const row = asRecord(value, 'ready outcome');
     assertExactKeys({ acceptedParent: undefined, acceptedInputs: undefined, ...row },
@@ -42,7 +42,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
       if (signal.aborted) throw signal.reason ?? new Error('DELIVERY_POOL_CANCELLED');
       if (!await execute(candidate.harness, mode, task.id, task.owner, signal)) throw new Error('DELIVERY_READY_EXECUTION_FAILED');
       // Preserve source and evidence for the sole integrator, including failed callbacks.
-      return { status: mode === 'packet' ? 'awaiting-executor' : 'proposal-awaiting-root-application',
+      return { status: mode === 'packet' ? 'awaiting-executor' : mode === 'run' ? 'candidate-awaiting-integration' : 'proposal-awaiting-root-application',
         sourceDigest: candidate.harness.snapshot().digest, acceptedSource: candidate.acceptedSource };
     },
   })), { maxConcurrency: manifest.maxConcurrency as number, signal });

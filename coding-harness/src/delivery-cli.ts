@@ -11,15 +11,16 @@ import type { NativeHandoff } from './delivery-contracts.js';
 import { bindAppliedProposal } from './delivery-proposal.js';
 import { dispatchDeliveryReady } from './delivery-ready.js';
 import { reopenDeliveryCandidate } from './delivery-candidate.js';
+import { runDeliveryOutcome } from './delivery-runner.js';
 
 /** API proposals never edit source or imply acceptance. Native handoffs and
  * optional Ruflo mirroring remain owned by the active integration host. */
 export async function deliveryCli(args: string[], signal?: AbortSignal, candidate?: DeliveryHarness): Promise<boolean> {
   const [root, command, ...rest] = args;
   const counts: Record<string, number> = { begin: 1, status: 1, inspect: 0, bind: 3, check: 3, verify: 2, finish: 3,
-    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3, ready: 1 };
+    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3, ready: 1, run: 2 };
   if (!root || !(command in counts) || rest.length !== counts[command]) {
-    throw new Error('usage: delivery <repository-root> ready <manifest.json> | begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
+    throw new Error('usage: delivery <repository-root> ready <manifest.json> | begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | run|next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
   }
   if (candidate && (candidate.context.kind !== 'candidate' || candidate.root !== resolve(root))) throw new Error('DELIVERY_CANDIDATE_IDENTITY');
   const reopened = !candidate && existsSync(join(resolve(root), '.metaharness/delivery/candidate.json')) ? reopenDeliveryCandidate(resolve(root)) : undefined;
@@ -32,6 +33,10 @@ export async function deliveryCli(args: string[], signal?: AbortSignal, candidat
   }
   if (command === 'inspect') { console.log(JSON.stringify(harness.inspect(), null, 2)); return true; }
   const [id, owner, extra] = rest;
+  if (command === 'run') {
+    const result = await runDeliveryOutcome(harness, id, owner, { signal });
+    console.log(JSON.stringify(result, null, 2)); return result.success;
+  }
   if (command === 'submit') {
     const input = readJson(resolve(extra));
     const response = input !== null && typeof input === 'object' && 'changes' in input ? bindAppliedProposal(harness, id, input) : input;

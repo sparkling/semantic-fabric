@@ -29,12 +29,13 @@ export async function logDigest(path: string): Promise<string> {
   return hash.digest('hex');
 }
 export function runCommand(argv: string[], cwd: string, env: Record<string, string>, out: number, err: number,
-  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number }, signal?: AbortSignal,
+  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number }, signal?: AbortSignal, stdin?: string,
 ): Promise<{ exitCode: number | null; signal: string | null; error?: string }> {
   return new Promise(resolve => {
     if (signal?.aborted) { resolve({ exitCode: null, signal: null, error: 'cancelled' }); return; }
     updateOperationChild(directory, 'starting');
-    const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdin.on('error', () => {}); child.stdin.end(stdin);
     updateOperationChild(directory, 'running', child.pid);
     let error: string | undefined;
     let termination: ReturnType<typeof setTimeout> | undefined;

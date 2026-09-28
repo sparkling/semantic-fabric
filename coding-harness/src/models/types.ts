@@ -64,6 +64,7 @@ export type WorkspaceAccess = 'read' | 'write';
 export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 interface NativeInvocationBase {
+  readonly reasoningEffort?: CodexReasoningEffort;
   readonly cwd: string;
   readonly model: string;
   readonly prompt: string;

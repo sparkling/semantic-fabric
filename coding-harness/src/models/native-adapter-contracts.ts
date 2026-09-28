@@ -107,7 +107,7 @@ export function parseRecord(text: string): Record<string, unknown> | null {
 }
 
 function validateModel(model: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(model)) {
+  if (!/^(?:cc\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,199}(?:\[1m\])?$/.test(model)) {
     throw new Error('HARNESS_NATIVE_MODEL_INVALID');
   }
 }

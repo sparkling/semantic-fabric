@@ -7,6 +7,7 @@ export interface DeliveryContext {
   readonly root: string;
   readonly directory: string;
   readonly apiDirectory?: string;
+  readonly canonicalRoot?: string;
   assert(): void;
   head(): string;
   snapshot(): SourceSnapshot;

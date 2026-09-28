@@ -13,6 +13,14 @@ const digest = (value: unknown): string => createHash('sha256').update(JSON.stri
 export const deliveryApiDigest = digest;
 const activeRequests = new Set<string>();
 export interface DeliverySourceFile { path: string; content: string | null }
+export interface DeliveryPlan { summary: string; files: string[]; tests: string[] }
+export function parseDeliveryPlan(value: unknown, scope: string[]): DeliveryPlan {
+  const plan = asRecord(value, 'delivery plan'); assertExactKeys(plan, ['summary', 'files', 'tests'], 'delivery plan');
+  if (typeof plan.summary !== 'string' || !plan.summary.trim() || !Array.isArray(plan.files) || !plan.files.length
+    || plan.files.some(path => typeof path !== 'string' || !scope.includes(path))
+    || !Array.isArray(plan.tests) || !plan.tests.length || plan.tests.some(test => typeof test !== 'string' || !test.trim())) throw new Error('DELIVERY_INVALID_PLAN');
+  return { summary: plan.summary, files: [...plan.files], tests: [...plan.tests] };
+}
 export interface DeliveryApiEvidence {
   requestId: string; stageRequestId: string; taskDigest: string; packet: string; status: string;
   requestedModel: string; resolvedModel?: string; providerRequestId?: string;
@@ -33,11 +41,14 @@ export function renderDeliveryPrompt(request: NativeStageRequest, files: Deliver
     requirement: request.requirement, sourceDigest: request.sourceDigest, scope: request.scope, files,
     ...(request.failedApi ? { priorApiFailure: { status: request.failedApi.status, actualUsd: request.failedApi.actualUsd,
       requestedModel: request.failedApi.requestedModel, resolvedModel: request.failedApi.resolvedModel } } : {}),
-    ...(request.stage === 'review' ? { checks } : { feedback: request.feedback }),
-    instruction: request.stage === 'review'
+    ...(request.stage === 'review' ? { checks } : { feedback: request.feedback, context: checks }),
+    instruction: request.stage === 'architecture'
+      ? 'Plan the smallest scoped change and focused tests. Return a plan object with summary, files (admitted paths) and tests (declared check IDs). Changes must be empty. Do not use tools.'
+      : request.stage === 'review'
       ? 'Fresh independent review of current source and sanitized deterministic checks. No author rationale. Return actual JSON verdict; changes must be empty.'
       : 'Packet-only execution: do not use tools or edit source. Propose full UTF-8 file contents only for admitted paths. Return actual JSON instance, not schema.',
-    response: { outcome: 'completed|changes-requested', summary: 'string', issues: ['string'], changes: [{ path: 'admitted path', content: 'full source' }] } });
+    response: { outcome: 'completed|changes-requested', summary: 'string', issues: ['string'], changes: [{ path: 'admitted path', content: 'full source' }],
+      ...(request.stage === 'architecture' ? { plan: { summary: 'string', files: ['admitted path'], tests: ['declared check ID'] } } : {}) } });
 }
 export function parseDeliveryChanges(value: unknown, scope: string[], review = false): { path: string; content: string }[] {
   if (!Array.isArray(value) || value.length > scope.length || (review && value.length)) throw new Error('Invalid changes');
@@ -72,7 +83,7 @@ export function createDeliveryApi(options: { directory: string; fetch?: typeof f
   const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
   return async (request: NativeStageRequest, files: DeliverySourceFile[], checks: unknown[], taskDigest: string,
     signal?: AbortSignal): Promise<{ response: NativeStageResponse; changes: { path: string; content: string }[];
-      evidence: DeliveryApiEvidence; evidencePath: string }> => {
+      evidence: DeliveryApiEvidence; evidencePath: string; plan?: DeliveryPlan }> => {
     const started = performance.now();
     if (request.route.host !== 'openrouter' || request.route.model !== DELIVERY_API_DEFAULTS.model || request.route.effort !== 'high') throw new Error('DELIVERY_API_ROUTE_REQUIRED');
     if (request.stage === 'implementation' && request.repair) throw new Error('DELIVERY_CAPABLE_NATIVE_REPAIR_REQUIRED');
@@ -155,20 +166,26 @@ export function createDeliveryApi(options: { directory: string; fetch?: typeof f
       if (!['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash-20260910'].includes(evidence.resolvedModel)) {
         evidence.status = 'completed-model-mismatch'; save(); hold(holdPath); fail(evidence.status);
       }
-      let proposal: { response: NativeStageResponse; changes: { path: string; content: string }[] };
+      let proposal: { response: NativeStageResponse; changes: { path: string; content: string }[]; plan?: DeliveryPlan };
       try {
         if (body.choices?.[0]?.finish_reason !== 'stop' || typeof body.choices[0]?.message?.content !== 'string') throw new Error('Incomplete output');
         const value = asRecord(JSON.parse(body.choices[0].message.content), 'API proposal');
-        assertExactKeys(value, ['outcome', 'summary', 'issues', 'changes'], 'API proposal');
+        assertExactKeys(value, ['outcome', 'summary', 'issues', 'changes', ...(request.stage === 'architecture' ? ['plan'] : [])], 'API proposal');
         if (value.outcome !== 'completed' && value.outcome !== 'changes-requested') throw new Error('Invalid API outcome');
-        const changes = parseDeliveryChanges(value.changes, request.scope, request.stage === 'review');
+        const changes = parseDeliveryChanges(value.changes, request.scope, request.stage !== 'implementation');
+        const plan = request.stage === 'architecture' ? parseDeliveryPlan(value.plan, request.scope) : undefined;
+        if (plan) {
+          const declared = checks.flatMap(value => value && typeof value === 'object' && 'declaredChecks' in value
+            && Array.isArray(value.declaredChecks) ? value.declaredChecks : []).map(value => asRecord(value, 'declared check').id);
+          if (value.outcome !== 'completed' || plan.tests.some(id => !declared.includes(id))) throw new Error('Invalid architecture plan');
+        }
         const stageResponse = parseStageResponse({ schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
-          native: { ...request.route, executorId: request.stage === 'implementation' ? request.executorId : `api-${evidence.requestId}`,
+          native: { ...request.route, executorId: request.stage !== 'review' ? request.executorId : `api-${evidence.requestId}`,
             authentication: 'openrouter-api', observation: `OpenRouter generation ${evidence.providerRequestId}; resolved ${evidence.resolvedModel}` },
           outcome: value.outcome, summary: value.summary, issues: value.issues,
           metering: { costUsd: evidence.actualUsd, latencyMs: performance.now() - started, evidenceDigest: digest(evidence) } });
-        evidence.proposalDigest = digest({ outcome: stageResponse.outcome, summary: stageResponse.summary, issues: stageResponse.issues, changes });
-        proposal = { response: stageResponse, changes };
+        evidence.proposalDigest = digest({ outcome: stageResponse.outcome, summary: stageResponse.summary, issues: stageResponse.issues, changes, ...(plan ? { plan } : {}) });
+        proposal = { response: stageResponse, changes, ...(plan ? { plan } : {}) };
       } catch { evidence.status = 'completed-invalid-output'; save(); hold(holdPath); return fail(evidence.status); }
       evidence.status = 'completed-valid-output'; save();
       proposal.response.metering!.evidenceDigest = digest(evidence);

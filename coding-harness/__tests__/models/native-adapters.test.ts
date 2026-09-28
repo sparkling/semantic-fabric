@@ -51,6 +51,15 @@ afterEach(() => {
 });
 
 describe('native subscription adapters', () => {
+  it('preserves configured gateway aliases and explicit Claude medium effort', () => {
+    const adapter = new ClaudeCodeSubscriptionAdapter({ executable: '/tools/claude', runner: new FakeRunner(() => ok('{}')),
+      sourceEnvironment: { HOME: '/home/tester' } });
+    const request = adapter.buildInvocation({ cwd: '/repo', model: 'cc/claude-sonnet-5[1m]', reasoningEffort: 'medium',
+      prompt: 'bounded task', schema: {}, workspaceAccess: 'read', timeoutMs: 1000, operation: 'implementation' });
+    expect(request.args[request.args.indexOf('--model') + 1]).toBe('cc/claude-sonnet-5[1m]');
+    expect(request.args[request.args.indexOf('--effort') + 1]).toBe('medium');
+  });
+
   it('checks both configured subscriptions without provider fallback', async () => {
     const evidenceRoot = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
     roots.push(evidenceRoot);

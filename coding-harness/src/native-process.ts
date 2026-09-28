@@ -376,7 +376,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     validateDirectory(request.cwd, this.#allowedRoots);
     assertCapabilityPath(request.cwd, this.#allowedReadRoots, this.#forbiddenRoots, false);
     assertNativeSubscriptionEnvironment(request.host, request.env);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(request.model)) {
+    if (!/^(?:cc\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,199}(?:\[1m\])?$/.test(request.model)) {
       throw new Error('HARNESS_NATIVE_MODEL_INVALID');
     }
     if (request.purpose === 'model-invocation') {

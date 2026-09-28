@@ -13,6 +13,7 @@
     "prepublishOnly": "node scripts/deny-publish.mjs"
   },
   "dependencies": {
+    "@metaharness/flywheel": "latest",
     "@metaharness/harness": "latest",
     "@metaharness/host-claude-code": "latest",
     "@metaharness/host-codex": "latest",

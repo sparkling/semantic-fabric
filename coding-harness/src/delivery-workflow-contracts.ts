@@ -6,7 +6,7 @@ import type { DeliveryApiEvidence } from './delivery-api.js';
 
 export interface NativeStageRequest {
   schemaVersion: 1; id: string; taskId: string; thread: string; baseCommit: string;
-  stage: 'implementation' | 'review'; attempt: number; sourceDigest: string;
+  stage: 'architecture' | 'implementation' | 'review'; attempt: number; sourceDigest: string;
   route: DeliveryRoute; executorId?: string; prerequisiteDigests: string[];
   evidenceDigest: string; repair: boolean;
   requirement: string; scope: string[]; feedback: string[];
