@@ -146,6 +146,10 @@ export function createDeliveryApi(options: { directory: string; fetch?: typeof f
       if (typeof body.usage?.cost === 'number' && Number.isFinite(body.usage.cost) && body.usage.cost >= 0) evidence.actualUsd = body.usage.cost;
       if (typeof body.usage?.prompt_tokens === 'number') evidence.inputTokens = body.usage.prompt_tokens;
       if (typeof body.usage?.completion_tokens === 'number') evidence.outputTokens = body.usage.completion_tokens;
+      if (!response.ok && evidence.providerRequestId && evidence.actualUsd !== null) {
+        if (typeof body.model === 'string' && body.model) evidence.resolvedModel = body.model;
+        evidence.status = 'completed-http-error'; save(); hold(holdPath); fail(evidence.status);
+      }
       if (!response.ok || !evidence.providerRequestId || evidence.actualUsd === null) throw new Error('Unconfirmed completion');
       evidence.resolvedModel = String(body.model); evidence.status = 'completed-awaiting-validation'; save();
       if (!['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash-20260910'].includes(evidence.resolvedModel)) {

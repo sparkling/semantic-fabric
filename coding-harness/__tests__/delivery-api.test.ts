@@ -87,6 +87,22 @@ describe('ordinary API transport', () => {
     await expect(g.invoke(request(), files, [], 'task')).rejects.toMatchObject({ code: 'completed-model-mismatch', evidence: { actualUsd: 0.01 } });
     await expect(g.invoke({ ...request(), id: 'e'.repeat(64) }, files, [], 'task')).rejects.toMatchObject({ code: 'completed-model-mismatch', evidence: { actualUsd: 0.01 } });
   });
+  it('keeps confirmed charged HTTP errors infrastructure-only and unrelated tasks eligible', async () => {
+    for (const status of [402, 503]) {
+      let calls = 0;
+      const f = fixture(async () => ++calls === 1 ? new Response(JSON.stringify({
+        id: 'known-http-generation', model: 'deepseek/deepseek-v4.1-flash-20260910',
+        usage: { cost: 0.01, prompt_tokens: 100, completion_tokens: 0 }, error: { code: status },
+      }), { status }) : response());
+      await expect(f.invoke(request(), files, [], 'charged-http-task')).rejects.toMatchObject({
+        code: 'completed-http-error', evidence: { status: 'completed-http-error', actualUsd: 0.01,
+          providerRequestId: 'known-http-generation', resolvedModel: 'deepseek/deepseek-v4.1-flash-20260910' } });
+      expect(readdirSync(f.directory)).not.toContain('unknown-charge.json');
+      await expect(f.invoke({ ...request(), id: 'e'.repeat(64) }, files, [], 'charged-http-task')).rejects.toThrow('completed-http-error');
+      expect((await f.invoke(request(), files, [], 'unrelated-http-task')).evidence.actualUsd).toBe(0.01);
+      expect(calls).toBe(2);
+    }
+  });
   it('does not dispatch oversized/pre-aborted packets and keeps review context independent', async () => {
     let calls = 0; const f = fixture(async () => { calls++; return response(); });
     await expect(f.invoke(request(), [{ path: 'source.ts', content: 'x'.repeat(2000000) }], [], 'task')).rejects.toThrow('request-cost-bound');
