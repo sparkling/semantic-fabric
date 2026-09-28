@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "eb520a39924dac012206dcfed04d3c32a4bceccba2e063d26fe1a10aa18f342c",
+  "harnessManifestDigest": "0efcb247f5c7c76e69afb2d197dbb10b9221beb245377557f27ca392c79090ba",
   "lockfileDigest": "b4ad5c8b1a4e1f473e38c58c404f39919138a0c6cf6c1cc4fd4a8898fdeab72d",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -31,15 +31,16 @@
     "coding-harness/dist/contracts.js": "36144d64c65feb03d26e52b57135d9b7a8c8197d3e3110259a9fec0fe355b32e",
     "coding-harness/dist/controller-attestation.js": "2caf6b563d52e6e3f7066db16c1f9b0635c6c9a339d5e463d2083b98964704fb",
     "coding-harness/dist/controller-build.js": "9c4c95b8fac6488a6e0457e3dac3b3a746c59d96878c19e18145151918fe1a79",
-    "coding-harness/dist/delivery-api.js": "b9b68659ecda6d56bfbf4f5ee9597a7bfc687461161734262ad99ce0e0a2905a",
-    "coding-harness/dist/delivery-cli.js": "3cb91e109a2c271cd4bc6aa703aae00cbf06f7050476ef4ee2f41bf52dedc538",
+    "coding-harness/dist/delivery-api.js": "aa77cce90ed0e6d1e707a908acf1f1acf3056cc4e5ddc293bc985301ad509239",
+    "coding-harness/dist/delivery-cli.js": "10c9d640f8b8216b44e85952646d80ae8fc399004e909d3af2c5b82dd726e02f",
     "coding-harness/dist/delivery-contracts.js": "efdab3967ca274403d3c66d5b602e2f6fbe0cdc091c658e54b802f694d055b7f",
     "coding-harness/dist/delivery-process.js": "7bf147da059d59846155ecf1b501423e8786a6bc9641e75db346206e38622724",
-    "coding-harness/dist/delivery-runtime.js": "4fa7d1aa5e62f7929862924e5f234b5f2c7bac072c6cdb246ad4de391ea53f78",
-    "coding-harness/dist/delivery-stage.js": "1973aba060b53b2b23f58e804c389f1ec8981cdbde33d9bdd0f3ff5001ae1f67",
-    "coding-harness/dist/delivery-workflow-contracts.js": "23ed7e27bc39d0627da5795fccb7f3d03f3d78ff8eba6842d26607dfb22b34b4",
-    "coding-harness/dist/delivery-workflow.js": "a2fde83d71bcae9dff0f4d33ab844687e7f770028fb8bb1293e5c43b6b88f700",
-    "coding-harness/dist/delivery-workspace.js": "dd652bb034674bb5f086e76601f500b0f5686985d6b1d54687f49d5d12c0a642",
+    "coding-harness/dist/delivery-proposal.js": "62195ab38ea8756ce666adf7e83f5c843f5586c4aeea0d0cdefd22ea110bb7a9",
+    "coding-harness/dist/delivery-runtime.js": "5a563eebb70df49ee6fa229e6b8176c014d6aabdfed7352be91cecf2b8f03faa",
+    "coding-harness/dist/delivery-stage.js": "f996354d59780e61c1491299484561d88f3dfdf173d3748574d31fd373686f6d",
+    "coding-harness/dist/delivery-workflow-contracts.js": "001e511c21983d58c642ff1fa7439b9c79ec607478863282ae32adb8297fcef6",
+    "coding-harness/dist/delivery-workflow.js": "f70dc19c52de71968a470a641f73886cb3c774c9a99e89bba9839945034345bf",
+    "coding-harness/dist/delivery-workspace.js": "8ae0c8ce55e8fdd59d75359b871828f94c28b1282a3b30a54407544e93494976",
     "coding-harness/dist/effective-config-command.js": "e32194d13dfee309ed217854dd97217815f654f664a8dc59ac168f924eb48412",
     "coding-harness/dist/effective-config-diagnostics.js": "4cb99f3dd4bf85c9684853b5082deaff8c020ee2fc2729476d46cc180a05a361",
     "coding-harness/dist/effective-config-filesystem.js": "c4dc3ba93b2e1c166c7b90df59c89010ac8c7a111cd9381fdf77875bf1f1c4a4",
@@ -180,7 +181,7 @@
     "coding-harness/dist/programme-v6-program.js": "ccc06c7df0668633b7aadfd1cbcce58a16142a4de9c326d9b689e449b7ace6f4",
     "coding-harness/dist/programme-v6-receipt-io.js": "0426e54d507717dc36c8a84efe2deda997052e5bf215b7a5f789b1b1be89f30d",
     "coding-harness/dist/programme-v6-replay.js": "263365285ac094c229aaf64ce8eb38f3bb681187cadbb468b37aed310d29f209",
-    "coding-harness/dist/protected-paths.js": "3a7e8d80f11c9074d0f8498580ca2a6a525a4bfc5a812fdada71e9d9dee6df5c",
+    "coding-harness/dist/protected-paths.js": "a059caf5e24f1fa8cefa2658b68f8744702ea2b5f524b3094cf03e84ed6f6ce7",
     "coding-harness/dist/qe-profile.js": "72fe665b395c68bee550cfb3ba51d94786b36c4c107c45d336b058d41ecc9113",
     "coding-harness/dist/receipts.js": "a845b122c6fbdf2fb18bcdc62d1449d77d71ff7bd3a5e8b5e6f399d3fbc9a9d1",
     "coding-harness/dist/repository-command-evidence.js": "8b54a743216c1fbec4d7cb107d618bade34ca9e9b17710672133abfc0d19e20d",
@@ -326,5 +327,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "73be2d591755c836c66c668c84adb7fcd819316aeefe5e1a88648f256ec98984"
+  "runtimeTreeDigest": "450449d588c22ff50e8838867c96975cd1f7dede35ec3f23286894258eb9dd6b"
 }

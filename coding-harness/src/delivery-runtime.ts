@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { closeSync, existsSync, openSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { hash, VerifierRegistry, type Verdict } from '@metaharness/harness';
 import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, executorIdentity, assertHostEnabled, parseDeliveryHandoff,
   type DeliveryTask, type DeliveryRoute, type NativeHandoff } from './delivery-contracts.js';
@@ -8,9 +8,10 @@ import { atomicJson, evidenceDirectory, git, mainRoot, outsideDigest, readJson,
   sourceSnapshot, withOperationLock, recoverOperation } from './delivery-workspace.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest, runCommand } from './delivery-process.js';
-import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow } from './delivery-workflow-contracts.js';
+import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow, type NativeStageRequest } from './delivery-workflow-contracts.js';
 import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } from './delivery-workflow.js';
 import { verifyNativeStage } from './delivery-stage.js';
+import type { DeliveryApiEvidence } from './delivery-api.js';
 
 export interface CheckResult {
   id: string; attempt: number; argv: string[]; cwd: string; startedAt: string; durationMs: number;
@@ -134,6 +135,76 @@ export class DeliveryHarness {
       return this.save(run);
     });
   }
+  async fallback(id: string, owner: string, requestId: string, evidencePath: string, handoff: NativeHandoff): Promise<DeliveryRun> {
+    return withOperationLock(this.directory, async () => {
+      const run = this.read(id); this.own(run, owner);
+      const source = this.source(run), workflow = run.workflow;
+      const previous = workflow?.requests.find(request => request.id === requestId);
+      if (!workflow || !previous || previous.route.host !== 'openrouter'
+        || workflow.invalidated.includes(requestId) || workflow.results.some(result => result.request.id === requestId)
+        || previous.sourceDigest !== source || previous.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_PENDING_API_REQUEST_REQUIRED');
+      await this.assertPrerequisites(run, previous);
+      const path = resolve(evidencePath);
+      if (dirname(path) !== join(this.directory, 'api') || !/^request-[a-f0-9]{64}\.json$/.test(basename(path))) throw new Error('DELIVERY_API_EVIDENCE_PATH');
+      const evidence = readJson(path) as DeliveryApiEvidence;
+      if (evidence.stageRequestId !== requestId || evidence.taskDigest !== hash(run.task)
+        || evidence.packet !== previous.stage || evidence.requestedModel !== previous.route.model
+        || typeof evidence.actualUsd !== 'number' || !Number.isFinite(evidence.actualUsd) || evidence.actualUsd < 0) throw new Error('DELIVERY_API_EVIDENCE_MISMATCH');
+      const native = parseDeliveryHandoff(handoff);
+      const credit = evidence.status === 'confirmed-credit-rejection' && evidence.actualUsd === 0;
+      const repair = evidence.status === 'completed-invalid-output';
+      const eligible = repair
+        ? native.host === 'claude-code' && native.model === 'cc/claude-opus-5-5[1m]' && native.effort === 'high'
+        : credit && native.effort === 'medium' && ((native.host === 'codex' && native.model === 'gpt-5.6-sol')
+          || (native.host === 'claude-code' && native.model === 'cc/claude-sonnet-5[1m]'));
+      if (!eligible) throw new Error('DELIVERY_API_FALLBACK_NOT_AUTHORIZED');
+      assertHostEnabled(native.host);
+      if (run.handoffs.some(author => author.executorId === native.executorId)) throw new Error('DELIVERY_FRESH_FALLBACK_EXECUTOR_REQUIRED');
+      this.reroute(run, previous, native, evidence);
+      run.events.push({ at: new Date().toISOString(), kind: 'api-fallback', reason: `${requestId}:${evidence.status}:${native.host}:${native.model}` });
+      delete run.verdict;
+      return this.save(run);
+    });
+  }
+  private reroute(run: DeliveryRun, previous: NativeStageRequest, native: NativeHandoff, failedApi?: DeliveryApiEvidence): void {
+    const workflow = run.workflow!, selected = route({ host: native.host, model: native.model, effort: native.effort });
+    workflow.invalidated.push(previous.id);
+    const { id: _id, ...body } = previous;
+    const nextBody = { ...body, route: selected, attempt: workflow.requests.length + 1,
+      ...(previous.stage === 'implementation' ? { executorId: native.executorId } : {}), ...(failedApi ? { failedApi } : {}) };
+    workflow.requests.push({ ...nextBody, id: hash(nextBody) });
+    if (previous.stage === 'implementation') { run.route = selected; run.handoffs.push({ ...native, at: new Date().toISOString() }); }
+  }
+  private async assertPrerequisites(run: DeliveryRun, request: NativeStageRequest): Promise<void> {
+    const references = new Set(request.prerequisiteDigests);
+    const results = new Map((run.workflow?.results ?? []).map(result => [hash(result), result]));
+    // A rejected repair can reference another repair; retain every original check.
+    for (const reference of references) {
+      for (const prerequisite of results.get(reference)?.request.prerequisiteDigests ?? []) references.add(prerequisite);
+    }
+    for (const check of run.checks.filter(check => references.has(hash(check)))) {
+      if (check.environmentDigest !== hash(checkEnvironmentEvidence(buildCheckEnvironment()))) throw new Error('DELIVERY_STALE_PREREQUISITES');
+      for (const [path, digest] of [[check.stdout, check.stdoutDigest], [check.stderr, check.stderrDigest]]) {
+        if (!existsSync(path) || await logDigest(path) !== digest) throw new Error('DELIVERY_STALE_PREREQUISITES');
+      }
+    }
+  }
+  async repair(id: string, owner: string, handoff: NativeHandoff): Promise<DeliveryRun> {
+    return withOperationLock(this.directory, async () => {
+      const run = this.read(id); this.own(run, owner); const source = this.source(run), workflow = run.workflow;
+      const pending = workflow?.requests.find(request => !workflow.invalidated.includes(request.id)
+        && !workflow.results.some(result => result.request.id === request.id));
+      if (!pending?.repair || pending.stage !== 'implementation' || pending.route.host !== 'openrouter'
+        || pending.sourceDigest !== source || pending.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_CAPABILITY_REPAIR_REQUIRED');
+      await this.assertPrerequisites(run, pending);
+      const native = parseDeliveryHandoff(handoff);
+      if (native.host !== 'claude-code' || native.model !== 'cc/claude-opus-5-5[1m]' || native.effort !== 'high'
+        || run.handoffs.some(author => author.executorId === native.executorId)) throw new Error('DELIVERY_CAPABLE_FRESH_NATIVE_REQUIRED');
+      assertHostEnabled(native.host); this.reroute(run, pending, native);
+      run.events.push({ at: new Date().toISOString(), kind: 'capability-repair', reason: pending.id });
+      delete run.verdict; return this.save(run);
+    });
+  }
   async check(id: string, owner: string, checkId: string, signal?: AbortSignal): Promise<DeliveryRun> {
     return withOperationLock(this.directory, async () => {
       const run = this.read(id); this.own(run, owner);
@@ -206,6 +277,7 @@ export class DeliveryHarness {
       this.own(run, owner);
       const source = this.source(run);
       const action = nextWorkflowAction(run, source, await this.validChecks(run, source));
+      if (action.kind === 'native') await this.assertPrerequisites(run, action.request);
       this.save(run); return action;
     });
   }
@@ -229,7 +301,10 @@ export class DeliveryHarness {
       if (!workflow || !request || workflow.invalidated.includes(request.id)
         || workflow.results.some(r => r.request.id === request.id)) throw new Error('DELIVERY_PENDING_REQUEST_REQUIRED');
       if (request.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_STALE_PREREQUISITES');
+      await this.assertPrerequisites(run, request);
       if (response.sourceDigest !== source) throw new Error('DELIVERY_RESPONSE_SOURCE_MISMATCH');
+      if (response.rootApplication && (response.rootApplication.sourceBefore !== request.sourceDigest
+        || response.rootApplication.rootChangedPaths.some(path => !request.scope.includes(path)))) throw new Error('DELIVERY_INVALID_ROOT_APPLICATION');
       const native = response.native;
       assertHostEnabled(native.host);
       if (hash(route({ host: native.host, model: native.model, effort: native.effort })) !== hash(request.route)) {

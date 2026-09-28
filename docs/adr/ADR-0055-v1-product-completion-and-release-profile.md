@@ -5,30 +5,13 @@ updated: 2026-09-28
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
-depends-on:
-  - ADR-0002
-  - ADR-0006
-  - ADR-0010
-  - ADR-0011
-  - ADR-0012
-  - ADR-0014
-  - ADR-0017
-  - ADR-0018
-  - ADR-0024
-  - ADR-0037
-  - ADR-0048
-  - ADR-0050
+depends-on: [ADR-0002, ADR-0006, ADR-0010, ADR-0011, ADR-0012, ADR-0014, ADR-0017, ADR-0018, ADR-0024, ADR-0037, ADR-0048, ADR-0050]
 implements: []
 ---
 
 # V1 product completion and release profile
 
-**Owner amendment (2026-09-28):** ADR-0058 authorizes direct implementation,
-repair, tests and builds for all work. The delivery harness remains available,
-not compulsory. Both native hosts and the isolated bounded OpenRouter adapter
-are authorized; historical Claude-only/native-only rules are superseded for
-ordinary engineering. Source/data isolation, independent review, public-feature
-acceptance and explicit application pause remain in force.
+**Owner amendment (2026-09-28):** ADR-0058 authorizes direct implementation, repair, tests and builds for all work. The delivery harness remains available, not compulsory. Both native hosts and the isolated bounded OpenRouter adapter are authorized; historical Claude-only/native-only rules are superseded for ordinary engineering. Source/data isolation, independent review, public-feature acceptance and explicit application pause remain in force.
 
 ## Status boundary
 

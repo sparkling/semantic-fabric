@@ -97,6 +97,7 @@ const BASE_REQUIRED_PROTECTED_PATHS = Object.freeze([
   'coding-harness/src/config.ts',
   'coding-harness/src/delivery-cli.ts',
   'coding-harness/src/delivery-api.ts',
+  'coding-harness/src/delivery-proposal.ts',
   'coding-harness/src/delivery-contracts.ts',
   'coding-harness/src/delivery-process.ts',
   'coding-harness/src/delivery-runtime.ts',

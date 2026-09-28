@@ -38,8 +38,8 @@ export function nextWorkflowAction(run: DeliveryRun, source: string, validChecks
   const pending = workflow.requests.find(r => !workflow.invalidated.includes(r.id)
     && !workflow.results.some(result => result.request.id === r.id));
   if (pending) {
-    if (pending.evidenceDigest === stageEvidenceDigest(run) && (pending.stage === 'implementation' || (pending.sourceDigest === source
-      && validChecks.size === run.task.checks.length
+    if (pending.sourceDigest === source && pending.evidenceDigest === stageEvidenceDigest(run) && (pending.stage === 'implementation' || (
+      validChecks.size === run.task.checks.length
       && hash(pending.prerequisiteDigests) === hash([hash(impl), ...checkDigests(run)])))) return { kind: 'native', request: pending };
     workflow.invalidated.push(pending.id);
   }

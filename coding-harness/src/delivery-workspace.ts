@@ -93,11 +93,12 @@ function acquireLease(directory: string): number {
   return fd;
 }
 interface OperationLock { pid: number; start: string; nonce: string; phase: string; childPid?: number }
-export function processIdentity(pid: number): string | undefined {
+export function processIdentity(pid: number, readStat: (path: string, encoding: 'utf8') => string = readFileSync): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error('DELIVERY_INVALID_PID');
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    const stat = readStat(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return ['Z', 'X', 'x'].includes(fields[0]) ? undefined : fields[19];
   } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw e; }
 }
 export function updateOperationChild(directory: string, phase: string, childPid?: number): void {
