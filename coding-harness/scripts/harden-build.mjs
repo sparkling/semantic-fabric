@@ -71,7 +71,8 @@ const body = {
 const build = { ...body, runtimeTreeDigest: sha256(JSON.stringify(body)) };
 const target = repositoryTarget(BUILD_MANIFEST);
 const temporary = `${target}.tmp-${String(process.pid)}`;
-writeFileSync(temporary, `${JSON.stringify(build, null, 2)}\n`, {
+const serialized = `{\n${Object.entries(build).map(([key, value]) => `  ${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(',\n')}\n}\n`;
+writeFileSync(temporary, serialized, {
   encoding: 'utf8', flag: 'wx', mode: 0o600,
 });
 renameSync(temporary, target);

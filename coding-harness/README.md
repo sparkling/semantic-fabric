@@ -11,7 +11,7 @@ The product runtime is Rust; any future production supervisor is a separately
 packaged Rust service under ADR-0048.
 
 The delivery CLI runs declared checks and records task/handoff/evidence state;
-it never launches another model host, creates a worktree, commits, pushes,
+it never launches another native model host, creates a worktree, commits, pushes,
 publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 
 ## Delivery path
@@ -26,25 +26,13 @@ explicitly authorized initial proof uses real configured models.
 
 ### Native parallel execution
 
-**Claude-only build (2026-09-22 user correction, Codex paused):** the
-programme coordinator is Claude Code at Sonnet high effort, using the
-user-authorized local `9router` subscription transport already configured in
-`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`,
-`cc/claude-*` aliases) — a native-subscription transport substitution, not a
-provider-API-key exception. `.agents/config.toml`'s Codex `gpt-6-astra`
-`xhigh` coordinator entry is historical/dormant while Codex is paused; do not
-resume it or `codex --model gpt-6-astra ... resume <UUID>` without explicit
-user re-authorization. Worker/reviewer routes remain task-specific, all on
-`claude-code`.
-
-The operating plan is [native parallel execution](../docs/plans/native-parallel-execution-plan.md),
-whose per-task tables predate this pause and are read as historical
-Codex/Claude comparison evidence, not a currently active Codex dispatch
-instruction. The existing native conversation coordinates and remains the sole
-integration writer. There is no repository-wide native session cap or new
-scheduler. Independent Claude sessions may investigate ready tasks
-concurrently; native per-session subagent limits still apply. The delivery CLI
-returns requests, not workers.
+Both configured native hosts are authorized. Preserve selected models, effort and
+the configured subscription gateway; never print or commit its credentials.
+The existing native conversation remains the sole canonical integration writer.
+The older [parallel plan](../docs/plans/native-parallel-execution-plan.md) retains
+historical provider restrictions; the September 28 owner amendment governs now.
+No repository-wide native session cap or new scheduler is imposed. Independent
+ready work may overlap; client-enforced per-session limits still apply.
 
 Before dispatch, record dependencies, source revision, owned scope, read-only
 status, deliverable, acceptance checks, native model/effort and result recipient
@@ -57,7 +45,7 @@ Only the integration owner edits. Checks and formal review require stable whole
 source, including unrelated files; pause writes until their evidence is captured.
 Other read-only investigations may continue. Serialize shared generated outputs,
 Git operations and heavy builds/fixtures separately from model execution. Keep
-the current delivery locks, sequential declared checks and opposite-provider
+the current delivery locks, sequential declared checks and independent fresh-context
 review. Do not use the historical worktree launchers or dual-mode templates as a
 parallel execution path.
 
@@ -101,8 +89,8 @@ alone is not crash-resume. We therefore reuse it per stage, not as another build
    hash-bound diagnostic log paths. Failed review returns the reviewer's actual issues.
    Dependent stages are not dispatched until their prerequisites pass. A repair with
    no source progress pauses for explicit intervention. After passing checks, the host
-   assigns the returned review request to an independent native executor: Sol medium
-   or Sonnet by default, or the task's explicit `reviewer: {host, model, effort}`.
+   assigns the returned review request to an independent executor, using the API
+   default or the task's explicit `reviewer: {host, model, effort}`.
    Review is read-only, must use a different executor ID from every implementation
    handoff, and is bound to the source and exact prerequisite results. `verify`
    requires both stages and every check; missing, failed or stale evidence fails.
@@ -193,29 +181,16 @@ routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
 may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
 Opus high is the bounded top-tier escalation (ADR-0055; it replaced Fable on
 2026-09-23) and, like Astra max, requires an explicit `requested` route. These are explicit project policy, not learned
-quality estimates. **Claude-only build (2026-09-22 user correction, Codex
-paused):** the host is `claude-code` for both implementation and review;
-review defaults to a second Claude Code executor at the normal implementation
-tier (Sonnet native default), using a distinct `executorId` from every
-implementation handoff (`DELIVERY_INDEPENDENT_REVIEW_REQUIRED` rejects a
-repeated executor). An explicit `reviewer` route may name a stronger Claude
-route (e.g. Opus, or Sonnet high) but stays on `claude-code` while Codex is
-paused. Claude Code's native subscription transport for this repository runs
-through the user-authorized local `9router` gateway already configured in
-`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`,
-`cc/claude-*` model aliases); this is a native-subscription transport
-substitution, not a provider-API-key or OpenRouter exception, and that token
-must never be printed, logged, or committed. If the Claude subscription is
-unavailable, pause with the exact native error; never replace the missing
-review with keys or another provider. When Codex is re-authorized, its prior
-cross-provider-reviewer requirement (`DELIVERY_CROSS_HOST_REVIEW_REQUIRED`)
-governed here 2026-09-19 through 2026-09-22 and would need explicit
-reinstatement, not silent revival. `requested: {host, model, effort}` plus
+quality estimates. New tasks without a host default to isolated OpenRouter
+`deepseek/deepseek-v4.1-flash` at high effort; explicit native assignments stay
+unchanged. Review requires a distinct executor from every author, not an implied
+cross-vendor consensus. Native unavailability pauses with exact client/model/error.
+`requested: {host, model, effort}` plus
 `selectionReason` preserves an explicit choice; `preserveMainModel: true`
 retains the active main model and requires its explicit `requested` route.
 Ultra otherwise requires `explicitUltra: true`.
-Max/ultra are forwarded unchanged. No monetary/token/request/quota ceilings,
-provider keys, OpenRouter fallback, inferred savings, or automatic escalation.
+Max/ultra are forwarded unchanged. Subscriptions have no usage/spending quota gate.
+Isolated API calls enforce at most $1 per request, with no cumulative ceiling.
 Check commands receive the sanitized environment unchanged. Evidence hashing
 deduplicates `PATH` in first-match order and omits only Codex's volatile
 `.codex/tmp/arg0/codex-arg0*` launcher entries, so a native-host transition does
@@ -251,15 +226,45 @@ The native identity observation is trusted host/operator input, not a provider
 signature. Request hashes and receipts establish local consistency, not proof that
 a model actually performed a review. Host dispatch and the commit decision remain
 the accountable integrator's responsibility. This cooperative harness does not sandbox arbitrary trusted build
-scripts or prevent a human/tool from bypassing it: canonical agent instructions
-require using it. Acceptance-command selection remains the owner's correctness
+scripts or require harness use for direct work. Acceptance-command selection remains the owner's correctness
 responsibility; a zero exit code alone cannot prove a meaningful test selection.
 Build environments preserve selected Cargo/Rust/owned-fixture settings but omit
 provider-specific configuration variables, API keys and proxy overrides. Trusted
 build scripts still have ordinary local filesystem access, including `HOME`;
 this is not native-credential isolation. Never put credentials in task arguments,
-handoff observations, or logs. Model transport is owned by the native host.
+handoff observations, or logs. Native and isolated API transports stay explicit.
 The real closed-candidate isolation and replay checks below are not weakened.
+
+### API proposals and isolated ready callbacks
+
+`propose <id> <owner>` dispatches the pending API packet without editing source.
+The sole integrator applies proposed bytes, builds generated metadata, then uses
+`submit` with the stored proposal. Submission verifies paid evidence, original
+source, exact proposed bytes and separately attributed root-generated paths.
+`packet` renders the same no-tools contract for native execution. Invalid output
+uses `fallback` with fresh Opus/high; failed checks/review use `repair` without
+another API author call. Only confirmed nonexecuted HTTP402 permits Sonnet5/Sol
+medium. Authentication, model mismatch, known HTTP infrastructure errors and
+unknown completion do not authorize that fallback. Costs and negative evidence persist.
+
+`runDeliveryPool` wraps the actual upstream bounded pool for caller-selected ready
+callbacks. It refuses same/ancestor mutation paths and shared named resources,
+holds the canonical operation lease across the cohort, and drains every started
+callback before releasing ownership, including noncooperative cancellation.
+Recorded candidate/evidence paths survive failed callbacks. `createDeliveryCandidate`
+reuses immutable private-source materialization and the ordinary `DeliveryHarness`
+lifecycle; candidates cannot commit or supersede canonical outcomes. A dependent
+requires a complete integrated parent and exact declared input bytes, never candidate success.
+These are cooperative source snapshots outside the checkout; scopes name files.
+Lifecycle detects out-of-scope writes; this is not hostile-process isolation.
+Contract tests use explicit fixture identities; they do not prove live model overlap.
+The CLI package is host-only development tooling: only `delivery-pool` imports its
+standalone pool leaf. The frozen `dist/issue-8-program.js` controller's 92-module
+local import closure contains neither this pool nor candidate adapter. It does
+not acquire a new CLI/MCP entry or dependency inside its protected runtime.
+Ordinary pool use requires the full development install; validation records its
+installed version against the lockfile plus actual module SHA-256, not a per-request gate.
+Production dependency hash coverage and symlink protections remain unchanged.
 
 ## Local verification
 

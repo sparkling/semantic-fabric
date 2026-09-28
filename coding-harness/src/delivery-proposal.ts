@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { hash } from '@metaharness/harness';
 import { asRecord, assertExactKeys } from './contracts.js';
 import { deliveryApiDigest, parseDeliveryChanges, type DeliveryApiEvidence } from './delivery-api.js';
-import { readJson, sourceSnapshot } from './delivery-workspace.js';
+import { readJson } from './delivery-workspace.js';
 import { parseStageResponse, type NativeStageResponse } from './delivery-workflow-contracts.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 
@@ -30,7 +30,7 @@ export function bindAppliedProposal(harness: DeliveryHarness, id: string, input:
   assertExactKeys(before, ['digest', 'files'], 'proposal source');
   const beforeFiles = asRecord(before.files, 'proposal files');
   if (before.digest !== request.sourceDigest || hash(beforeFiles) !== before.digest) throw new Error('DELIVERY_PROPOSAL_SOURCE_MISMATCH');
-  const current = sourceSnapshot(harness.root);
+  const current = harness.snapshot();
   for (const change of changes) {
     const expected = createHash('sha256').update(change.content).digest('hex');
     if (current.files[change.path]?.split(':')[1] !== expected) throw new Error('DELIVERY_PROPOSAL_NOT_APPLIED');

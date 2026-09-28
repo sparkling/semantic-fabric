@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { hash } from '@metaharness/harness';
 import { fileURLToPath } from 'node:url';
 import { DeliveryHarness } from './delivery-runtime.js';
-import { readJson, sourceSnapshot } from './delivery-workspace.js';
+import { readJson } from './delivery-workspace.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { createDeliveryApi, renderDeliveryPrompt } from './delivery-api.js';
 import type { NativeHandoff } from './delivery-contracts.js';
@@ -36,7 +36,7 @@ export async function deliveryCli(args: string[], signal?: AbortSignal): Promise
   if (command === 'propose' || command === 'packet') {
     const action = await harness.next(id, owner);
     if (action.kind !== 'native' || (command === 'propose' && action.request.route.host !== 'openrouter')) throw new Error('DELIVERY_PENDING_API_REQUEST_REQUIRED');
-    const sourceBefore = sourceSnapshot(harness.root);
+    const sourceBefore = harness.snapshot();
     if (sourceBefore.digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     const run = harness.read(id);
     const files = action.request.scope.map(path => {
@@ -46,14 +46,14 @@ export async function deliveryCli(args: string[], signal?: AbortSignal): Promise
     });
     const checks = run.checks.map(({ id, attempt, passed, exitCode, sourceBefore, sourceAfter, stdoutDigest, stderrDigest }) =>
       ({ id, attempt, passed, exitCode, sourceBefore, sourceAfter, stdoutDigest, stderrDigest }));
-    if (sourceSnapshot(harness.root).digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
+    if (harness.snapshot().digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     if (command === 'packet') {
       const path = join(harness.directory, `packet-${action.request.id}.json`);
       writeFileSync(path, JSON.stringify({ request: action.request, prompt: renderDeliveryPrompt(action.request, files, checks) }), { flag: 'wx', mode: 0o600 });
       console.log(JSON.stringify({ packetPath: path, status: 'awaiting-executor' })); return true;
     }
     const proposal = await createDeliveryApi({ directory: join(harness.directory, 'api') })(action.request, files, checks, hash(run.task), signal);
-    if (sourceSnapshot(harness.root).digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
+    if (harness.snapshot().digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     const path = join(harness.directory, `proposal-${proposal.evidence.requestId}.json`);
     writeFileSync(path, JSON.stringify({ ...proposal, sourceBefore }), { flag: 'wx', mode: 0o600 });
     console.log(JSON.stringify({ proposalPath: path, actualUsd: proposal.evidence.actualUsd, status: 'proposal-awaiting-root-application' }));

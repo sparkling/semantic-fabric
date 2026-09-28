@@ -19,6 +19,7 @@
     "@metaharness/router": "latest"
   },
   "devDependencies": {
+    "@claude-flow/cli": "latest",
     "@types/node": "24",
     "metaharness": "latest",
     "typescript": "latest",

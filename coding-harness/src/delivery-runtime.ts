@@ -4,8 +4,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { hash, VerifierRegistry, type Verdict } from '@metaharness/harness';
 import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, executorIdentity, assertHostEnabled, parseDeliveryHandoff,
   type DeliveryTask, type DeliveryRoute, type NativeHandoff } from './delivery-contracts.js';
-import { atomicJson, evidenceDirectory, git, mainRoot, outsideDigest, readJson,
-  sourceSnapshot, withOperationLock, recoverOperation } from './delivery-workspace.js';
+import { atomicJson, git, outsideDigest, readJson,
+  withOperationLock, recoverOperation } from './delivery-workspace.js';
+import { mainDeliveryContext, type DeliveryContext } from './delivery-context.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest, runCommand } from './delivery-process.js';
 import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow, type NativeStageRequest } from './delivery-workflow-contracts.js';
@@ -38,10 +39,12 @@ export interface DeliveryRun {
 export class DeliveryHarness {
   readonly root: string;
   readonly directory: string;
-  constructor(root: string) {
-    this.root = mainRoot(root);
-    this.directory = evidenceDirectory(this.root);
+  constructor(root: string, readonly context: DeliveryContext = mainDeliveryContext(root)) {
+    context.assert();
+    this.root = context.root;
+    this.directory = context.directory;
   }
+  snapshot() { this.context.assert(); return this.context.snapshot(); }
   private file(id: string): string { return join(this.directory, `${identifier(id)}.json`); }
   private get activeFile(): string { return join(this.directory, 'active.json'); }
   inspect(): { active: unknown; operation: unknown } {
@@ -78,30 +81,27 @@ export class DeliveryHarness {
     atomicJson(this.activeFile, { id });
   }
   private own(run: DeliveryRun, owner: string, requireHandoff = true): void {
-    mainRoot(this.root);
+    this.context.assert();
     if (owner !== run.task.owner || !existsSync(this.activeFile)
       || (readJson(this.activeFile) as { id: string }).id !== run.task.id) throw new Error('DELIVERY_WRITER_MISMATCH');
     if (run.status !== 'active' && run.status !== 'awaiting-native') throw new Error('DELIVERY_RUN_NOT_ACTIVE');
     if (requireHandoff && run.status !== 'active') throw new Error('DELIVERY_NATIVE_HANDOFF_REQUIRED');
   }
   private source(run: DeliveryRun): string {
-    if (git(this.root, 'rev-parse', 'HEAD') !== run.baseCommit) throw new Error('DELIVERY_BASE_MOVED');
-    const snapshot = sourceSnapshot(this.root);
+    if (this.context.head() !== run.baseCommit) throw new Error('DELIVERY_BASE_MOVED');
+    const snapshot = this.snapshot();
     if (outsideDigest(snapshot, run.task.scope) !== run.outsideDigest) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
     return snapshot.digest;
   }
   async begin(input: unknown): Promise<DeliveryRun> {
     return withOperationLock(this.directory, async () => {
-      mainRoot(this.root);
+      this.context.assert();
       const task = parseDeliveryTask(input);
       assertHostEnabled(task.host);
       if (task.reviewer) assertHostEnabled(task.reviewer.host);
       if (existsSync(this.file(task.id))) throw new Error('DELIVERY_RUN_ALREADY_EXISTS');
-      const snapshot = sourceSnapshot(this.root);
-      const dirty = new Set([
-        ...git(this.root, 'diff', '--name-only', '-z', 'HEAD').split('\0'),
-        ...git(this.root, 'ls-files', '--others', '--exclude-standard', '-z').split('\0'),
-      ].filter(p => task.scope.includes(p)));
+      const snapshot = this.snapshot();
+      const dirty = new Set(this.context.dirty(task.scope));
       if (hash([...dirty].sort()) !== hash([...(task.adoptExistingChanges ?? [])].sort())) {
         throw new Error('DELIVERY_EXISTING_SCOPE_REQUIRES_EXPLICIT_ADOPTION');
       }
@@ -110,7 +110,7 @@ export class DeliveryHarness {
       }
       const now = new Date().toISOString();
       const run: DeliveryRun = { schemaVersion: 1, task, route: selectDeliveryRoute(task),
-        baseCommit: git(this.root, 'rev-parse', 'HEAD'), outsideDigest: outsideDigest(snapshot, task.scope),
+        baseCommit: this.context.head(), outsideDigest: outsideDigest(snapshot, task.scope),
         startedAt: now, updatedAt: now, status: 'awaiting-native', handoffs: [], checks: [], events: [],
         workflow: { requests: [], results: [], invalidated: [] },
         adoptedSource: Object.fromEntries([...dirty].map(p => [p, snapshot.files[p] ?? null])) };
@@ -228,7 +228,7 @@ export class DeliveryHarness {
         result = await runCommand(check.argv, cwd, env, out, err, this.directory, check, signal);
       } finally { closeSync(out); closeSync(err); }
       let sourceAfter: string;
-      try { mainRoot(this.root); sourceAfter = this.source(run); }
+      try { this.context.assert(); sourceAfter = this.source(run); }
       catch (e) { sourceAfter = 'invalid'; result.error = String(e); }
       run.checks.push({ ...check, attempt, startedAt, durationMs: Math.round(performance.now() - start),
         sourceBefore, sourceAfter, environmentDigest: hash(checkEnvironmentEvidence(env)), ...result, stdout, stderr,
@@ -345,6 +345,7 @@ export class DeliveryHarness {
     });
   }
   async finish(id: string, owner: string, commit: string): Promise<DeliveryRun> {
+    if (this.context.kind !== 'main') throw new Error('DELIVERY_CANDIDATE_CANNOT_COMMIT');
     return withOperationLock(this.directory, async () => {
       const run = this.read(id); this.own(run, owner);
       if (!/^[a-f0-9]{40,64}$/.test(commit) || git(this.root, 'rev-parse', 'HEAD') !== commit
@@ -352,7 +353,7 @@ export class DeliveryHarness {
       const changed = git(this.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', commit).split('\n').filter(Boolean);
       if (!changed.length || changed.some(p => !run.task.scope.includes(p))) throw new Error('DELIVERY_COMMIT_SCOPE_MISMATCH');
       if (git(this.root, 'diff', commit, '--', ...run.task.scope) !== '') throw new Error('DELIVERY_UNCOMMITTED_SCOPE');
-      const snapshot = sourceSnapshot(this.root);
+      const snapshot = this.snapshot();
       const untracked = git(this.root, 'ls-files', '--others', '--exclude-standard', '-z').split('\0');
       if (run.task.scope.some(p => untracked.includes(p))) throw new Error('DELIVERY_UNCOMMITTED_SCOPE');
       if (outsideDigest(snapshot, run.task.scope) !== run.outsideDigest) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
@@ -371,7 +372,7 @@ export class DeliveryHarness {
   }
   async resume(id: string, owner: string): Promise<DeliveryRun> {
     return withOperationLock(this.directory, async () => {
-      const run = this.read(id); mainRoot(this.root);
+      const run = this.read(id); this.context.assert();
       if (run.status !== 'paused' || run.task.owner !== owner) throw new Error('DELIVERY_PAUSED_OWNER_REQUIRED');
       this.source(run);
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
@@ -382,8 +383,9 @@ export class DeliveryHarness {
     });
   }
   async supersede(id: string, owner: string, successorId: string, reason: string): Promise<DeliveryRun> {
+    if (this.context.kind !== 'main') throw new Error('DELIVERY_CANDIDATE_CANNOT_COMMIT');
     return withOperationLock(this.directory, async () => {
-      const run = this.read(id); mainRoot(this.root);
+      const run = this.read(id); this.context.assert();
       if (run.task.owner !== owner) throw new Error('DELIVERY_WRITER_MISMATCH');
       if (run.status !== 'paused') throw new Error('DELIVERY_PAUSED_RUN_REQUIRED');
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
@@ -420,7 +422,7 @@ export class DeliveryHarness {
     nonempty(reason, 'recovery reason');
     recoverOperation(this.directory, nonce);
     return withOperationLock(this.directory, async () => {
-      const run = this.read(id); mainRoot(this.root);
+      const run = this.read(id); this.context.assert();
       const active = existsSync(this.activeFile) ? (readJson(this.activeFile) as { id: string }).id : undefined;
       if (active && active !== id) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
       if (run.status === 'paused' || run.status === 'complete' || run.status === 'superseded') {
