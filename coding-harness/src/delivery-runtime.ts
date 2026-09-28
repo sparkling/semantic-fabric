@@ -2,7 +2,7 @@
 import { closeSync, existsSync, openSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { hash, VerifierRegistry, type Verdict } from '@metaharness/harness';
-import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, executorIdentity,
+import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, executorIdentity, assertHostEnabled, parseDeliveryHandoff,
   type DeliveryTask, type DeliveryRoute, type NativeHandoff } from './delivery-contracts.js';
 import { atomicJson, evidenceDirectory, git, mainRoot, outsideDigest, readJson,
   sourceSnapshot, withOperationLock, recoverOperation } from './delivery-workspace.js';
@@ -93,6 +93,8 @@ export class DeliveryHarness {
     return withOperationLock(this.directory, async () => {
       mainRoot(this.root);
       const task = parseDeliveryTask(input);
+      assertHostEnabled(task.host);
+      if (task.reviewer) assertHostEnabled(task.reviewer.host);
       if (existsSync(this.file(task.id))) throw new Error('DELIVERY_RUN_ALREADY_EXISTS');
       const snapshot = sourceSnapshot(this.root);
       const dirty = new Set([
@@ -119,8 +121,10 @@ export class DeliveryHarness {
     return withOperationLock(this.directory, async () => {
       const run = this.read(id); this.own(run, owner, false); this.source(run);
       if (run.status !== 'awaiting-native') throw new Error('DELIVERY_HANDOFF_ALREADY_BOUND');
-      const selected = route({ host: handoff.host, model: handoff.model, effort: handoff.effort });
-      if (hash(selected) !== hash(run.route) || handoff.authentication !== 'native-subscription') {
+      const parsed = parseDeliveryHandoff(handoff);
+      const selected = route({ host: parsed.host, model: parsed.model, effort: parsed.effort });
+      assertHostEnabled(selected.host);
+      if (hash(selected) !== hash(run.route)) {
         throw new Error('DELIVERY_NATIVE_ROUTE_MISMATCH');
       }
       executorIdentity(handoff.executorId); nonempty(handoff.observation, 'native observation');
@@ -227,6 +231,7 @@ export class DeliveryHarness {
       if (request.evidenceDigest !== stageEvidenceDigest(run)) throw new Error('DELIVERY_STALE_PREREQUISITES');
       if (response.sourceDigest !== source) throw new Error('DELIVERY_RESPONSE_SOURCE_MISMATCH');
       const native = response.native;
+      assertHostEnabled(native.host);
       if (hash(route({ host: native.host, model: native.model, effort: native.effort })) !== hash(request.route)) {
         throw new Error('DELIVERY_NATIVE_ROUTE_MISMATCH');
       }

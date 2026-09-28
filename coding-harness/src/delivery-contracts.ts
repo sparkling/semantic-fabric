@@ -3,8 +3,9 @@ import { codexReasoningArguments } from './models/native-adapter-contracts.js';
 import type { CodexReasoningEffort, NativeHost } from './models/types.js';
 import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.js';
 
+export type DeliveryHost = NativeHost | 'openrouter';
 export interface DeliveryRoute {
-  host: NativeHost;
+  host: DeliveryHost;
   model: string;
   effort: CodexReasoningEffort | 'default';
 }
@@ -16,7 +17,7 @@ export interface DeliveryTask {
   owner: string;
   thread: string;
   taskClass: TaskClass;
-  host: NativeHost;
+  host: DeliveryHost;
   scope: string[];
   checks: { id: string; kind: 'acceptance' | 'build'; argv: string[]; cwd: string;
     timeoutMs?: number; maxOutputBytes?: number }[];
@@ -30,7 +31,7 @@ export interface DeliveryTask {
 }
 export interface NativeHandoff extends DeliveryRoute {
   executorId: string;
-  authentication: 'native-subscription';
+  authentication: 'native-subscription' | 'openrouter-api';
   observation: string;
 }
 
@@ -53,9 +54,15 @@ export function executorIdentity(value: unknown): string {
 export function route(value: unknown): DeliveryRoute {
   const r = asRecord(value, 'route');
   assertExactKeys(r, ['host', 'model', 'effort'], 'route');
-  if (r.host !== 'codex' && r.host !== 'claude-code') throw new Error('DELIVERY_INVALID_HOST');
+  if (r.host !== 'codex' && r.host !== 'claude-code' && r.host !== 'openrouter') throw new Error('DELIVERY_INVALID_HOST');
   const model = nonempty(r.model, 'model');
-  if (!/^[a-zA-Z0-9._-]+$/.test(model) || /openrouter|requesty/i.test(model)) {
+  if (r.host === 'openrouter') {
+    if (model !== 'deepseek/deepseek-v4.1-flash' || r.effort !== 'high') throw new Error('DELIVERY_API_ROUTE_NOT_ADMITTED');
+    return { host: r.host, model, effort: 'high' };
+  }
+  const nativeModel = r.host === 'claude-code'
+    ? /^(?:cc\/)?[a-zA-Z0-9._-]+(?:\[1m\])?$/ : /^[a-zA-Z0-9._-]+$/;
+  if (!nativeModel.test(model) || /openrouter|requesty/i.test(model)) {
     throw new Error('DELIVERY_NATIVE_MODEL_REQUIRED');
   }
   if (r.effort === undefined) throw new Error('DELIVERY_EXPLICIT_NATIVE_EFFORT_REQUIRED');
@@ -66,9 +73,17 @@ export function route(value: unknown): DeliveryRoute {
 }
 /** Currently authorized execution hosts. Structural parsing above stays independent of this so
  * historical records for a disabled host remain readable; only execution entry points recheck it. */
-export const ENABLED_HOSTS: readonly NativeHost[] = ['claude-code'];
-export function assertHostEnabled(host: NativeHost): void {
+export const ENABLED_HOSTS: readonly DeliveryHost[] = ['claude-code', 'codex', 'openrouter'];
+export function assertHostEnabled(host: DeliveryHost): void {
   if (!ENABLED_HOSTS.includes(host)) throw new Error(`DELIVERY_HOST_PAUSED:${host}`);
+}
+export function parseDeliveryHandoff(value: unknown): NativeHandoff {
+  const n = asRecord(value, 'delivery identity');
+  assertExactKeys(n, ['host', 'model', 'effort', 'executorId', 'authentication', 'observation'], 'delivery identity');
+  const selected = route({ host: n.host, model: n.model, effort: n.effort });
+  const authentication = selected.host === 'openrouter' ? 'openrouter-api' : 'native-subscription';
+  if (n.authentication !== authentication) throw new Error('DELIVERY_TRANSPORT_AUTHENTICATION_MISMATCH');
+  return { ...selected, authentication, executorId: executorIdentity(n.executorId), observation: nonempty(n.observation, 'observation') };
 }
 export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
   if (task.preserveMainModel && !task.requested) throw new Error('DELIVERY_CURRENT_MAIN_ROUTE_REQUIRED');
@@ -83,6 +98,7 @@ export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
     }
     return selected; // No clamp, automatic retry, provider fallback, or quota routing.
   }
+  if (task.host === 'openrouter') return { host: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', effort: 'high' };
   if (task.host === 'claude-code') {
     return { host: task.host, model: task.taskClass === 'mechanical' ? 'haiku'
       : task.taskClass === 'difficult' ? 'opus' : 'sonnet', effort: 'default' };
@@ -97,8 +113,8 @@ export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
 }
 export function parseDeliveryTask(value: unknown): DeliveryTask {
   const t = asRecord(value, 'delivery task');
-  const required = ['schemaVersion', 'id', 'requirement', 'owner', 'thread', 'taskClass', 'host', 'scope', 'checks'];
-  const optional = ['requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges', 'reviewer'];
+  const required = ['schemaVersion', 'id', 'requirement', 'owner', 'thread', 'taskClass', 'scope', 'checks'];
+  const optional = ['host', 'requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges', 'reviewer'];
   for (const key of required) if (!(key in t)) throw new Error(`DELIVERY_MISSING:${key}`);
   for (const key of Object.keys(t)) if (![...required, ...optional].includes(key)) {
     throw new Error(`DELIVERY_UNKNOWN_FIELD:${key}`);
@@ -106,7 +122,8 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
   if (t.schemaVersion !== 1 || !['mechanical', 'pattern', 'implementation', 'correctness', 'difficult'].includes(String(t.taskClass))) {
     throw new Error('DELIVERY_INVALID_TASK');
   }
-  if (t.host !== 'codex' && t.host !== 'claude-code') throw new Error('DELIVERY_INVALID_HOST');
+  const host = t.host ?? 'openrouter';
+  if (host !== 'codex' && host !== 'claude-code' && host !== 'openrouter') throw new Error('DELIVERY_INVALID_HOST');
   for (const key of ['preserveMainModel', 'explicitUltra']) {
     if (t[key] !== undefined && typeof t[key] !== 'boolean') throw new Error(`DELIVERY_INVALID:${key}`);
   }
@@ -153,7 +170,7 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
   const task: DeliveryTask = {
     schemaVersion: 1, id: identifier(t.id), requirement: nonempty(t.requirement, 'requirement'),
     owner: nonempty(t.owner, 'owner'), thread: nonempty(t.thread, 'thread'), taskClass: t.taskClass as TaskClass,
-    host: t.host, scope, checks,
+    host, scope, checks,
   };
   if (task.id === 'active') throw new Error('DELIVERY_RESERVED_ID');
   if (t.adoptExistingChanges !== undefined) {

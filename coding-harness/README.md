@@ -1,6 +1,6 @@
 # semantic-fabric coding harness
 
-Mandatory, private development-only delivery harness for every building task,
+Optional, private development-only delivery harness for engineering work,
 with native Codex/ChatGPT and Claude Code executors under
 [ADR-0055](../docs/adr/ADR-0055-v1-product-completion-and-release-profile.md).
 The older closed-candidate experiment remains separate and optional.
@@ -14,7 +14,15 @@ The delivery CLI runs declared checks and records task/handoff/evidence state;
 it never launches another model host, creates a worktree, commits, pushes,
 publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
 
-## Mandatory delivery path
+## Delivery path
+
+Owner amendment 2026-09-28 (ADR-0058): direct implementation, repair, tests and
+builds are allowed for all work. Both native hosts and an isolated direct
+OpenRouter adapter are authorized. The historical Claude-only/native-only and
+mandatory-dispatch descriptions below do not govern current ordinary delivery.
+Retain scoped acceptance, independent review, one integrator and data isolation.
+Application programme remains paused. Unit tests use injected transports; the
+explicitly authorized initial proof uses real configured models.
 
 ### Native parallel execution
 

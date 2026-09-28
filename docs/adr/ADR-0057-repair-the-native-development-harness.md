@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-24
-updated: 2026-09-25
+updated: 2026-09-28
 tags: [dev-process, metaharness, native-subscriptions, routing, frozen-evaluators]
 depends-on:
   - ADR-0037
@@ -10,6 +10,13 @@ depends-on:
 ---
 
 # ADR-0057: Repair the native development harness
+
+**Owner amendment (2026-09-28):** ADR-0058 is the current repair plan. Direct
+implementation, repair, tests and builds are allowed for all work; harness-only
+execution and Claude-only/native-only restrictions below are historical.
+Both native hosts and isolated bounded direct OpenRouter are authorized.
+Keep existing acceptance, sole integrator and source/data isolation. No
+application programme resumption or expanded evolution programme is implied.
 
 - **Status**: proposed
 - **Date**: 2026-09-24

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-09-10
+updated: 2026-09-28
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -12,6 +12,13 @@ implements: []
 ---
 
 # Dual-host Ruflo engineering MetaHarness
+
+> **Owner amendment (2026-09-28):** ADR-0058 supersedes historical mandatory
+> delivery, Claude-only and native-only restrictions for ordinary engineering.
+> Direct implementation, repair, tests and builds are allowed for all work.
+> Both native hosts and isolated bounded OpenRouter are authorized. Preserve
+> sole integration ownership, scoped acceptance, independent review and the
+> separate frozen experiment boundary. Application programme remains paused.
 
 > **V1 execution amendment (2026-09-10):** [ADR-0055](ADR-0055-v1-product-completion-and-release-profile.md) requires the main-only delivery harness for every build. `DeliveryHarness` durably sequences source-bound native requests, actual checks, feedback-directed repair and independent review; `HarnessKernel` verifies each ready stage. The existing native host executes requests; no second host, new MCP server or autonomous publication is implied. Upstream's sequential kernel neither supplies failed-verifier feedback on retry nor provides durable resume; prerequisite admission and recovery remain explicit outer-controller responsibilities. See [delivery usage](../../coding-harness/README.md#mandatory-delivery-path). The closed transaction below remains optional/historical, worktree launchers prohibited and evolution post-1.0.
 

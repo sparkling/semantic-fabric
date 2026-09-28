@@ -19,13 +19,13 @@
     "@metaharness/router": "latest"
   },
   "devDependencies": {
-    "@types/node": "latest",
+    "@types/node": "24",
     "metaharness": "latest",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0 <25"
   }
 }

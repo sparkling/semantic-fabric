@@ -11,7 +11,7 @@ export async function verifyNativeStage(request: NativeStageRequest, response: N
   const pool = new AgentPool();
   pool.register({ id: response.native.executorId, model: response.native.model, handles: [request.stage],
     run: async () => ({ output: { request, response }, quality: accepted ? 1 : 0,
-      confidence: 1, risk: 0, costUsd: 0, latencyMs: 0 }) });
+      confidence: 1, risk: 0, costUsd: response.metering?.costUsd ?? 0, latencyMs: response.metering?.latencyMs ?? 0 }) });
   const verifiers = new VerifierRegistry();
   verifiers.register({ id: 'source-bound-native-stage', kind: request.stage, check: async value => ({
     pass: accepted && hash(value) === hash({ request, response }), score: accepted ? 1 : 0,

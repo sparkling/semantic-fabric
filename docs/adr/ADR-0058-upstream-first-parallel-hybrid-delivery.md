@@ -12,6 +12,33 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 - **Date**: 2026-09-26
 - **Deciders**:
 
+## September 28 implemented transport slice
+
+Owner authorized direct implementation, repair, builds and tests for all work,
+with both configured native hosts and isolated OpenRouter execution. The harness
+remains optional orchestration/learning, not a compulsory application gate.
+Application programmes remain paused; no push or publication is authorized.
+This supersedes the narrower maintenance-only wording in the historical plan.
+
+The existing delivery CLI now exposes `propose`, using source-bound pending
+requests and an isolated API adapter. New tasks without an explicit host default
+to DeepSeek/high; explicit native assignments remain unchanged. API handoffs
+record actual API authentication and usage, never pretend native execution.
+Known malformed output is task-held; unknown completion and abandoned process
+reservations stop dispatch. Live process-owned reservations permit concurrent
+calls. Source application, checks and acceptance stay with the existing main-only
+integrator and MetaHarness verifier seam. No second scheduler was introduced.
+
+Node 24 engines/declarations and strict library checking are active. Validation
+passed the existing build (TypeScript, manifest sync, runtime hardening) and all
+46 focused delivery API/runtime/workflow tests. Generated outputs require non-group-writable
+modes; the runtime hardening guard remains unchanged.
+
+This is partial transport evidence, not full ADR completion. Native fallback,
+shared native/API planning, initial live cascade, compatible pool/source handoff
+and restart admission still require proof. Failed native attempts remain evidence;
+injected transport tests do not stand in for real model execution.
+
 ## September 28 implementation handoff (current plan)
 
 This section supersedes conflicting September 26 proposals below. Those sections

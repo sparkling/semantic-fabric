@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-07
-updated: 2026-09-23
+updated: 2026-09-28
 tags: [programme, v1, completion, release, governance, ruflo]
 supersedes:
   - ADR-0038
@@ -22,6 +22,13 @@ implements: []
 ---
 
 # V1 product completion and release profile
+
+**Owner amendment (2026-09-28):** ADR-0058 authorizes direct implementation,
+repair, tests and builds for all work. The delivery harness remains available,
+not compulsory. Both native hosts and the isolated bounded OpenRouter adapter
+are authorized; historical Claude-only/native-only rules are superseded for
+ordinary engineering. Source/data isolation, independent review, public-feature
+acceptance and explicit application pause remain in force.
 
 ## Status boundary
 

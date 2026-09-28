@@ -8,7 +8,30 @@
 > it via `@AGENTS.md` at the top of `CLAUDE.md`. Edit SHARED instructions HERE.
 > Claude-Code-only guidance lives in `CLAUDE.md` (below its `@AGENTS.md` line).
 
-## Claude-only build (2026-09-22 user correction; Codex paused)
+## Harness repair authorization (2026-09-28 owner amendment)
+
+The owner authorizes ADR-0058 implementation with the same model access and
+limits as Semantic Builder. The Claude-only restriction below is historical and
+revoked. Native Codex and Claude Code may execute and independently review
+implementation, repair and review. Direct edits, tests and builds are authorized;
+the harness is available orchestration, never a compulsory authoring/test gate.
+Keep one integrator on canonical `main`, source-bound acceptance and independent
+review. Application work remains paused until separately resumed by the owner.
+
+Direct OpenRouter `deepseek/deepseek-v4.1-flash` authoring and fresh-context
+independent review are authorized through an isolated adapter. Enforce at most
+$1 per metered request before dispatch and `maxTotalUsd: null`; no cumulative
+spending cap. Preserve accounting, unknown-charge stops and replay protection.
+API credentials remain only in the API adapter, never check/native environments.
+Capability/output failure admits configured Opus/high repair; only confirmed
+nonexecuted HTTP 402 credit rejection admits lighter Sonnet or authorized Sol
+subscription execution. Preserve actual executor identities and configured
+native gateway transport. Native client/model failure pauses with its exact error.
+Native subscriptions have no cost, token, request, invocation or quota budgets.
+ADR-0058 governs this repair where historical policy below conflicts. No push,
+publication, application resumption or expanded evolution programme is authorized.
+
+## Historical Claude-only build (2026-09-22; superseded above)
 
 Codex is not used for build, task execution, or review until the user
 explicitly re-authorizes it. Every delivery task uses `host: 'claude-code'`;
@@ -173,7 +196,15 @@ cargo build --workspace --locked
 
 ## Codex platform notes
 
-### Delivery execution (ADR-0055, updated 2026-09-11)
+### Current delivery execution (2026-09-28)
+
+Direct implementation, repair, tests and builds are permitted for all work.
+Use the delivery harness when useful for orchestration and learning; it is not
+a prerequisite. Both native hosts and the isolated ADR-0058 API adapter are
+authorized. Retain one integrator, scoped tests/builds, independent review,
+source/data isolation and the current application pause.
+
+### Historical delivery execution (ADR-0055, superseded by September 28 amendment)
 
 - Every building task must use the main-only delivery harness in `coding-harness/` (ADR-0055, user corrections 2026-09-10, 2026-09-19 and 2026-09-22). Begin a scoped task before editing, bind the actual native executor/model/effort, then use `advance`/`submit` for source-bound implementation, declared checks, failure-directed repair and independent read-only review. With Codex paused (2026-09-22), the host is Claude Code for both implementation and review; independent review uses a second, distinct Claude Code executor identity, not a second provider. The existing native host executes each returned request; do not start another implementation host. Verify, commit only that slice, then finish against the exact commit. See `coding-harness/README.md` for response schemas, recovery and trust boundaries. Ruflo MCP records coordination/results; local receipts do not prove remote synchronization. Manifests use `latest`, with exact tested dependency resolution retained in the lockfile. The historical closed candidate experiment remains optional and its worktree launchers remain prohibited.
 - After an explicit user pause/review request, do not resume application tasks from the scheduler or an active goal until the user releases that pause. Preserve interrupted patches; explicit adoption records starting changes without treating them as verified.

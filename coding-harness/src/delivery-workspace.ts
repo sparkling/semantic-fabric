@@ -93,7 +93,7 @@ function acquireLease(directory: string): number {
   return fd;
 }
 interface OperationLock { pid: number; start: string; nonce: string; phase: string; childPid?: number }
-function processIdentity(pid: number): string | undefined {
+export function processIdentity(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error('DELIVERY_INVALID_PID');
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
