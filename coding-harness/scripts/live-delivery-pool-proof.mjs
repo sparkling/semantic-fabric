@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Explicit local harness proof; paid fixture outcomes or read-only reviews, never application work.
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -127,6 +127,8 @@ async function wholeOutcomeProof(preflight) {
   for (const path of paths) writeFileSync(join(root, path), 'before\n');
   writeFileSync(join(root, 'coding-harness/check.mjs'),
     "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst path = process.argv[2];\nassert.ok(['product.txt', 'other.txt'].includes(path));\nassert.equal(readFileSync(new URL('../' + path, import.meta.url), 'utf8'), 'fixed\\n');\n");
+  writeFileSync(join(root, 'coding-harness/build.mjs'),
+    "import { execFileSync } from 'node:child_process';\nexecFileSync(process.execPath, ['--check', new URL('check.mjs', import.meta.url).pathname], { stdio: 'inherit' });\n");
   const git = (...args) => execFileSync('git', args, { cwd: root, env: buildCheckEnvironment(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git('init', '-b', 'main'); git('config', 'user.name', 'Fabric live harness proof'); git('config', 'user.email', 'harness@example.invalid');
   git('add', '.'); git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: frozen live harness fixture');
@@ -136,14 +138,22 @@ async function wholeOutcomeProof(preflight) {
     schemaVersion: 1, id: `fabric-live-fixture-${index}`, owner: 'fabric-proof-integrator', thread: 'fabric-live-whole-outcome',
     requirement: `Harness fixture only: replace the entire contents of ${path} with exactly fixed followed by one newline. Preserve all other files. This is transport/lifecycle proof, not product work. Plan against declared build and acceptance check IDs.`,
     taskClass: 'implementation', host: route.host, scope: [path], checks: [
-      { id: 'build', kind: 'build', argv: ['node', '--check', 'check.mjs'], cwd: 'coding-harness' },
+      { id: 'build', kind: 'build', argv: ['node', 'build.mjs'], cwd: 'coding-harness' },
       { id: 'acceptance', kind: 'acceptance', argv: ['node', 'check.mjs', path], cwd: 'coding-harness' },
     ] }, handoff: { ...route, executorId: `live-api-author-${index}`, authentication: 'openrouter-api', observation: 'Actual isolated OpenRouter executor; provider request evidence retained' }, resources: [`private-fixture-${index}`] }));
   const manifest = { schemaVersion: 1, parentDirectory, maxConcurrency: 2, mode: 'run', outcomes };
   atomicJson(join(proofRoot, 'manifest.json'), manifest);
-  const baseline = paths.map(path => ({ path, exitCode: spawnSync(process.execPath, ['check.mjs', path],
-    { cwd: join(root, 'coding-harness'), env: buildCheckEnvironment(), stdio: 'ignore' }).status }));
-  if (baseline.some(row => row.exitCode !== 1)) throw new Error('LIVE_FIXTURE_BASELINE_NOT_RED');
+  const baseline = [];
+  for (const { task, handoff } of outcomes) {
+    await harness.begin(task); await harness.bind(task.id, task.owner, { ...handoff, observation: 'Frozen baseline admission only; no model invocation' });
+    for (const check of task.checks) {
+      const result = (await harness.check(task.id, task.owner, check.id)).checks.at(-1);
+      baseline.push({ taskId: task.id, checkId: check.id, exitCode: result.exitCode, passed: result.passed, sourceDigest: result.sourceAfter });
+    }
+    await harness.pause(task.id, task.owner, 'Frozen baseline checked; no model invocation or acceptance');
+  }
+  atomicJson(join(proofRoot, 'baseline.json'), baseline);
+  if (baseline.some(row => row.checkId === 'build' ? !row.passed : row.passed || row.exitCode !== 1)) throw new Error('LIVE_FIXTURE_BASELINE_INVALID');
   const excluded = [];
   for (const conflict of ['path', 'resource']) {
     const blocked = structuredClone(manifest);
