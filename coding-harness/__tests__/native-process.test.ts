@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { BoundedNativeProcessRunner } from '../src/native-process.js';
+import { processSucceeded } from '../src/models/native-adapter-contracts.js';
 import type { NativeProcessRequest } from '../src/models/types.js';
 import type { NativeModelOriginPinningBoundary } from '../src/network.js';
 import type { NativeModelFilesystemBoundary } from '../src/native-filesystem.js';
@@ -163,7 +164,8 @@ describe('bounded native subscription process bridge', () => {
     const result = await runner(root, 128, [root], [root], [workspace()], [], {
       ...fakeResourceBoundary, terminateAndVerify,
     }).run(request(root, 'output', { stdin: undefined }));
-    expect(result.exitCode).not.toBe(0);
+    // A fast child may exit before termination; the explicit ceiling flag still refuses acceptance.
+    expect(processSucceeded({ ...result, exitCode: 0 })).toBe(false);
     expect(result.outputLimitExceeded).toBe(true);
     expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(128);
     expect(terminateAndVerify).toHaveBeenCalledTimes(2);

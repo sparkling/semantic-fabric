@@ -59,6 +59,9 @@ functional suites pass (runner, learning, policy, ready/candidate/API/workflow,
 manifest, native adapters/client/process/runtime ledger). Activated policy reaches
 ordinary worker context without evaluation override. Earlier pool slice passed
 84 tests. No performance tests, paid calls, application tasks or publication ran.
+Exact Flywheel 0.1.12 validation exposed an existing output-ceiling test race:
+the child can exit zero before termination. The test now checks refusal through
+the real success predicate, bounded output and termination evidence, not OS timing.
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness
