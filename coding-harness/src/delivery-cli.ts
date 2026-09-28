@@ -10,7 +10,7 @@ import { createDeliveryApi, renderDeliveryPrompt } from './delivery-api.js';
 import type { NativeHandoff } from './delivery-contracts.js';
 import { bindAppliedProposal } from './delivery-proposal.js';
 import { dispatchDeliveryReady } from './delivery-ready.js';
-import { reopenDeliveryCandidate } from './delivery-candidate.js';
+import { reopenDeliveryCandidate, deliveryReadPaths } from './delivery-candidate.js';
 import { runDeliveryOutcome } from './delivery-runner.js';
 
 /** API proposals never edit source or imply acceptance. Native handoffs and
@@ -18,13 +18,16 @@ import { runDeliveryOutcome } from './delivery-runner.js';
 export async function deliveryCli(args: string[], signal?: AbortSignal, candidate?: DeliveryHarness): Promise<boolean> {
   const [root, command, ...rest] = args;
   const counts: Record<string, number> = { begin: 1, status: 1, inspect: 0, bind: 3, check: 3, verify: 2, finish: 3,
-    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3, ready: 1, run: 2 };
+    pause: 3, resume: 2, supersede: 4, reconcile: 4, next: 2, advance: 2, submit: 3, propose: 2, packet: 2, fallback: 5, repair: 3, ready: 1, run: 2, integrate: 1 };
   if (!root || !(command in counts) || rest.length !== counts[command]) {
-    throw new Error('usage: delivery <repository-root> ready <manifest.json> | begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | run|next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
+    throw new Error('usage: delivery <repository-root> ready <manifest.json> | integrate <integration.json> | begin <task.json> | status <id> | inspect | bind|repair <id> <owner> <native.json> | run|next|advance|propose|packet <id> <owner> | fallback <id> <owner> <request-id> <api-evidence.json> <native.json> | submit <id> <owner> <response-or-proposal.json> | check <id> <owner> <check-id> | verify <id> <owner> | finish <id> <owner> <commit> | pause <id> <owner> <reason> | resume <id> <owner> | supersede <id> <owner> <successor-id> <reason> | reconcile <id> <owner> <nonce-or-none> <reason>');
   }
   if (candidate && (candidate.context.kind !== 'candidate' || candidate.root !== resolve(root))) throw new Error('DELIVERY_CANDIDATE_IDENTITY');
   const reopened = !candidate && existsSync(join(resolve(root), '.metaharness/delivery/candidate.json')) ? reopenDeliveryCandidate(resolve(root)) : undefined;
   const harness = candidate ?? reopened?.harness ?? new DeliveryHarness(resolve(root));
+  if (command === 'integrate') {
+    console.log(JSON.stringify(await harness.integrate(readJson(resolve(rest[0]))), null, 2)); return true;
+  }
   if (command === 'ready') {
     const result = await dispatchDeliveryReady(harness, readJson(resolve(rest[0])),
       (selected, mode, id, owner, signal) => deliveryCli([selected.root, mode, id, owner], signal, selected), signal);
@@ -54,7 +57,7 @@ export async function deliveryCli(args: string[], signal?: AbortSignal, candidat
     const sourceBefore = harness.snapshot();
     if (sourceBefore.digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     const run = harness.read(id);
-    const files = action.request.scope.map(path => {
+    const files = deliveryReadPaths(harness, action.request.scope, run.task.readPaths).map(path => {
       const absolute = resolveWorkspacePath(harness.root, path, { allowMissingLeaf: true, requireRegularFile: true });
       try { return { path, content: readFileSync(absolute, 'utf8') }; }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, content: null }; throw error; }

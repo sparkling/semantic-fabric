@@ -71,6 +71,13 @@ describe('ordinary API transport', () => {
     await expect(f.invoke(request(), files, [], 'task-a')).rejects.toMatchObject({ code: 'task-output-held', evidence: { actualUsd: 0.01 } });
     expect((await f.invoke(request(), files, [], 'task-b')).changes).toEqual(valid.changes);
   });
+  it('rejects contradictory changes-requested edits before admitting paid output', async () => {
+    const f = fixture(async () => response({ ...valid, outcome: 'changes-requested', issues: ['Source needs proposed edits'] }));
+    await expect(f.invoke(request(), files, [], 'contradictory-task')).rejects.toMatchObject({
+      code: 'completed-invalid-output', evidence: { actualUsd: 0.01, providerRequestId: 'generation-1' },
+    });
+    await expect(f.invoke(request(), files, [], 'contradictory-task')).rejects.toThrow('task-output-held');
+  });
   it('distinguishes credit, auth and unknown outcomes without accepting unsafe native fallback', async () => {
     for (const [status, code] of [[402, 'confirmed-credit-rejection'], [401, 'authentication-rejected']] as const) {
       const f = fixture(async () => new Response(JSON.stringify({ error: { code: status } }), { status }));

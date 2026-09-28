@@ -24,17 +24,10 @@ cancellation drain and retained candidate evidence. Candidate success awaits
 sole-root integration; no automatic main write or programme resumption occurs.
 
 Run `npm --prefix coding-harness run delivery -- /absolute/repository ready /absolute/ready.json`.
-Manifest fields: `schemaVersion: 1`, existing external absolute `parentDirectory`,
-positive `maxConcurrency`, `mode: "packet"`, `"propose"` or `"run"`, and `outcomes`. Each
-outcome contains ordinary `task`, actual executor `handoff`, explicit `resources`,
-and optional `acceptedParent`/`acceptedInputs`. Packet mode awaits execution;
-proposal mode requires the isolated API route. Continue using the returned
-`candidateRoot` with ordinary CLI status/submit/advance/verify commands. Context
-reload reads canonical-owned scope/baseline custody and rejects source drift;
-candidate finish remains forbidden. Shared canonical API accounting prevents
-candidate isolation from bypassing unknown-charge holds. A real subprocess test
-continues ready output through implementation, checks, independent review and
-verification without claiming a real model invocation.
+Manifest fields: `schemaVersion: 1`, existing external absolute `parentDirectory`, positive `maxConcurrency`, `mode: "packet"`, `"propose"` or `"run"`, and `outcomes`.
+Each outcome contains ordinary `task`, actual executor `handoff`, explicit `resources`, and optional `acceptedParent`/`acceptedInputs`. Packet mode awaits execution; proposal mode requires the isolated API route.
+Continue returned `candidateRoot` with ordinary CLI status/submit/advance/verify. Reload validates canonical custody and source drift; candidate finish stays forbidden. Shared canonical API accounting preserves unknown-charge holds.
+A real subprocess test continues implementation, checks, independent review and verification without claiming a real model invocation.
 
 Native-only verified author observations now publish immutable deltas and reduce
 serially into the existing PersistentRoutedAgentPool/Router. Assigned routes stay
@@ -54,14 +47,9 @@ production routing, changes assigned models or installs policy automatically.
 `config/delivery-policy.json` supplies operator-controlled signer/root pins;
 without it ordinary delivery uses seed guidance. No policy was activated here.
 
-Validation: strict build/manifest hardening passes; 138 tests across 13 injected
-functional suites pass (runner, learning, policy, ready/candidate/API/workflow,
-manifest, native adapters/client/process/runtime ledger). Activated policy reaches
-ordinary worker context without evaluation override. Earlier pool slice passed
-84 tests. This implementation validation used injected tests; live proof follows.
-Exact Flywheel 0.1.12 validation exposed an existing output-ceiling test race:
-the child can exit zero before termination. The test now checks refusal through
-the real success predicate, bounded output and termination evidence, not OS timing.
+Earlier implementation: strict build/manifest hardening and 138 tests across 13 injected suites passed (runner, learning, policy, ready/candidate/API/workflow, manifest, native adapters/client/process/runtime ledger); earlier pool slice passed 84 tests.
+Activated policy reaches ordinary context without evaluation override. These are injected tests, not live model proof.
+Flywheel 0.1.12 exposed an existing output-ceiling race: child exit zero can precede termination. Test now checks actual success refusal, bounded output and termination evidence, not OS timing.
 
 ### September 28 live whole-outcome proof
 Command: `node coding-harness/scripts/live-delivery-pool-proof.mjs --whole-outcome`.
@@ -72,7 +60,15 @@ Six confirmed API calls cost $0.002079054; maximum pre-dispatch request bound $0
 Earlier `whole-outcome-proof-wOy3Lr` remains negative ($0.00163645): unsupported fixture build argv stopped both outcomes; one real Opus/high planner repair succeeded.
 Correction `3ce6c2be` preflights exact build/acceptance argv through the harness boundary; build and 18 focused tests pass. No model blame or blind replay.
 Read-only restart shows no Fabric/scratch canonical active writer or operation; source unchanged. Initial/final host samples show 74.3% interval CPU idle; checks bounded to two.
-Manual accepted-source handoff passes in the same scratch fixture: `manual-handoff.json` beside that result verifies both review/receipt chains, four canonical checks, scratch-main commit `7e63869b735c106a2d2790f4e88d6e6061319934`, and exact committed-byte readback through existing candidate creation (proof digest `ff9e24e262b84a1e84e2ca41d10c86cca79c5205d537675c82da1a56c4484693`). Remaining gap is automated production candidate receipt/state adoption, not root manual acceptance. Historical API input still returned `DELIVERY_ACCEPTED_INPUT_CHANGED`; no receipt import, `finish`, automatic accepted-parent gate, live child, extra model call, programme resumption, policy activation or publication is claimed.
+Historical manual handoff: `manual-handoff.json` verifies review chains, four canonical checks, scratch commit `7e63869b735c106a2d2790f4e88d6e6061319934` and committed-byte readback (proof digest `ff9e24e262b84a1e84e2ca41d10c86cca79c5205d537675c82da1a56c4484693`). That proof lacked production receipt/state adoption and live child execution; the following slice closes those gaps, without rewriting history.
+Production `integrate <integration.json>` takes `candidateRoot`, `id`, `owner`, `expectedDigest`. Root explicitly integrates, runs each declared `check`, runs `verify`, commits only admitted paths, then calls exact-commit `finish`; integration never auto-commits.
+Original candidate workflow, logs and outcome receipts remain immutable. Canonical evidence copies them and revalidates receipt chains; durable per-file application supports partial-apply and commit-before-finish recovery. Same-base siblings require completed prior integrations and unchanged declared read dependencies; omitted `readPaths` pins all outside-scope source, including newly added files. Runtime/evaluator/package inputs cannot be omitted.
+Real parents in `.metaharness/delivery/whole-outcome-proof-CSlRvE/` passed and integrated serially at `e12acc8469c6906148cf3462b608f2c2bf42e2bb` and `baf83f686b9408ae97b9dbd0b514db615d661fd6`; planner overlap 7134ms. One malformed planner required successful configured Opus/high repair. No speedup claim.
+Original `result.json` stays negative: child proposed edits with `changes-requested`, rejected without source mutation. File SHA-256 `8ae0f509001ffc596ad06b62249e0541b5998f5d16722f75c59fd43f7f289925`; known API cost $0.01445282, no unknown charge. Adapter now rejects this contradiction before valid-output admission, preserves paid failure accounting, and clarifies proposal completion in the shared prompt.
+Same child resumed through existing bind/advance/submit/check/review lifecycle, without parent or planner replay. Fresh real DeepSeek author and independent review passed; accepted input `product.txt="fixed\n"` produced `child.txt="fixed\nfixed\n"`. Production integration finished at scratch commit `518f91ac883fd56998a51405cdadfed953e82863`.
+Continuation: `continuation-f7f6c1bb-1409-48c5-a3e7-1debde9ddd35/result.json` beneath that proof directory; file SHA-256 `c8a10a451af4d24c839dd69fabdac82b4c84b2719025ada5fa748d84a620ec0a`. Two additional actual API calls cost $0.000646005; original failed evidence remains unchanged. Root independently verified all three completed records, receipt chains, copied logs, fresh review identities and canonical checks.
+Observed planner outlier `gen-1790598162-IhDVYBcrwYTwY1ECAsot`: provider OpenInference, generation 1628807ms, latency 718247ms, confirmed $0.00912259; completed, not cancelled. No routing, timeout, reasoning or resource limits changed. Host samples every 30 seconds during live work: 69-81% CPU idle; final child continuation 80.2%, one deterministic worker; memory/I/O healthy.
+Final scoped validation: strict build/hardening and 112 tests across 10 suites pass, including 13 integration regressions and contradiction rejection. Independent read-only review cleared corrections. Full suite remains non-green: 1087 passed, 29 failed, 2 skipped; 16 failures reproduce on clean baseline, remaining failures concern historical native/Ruflo/config/source pins and two packed-controller timeouts. No application repair, resumption, policy activation, publication or release-safety claim.
 
 Owner authorized direct implementation, repair, builds and tests for all work,
 with both configured native hosts and isolated OpenRouter execution. The harness

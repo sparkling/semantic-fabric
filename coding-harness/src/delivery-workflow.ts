@@ -3,6 +3,7 @@ import { hash } from '@metaharness/harness';
 import { selectDeliveryRoute } from './delivery-contracts.js';
 import type { DeliveryRun, CheckResult } from './delivery-runtime.js';
 import type { DeliveryAction, NativeStageRequest, NativeStageResult } from './delivery-workflow-contracts.js';
+import { integrationReady } from './delivery-integration.js';
 
 export function checkDigests(run: DeliveryRun): string[] {
   return run.task.checks.map(c => hash(run.checks.filter(r => r.id === c.id).at(-1) ?? null));
@@ -17,6 +18,7 @@ function implementation(run: DeliveryRun): NativeStageResult | undefined {
   return run.workflow?.results.filter(r => r.request.stage === 'implementation' && !isTransport(r)).at(-1);
 }
 export function workflowReady(run: DeliveryRun, source: string): boolean {
+  if (run.integration) return integrationReady(run, source);
   const impl = implementation(run), review = run.workflow?.results.at(-1);
   return !!impl?.accepted && impl.response.sourceDigest === source
     && !!review?.accepted && review.request.stage === 'review' && review.response.sourceDigest === source
@@ -33,6 +35,11 @@ function failureFeedback(check: CheckResult): string {
 
 /** Returns/persists one next transition. Does not invoke missing or failed dependents. */
 export function nextWorkflowAction(run: DeliveryRun, source: string, validChecks: ReadonlySet<string>): DeliveryAction {
+  if (run.integration) {
+    if (!integrationReady(run, source)) throw new Error('DELIVERY_INTEGRATION_SOURCE_MISMATCH');
+    const missing = run.task.checks.find(check => !validChecks.has(check.id));
+    return missing ? { kind: 'check', checkId: missing.id } : { kind: 'ready-to-commit', sourceDigest: source };
+  }
   const workflow = run.workflow ??= { requests: [], results: [], invalidated: [] };
   const impl = implementation(run), last = workflow.results.filter(r => !isTransport(r)).at(-1);
   const pending = workflow.requests.find(r => !workflow.invalidated.includes(r.id)

@@ -46,7 +46,7 @@ export function renderDeliveryPrompt(request: NativeStageRequest, files: Deliver
       ? 'Plan the smallest scoped change and focused tests. Return a plan object with summary, files (admitted paths) and tests (declared check IDs). Changes must be empty. Do not use tools.'
       : request.stage === 'review'
       ? 'Fresh independent review of current source and sanitized deterministic checks. No author rationale. Return actual JSON verdict; changes must be empty.'
-      : 'Packet-only execution: do not use tools or edit source. Propose full UTF-8 file contents only for admitted paths. Return actual JSON instance, not schema.',
+      : 'Packet-only execution: do not use tools or edit source. Propose full UTF-8 file contents only for admitted paths. completed means the proposed edits fully satisfy the requirement, not that source is already edited. changes-requested means unable to provide a complete proposal and requires changes=[]. Return actual JSON instance, not schema.',
     response: { outcome: 'completed|changes-requested', summary: 'string', issues: ['string'], changes: [{ path: 'admitted path', content: 'full source' }],
       ...(request.stage === 'architecture' ? { plan: { summary: 'string', files: ['admitted path'], tests: ['declared check ID'] } } : {}) } });
 }
@@ -173,6 +173,7 @@ export function createDeliveryApi(options: { directory: string; fetch?: typeof f
         assertExactKeys(value, ['outcome', 'summary', 'issues', 'changes', ...(request.stage === 'architecture' ? ['plan'] : [])], 'API proposal');
         if (value.outcome !== 'completed' && value.outcome !== 'changes-requested') throw new Error('Invalid API outcome');
         const changes = parseDeliveryChanges(value.changes, request.scope, request.stage !== 'implementation');
+        if (value.outcome !== 'completed' && changes.length) throw new Error('Contradictory API proposal');
         const plan = request.stage === 'architecture' ? parseDeliveryPlan(value.plan, request.scope) : undefined;
         if (plan) {
           const declared = checks.flatMap(value => value && typeof value === 'object' && 'declaredChecks' in value

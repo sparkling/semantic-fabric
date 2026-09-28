@@ -124,9 +124,9 @@ async function wholeOutcomeProof(preflight) {
   mkdirSync(root); mkdirSync(parentDirectory); mkdirSync(join(root, 'coding-harness'));
   writeFileSync(join(root, '.gitignore'), '.metaharness/\n');
   const paths = ['product.txt', 'other.txt'];
-  for (const path of paths) writeFileSync(join(root, path), 'before\n');
+  for (const path of [...paths, 'child.txt']) writeFileSync(join(root, path), 'before\n');
   writeFileSync(join(root, 'coding-harness/check.mjs'),
-    "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst path = process.argv[2];\nassert.ok(['product.txt', 'other.txt'].includes(path));\nassert.equal(readFileSync(new URL('../' + path, import.meta.url), 'utf8'), 'fixed\\n');\n");
+    "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst path = process.argv[2];\nassert.ok(['product.txt', 'other.txt', 'child.txt'].includes(path));\nassert.equal(readFileSync(new URL('../' + path, import.meta.url), 'utf8'), path === 'child.txt' ? 'fixed\\nfixed\\n' : 'fixed\\n');\n");
   writeFileSync(join(root, 'coding-harness/build.mjs'),
     "import { execFileSync } from 'node:child_process';\nexecFileSync(process.execPath, ['--check', new URL('check.mjs', import.meta.url).pathname], { stdio: 'inherit' });\n");
   const git = (...args) => execFileSync('git', args, { cwd: root, env: buildCheckEnvironment(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -137,14 +137,15 @@ async function wholeOutcomeProof(preflight) {
   const outcomes = paths.map((path, index) => ({ task: {
     schemaVersion: 1, id: `fabric-live-fixture-${index}`, owner: 'fabric-proof-integrator', thread: 'fabric-live-whole-outcome',
     requirement: `Harness fixture only: replace the entire contents of ${path} with exactly fixed followed by one newline. Preserve all other files. This is transport/lifecycle proof, not product work. Plan against declared build and acceptance check IDs.`,
-    taskClass: 'implementation', host: route.host, scope: [path], checks: [
+    taskClass: 'implementation', host: route.host, scope: [path], readPaths: ['coding-harness/check.mjs', 'coding-harness/build.mjs'], checks: [
       { id: 'build', kind: 'build', argv: ['node', 'build.mjs'], cwd: 'coding-harness' },
       { id: 'acceptance', kind: 'acceptance', argv: ['node', 'check.mjs', path], cwd: 'coding-harness' },
     ] }, handoff: { ...route, executorId: `live-api-author-${index}`, authentication: 'openrouter-api', observation: 'Actual isolated OpenRouter executor; provider request evidence retained' }, resources: [`private-fixture-${index}`] }));
   const manifest = { schemaVersion: 1, parentDirectory, maxConcurrency: 2, mode: 'run', outcomes };
   atomicJson(join(proofRoot, 'manifest.json'), manifest);
   const baseline = [];
-  for (const { task, handoff } of outcomes) {
+  for (const outcome of outcomes) {
+    const task = { ...outcome.task, id: `${outcome.task.id}-baseline` }, handoff = outcome.handoff;
     await harness.begin(task); await harness.bind(task.id, task.owner, { ...handoff, observation: 'Frozen baseline admission only; no model invocation' });
     for (const check of task.checks) {
       const result = (await harness.check(task.id, task.owner, check.id)).checks.at(-1);
@@ -181,14 +182,14 @@ async function wholeOutcomeProof(preflight) {
   sample();
   const prerequisites = { sourceDigest: original.digest, fabricCommit: canonical.context.head(), fixtureRoot: root, fixtureCommit: git('rev-parse', 'HEAD'),
     baseline, excluded, model: route, apiKeyPresent: Boolean(process.env.OPENROUTER_API_KEY), preflight,
-    dependentProof: { status: 'blocked', reason: 'No production candidate integration seam; historical accepted delivery-api.ts input is stale. No fabricated acceptance or extra model join.' } };
+    dependentProof: { status: 'pending', reason: 'Explicit canonical candidate integration and accepted-parent child execution follow pool completion.' } };
   atomicJson(join(proofRoot, 'prerequisites.json'), prerequisites);
   console.log(JSON.stringify({ phase: preflight ? 'preflight-complete' : 'live-start', pid: process.pid, proofRoot, fixtureRoot: root, model: route.model }));
   if (preflight) return;
   const controller = new AbortController(), timer = setInterval(sample, 30000);
   const stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
   try {
-    const result = await dispatchDeliveryReady(harness, manifest, async (candidate, mode, id, owner, signal) => {
+    const execute = async (candidate, mode, id, owner, signal) => {
       if (mode !== 'run') throw new Error('WHOLE_OUTCOME_MODE_REQUIRED');
       const task = candidate.read(id).task, actual = createDeliveryExecutor(candidate, hash(task));
       const outcome = await runDeliveryOutcome(candidate, id, owner, { signal, execute: async (request, files, checks, signal) => {
@@ -202,20 +203,51 @@ async function wholeOutcomeProof(preflight) {
         sourceDigest: outcome.sourceAfter, actualUsd: outcome.knownActualUsd, receiptDigest: hash(JSON.parse(readFileSync(outcome.receiptPath, 'utf8'))) });
       atomicJson(join(proofRoot, 'outcomes.json'), completed);
       return outcome.success;
-    }, controller.signal);
+    };
+    const result = await dispatchDeliveryReady(harness, manifest, execute, controller.signal);
     const first = outcomes.map(({ task }) => ({ id: task.id,
       start: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'start')?.at,
       end: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'settled')?.at }));
     const overlapMs = Math.max(0, Math.min(...first.map(row => row.end ?? 0)) - Math.max(...first.map(row => row.start ?? Infinity)));
     const unchanged = harness.snapshot().digest === source.digest && canonical.snapshot().digest === original.digest;
-    const passed = unchanged && overlapMs > 0 && completed.length === 2 && completed.every(row => row.success)
-      && result.results.every(row => row.status === 'fulfilled');
-    const proof = { ...prerequisites, result, completed, events, first, overlapMs, unchanged, passed,
+    const integrated = [];
+    const integrate = async row => {
+      const candidateRun = JSON.parse(readFileSync(join(row.evidenceDirectory, `${row.id}.json`), 'utf8'));
+      const prepared = await harness.integrate({ candidateRoot: row.candidateRoot, id: row.id,
+        owner: candidateRun.task.owner, expectedDigest: candidateRun.digest });
+      for (const check of prepared.task.checks) await harness.check(row.id, prepared.task.owner, check.id);
+      const verified = await harness.verify(row.id, prepared.task.owner);
+      if (!verified.verdict?.pass) throw new Error('CANONICAL_INTEGRATION_CHECK_FAILED');
+      git('add', '--', ...prepared.task.scope); git('commit', '-qm', `test: accept ${row.id}`);
+      const accepted = await harness.finish(row.id, prepared.task.owner, git('rev-parse', 'HEAD'));
+      integrated.push({ taskId: row.id, commit: accepted.commit, digest: accepted.digest,
+        sourceDigest: accepted.integration.sourceAfter.digest, originalDigest: candidateRun.digest });
+      atomicJson(join(proofRoot, 'integrated.json'), integrated);
+    };
+    let dependentProof = prerequisites.dependentProof;
+    if (unchanged && completed.length === 2 && completed.every(row => row.success) && result.results.every(row => row.status === 'fulfilled')) {
+      for (const row of result.results) await integrate(row);
+      const child = { ...outcomes[0], task: { ...outcomes[0].task, id: 'fabric-live-dependent', scope: ['child.txt'],
+        requirement: 'Harness fixture only: read accepted product.txt input provided in files. Set child.txt to exactly two concatenated copies of that entire input, including its newline. Preserve product.txt and all other files. Plan against declared build and acceptance check IDs.',
+        checks: outcomes[0].task.checks.map(check => check.id === 'acceptance' ? { ...check, argv: ['node', 'check.mjs', 'child.txt'] } : check) },
+        handoff: { ...outcomes[0].handoff, executorId: 'live-api-dependent-author' },
+        acceptedParent: outcomes[0].task.id, acceptedInputs: ['product.txt'] };
+      const childManifest = { ...manifest, maxConcurrency: 1, outcomes: [child] };
+      atomicJson(join(proofRoot, 'dependent-manifest.json'), childManifest);
+      const childResult = await dispatchDeliveryReady(harness, childManifest, execute, controller.signal);
+      if (childResult.results[0].status === 'fulfilled') await integrate(childResult.results[0]);
+      dependentProof = { status: childResult.results[0].status === 'fulfilled' ? 'accepted' : 'failed', result: childResult,
+        acceptedParent: child.acceptedParent, acceptedInputs: child.acceptedInputs, parentCommit: integrated[0].commit,
+        readbackSha256: createHash('sha256').update(readFileSync(join(root, 'product.txt'))).digest('hex') };
+    }
+    const passed = unchanged && canonical.snapshot().digest === original.digest && overlapMs > 0 && completed.length === 3
+      && completed.every(row => row.success) && integrated.length === 3 && dependentProof.status === 'accepted';
+    const proof = { ...prerequisites, dependentProof, result, completed, integrated, events, first, overlapMs, unchanged, passed,
       pool: deliveryPoolIdentity(), restart: { fabric: canonical.inspect(), scratch: harness.inspect() },
       knownActualUsd: completed.reduce((sum, row) => sum + row.actualUsd, 0) };
     atomicJson(join(proofRoot, 'result.json'), proof);
     console.log(JSON.stringify({ phase: 'live-complete', proofRoot, passed, overlapMs, knownActualUsd: proof.knownActualUsd,
-      outcomes: completed.map(({ taskId, success, failure }) => ({ taskId, success, failure })), dependentProof: prerequisites.dependentProof }));
+      outcomes: completed.map(({ taskId, success, failure }) => ({ taskId, success, failure })), dependentProof }));
     process.exitCode = passed ? 0 : 1;
   } finally { clearInterval(timer); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); sample(); }
 }

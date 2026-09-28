@@ -6,6 +6,7 @@ import { AgentPool, AlgorithmRouter, HarnessKernel, PolicyGate, VerifierRegistry
 import { DeliveryApiFailure, parseDeliveryChanges, parseDeliveryPlan, type DeliveryPlan } from './delivery-api.js';
 import { createDeliveryExecutor, type DeliveryExecution, type DeliveryExecutor } from './delivery-executor.js';
 import { bindAppliedProposal } from './delivery-proposal.js';
+import { deliveryReadPaths } from './delivery-candidate.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { atomicJson, withOperationLock } from './delivery-workspace.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
@@ -47,7 +48,7 @@ export async function runDeliveryOutcome(harness: DeliveryHarness, id: string, o
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('DELIVERY_RUN_CANCELLED');
       const before = harness.snapshot();
       if (before.digest !== request.sourceDigest) throw new Error('DELIVERY_EXECUTION_SOURCE_CHANGED');
-      const files = request.scope.map(path => {
+      const files = deliveryReadPaths(harness, request.scope, run.task.readPaths).map(path => {
         const absolute = resolveWorkspacePath(harness.root, path, { allowMissingLeaf: true, requireRegularFile: true });
         try { return { path, content: readFileSync(absolute, 'utf8') }; }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, content: null }; throw error; }

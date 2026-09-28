@@ -19,6 +19,8 @@ export interface DeliveryTask {
   taskClass: TaskClass;
   host: DeliveryHost;
   scope: string[];
+  /** Complete declared read closure; omission conservatively pins all source. */
+  readPaths?: string[];
   checks: { id: string; kind: 'acceptance' | 'build'; argv: string[]; cwd: string;
     timeoutMs?: number; maxOutputBytes?: number }[];
   requested?: DeliveryRoute;
@@ -114,7 +116,7 @@ export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
 export function parseDeliveryTask(value: unknown): DeliveryTask {
   const t = asRecord(value, 'delivery task');
   const required = ['schemaVersion', 'id', 'requirement', 'owner', 'thread', 'taskClass', 'scope', 'checks'];
-  const optional = ['host', 'requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges', 'reviewer'];
+  const optional = ['host', 'requested', 'selectionReason', 'preserveMainModel', 'explicitUltra', 'rufloTaskId', 'adoptExistingChanges', 'reviewer', 'readPaths'];
   for (const key of required) if (!(key in t)) throw new Error(`DELIVERY_MISSING:${key}`);
   for (const key of Object.keys(t)) if (![...required, ...optional].includes(key)) {
     throw new Error(`DELIVERY_UNKNOWN_FIELD:${key}`);
@@ -173,6 +175,12 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
     host, scope, checks,
   };
   if (task.id === 'active') throw new Error('DELIVERY_RESERVED_ID');
+  if (t.readPaths !== undefined) {
+    if (!Array.isArray(t.readPaths)) throw new Error('DELIVERY_INVALID_READ_PATHS');
+    task.readPaths = t.readPaths.map(p => normalizeWorkspacePath(nonempty(p, 'read path'), 'read path'));
+    if (new Set(task.readPaths).size !== task.readPaths.length
+      || task.readPaths.some(p => /(^|\/)(\.git|\.env(?:\..*)?|\.metaharness)(\/|$)/.test(p))) throw new Error('DELIVERY_INVALID_READ_PATHS');
+  }
   if (t.adoptExistingChanges !== undefined) {
     if (!Array.isArray(t.adoptExistingChanges)) throw new Error('DELIVERY_INVALID_ADOPTION');
     task.adoptExistingChanges = t.adoptExistingChanges.map(p => nonempty(p, 'adoption'));

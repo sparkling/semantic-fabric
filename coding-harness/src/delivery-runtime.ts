@@ -13,6 +13,7 @@ import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow, type Na
 import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } from './delivery-workflow.js';
 import { verifyNativeStage } from './delivery-stage.js';
 import type { DeliveryApiEvidence } from './delivery-api.js';
+import { applyIntegration, parseIntegrationInput, prepareIntegration, validateIntegrationEvidence, type CandidateIntegration } from './delivery-integration.js';
 
 export interface CheckResult {
   id: string; attempt: number; argv: string[]; cwd: string; startedAt: string; durationMs: number;
@@ -31,6 +32,7 @@ export interface DeliveryRun {
   commit?: string; verdict?: Verdict; digest?: string;
   resolution?: { successorTask: string; successorCommit: string; reason: string; at: string };
   workflow?: DeliveryWorkflow;
+  integration?: CandidateIntegration;
 }
 
 /** Main-only development harness. The native host still owns editing and spawning.
@@ -116,6 +118,25 @@ export class DeliveryHarness {
         adoptedSource: Object.fromEntries([...dirty].map(p => [p, snapshot.files[p] ?? null])) };
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
       this.save(run); this.claim(task.id); return run;
+    });
+  }
+  /** Explicit sole-integrator adoption; original model attestations remain unchanged. */
+  async integrate(value: unknown): Promise<DeliveryRun> {
+    return withOperationLock(this.directory, async () => {
+      this.context.assert();
+      const input = parseIntegrationInput(value);
+      if (this.context.kind !== 'main') throw new Error('DELIVERY_CANONICAL_SOURCE_REQUIRED');
+      const existing = existsSync(this.file(input.id)) ? this.read(input.id) : undefined;
+      if (existing && !existing.integration) throw new Error('DELIVERY_RUN_ALREADY_EXISTS');
+      const active = this.inspect().active as { id: string } | null;
+      if (active && active.id !== input.id) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+      const run = existing ?? await prepareIntegration(this, input);
+      if (run.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_OWNER_MISMATCH');
+      if (run.status !== 'active') throw new Error('DELIVERY_RUN_NOT_ACTIVE');
+      if (!existing) this.save(run);
+      if (!active) this.claim(input.id);
+      applyIntegration(this, run, input);
+      return this.save(run);
     });
   }
   async bind(id: string, owner: string, handoff: NativeHandoff): Promise<DeliveryRun> {
@@ -255,6 +276,7 @@ export class DeliveryHarness {
     return valid;
   }
   private async verdict(run: DeliveryRun, digest: string): Promise<Verdict> {
+    await validateIntegrationEvidence(run);
     const valid = await this.validChecks(run, digest);
     const registry = new VerifierRegistry();
     for (const check of run.task.checks) registry.register({ id: check.id, kind: 'delivery', check: async () => {
@@ -376,7 +398,7 @@ export class DeliveryHarness {
       if (run.status !== 'paused' || run.task.owner !== owner) throw new Error('DELIVERY_PAUSED_OWNER_REQUIRED');
       this.source(run);
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
-      run.status = 'awaiting-native';
+      run.status = run.integration ? 'active' : 'awaiting-native';
       this.invalidatePending(run);
       run.events.push({ at: new Date().toISOString(), kind: 'resume', reason: 'new native handoff required' });
       this.save(run); this.claim(id); return run;
@@ -430,7 +452,7 @@ export class DeliveryHarness {
       } else {
         this.source(run);
         if (!active) this.claim(id);
-        run.status = 'awaiting-native';
+        run.status = run.integration ? 'active' : 'awaiting-native';
         this.invalidatePending(run);
       }
       run.events.push({ at: new Date().toISOString(), kind: 'reconcile', reason: `${nonce}: ${reason}` });

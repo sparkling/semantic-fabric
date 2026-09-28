@@ -35,7 +35,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
   return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs }) => ({
     id: task.id, mutationPaths: task.scope, resources,
     run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
-      const candidate = createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs });
+      const candidate = createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths });
       record(candidate);
       await candidate.harness.begin(task);
       await candidate.harness.bind(task.id, task.owner, handoff);
