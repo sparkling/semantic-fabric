@@ -258,3 +258,6 @@ async fn unqualified_journal_mode_keeps_the_unverified_path() {
         (StatusCode::OK, vec!["25".into(), "30".into()])
     );
 }
+
+#[path = "ordinary_sqlite_generation_profile_tests.rs"]
+mod ordinary_profile;
