@@ -26,11 +26,14 @@ use crate::backend::{Backend, BackendKind};
 use crate::binding_identity::RuntimeBindingIdentity;
 use crate::pg_generation::{PgGenerationError, SourceGeneration};
 use crate::schema_observation::BoundSourceSchemaObservationV1;
-use crate::semantic_admission::ValidatedMapping;
+use crate::semantic_admission::{GeneratedAdmissionReceipt, ValidatedMapping};
 use crate::IntrospectedSource;
 
 /// Plan-cache capacity for one immutable compiler binding (ADR-0007).
 const PLAN_CACHE_CAP: usize = 64;
+#[allow(dead_code)]
+#[path = "generated_runtime_binding.rs"]
+mod generated;
 #[path = "binding_lineage.rs"]
 mod lineage;
 
@@ -93,6 +96,7 @@ pub(crate) struct RuntimeBinding {
     schema_observation: BoundSourceSchemaObservationV1,
     generation: SourceGeneration,
     semantic_warnings: usize,
+    generated: GeneratedAdmissionReceipt,
     compiler: CompilerBinding,
 }
 
@@ -109,6 +113,7 @@ impl RuntimeBinding {
         let (backend, schema, observation, generation) = source.into_parts();
         let profile = BackendProfile::from_kind(backend.kind());
         let schema_observation = observation.bind(profile.kind(), source_id);
+        let generated = mapping.generated_receipt();
         let (mapping, ontology_digest, semantic_admission_digest, semantic_warnings) =
             mapping.into_parts();
         let rls_tables = if profile.kind() == BackendKind::Postgres && !generation.is_verified() {
@@ -140,6 +145,7 @@ impl RuntimeBinding {
             schema_observation,
             generation,
             semantic_warnings,
+            generated,
             compiler,
         }
     }

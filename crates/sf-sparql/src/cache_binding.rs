@@ -206,6 +206,13 @@ impl CompilerBinding {
         Ok(map.id.clone())
     }
 
+    /// Borrow the mapping this binding compiles against. Read access only:
+    /// raw compiler access is not admission authority, and callers must pair
+    /// this borrow with a sealed receipt checked against [`Self::digests`].
+    pub fn source_mapping(&self) -> &SourceMapping {
+        &self.mapping
+    }
+
     /// Build a binding with externally supplied semantic identity. The exact
     /// document and admission digests partition every plan/cache entry, but the
     /// caller remains responsible for enforcing its opaque admission boundary.
