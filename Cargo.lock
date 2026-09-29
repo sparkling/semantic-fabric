@@ -2071,7 +2071,7 @@ dependencies = [
  "num-bigint",
  "pbkdf2",
  "rand 0.9.5",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-webpki 0.103.15",
  "secstr",
  "serde",
@@ -2207,7 +2207,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-util",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-native-certs 0.8.4",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -2991,7 +2991,7 @@ dependencies = [
  "mysql_common",
  "percent-encoding",
  "rand 0.10.2",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "serde",
  "socket2",
  "thiserror 2.0.20",
@@ -3598,7 +3598,7 @@ checksum = "01d4ba13b109f473f649aa71dfc8a83c41cc0cd3eaf5f6adfe2a18046b985d8a"
 dependencies = [
  "http",
  "httparse",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "url",
@@ -4170,7 +4170,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "socket2",
  "thiserror 2.0.20",
  "tokio",
@@ -4191,7 +4191,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.20",
@@ -4525,7 +4525,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-native-certs 0.8.4",
  "rustls-pki-types",
  "serde",
@@ -4765,9 +4765,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -4833,7 +4833,7 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-native-certs 0.8.4",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.15",
@@ -5214,7 +5214,7 @@ dependencies = [
  "oxttl",
  "rcgen",
  "rusqlite",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "serde",
  "serde_json",
  "sf-core",
@@ -6047,7 +6047,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c2ad44aa0ae96db89c4742212ed41645b2f597311ff6e1945542a4d9fadc2fb"
 dependencies = [
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "sha2 0.11.0",
  "tokio",
  "tokio-postgres",
@@ -6071,7 +6071,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "tokio",
 ]
 
@@ -6376,7 +6376,7 @@ dependencies = [
  "base64 0.23.1",
  "log",
  "percent-encoding",
- "rustls 0.23.43",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "ureq-proto",
  "utf8-zero",
