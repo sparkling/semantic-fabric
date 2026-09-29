@@ -25,8 +25,8 @@ explicitly authorized initial proof uses real configured models.
 
 ### Native parallel execution
 
-GCP is stopped; application goal remains paused. Local harness repair does not
-accept application WIP or authorize cloud work. Stop the previous coordinator
+GCP resumption and this harness deployment are owner-authorized. Repairs never
+accept application WIP or authorize other publication. Stop the previous coordinator
 writer before resuming its existing UUID; never launch a competing conversation.
 Set `SEMANTIC_FABRIC_COORDINATOR_SESSION_ID`, then run `npm run coordinator` here.
 Use `npm run coordinator -- --dry-run` to inspect without launching. The launcher
@@ -42,11 +42,11 @@ Upstream refills queued independent outcomes immediately, including after failur
 
 JSON `delivery-pool-progress` on stderr links durable starts, candidates, settlements and drain; stdout retains final results.
 `fulfilled` means callback success, not candidate acceptance or integrated product progress.
-Canonical source stays locked throughout the cohort. Events do not authorize early
-integration. After return, sole owner serially integrates/checks/verifies/commits/
-finishes candidates; only accepted parents release children into the next cohort.
-Manifests are static cohorts, not an automatic DAG scheduler. Preserve source/read
-closure checks, resource exclusions, cancellation drain and independent fresh review.
+Settled outcomes may integrate before unrelated siblings finish: sole owner serially
+integrates/checks/verifies/commits/finishes, subject to active read/write/resource
+reservations. Only accepted parents release children, including concurrent cohorts.
+Manifests remain explicit, not an automatic DAG scheduler. Whole-source/Cargo reads
+still block conflicting acceptance; preserve cancellation custody and fresh review.
 
 `selectDeliveryRoute` already supplies task-based model/effort defaults. Preserve
 an explicit route and the selected main model; escalate only a named unresolved
@@ -249,8 +249,8 @@ unknown completion do not authorize that fallback. Costs and negative evidence p
 
 `runDeliveryPool` wraps the actual upstream bounded pool for caller-selected ready
 callbacks. It refuses same/ancestor mutation paths and shared named resources,
-holds the canonical operation lease across the cohort, and drains every started
-callback before releasing ownership, including noncooperative cancellation.
+holds canonical lease only for admission/snapshot/integration, and drains every started
+callback before releasing its reservation, retaining unconfirmed child custody.
 Recorded candidate/evidence paths survive failed callbacks. `createDeliveryCandidate`
 reuses immutable private-source materialization and the ordinary `DeliveryHarness`
 lifecycle; candidates cannot commit or supersede canonical outcomes. A dependent

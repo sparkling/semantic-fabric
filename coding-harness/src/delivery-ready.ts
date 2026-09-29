@@ -2,9 +2,11 @@
 import { isAbsolute } from 'node:path';
 import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.js';
 import { identifier, nonempty, parseDeliveryHandoff, parseDeliveryTask } from './delivery-contracts.js';
-import { createDeliveryCandidate } from './delivery-candidate.js';
+import { assertAcceptedDeliverySource, createDeliveryCandidate } from './delivery-candidate.js';
 import { runDeliveryPool, type DeliveryPoolProgress } from './delivery-pool.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
+import { withSynchronousOperationLock } from './delivery-workspace.js';
+import { requiredDeliveryInputs } from './delivery-lineage.js';
 
 /** Explicit ready cohort only: accepted main outcomes, never candidate success, release dependencies. */
 export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: unknown,
@@ -30,12 +32,18 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
     const acceptedParent = row.acceptedParent === undefined ? undefined : identifier(row.acceptedParent);
     if (row.acceptedInputs !== undefined && (!Array.isArray(row.acceptedInputs) || !row.acceptedInputs.length)) throw new Error('DELIVERY_ACCEPTED_INPUT_SCOPE');
     const acceptedInputs = (row.acceptedInputs as unknown[] | undefined)?.map(value => normalizeWorkspacePath(nonempty(value, 'accepted input'), 'accepted input'));
-    return { task, handoff, resources, acceptedParent, acceptedInputs };
+    const acceptedReadPaths = acceptedParent ? Object.keys(assertAcceptedDeliverySource(canonical, acceptedParent, acceptedInputs).inputs) : [];
+    return { task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths };
   });
-  return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs }) => ({
+  return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths }) => ({
     id: task.id, mutationPaths: task.scope, resources,
+    readPaths: task.readPaths === undefined || task.checks.some(check => check.argv[0] === 'cargo') ? undefined : [...new Set([...task.readPaths, ...acceptedReadPaths,
+      ...requiredDeliveryInputs(canonical.snapshot().files, task.checks)])],
     run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
-      const candidate = createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths });
+      const candidate = withSynchronousOperationLock(canonical.directory, () => {
+        if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+        return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources });
+      });
       record(candidate);
       await candidate.harness.begin(task);
       await candidate.harness.bind(task.id, task.owner, handoff);

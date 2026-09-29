@@ -12,16 +12,18 @@ import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest } from './de
 import { workflowReady } from './delivery-workflow.js';
 import { parseStageResponse } from './delivery-workflow-contracts.js';
 import { resolveMutablePath, resolveWorkspacePath } from './workspace.js';
+import { requiredDeliveryInputs } from './delivery-lineage.js';
+import { assertIntegrationReservations } from './delivery-cohort-custody.js';
 
 export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string }
 export interface CandidateIntegration {
   candidateRoot: string; candidateDigest: string; original: DeliveryRun;
   sourceBefore: SourceSnapshot; sourceAfter: SourceSnapshot; phase: 'applying' | 'prepared';
-  candidateSource: SourceSnapshot; readPaths: string[]; custodyDigest: string;
+  candidateSource: SourceSnapshot; readPaths: string[]; custodyDigest: string; resources: string[];
   checkLogs: Record<string, string>; outcomeReceipts: unknown[]; outcomeHistory: unknown[];
 }
 interface Custody { root: string; sourceBefore: SourceSnapshot; baseCommit: string; scope: string[];
-  readPaths?: string[]; declaredReadPaths?: string[] | null; cleanBase?: boolean }
+  readPaths?: string[]; declaredReadPaths?: string[] | null; cleanBase?: boolean; resources?: string[] }
 
 export function parseIntegrationInput(input: unknown): IntegrationInput {
   const value = asRecord(input, 'integration');
@@ -32,10 +34,7 @@ export function parseIntegrationInput(input: unknown): IntegrationInput {
 }
 // Explicit read closure may narrow data dependencies, never evaluator/runtime/package inputs.
 function requiredInputs(files: Record<string, string>, run: DeliveryRun): string[] {
-  if (run.task.checks.some(c => c.argv[0] === 'cargo')) return Object.keys(files);
-  const scripts = run.task.checks.filter(c => c.argv[0] === 'node').map(c => `${c.cwd}/${c.argv[1]}`);
-  return Object.keys(files).filter(path => scripts.includes(path) || /^(coding-harness|scripts|config)\//.test(path)
-    || /(^|\/)(?:[^/]*lock[^/]*|package\.json|Cargo\.toml|tsconfig[^/]*|\.gitignore|\.gitattributes)$/.test(path));
+  return requiredDeliveryInputs(files, run.task.checks);
 }
 export async function validateCandidateRun(run: DeliveryRun, source: SourceSnapshot, logs?: Record<string, string>): Promise<void> {
   const { digest, ...body } = run;
@@ -105,6 +104,7 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   }
   const context = candidateContext(input.candidateRoot, harness, custody.sourceBefore, custody.baseCommit, custody.scope, true);
   const candidate = new DeliveryHarness(input.candidateRoot, context), original = candidate.read(input.id), candidateSource = candidate.snapshot();
+  assertIntegrationReservations(harness, original.task.scope, custody.resources);
   if (original.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_OWNER_MISMATCH');
   if (original.digest !== input.expectedDigest || hash(original.task.scope) !== hash(custody.scope)
     || original.baseCommit !== custody.baseCommit || hash(original.task.readPaths ?? null) !== hash(custody.declaredReadPaths ?? null)) {
@@ -147,10 +147,10 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   return { ...structuredClone(original), baseCommit: harness.context.head(), outsideDigest: outsideDigest(before, original.task.scope),
     checks: [], events: [{ at: new Date().toISOString(), kind: 'candidate-integration', reason: input.expectedDigest }],
     verdict: undefined, digest: undefined, integration: { candidateRoot: input.candidateRoot, candidateDigest: input.expectedDigest,
-      original, sourceBefore: before, sourceAfter: after, candidateSource, readPaths, custodyDigest: hash(custody), checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying' } };
+      original, sourceBefore: before, sourceAfter: after, candidateSource, readPaths, custodyDigest: hash(custody), resources: custody.resources ?? [], checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying' } };
 }
 
-function findIntegratedRun(harness: DeliveryHarness, commit: string): DeliveryRun | undefined {
+export function findIntegratedRun(harness: DeliveryHarness, commit: string): DeliveryRun | undefined {
   for (const file of readdirSync(harness.directory)) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}\.json$/.test(file)) continue;
     const value = readJson(join(harness.directory, file)) as Partial<DeliveryRun>;
@@ -170,6 +170,8 @@ export function integrationReady(run: DeliveryRun, source: string): boolean {
     && workflowReady(integration.original, integration.candidateSource.digest);
 }
 export function applyIntegration(harness: DeliveryHarness, run: DeliveryRun, input: IntegrationInput): void {
+  assertIntegrationReservations(harness, run.task.scope,
+    (readJson(join(harness.directory, `candidate-${hash(input.candidateRoot)}.json`)) as Custody).resources);
   const evidence = run.integration;
   if (!evidence || input.expectedDigest !== evidence.candidateDigest || input.candidateRoot !== evidence.candidateRoot
     || run.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_OWNER_OR_IDENTITY');

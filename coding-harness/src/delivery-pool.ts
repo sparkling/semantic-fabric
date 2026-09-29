@@ -5,12 +5,13 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { normalizeWorkspacePath } from './contracts.js';
-import { atomicJson, withOperationLock } from './delivery-workspace.js';
+import { atomicJson, withSynchronousOperationLock } from './delivery-workspace.js';
+import { assertReservationAdmission, candidateHasOperation, saveReservations } from './delivery-cohort-custody.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 import type { DeliveryCandidate } from './delivery-candidate.js';
 
 export interface DeliveryReadyCallback<T> {
-  id: string; mutationPaths: string[]; resources: string[];
+  id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[];
   run(signal: AbortSignal, record: (candidate: DeliveryCandidate) => void): Promise<T>;
 }
 export interface DeliveryPoolProgress {
@@ -20,7 +21,7 @@ export interface DeliveryPoolProgress {
   recordedAt: string;
   sourceDigest: string;
   evidencePath: string;
-  integration: 'await-cohort-return-and-owner-acceptance';
+  integration: 'settled-outcome-awaits-owner-acceptance';
   taskId?: string;
   candidateRoot?: string;
   evidenceDirectory?: string;
@@ -50,22 +51,38 @@ export async function runDeliveryPool<T>(canonical: DeliveryHarness, tasks: read
     if (!task.id || ids.has(task.id)) throw new Error('DELIVERY_POOL_DUPLICATE_ID');
     ids.add(task.id);
     for (const path of task.mutationPaths) normalizeWorkspacePath(path, 'pool mutation path');
+    for (const path of task.readPaths ?? []) normalizeWorkspacePath(path, 'pool read path');
     if (task.resources.some(value => !value.trim() || value.includes('\0'))) throw new Error('DELIVERY_POOL_INVALID_RESOURCE');
     for (const previous of tasks.slice(0, i)) if (task.mutationPaths.some(path => previous.mutationPaths.some(other => overlaps(path, other)))
       || task.resources.some(resource => previous.resources.includes(resource))) throw new Error('DELIVERY_POOL_RESOURCE_CONFLICT');
   }
-  return withOperationLock(canonical.directory, async () => {
+  const admission = withSynchronousOperationLock(canonical.directory, () => {
     if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
-    const source = canonical.snapshot().digest, started: Promise<unknown>[] = [];
-    const evidence = new Map<string, { candidateRoot: string; evidenceDirectory: string }>();
+    assertReservationAdmission(canonical, tasks);
+    const source = canonical.snapshot();
     const progressDirectory = mkdtempSync(join(canonical.directory, 'pool-'));
+    saveReservations(progressDirectory, tasks.map(({ id, mutationPaths, resources, readPaths }) => ({ id, mutationPaths, resources, readPaths })));
+    return { source, progressDirectory };
+  });
+    const { source: baseline, progressDirectory } = admission;
+    const source = baseline.digest, started: Promise<unknown>[] = [];
+    const evidence = new Map<string, { candidateRoot: string; evidenceDirectory: string }>();
     const settled = new Set<string>();
+    const retained = new Set<string>();
+    const settle = (id: string) => {
+      const candidate = evidence.get(id);
+      if (candidate && candidateHasOperation(candidate.evidenceDirectory)) retained.add(id);
+      settled.add(id);
+      saveReservations(progressDirectory, tasks.filter(task => !settled.has(task.id) || retained.has(task.id))
+        .map(({ id, mutationPaths, resources, readPaths }) => ({ id, mutationPaths, resources, readPaths,
+          ...(retained.has(id) ? { retainedDirectory: evidence.get(id)!.evidenceDirectory } : {}) })));
+    };
     let sequence = 0;
     const report = (event: DeliveryPoolProgress['event'], detail: Pick<DeliveryPoolProgress,
       'taskId' | 'candidateRoot' | 'evidenceDirectory' | 'status' | 'sourceRevalidated'> = {}) => {
       const evidencePath = join(progressDirectory, `${String(++sequence).padStart(6, '0')}.json`);
       const value: DeliveryPoolProgress = { schemaVersion: 1, sequence, event, recordedAt: new Date().toISOString(),
-        sourceDigest: source, evidencePath, integration: 'await-cohort-return-and-owner-acceptance', ...detail };
+        sourceDigest: source, evidencePath, integration: 'settled-outcome-awaits-owner-acceptance', ...detail };
       atomicJson(evidencePath, value);
       // Observers receive a copy; progress consumers cannot rewrite durable execution evidence.
       try { void Promise.resolve(options.observe?.(structuredClone(value))).catch(() => {}); }
@@ -85,32 +102,36 @@ export async function runDeliveryPool<T>(canonical: DeliveryHarness, tasks: read
           report('candidate-created', { taskId: task.id, ...evidence.get(task.id) });
           });
         }).then(value => {
+          settle(task.id);
           report('outcome-settled', { taskId: task.id, ...evidence.get(task.id),
             status: signal.aborted || options.signal?.aborted ? 'cancelled' : 'fulfilled' });
-          settled.add(task.id); return value;
+          return value;
         }, error => {
+          settle(task.id);
           report('outcome-settled', { taskId: task.id, ...evidence.get(task.id),
             status: signal.aborted || options.signal?.aborted ? 'cancelled' : 'rejected' });
-          settled.add(task.id); throw error;
+          throw error;
         });
         started.push(work); return work;
       } })), options);
       await Promise.allSettled(started);
       for (const row of result.results) if (!settled.has(row.id)) {
+        settle(row.id);
         report('outcome-settled', { taskId: row.id, ...evidence.get(row.id), status: row.status });
       }
-      if (canonical.snapshot().digest !== source) throw new Error('DELIVERY_POOL_CANONICAL_SOURCE_CHANGED');
-      report('cohort-drained', { sourceRevalidated: true });
+      // Private completion is not canonical acceptance; integration revalidates canonical inputs.
+      report('cohort-drained', { sourceRevalidated: false });
       return { ...result, results: result.results.map(result => ({ ...result, ...evidence.get(result.id) })),
         durationMs: performance.now() - began, progressDirectory };
     } catch (error) {
       await Promise.allSettled(started);
       // Preserve the original failure if snapshot or evidence storage also fails.
-      try { report('cohort-drained', { sourceRevalidated: canonical.snapshot().digest === source }); } catch { /* Original error wins. */ }
+      try {
+        report('cohort-drained', { sourceRevalidated: false });
+      } catch { /* Original error wins. */ }
       throw error;
     } finally {
       // Upstream cancellation may return before a noncooperative callback terminates.
       await Promise.allSettled(started);
     }
-  });
 }

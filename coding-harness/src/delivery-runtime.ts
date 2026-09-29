@@ -7,6 +7,7 @@ import { parseDeliveryTask, selectDeliveryRoute, route, nonempty, identifier, ex
 import { atomicJson, git, outsideDigest, readJson,
   withOperationLock, recoverOperation } from './delivery-workspace.js';
 import { mainDeliveryContext, type DeliveryContext } from './delivery-context.js';
+import { activeReservations, assertIntegrationReservations } from './delivery-cohort-custody.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest, runCommand } from './delivery-process.js';
 import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow, type NativeStageRequest } from './delivery-workflow-contracts.js';
@@ -99,6 +100,7 @@ export class DeliveryHarness {
     return withOperationLock(this.directory, async () => {
       this.context.assert();
       const task = parseDeliveryTask(input);
+      if (this.context.kind === 'main' && activeReservations(this).length) throw new Error('DELIVERY_ACTIVE_CANDIDATES_REQUIRE_INTEGRATION');
       assertHostEnabled(task.host);
       if (task.reviewer) assertHostEnabled(task.reviewer.host);
       if (existsSync(this.file(task.id))) throw new Error('DELIVERY_RUN_ALREADY_EXISTS');
@@ -396,6 +398,8 @@ export class DeliveryHarness {
     return withOperationLock(this.directory, async () => {
       const run = this.read(id); this.context.assert();
       if (run.status !== 'paused' || run.task.owner !== owner) throw new Error('DELIVERY_PAUSED_OWNER_REQUIRED');
+      if (this.context.kind === 'main' && !run.integration && activeReservations(this).length) throw new Error('DELIVERY_ACTIVE_CANDIDATES_REQUIRE_INTEGRATION');
+      if (this.context.kind === 'main' && run.integration) assertIntegrationReservations(this, run.task.scope, run.integration.resources);
       this.source(run);
       if (existsSync(this.activeFile)) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
       run.status = run.integration ? 'active' : 'awaiting-native';
@@ -450,6 +454,8 @@ export class DeliveryHarness {
       if (run.status === 'paused' || run.status === 'complete' || run.status === 'superseded') {
         if (active === id) unlinkSync(this.activeFile);
       } else {
+        if (this.context.kind === 'main' && !run.integration && activeReservations(this).length) throw new Error('DELIVERY_ACTIVE_CANDIDATES_REQUIRE_INTEGRATION');
+        if (this.context.kind === 'main' && run.integration) assertIntegrationReservations(this, run.task.scope, run.integration.resources);
         this.source(run);
         if (!active) this.claim(id);
         run.status = run.integration ? 'active' : 'awaiting-native';

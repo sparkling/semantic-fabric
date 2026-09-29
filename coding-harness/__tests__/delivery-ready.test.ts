@@ -10,6 +10,7 @@ import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 import * as executor from '../src/delivery-executor.js';
 import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
 import { runDeliveryOutcome } from '../src/delivery-runner.js';
+import { activeReservations } from '../src/delivery-cohort-custody.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -56,22 +57,22 @@ it.each([false, true])('reports actual candidate completion and refills before s
       .toMatchObject({ status: failure ? 'rejected' : 'fulfilled', candidateRoot: expect.any(String), evidenceDirectory: expect.any(String) });
     expect(progress.some(event => event.event === 'outcome-settled' && event.taskId === 'ready-1')).toBe(false);
     expect(progress.some(event => event.event === 'cohort-drained')).toBe(false);
-    expect(f.harness.inspect().operation).not.toBeNull();
+    expect(activeReservations(f.harness).length).toBeGreaterThan(0);
     for (const event of progress) expect(JSON.parse(readFileSync(event.evidencePath, 'utf8'))).toEqual(event);
   } finally { release(); }
   const result = await pending;
   expect(result.results.map(row => row.status)).toEqual([failure ? 'rejected' : 'fulfilled', 'fulfilled', 'fulfilled']);
-  expect(progress.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: true,
-    integration: 'await-cohort-return-and-owner-acceptance' });
+  expect(progress.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: false,
+    integration: 'settled-outcome-awaits-owner-acceptance' });
   expect(f.harness.inspect()).toEqual({ active: null, operation: null });
 });
 
-it('keeps durable progress independent of observer errors and refuses canonical source drift', async () => {
+it('keeps durable progress independent of observer errors without claiming canonical acceptance', async () => {
   const f = fixture(), events: DeliveryPoolProgress[] = [];
   await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, async () => {
     writeFileSync(join(f.root, 'product.txt'), 'unexpected drift'); return true;
   }, undefined, async event => { events.push(structuredClone(event)); event.sourceDigest = 'observer mutation'; throw new Error('observer'); }))
-    .rejects.toThrow('DELIVERY_POOL_CANONICAL_SOURCE_CHANGED');
+    .resolves.toMatchObject({ results: [{ status: 'fulfilled' }] });
   expect(events.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: false });
   for (const event of events) expect(JSON.parse(readFileSync(event.evidencePath, 'utf8'))).toEqual(event);
   expect(f.harness.inspect().operation).toBeNull();
@@ -121,7 +122,7 @@ it('ready dispatch overlaps callbacks, drains cancellation, and retains candidat
     expect(candidate.context.kind).toBe('candidate'); if (++count === 2) started(); await end; return true;
   }, controller.signal, event => { events.push(event); }).then(result => { settled = true; return result; });
   await barrier; controller.abort(); await new Promise(resolve => setImmediate(resolve));
-  expect(settled).toBe(false); expect(f.harness.inspect().operation).not.toBeNull();
+  expect(settled).toBe(false); expect(activeReservations(f.harness).length).toBeGreaterThan(0);
   expect(events.some(event => event.event === 'outcome-settled' || event.event === 'cohort-drained')).toBe(false);
   release(); const result = await pending;
   expect(result.results.every(row => row.status === 'cancelled' && row.candidateRoot)).toBe(true);
@@ -136,8 +137,8 @@ it('rejects conflicts before candidate creation and blocks nonaccepted dependenc
   expect(readdirSync(f.parentDirectory)).toEqual([]); expect(execute).not.toHaveBeenCalled();
   f.manifest.outcomes[1].resources = ['independent'];
   await f.harness.begin(f.task); await f.harness.pause(f.task.id, f.task.owner, 'fixture hold');
-  const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [{ ...f.manifest.outcomes[0], acceptedParent: f.task.id }] }, execute);
-  expect(result.results[0]).toMatchObject({ status: 'rejected', error: 'DELIVERY_ACCEPTED_MAIN_SOURCE_REQUIRED' });
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [{ ...f.manifest.outcomes[0], acceptedParent: f.task.id }] }, execute))
+    .rejects.toThrow('DELIVERY_ACCEPTED_MAIN_SOURCE_REQUIRED');
   expect(execute).not.toHaveBeenCalled();
 });
 
@@ -190,7 +191,7 @@ it('resumes retained candidates across real CLI processes through checks and ind
   expect(run(root, 'verify', task.id, task.owner).verdict.pass).toBe(true);
   expect(run(root, 'advance', task.id, task.owner).kind).toBe('ready-to-commit');
   writeFileSync(join(f.root, 'product.txt'), 'canonical drift');
-  expect(() => run(root, 'status', task.id)).toThrow();
+  expect(run(root, 'status', task.id).status).toBe('active');
 });
 
 it('submits API proposals after reopening with canonical accounting custody', async () => {
