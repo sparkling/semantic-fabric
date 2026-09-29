@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { runDeliveryOutcome } from '../src/delivery-runner.js';
 import { git } from '../src/delivery-workspace.js';
-import { activeReservations } from '../src/delivery-cohort-custody.js';
+import { activeReservations, assertIntegrationReservations } from '../src/delivery-cohort-custody.js';
 import { reopenDeliveryCandidate } from '../src/delivery-candidate.js';
 import type { DeliveryHarness } from '../src/delivery-runtime.js';
 import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
@@ -73,7 +73,7 @@ it('accepts parent and launches accepted-input child while disjoint sibling stay
   await accept(f.harness, events.find(row => row.taskId === 'early-1' && row.event === 'outcome-settled')!);
 });
 
-it.each(['read', 'write', 'resource'])('rejects conflicting cross-cohort %s admission while sibling runs', async kind => {
+it.each(['write', 'resource'])('rejects conflicting cross-cohort %s admission while sibling runs', async kind => {
   const f = fixture(), started = deferred(), release = deferred();
   const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[1]] }, async () => {
     started.resolve(); await release.promise; return true;
@@ -81,10 +81,31 @@ it.each(['read', 'write', 'resource'])('rejects conflicting cross-cohort %s admi
   try {
     await started.promise;
     const conflict = structuredClone(f.manifest.outcomes[0]);
-    if (kind === 'read') conflict.task.readPaths.push('slow.txt');
     if (kind === 'write') conflict.task.scope = ['slow.txt'];
     if (kind === 'resource') conflict.resources = f.manifest.outcomes[1].resources;
     await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [conflict] }, execute)).rejects.toThrow('RESOURCE_CONFLICT');
+  } finally { release.resolve(); await pending; }
+});
+
+it.each(['declared', 'implicit'])('allows cross-cohort %s reads of a private writer snapshot', async kind => {
+  const f = fixture(), started = deferred(), release = deferred();
+  const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[1]] }, async candidate => {
+    writeFileSync(join(candidate.root, 'slow.txt'), 'private writer change\n');
+    started.resolve(); await release.promise; return true;
+  });
+  try {
+    await started.promise;
+    const reader = structuredClone(f.manifest.outcomes[0]);
+    if (kind === 'declared') reader.task.readPaths.push('slow.txt');
+    else delete (reader.task as { readPaths?: string[] }).readPaths;
+    const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [reader] }, async candidate => {
+      expect(readFileSync(join(candidate.root, 'slow.txt'), 'utf8')).toBe('before\n');
+      expect(activeReservations(f.harness)).toHaveLength(2);
+      expect(() => assertIntegrationReservations(f.harness, ['slow.txt'])).toThrow('ACTIVE_DEPENDENCY');
+      return true;
+    });
+    expect(result.results[0].status).toBe('fulfilled');
+    expect(readFileSync(join(f.root, 'slow.txt'), 'utf8')).toBe('before\n');
   } finally { release.resolve(); await pending; }
 });
 
@@ -125,7 +146,7 @@ it('retains resource custody after a callback leaves an unconfirmed child lock',
   expect(activeReservations(f.harness)).toEqual([]);
 });
 
-it('blocks newly introduced evaluator paths and canonical non-integration resume while a lane runs', async () => {
+it('allows private evaluator proposals but blocks canonical evaluator writes and resume while a lane runs', async () => {
   const f = fixture(), started = deferred(), release = deferred();
   await f.harness.begin(f.task); await f.harness.pause(f.task.id, f.task.owner, 'paused fixture');
   const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[1]] }, async () => {
@@ -135,7 +156,9 @@ it('blocks newly introduced evaluator paths and canonical non-integration resume
     await started.promise;
     await expect(f.harness.resume(f.task.id, f.task.owner)).rejects.toThrow('ACTIVE_CANDIDATES');
     const conflict = structuredClone(f.manifest.outcomes[0]); conflict.task.scope = ['coding-harness/new-check.mjs'];
-    await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [conflict] }, execute)).rejects.toThrow('RESOURCE_CONFLICT');
+    const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [conflict] }, async () => true);
+    expect(result.results[0].status).toBe('fulfilled');
+    expect(() => assertIntegrationReservations(f.harness, conflict.task.scope)).toThrow('ACTIVE_DEPENDENCY');
   } finally { release.resolve(); await pending; }
 });
 
@@ -151,7 +174,9 @@ it('reserves implicit accepted-parent inputs before child execution', async () =
   try {
     await started.promise;
     expect(activeReservations(f.harness)[0].readPaths).toContain('product.txt');
-    await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, execute)).rejects.toThrow('RESOURCE_CONFLICT');
+    const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, async () => true);
+    expect(result.results[0].status).toBe('fulfilled');
+    expect(() => assertIntegrationReservations(f.harness, ['product.txt'])).toThrow('ACTIVE_DEPENDENCY');
   } finally { release.resolve(); await pending; }
 });
 
