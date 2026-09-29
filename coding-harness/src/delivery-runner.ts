@@ -21,6 +21,8 @@ import { captureDeliveryPolicy, DELIVERY_ROOT_POLICY, loadDeliveryPolicy } from 
 import type { Policy } from '@metaharness/flywheel';
 
 const repairRoute = { host: 'claude-code' as const, model: 'cc/claude-opus-5-5[1m]', effort: 'high' as const };
+// Match Builder's generated dependency policy; authored/vendor source stays bounded.
+const generatedDependencyLockfile = /(?:^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock)$/u;
 const fresh = (selected: DeliveryRoute): NativeHandoff => ({ ...selected,
   executorId: `runner-${randomUUID()}`, authentication: 'native-subscription', observation: 'Runner selected native subscription executor; actual invocation recorded in response' });
 
@@ -131,7 +133,7 @@ export async function runDeliveryOutcome(harness: DeliveryHarness, id: string, o
           if (request.stage !== 'implementation' && result.changes.length) throw new Error('DELIVERY_REVIEW_MUTATION_REFUSED');
           const changes = parseDeliveryChanges(result.changes, request.scope, request.stage !== 'implementation');
           if (result.response.outcome !== 'completed' && changes.length) throw new Error('DELIVERY_REJECTED_OUTPUT_MUTATION');
-          if (changes.some(change => change.content.split('\n').length > 500)) throw new Error('DELIVERY_FILE_LINE_LIMIT');
+          if (changes.some(change => change.content.split('\n').length > 500 && !generatedDependencyLockfile.test(change.path))) throw new Error('DELIVERY_FILE_LINE_LIMIT');
           for (const change of changes) {
             if (!request.scope.includes(change.path)) throw new Error('DELIVERY_OUT_OF_SCOPE_CHANGE');
             const path = resolveWorkspacePath(harness.root, change.path, { allowMissingLeaf: true, requireRegularFile: true });

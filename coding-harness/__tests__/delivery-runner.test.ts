@@ -16,8 +16,9 @@ import { selectDeliveryRoute } from '../src/delivery-contracts.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-async function fixture(api = false, sonnet = false) {
+async function fixture(api = false, sonnet = false, scope = ['product.txt']) {
   const f = workflowFixture(roots, "import {readFileSync} from 'node:fs'; const pass = readFileSync('../product.txt','utf8') === 'fixed\\n'; if (!pass) console.error('error[E0308]: expected &Router, found &RequestDeadlineService'); process.exit(pass ? 0 : 1);\n");
+  f.task.scope = scope;
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-runner-')); roots.push(parentDirectory);
   if (api) f.task.host = 'openrouter';
   if (sonnet) f.task.host = 'claude-code';
@@ -34,6 +35,38 @@ function result(request: NativeStageRequest, content = 'fixed\n') {
     changes: request.stage === 'implementation' ? [{ path: 'product.txt', content }] : [],
     ...(request.stage === 'architecture' ? { plan: { summary: 'Fix source', files: ['product.txt'], tests: ['build', 'public'] } } : {}) };
 }
+
+it.each(['Cargo.lock', 'nested/Cargo.lock', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'uv.lock'])
+('admits generated dependency lock %s above source line limit through checks and review', async path => {
+  const f = await fixture(false, true, ['product.txt', path]), stages: string[] = [];
+  const content = '# generated dependency metadata\n'.repeat(600), before = f.harness.snapshot().digest;
+  const outcome = await runDeliveryOutcome(f.candidate.harness, f.task.id, f.task.owner, { execute: async request => {
+    stages.push(request.stage);
+    const response = result(request);
+    if (request.stage === 'implementation') response.changes.push({ path, content });
+    return response;
+  } });
+  expect(outcome.failure).toBeNull(); expect(outcome.success).toBe(true); expect(outcome.status).toBe('candidate-awaiting-integration');
+  expect(stages).toEqual(['architecture', 'implementation', 'review']);
+  expect(readFileSync(join(f.candidate.harness.root, path), 'utf8')).toBe(content);
+  expect(f.harness.snapshot().digest).toBe(before);
+});
+
+it.each([
+  ['vendor/parser.rs', 'source\n'.repeat(600), 'DELIVERY_FILE_LINE_LIMIT'],
+  ['fake-Cargo.lock', '# lock\n'.repeat(600), 'DELIVERY_FILE_LINE_LIMIT'],
+  ['Cargo.lock.rs', 'source\n'.repeat(600), 'DELIVERY_FILE_LINE_LIMIT'],
+  ['Cargo.lock', 'x'.repeat(512 * 1024 + 1), 'Change outside scope'],
+])('retains source and byte guards for %s', async (path, content, failure) => {
+  const f = await fixture(false, true, ['product.txt', path]), before = f.candidate.harness.snapshot().digest;
+  const outcome = await runDeliveryOutcome(f.candidate.harness, f.task.id, f.task.owner, { execute: async request => {
+    const response = result(request);
+    if (request.stage === 'implementation') response.changes.push({ path, content });
+    return response;
+  } });
+  expect(outcome.failure).toBe(failure); expect(outcome.success).toBe(false);
+  expect(f.candidate.harness.snapshot().digest).toBe(before);
+});
 
 it.each([false, true])('executes plan, author, failed checks, capable repair and fresh review (Sonnet=%s)', async sonnet => {
   const f = await fixture(false, sonnet), events: string[] = [], before = f.harness.snapshot().digest;
