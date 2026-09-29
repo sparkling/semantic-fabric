@@ -1,14 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { runDeliveryOutcome } from '../src/delivery-runner.js';
 import { git } from '../src/delivery-workspace.js';
-import { activeReservations, assertIntegrationReservations } from '../src/delivery-cohort-custody.js';
+import { activeReservations, assertIntegrationReservations, saveReservations } from '../src/delivery-cohort-custody.js';
 import { reopenDeliveryCandidate } from '../src/delivery-candidate.js';
+import { runIntegrationReview } from '../src/delivery-integration-review.js';
 import type { DeliveryHarness } from '../src/delivery-runtime.js';
 import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
+import type { DeliveryExecutor } from '../src/delivery-executor.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 
 const roots: string[] = [];
@@ -214,4 +216,82 @@ it('refuses paused integration resume when disjoint candidate owns same resource
     await expect(f.harness.resume(original.task.id, original.task.owner)).rejects.toThrow('ACTIVE_DEPENDENCY');
   } finally { release.resolve(); await pending; }
   await expect(f.harness.resume(original.task.id, original.task.owner)).resolves.toMatchObject({ status: 'active' });
+});
+
+function laneFixture() {
+  const f = fixture();
+  for (const path of ['crates/serve/tests/endpoint.rs', 'vendor/xml/src/lib.rs', 'vendor/xml/tests/compat.rs']) {
+    mkdirSync(join(f.root, dirname(path)), { recursive: true }); writeFileSync(join(f.root, path), 'before\n');
+  }
+  git(f.root, 'add', '.'); git(f.root, 'commit', '-qm', 'nested test and vendor fixture');
+  const lane = (id: string, scope: string, readPaths: string[]) => ({ ...f.manifest.outcomes[0],
+    task: { ...f.manifest.outcomes[0].task, id, scope: [scope], readPaths }, resources: [`${id}-target`] });
+  return { ...f, lane, xml: lane('xml', 'vendor/xml/src/lib.rs', ['coding-harness/check.mjs', 'vendor/xml/tests/compat.rs']),
+    endpoint: lane('endpoint', 'crates/serve/tests/endpoint.rs', ['coding-harness/check.mjs']) };
+}
+const freshReview = (executorId: string): DeliveryExecutor => async request => ({
+  changes: [], response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+    native: { ...native, executorId }, outcome: 'completed', summary: 'fresh current-source review', issues: [] } });
+
+it('integrates endpoint parent and releases child while unrelated private package lane runs; stale lane revalidates', async () => {
+  const f = laneFixture(), release = deferred(), parent = deferred(), events: DeliveryPoolProgress[] = [];
+  const cohort = dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.xml, f.endpoint] }, async (candidate, mode, id, owner, signal) => {
+    if (id === 'xml') await release.promise;
+    return execute(candidate, mode, id, owner, signal);
+  }, undefined, event => { events.push(event); if (event.taskId === 'endpoint' && event.event === 'outcome-settled') parent.resolve(); });
+  try {
+    await parent.promise;
+    await accept(f.harness, events.find(row => row.taskId === 'endpoint' && row.event === 'outcome-settled')!);
+    const [reservation] = activeReservations(f.harness);
+    expect(reservation).toMatchObject({ id: 'xml', privateSnapshot: true });
+    expect(reservation.readPaths).not.toContain('crates/serve/tests/endpoint.rs');
+    const child = { ...f.lane('child-lane', 'crates/serve/tests/child.rs', ['coding-harness/check.mjs']),
+      acceptedParent: 'endpoint', acceptedInputs: ['crates/serve/tests/endpoint.rs'] };
+    const childEvents: DeliveryPoolProgress[] = [];
+    const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [child] }, async (candidate, ...rest) => {
+      expect(readFileSync(join(candidate.root, 'crates/serve/tests/endpoint.rs'), 'utf8')).toBe('fixed\n');
+      return execute(candidate, ...rest);
+    }, undefined, event => childEvents.push(event));
+    expect(result.results[0].status).toBe('fulfilled');
+    await accept(f.harness, childEvents.find(row => row.event === 'outcome-settled')!);
+    expect(events.some(row => row.event === 'cohort-drained')).toBe(false);
+  } finally { release.resolve(); }
+  expect((await cohort).results.every(row => row.status === 'fulfilled')).toBe(true);
+  const settled = events.find(row => row.taskId === 'xml' && row.event === 'outcome-settled')!;
+  const originalPath = join(settled.evidenceDirectory!, 'xml.json'), original = readFileSync(originalPath, 'utf8');
+  // Nested tests remain hard integration inputs: stale candidate needs exact owner revalidation and fresh review.
+  await expect(accept(f.harness, settled)).rejects.toThrow('INPUT_CHANGED');
+  const input = { candidateRoot: settled.candidateRoot!, id: 'xml', owner: 'root', expectedDigest: JSON.parse(original).digest,
+    revalidateAgainst: { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest } };
+  const run = await f.harness.integrate(input);
+  for (const check of run.task.checks) await f.harness.check('xml', 'root', check.id);
+  expect((await f.harness.verify('xml', 'root')).verdict?.pass).toBe(false);
+  expect((await runIntegrationReview(f.harness, 'xml', 'root', { execute: freshReview('xml-current-reviewer') })).success).toBe(true);
+  git(f.root, 'add', 'vendor/xml/src/lib.rs'); git(f.root, 'commit', '-qm', 'revalidated xml');
+  expect((await f.harness.finish('xml', 'root', git(f.root, 'rev-parse', 'HEAD'))).status).toBe('complete');
+  expect(readFileSync(originalPath, 'utf8')).toBe(original);
+}, 30_000);
+
+it.each(['declared', 'runtime', 'resource', 'legacy', 'omitted', 'canonical-check', 'parent-check'])('keeps %s dependency on active private lane refused', async kind => {
+  const f = laneFixture(), started = deferred(), release = deferred();
+  const xml = structuredClone(f.xml);
+  if (kind === 'declared') xml.task.readPaths.push('crates/serve/tests/endpoint.rs');
+  if (kind === 'omitted') delete (xml.task as { readPaths?: string[] }).readPaths;
+  // A check naming the canonical checkout reads live source, not only its private snapshot.
+  if (kind === 'canonical-check') xml.task.checks[0] = { ...xml.task.checks[0], argv: ['node', 'check.mjs', f.root] };
+  if (kind === 'parent-check') xml.task.checks[0] = { ...xml.task.checks[0], argv: ['node', 'check.mjs', '--manifest=../escape'] };
+  if (kind === 'legacy') {
+    // Frozen reservations written before privateSnapshot existed keep conservative evaluator pins.
+    const directory = join(f.harness.directory, 'pool-frozen'); mkdirSync(directory, { recursive: true });
+    saveReservations(directory, [{ id: 'frozen', mutationPaths: ['vendor/xml/src/lib.rs'], readPaths: ['coding-harness/check.mjs'], resources: [] }]);
+  }
+  const pending = kind === 'legacy' ? Promise.resolve() : dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [xml] }, async () => {
+    started.resolve(); await release.promise; return true;
+  });
+  if (kind === 'legacy') started.resolve();
+  try {
+    await started.promise;
+    const scope = kind === 'runtime' ? ['config/policy.json'] : ['crates/serve/tests/endpoint.rs'];
+    expect(() => assertIntegrationReservations(f.harness, scope, kind === 'resource' ? xml.resources : [])).toThrow('ACTIVE_DEPENDENCY');
+  } finally { release.resolve(); await pending; }
 });

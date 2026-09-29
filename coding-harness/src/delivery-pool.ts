@@ -11,7 +11,7 @@ import type { DeliveryHarness } from './delivery-runtime.js';
 import type { DeliveryCandidate } from './delivery-candidate.js';
 
 export interface DeliveryReadyCallback<T> {
-  id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[];
+  id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[]; privateSnapshot?: true;
   run(signal: AbortSignal, record: (candidate: DeliveryCandidate) => void): Promise<T>;
 }
 export interface DeliveryPoolProgress {
@@ -29,6 +29,8 @@ export interface DeliveryPoolProgress {
   sourceRevalidated?: boolean;
 }
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+const reservation = ({ id, mutationPaths, resources, readPaths, privateSnapshot }: DeliveryReadyCallback<unknown>) =>
+  ({ id, mutationPaths, resources, readPaths, ...(privateSnapshot === true ? { privateSnapshot } : {}) });
 
 export function deliveryPoolIdentity() {
   const entry = fileURLToPath(import.meta.resolve('@claude-flow/cli/dist/src/services/bounded-worker-pool.js'));
@@ -61,7 +63,7 @@ export async function runDeliveryPool<T>(canonical: DeliveryHarness, tasks: read
     assertReservationAdmission(canonical, tasks);
     const source = canonical.snapshot();
     const progressDirectory = mkdtempSync(join(canonical.directory, 'pool-'));
-    saveReservations(progressDirectory, tasks.map(({ id, mutationPaths, resources, readPaths }) => ({ id, mutationPaths, resources, readPaths })));
+    saveReservations(progressDirectory, tasks.map(reservation));
     return { source, progressDirectory };
   });
     const { source: baseline, progressDirectory } = admission;
@@ -74,8 +76,7 @@ export async function runDeliveryPool<T>(canonical: DeliveryHarness, tasks: read
       if (candidate && candidateHasOperation(candidate.evidenceDirectory)) retained.add(id);
       settled.add(id);
       saveReservations(progressDirectory, tasks.filter(task => !settled.has(task.id) || retained.has(task.id))
-        .map(({ id, mutationPaths, resources, readPaths }) => ({ id, mutationPaths, resources, readPaths,
-          ...(retained.has(id) ? { retainedDirectory: evidence.get(id)!.evidenceDirectory } : {}) })));
+        .map(task => ({ ...reservation(task), ...(retained.has(task.id) ? { retainedDirectory: evidence.get(task.id)!.evidenceDirectory } : {}) })));
     };
     let sequence = 0;
     const report = (event: DeliveryPoolProgress['event'], detail: Pick<DeliveryPoolProgress,

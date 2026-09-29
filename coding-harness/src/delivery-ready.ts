@@ -6,7 +6,7 @@ import { assertAcceptedDeliverySource, createDeliveryCandidate } from './deliver
 import { runDeliveryPool, type DeliveryPoolProgress } from './delivery-pool.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 import { withSynchronousOperationLock } from './delivery-workspace.js';
-import { requiredDeliveryInputs } from './delivery-lineage.js';
+import { liveDeliveryRuntimeInputs, requiredDeliveryInputs } from './delivery-lineage.js';
 
 /** Explicit ready cohort only: accepted main outcomes, never candidate success, release dependencies. */
 export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: unknown,
@@ -35,23 +35,27 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
     const acceptedReadPaths = acceptedParent ? Object.keys(assertAcceptedDeliverySource(canonical, acceptedParent, acceptedInputs).inputs) : [];
     return { task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths };
   });
-  return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths }) => ({
-    id: task.id, mutationPaths: task.scope, resources,
-    readPaths: task.readPaths === undefined ? undefined : [...new Set([...task.readPaths, ...acceptedReadPaths,
-      ...requiredDeliveryInputs(canonical.snapshot().files, task.checks)])],
-    run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
-      const candidate = withSynchronousOperationLock(canonical.directory, () => {
-        if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
-        return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources });
-      });
-      record(candidate);
-      await candidate.harness.begin(task);
-      await candidate.harness.bind(task.id, task.owner, handoff);
-      if (signal.aborted) throw signal.reason ?? new Error('DELIVERY_POOL_CANCELLED');
-      if (!await execute(candidate.harness, mode, task.id, task.owner, signal)) throw new Error('DELIVERY_READY_EXECUTION_FAILED');
-      // Preserve source and evidence for the sole integrator, including failed callbacks.
-      return { status: mode === 'packet' ? 'awaiting-executor' : mode === 'run' ? 'candidate-awaiting-integration' : 'proposal-awaiting-root-application',
-        sourceDigest: candidate.harness.snapshot().digest, acceptedSource: candidate.acceptedSource };
-    },
-  })), { maxConcurrency: manifest.maxConcurrency as number, signal, observe });
+  return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths }) => {
+    // Callbacks run in createDeliveryCandidate's snapshot; checks naming canonical or parent paths keep live evaluator pins.
+    const live = task.checks.some(check => check.argv.some(arg => arg.includes(canonical.root) || /(^|[/=])\.\.(\/|$)/.test(arg)));
+    const files = canonical.snapshot().files;
+    return { id: task.id, mutationPaths: task.scope, resources, ...(live ? {} : { privateSnapshot: true as const }),
+      readPaths: task.readPaths === undefined ? undefined : [...new Set([...task.readPaths, ...acceptedReadPaths,
+        ...(live ? requiredDeliveryInputs(files, task.checks) : liveDeliveryRuntimeInputs(Object.keys(files)))])],
+      run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
+        const candidate = withSynchronousOperationLock(canonical.directory, () => {
+          if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+          return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources });
+        });
+        record(candidate);
+        await candidate.harness.begin(task);
+        await candidate.harness.bind(task.id, task.owner, handoff);
+        if (signal.aborted) throw signal.reason ?? new Error('DELIVERY_POOL_CANCELLED');
+        if (!await execute(candidate.harness, mode, task.id, task.owner, signal)) throw new Error('DELIVERY_READY_EXECUTION_FAILED');
+        // Preserve source and evidence for the sole integrator, including failed callbacks.
+        return { status: mode === 'packet' ? 'awaiting-executor' : mode === 'run' ? 'candidate-awaiting-integration' : 'proposal-awaiting-root-application',
+          sourceDigest: candidate.harness.snapshot().digest, acceptedSource: candidate.acceptedSource };
+      },
+    };
+  }), { maxConcurrency: manifest.maxConcurrency as number, signal, observe });
 }

@@ -3,14 +3,17 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicJson, processIdentity, readJson } from './delivery-workspace.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
-import { requiredDeliveryInputs } from './delivery-lineage.js';
+import { liveDeliveryRuntimeInputs, requiredDeliveryInputs } from './delivery-lineage.js';
 
-export interface OutcomeReservation { id: string; mutationPaths: string[]; readPaths?: string[]; resources: string[]; retainedDirectory?: string }
+/** privateSnapshot: callback executes only in a private candidate snapshot; absent means live canonical reads. */
+export interface OutcomeReservation { id: string; mutationPaths: string[]; readPaths?: string[]; resources: string[]; privateSnapshot?: true; retainedDirectory?: string }
 interface ReservationFile { outcomes: OutcomeReservation[] }
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 const intersects = (left: string[], right: string[]) => left.some(a => right.some(b => overlaps(a, b)));
+// Snapshot evaluator inputs are re-pinned at the reader's own integration; only live runtime stays implicit here.
 const reads = (reservation: OutcomeReservation, paths: string[]) => reservation.readPaths === undefined || intersects(reservation.readPaths, paths)
-  || requiredDeliveryInputs(Object.fromEntries(paths.map(path => [path, ''])), []).length > 0;
+  || (reservation.privateSnapshot === true ? liveDeliveryRuntimeInputs(paths)
+    : requiredDeliveryInputs(Object.fromEntries(paths.map(path => [path, ''])), [])).length > 0;
 
 /** Caller holds canonical operation lock for admission and integration. Stale reservations fail closed. */
 export function activeReservations(harness: DeliveryHarness): OutcomeReservation[] {
