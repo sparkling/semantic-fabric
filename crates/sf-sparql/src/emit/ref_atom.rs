@@ -2,6 +2,9 @@
 use super::*;
 use crate::iq::scan::LexicalMode;
 
+#[path = "ref_atom_work.rs"]
+mod work;
+
 pub(super) fn validate_shape_controlled(
     input: &Branch,
     columns: &[ColRef],
@@ -392,11 +395,7 @@ pub(super) fn sql(
     } else {
         metadata_source::branch_copy_controlled(input, work)?;
         let mut legacy = input.clone();
-        crate::cascade::force_distinct_for_dup_safety(
-            std::slice::from_mut(&mut legacy),
-            &[],
-            dialect,
-        );
+        work::force_distinct(&mut legacy, dialect, work)?;
         Some(legacy)
     };
     let input = legacy.as_ref().unwrap_or(input);
