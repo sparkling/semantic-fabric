@@ -55,7 +55,10 @@ describe('mandatory main-only delivery harness', () => {
     expect(selectDeliveryRoute({ ...task, taskClass: 'pattern' }).model).toBe('gpt-5.6-terra');
     expect(selectDeliveryRoute({ ...task, taskClass: 'mechanical' }).effort).toBe('low');
     expect(selectDeliveryRoute({ ...task, taskClass: 'correctness' }).effort).toBe('high');
-    expect(selectDeliveryRoute({ ...task, host: 'claude-code' })).toEqual({ host: 'claude-code', model: 'sonnet', effort: 'default' });
+    expect(selectDeliveryRoute({ ...task, host: 'claude-code' })).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
+    const { host: _host, ...ordinary } = task;
+    expect(selectDeliveryRoute(parseDeliveryTask(ordinary))).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
+    expect(selectDeliveryRoute(parseDeliveryTask({ ...ordinary, host: 'openrouter' })).model).toBe('deepseek/deepseek-v4.1-flash');
     const claude = { ...task, host: 'claude-code' as const, selectionReason: 'main session' };
     expect(selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'opus', effort: 'xhigh' } }).effort).toBe('xhigh');
     expect(() => selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'opus', effort: 'ultra' }, explicitUltra: true })).toThrow('EFFORT_NOT_NATIVE');

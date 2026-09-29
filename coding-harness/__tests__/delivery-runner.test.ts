@@ -12,16 +12,18 @@ import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 import { DELIVERY_ROOT_POLICY } from '../src/delivery-policy.js';
 import { createDeliveryExecutor } from '../src/delivery-executor.js';
 import * as processes from '../src/delivery-process.js';
+import { selectDeliveryRoute } from '../src/delivery-contracts.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-async function fixture(api = false) {
+async function fixture(api = false, sonnet = false) {
   const f = workflowFixture(roots, "import {readFileSync} from 'node:fs'; process.exit(readFileSync('../product.txt','utf8') === 'fixed\\n' ? 0 : 1);\n");
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-runner-')); roots.push(parentDirectory);
   if (api) f.task.host = 'openrouter';
+  if (sonnet) f.task.host = 'claude-code';
   const candidate = createDeliveryCandidate(f.harness, { parentDirectory, scope: f.task.scope });
   await candidate.harness.begin(f.task); await candidate.harness.bind(f.task.id, f.task.owner, api ? {
-    host: 'openrouter', model: DELIVERY_API_DEFAULTS.model, effort: 'high', executorId: 'api-author', authentication: 'openrouter-api', observation: 'Injected API transport' } : native);
+    host: 'openrouter', model: DELIVERY_API_DEFAULTS.model, effort: 'high', executorId: 'api-author', authentication: 'openrouter-api', observation: 'Injected API transport' } : sonnet ? { ...native, ...selectDeliveryRoute(f.task) } : native);
   return { ...f, candidate };
 }
 function result(request: NativeStageRequest, content = 'fixed\n') {
@@ -33,11 +35,12 @@ function result(request: NativeStageRequest, content = 'fixed\n') {
     ...(request.stage === 'architecture' ? { plan: { summary: 'Fix source', files: ['product.txt'], tests: ['build', 'public'] } } : {}) };
 }
 
-it('executes plan, author, failed checks, fresh capable repair, checks and independent review without integrating main', async () => {
-  const f = await fixture(), events: string[] = [], before = f.harness.snapshot().digest;
+it.each([false, true])('executes plan, author, failed checks, capable repair and fresh review (Sonnet=%s)', async sonnet => {
+  const f = await fixture(false, sonnet), events: string[] = [], before = f.harness.snapshot().digest;
   const execute: DeliveryExecutor = async (request, _files, context) => {
     events.push(request.stage === 'implementation' && request.repair ? 'repair' : request.stage);
     if (request.repair) expect(request.route).toMatchObject({ host: 'claude-code', model: 'cc/claude-opus-5-5[1m]', effort: 'high' });
+    else if (sonnet) expect(request.route).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
     if (request.stage === 'review') {
       expect(context.some(value => typeof value === 'object' && value !== null && 'plan' in value)).toBe(false);
       expect(f.candidate.harness.read(f.task.id).checks.filter(check => check.sourceAfter === request.sourceDigest && check.passed)).toHaveLength(2);

@@ -102,8 +102,8 @@ export function selectDeliveryRoute(task: DeliveryTask): DeliveryRoute {
   }
   if (task.host === 'openrouter') return { host: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', effort: 'high' };
   if (task.host === 'claude-code') {
-    return { host: task.host, model: task.taskClass === 'mechanical' ? 'haiku'
-      : task.taskClass === 'difficult' ? 'opus' : 'sonnet', effort: 'default' };
+    return { host: task.host, model: 'cc/claude-sonnet-5-5[1m]',
+      effort: task.taskClass === 'correctness' || task.taskClass === 'difficult' ? 'high' : 'medium' };
   }
   const choices: Record<TaskClass, [string, DeliveryRoute['effort']]> = {
     mechanical: ['gpt-5.6-luna', 'low'], pattern: ['gpt-5.6-terra', 'medium'],
@@ -124,7 +124,7 @@ export function parseDeliveryTask(value: unknown): DeliveryTask {
   if (t.schemaVersion !== 1 || !['mechanical', 'pattern', 'implementation', 'correctness', 'difficult'].includes(String(t.taskClass))) {
     throw new Error('DELIVERY_INVALID_TASK');
   }
-  const host = t.host ?? 'openrouter';
+  const host = t.host ?? 'claude-code';
   if (host !== 'codex' && host !== 'claude-code' && host !== 'openrouter') throw new Error('DELIVERY_INVALID_HOST');
   for (const key of ['preserveMainModel', 'explicitUltra']) {
     if (t[key] !== undefined && typeof t[key] !== 'boolean') throw new Error(`DELIVERY_INVALID:${key}`);

@@ -8,7 +8,7 @@
 > it via `@AGENTS.md` at the top of `CLAUDE.md`. Edit SHARED instructions HERE.
 > Claude-Code-only guidance lives in `CLAUDE.md` (below its `@AGENTS.md` line).
 
-## Engineering execution policy (2026-09-28 owner amendment)
+## Engineering execution policy (2026-09-29 owner amendment)
 
 The owner authorizes ADR-0058 implementation with the same model access and
 limits as Semantic Builder. The Claude-only restriction below is historical and
@@ -17,7 +17,11 @@ implementation, repair and review. Direct implementation, repair, builds and tes
 are authorized for application and harness work. Harness orchestration, parallelism
 and learning remain optional; harness execution is never a compulsory gate.
 Keep one integrator on canonical `main`, source-bound acceptance and independent
-review. Application work remains paused until separately resumed by the owner.
+review. The owner resumed the main Fabric programme on GCP through Herdr.
+Its sole coordinator resumes existing Codex `gpt-6-astra` at `medium`.
+Ordinary planning, authoring and fresh-context review use native
+`cc/claude-sonnet-5-5[1m]` through existing 9router; Opus 5.5/high repairs remain.
+Explicit task/reviewer pins and native learning remain; no global Claude-only rule.
 
 Direct OpenRouter `deepseek/deepseek-v4.1-flash` authoring and fresh-context
 independent review are authorized through an isolated adapter. Enforce at most
@@ -30,7 +34,7 @@ subscription execution. Preserve actual executor identities and configured
 native gateway transport. Native client/model failure pauses with its exact error.
 Native subscriptions have no cost, token, request, invocation or quota budgets.
 ADR-0058 governs this repair where historical policy below conflicts. No push,
-publication, application resumption or expanded evolution programme is authorized.
+publication or expanded evolution programme follows from harness acceptance.
 
 ## Historical Claude-only build (2026-09-22; superseded above)
 
@@ -203,7 +207,7 @@ Direct implementation, repair, tests and builds are permitted for all work.
 Use the delivery harness when useful for orchestration and learning; it is not
 a prerequisite. Both native hosts and the isolated ADR-0058 API adapter are
 authorized. Retain one integrator, scoped tests/builds, independent review,
-source/data isolation and the current application pause.
+source/data isolation and the current owner-authorized GCP programme resumption.
 
 ### Historical delivery execution (ADR-0055, superseded by September 28 amendment)
 

@@ -1,7 +1,7 @@
 ---
 status: implemented
 date: 2026-09-26
-updated: 2026-09-28
+updated: 2026-09-29
 tags: [dev-process, metaharness, ruflo, parallel-delivery, openrouter]
 depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 ---
@@ -12,7 +12,17 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 - **Date**: 2026-09-26
 - **Deciders**:
 
-## September 28 implemented scope and exact evidence
+## September 29 ordinary native route and GCP resumption
+
+New tasks default to native `cc/claude-sonnet-5-5[1m]` through existing 9router.
+Existing whole-outcome planning, authoring and fresh review all consume that
+route; failed candidates retain configured Opus 5.5/high repair. Explicit native,
+API and reviewer assignments remain readable and honored. Codex Astra/medium
+coordinates the resumed main programme on GCP through Herdr. Existing parallel
+pool, exact source acceptance and native learning remain. Historical DeepSeek
+proofs below do not establish Sonnet application acceptance or GCP completion.
+
+## September 28 implemented scope and exact evidence (historical)
 
 Ordinary `delivery <root> ready <manifest.json>` reaches the upstream pool.
 `mode: "run"` now invokes an upstream HarnessKernel whole-outcome driver:
