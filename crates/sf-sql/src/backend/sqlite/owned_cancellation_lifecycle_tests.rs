@@ -18,6 +18,7 @@ const LONG_QUERY: &str = "WITH RECURSIVE counter(value) AS (\
 const ISOLATION_QUERY: &str = "WITH RECURSIVE counter(value) AS (\
     VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 10000\
 ) SELECT value FROM counter WHERE value = 10000";
+const THREE_ROWS: &str = "SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3";
 
 fn budget() -> Arc<QueryBudget> {
     Arc::new(QueryBudget::new(QueryLimits::new(
@@ -191,14 +192,47 @@ async fn progress_handler_is_removed_after_receiver_drop() {
     let control = budget();
     let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
     let mut backend = SqliteOwnedBackend::new_controlled(conn.clone(), control.clone());
+    let mut rows = backend.open_branch(THREE_ROWS, &[]).await.unwrap();
+    assert!(rows.next_row().await.unwrap().is_some());
+    drop(rows);
+
+    assert_plain_reuse_is_not_governed_by_old_control(&conn, &control);
+}
+
+#[tokio::test]
+async fn progress_handler_is_removed_after_idle_early_stop_drop() {
+    let control = budget();
+    let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+    let mut backend = SqliteOwnedBackend::new_controlled(conn.clone(), control.clone());
     let mut rows = backend
-        .open_branch("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", &[])
+        .open_branch_with_demand(THREE_ROWS, &[], None, false, false, true)
         .await
         .unwrap();
     assert!(rows.next_row().await.unwrap().is_some());
     drop(rows);
 
     assert_plain_reuse_is_not_governed_by_old_control(&conn, &control);
+}
+
+#[tokio::test]
+async fn idle_early_stop_worker_releases_connection_on_deadline_with_receiver_retained() {
+    let control = budget();
+    let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+    let mut backend = SqliteOwnedBackend::new_controlled(conn.clone(), control.clone());
+    let mut rows = backend
+        .open_branch_with_demand(THREE_ROWS, &[], None, false, false, true)
+        .await
+        .unwrap();
+    assert!(rows.next_row().await.unwrap().is_some());
+    control.terminate(QueryControlError::DeadlineExceeded);
+    // The stream stays retained and unpolled; only the idle worker's own
+    // control check can release the connection and its progress handler.
+    assert_plain_reuse_is_not_governed_by_old_control(&conn, &control);
+    assert!(matches!(
+        rows.next_row().await,
+        Err(Error::QueryControl(QueryControlError::DeadlineExceeded))
+    ));
+    assert!(rows.next_row().await.unwrap().is_none());
 }
 
 #[tokio::test]

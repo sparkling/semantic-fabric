@@ -59,28 +59,23 @@ async fn completes(query: &str, source_work: u64) -> bool {
 /// or not per-row reconstruction is charged at all, so these are fixed numbers,
 /// measured with the real charge in place and then re-measured with the
 /// reconstruction call site's control temporarily disconnected
-/// (`TermWork::uncontrolled()`): SELECT/CONSTRUCT fell 27_985 -> 27_857 and ASK's
-/// ceiling 27_919 -> 27_855. Each assertion below therefore fails if that specific call
-/// site stops charging the caller's control, rather than merely proving that
-/// some source work is charged somewhere in a query.
+/// (`TermWork::uncontrolled()`): SELECT/CONSTRUCT fell 27_985 -> 27_857, 64
+/// units per reconstructed row. Each assertion below therefore fails if that
+/// specific call site stops charging the caller's control, rather than merely
+/// proving that some source work is charged somewhere in a query.
 const SELECT_EXACT_SOURCE_WORK: u64 = 27_985;
-/// ASK's ceiling: the most source work it can spend. Unlike SELECT/CONSTRUCT,
-/// ASK's total is NOT exact on the SQLite owned-worker path, and this test
-/// asserts a bounded window rather than a single boundary. The worker thread
-/// decodes and charges rows ahead of the consumer across a capacity-1 channel
-/// (`sf-sql` `backend/sqlite/owned.rs`); ASK stops after its first solution
-/// and drops the receiver, so how many prefetched rows were already charged is
-/// a thread-scheduling race. Measured over 30 runs each: ASK completed at N-1
-/// 9/30, N-4 11/30, N-8 2/30, N-16 0/30. Forcing a delay before each worker
-/// row made it fully deterministic, and the variance was identical with this
-/// slice's reconstruction charge disconnected, so the race is pre-existing and
-/// not reconstruction's. SELECT drains every row and is exact (0/20).
-const ASK_MAX_SOURCE_WORK: u64 = 27_919;
-/// The widest observed prefetch race. Below `ASK_MAX_SOURCE_WORK - ASK_RACE_WINDOW`
-/// ASK must ALWAYS refuse. Disconnecting reconstruction's charge drops ASK to
-/// 27_855 (64 below the ceiling), well outside this window, so the bounded
-/// assertion still fails if reconstruction stops charging.
-const ASK_RACE_WINDOW: u64 = 16;
+/// ASK's exact total. ASK stops after its first solution, and the executor
+/// opens its SQLite owned-worker branch with the early-stop demand hint, so the
+/// worker decodes only the one row ASK pulls. Before that hint the worker also
+/// decoded and billed the second row speculatively, racing ASK's return (the
+/// old 27_919 ceiling with a 16-unit race window). That second row's decode is
+/// 79 units (`sf-sql` `backend/sqlite/decode.rs`): value and code slot vectors
+/// `2 x (1 + 24)` and `2 x (1 + 1)`, the `id` cell `1 + 20`, and the `'two'`
+/// cell `1 + 3`; so ASK now spends 27_919 - 79. SELECT agrees: 27_985 less 2
+/// (SELECT's second-row and EOF pulls), 64 (its second row's reconstruction)
+/// and 79. Disconnecting reconstruction's charge drops ASK by its one row's 64
+/// units, far beyond the one-unit boundary asserted here.
+const ASK_EXACT_SOURCE_WORK: u64 = 27_840;
 const CONSTRUCT_EXACT_SOURCE_WORK: u64 = 27_985;
 
 /// Assert the pinned total really is this query's boundary: it completes at
@@ -156,25 +151,23 @@ async fn select_fails_its_stream_one_unit_short_then_answers_exactly() {
     );
 }
 
-/// `ASK` buffers, so its refusal is the ordinary typed problem response.
-/// Bounded, not exact: see `ASK_MAX_SOURCE_WORK` for the measured race.
+/// `ASK` buffers, so its refusal is the ordinary typed problem response. Its
+/// total is exact because only demanded rows are decoded; the boundary repeats
+/// so a reintroduced prefetch race cannot pass by scheduling luck.
 #[tokio::test]
-async fn ask_refuses_below_its_reconstruction_window_then_answers_exactly() {
-    let floor = ASK_MAX_SOURCE_WORK - ASK_RACE_WINDOW;
-    assert!(
-        completes(ASK_TERMS, ASK_MAX_SOURCE_WORK).await,
-        "ASK must always complete at its measured ceiling {ASK_MAX_SOURCE_WORK}"
-    );
-    // Below the race window ASK must always refuse, with the typed problem.
+async fn ask_refuses_one_unit_short_then_answers_exactly() {
+    let exact = ASK_EXACT_SOURCE_WORK;
+    for _ in 0..4 {
+        assert_exact_boundary(ASK_TERMS, exact).await;
+    }
     assert_budget_problem(
-        router(Arc::new(source_capped(floor - 1)))
+        router(Arc::new(source_capped(exact - 1)))
             .oneshot(authenticated(ASK_TERMS))
             .await
             .unwrap(),
     )
     .await;
-    let json: serde_json::Value =
-        serde_json::from_slice(&body(ASK_TERMS, ASK_MAX_SOURCE_WORK).await).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body(ASK_TERMS, exact).await).unwrap();
     assert_eq!(json["boolean"], true);
 }
 
@@ -201,14 +194,12 @@ async fn construct_fails_its_stream_one_unit_short_then_answers_exactly() {
 /// the next one against the same configuration.
 #[tokio::test]
 async fn a_refused_request_does_not_degrade_the_next_one() {
-    let cfg = Arc::new(source_capped(ASK_MAX_SOURCE_WORK));
+    let cfg = Arc::new(source_capped(ASK_EXACT_SOURCE_WORK));
     assert_budget_problem(
-        router(Arc::new(source_capped(
-            ASK_MAX_SOURCE_WORK - ASK_RACE_WINDOW - 1,
-        )))
-        .oneshot(authenticated(ASK_TERMS))
-        .await
-        .unwrap(),
+        router(Arc::new(source_capped(ASK_EXACT_SOURCE_WORK - 1)))
+            .oneshot(authenticated(ASK_TERMS))
+            .await
+            .unwrap(),
     )
     .await;
     for _ in 0..3 {

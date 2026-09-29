@@ -210,6 +210,31 @@ pub trait SqlBackend {
             .await
     }
 
+    /// Per-open consumer hint. `early_stop` means this one caller may stop
+    /// before EOF (ASK, or a LIMIT it applies itself), so an adapter may produce
+    /// rows only on demand instead of prefetching. The executor chooses it from
+    /// plan shape for each open; it is never inferred from SQL text nor kept as
+    /// backend state. The default ignores the hint and forwards every identity
+    /// and metadata argument unchanged.
+    async fn open_branch_with_demand<'s>(
+        &'s mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+        sqlite_lexical_keys: bool,
+        _early_stop: bool,
+    ) -> Result<Self::Stream<'s>> {
+        self.open_branch_with_identity(
+            sql,
+            lexical_params,
+            metadata_sql,
+            sqlite_character_keys,
+            sqlite_lexical_keys,
+        )
+        .await
+    }
+
     /// Open a server-side cursor for one emitted branch and bind `lexical_params`
     /// (= `EmittedBranch::params`, every value a `&str`) as N positional params.
     ///

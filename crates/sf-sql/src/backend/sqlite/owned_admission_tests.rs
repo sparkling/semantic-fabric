@@ -198,44 +198,53 @@ async fn final_backend_control_drops_before_admission_reopens() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn final_worker_control_drops_before_admission_on_every_terminal_path() {
-    for (sql, receiver_drop, reject) in [
-        ("SELECT 1 UNION ALL SELECT 2", false, false),
-        ("SELECT 1 UNION ALL SELECT 2", true, false),
-        ("SELECT missing FROM absent", false, false),
-        ("SELECT json_extract('invalid-json', '$')", false, false),
-        ("SELECT 1", false, true),
-    ] {
-        let member = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let probe = Arc::new(ControlDropProbe {
-            member: member.clone(),
-            observed: Some(tx),
-            reject,
-        });
-        let barrier = Arc::new(MutexBarrier::default());
-        let release = ReleaseOnDrop(Arc::clone(&barrier));
-        let mut backend = SqliteOwnedBackend::new_controlled_leased_observed(
-            member.acquire().await.unwrap(),
-            probe,
-            barrier.observer(),
-        );
-        let mut stream = backend.open_branch(sql, &[]).await.unwrap();
-        barrier.wait_until_entered();
-        drop(backend); // only the worker now owns request control and admission
-        drop(release);
-        if !receiver_drop {
-            while matches!(stream.next_row().await, Ok(Some(_))) {}
+    // Both bridge modes: full-scan prefetch and early-stop consumer demand.
+    for early_stop in [false, true] {
+        for (sql, receiver_drop, reject) in [
+            ("SELECT 1 UNION ALL SELECT 2", false, false),
+            ("SELECT 1 UNION ALL SELECT 2", true, false),
+            ("SELECT missing FROM absent", false, false),
+            ("SELECT json_extract('invalid-json', '$')", false, false),
+            ("SELECT 1", false, true),
+        ] {
+            let member = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let probe = Arc::new(ControlDropProbe {
+                member: member.clone(),
+                observed: Some(tx),
+                reject,
+            });
+            let barrier = Arc::new(MutexBarrier::default());
+            let release = ReleaseOnDrop(Arc::clone(&barrier));
+            let mut backend = SqliteOwnedBackend::new_controlled_leased_observed(
+                member.acquire().await.unwrap(),
+                probe,
+                barrier.observer(),
+            );
+            let mut stream = backend
+                .open_branch_with_demand(sql, &[], None, false, false, early_stop)
+                .await
+                .unwrap();
+            barrier.wait_until_entered();
+            drop(backend); // only the worker now owns request control and admission
+            drop(release);
+            if !receiver_drop {
+                while matches!(stream.next_row().await, Ok(Some(_))) {}
+            }
+            drop(stream);
+            let permits = tokio::time::timeout(Duration::from_secs(2), rx)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                permits, 0,
+                "{sql} (early_stop {early_stop}): control outlived admission"
+            );
+            let _next = tokio::time::timeout(Duration::from_secs(2), member.acquire())
+                .await
+                .unwrap()
+                .unwrap();
         }
-        drop(stream);
-        let permits = tokio::time::timeout(Duration::from_secs(2), rx)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(permits, 0, "{sql}: control outlived admission");
-        let _next = tokio::time::timeout(Duration::from_secs(2), member.acquire())
-            .await
-            .unwrap()
-            .unwrap();
     }
 }
 

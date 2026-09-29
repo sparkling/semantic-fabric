@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use sf_core::query_control::QueryControl;
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
 
-use crate::backend::{BranchStream, RawTuple, SqlBackend};
+use crate::backend::SqlBackend;
 use crate::error::{Error, Result};
 use crate::source_work::SourceWork;
 
@@ -14,6 +14,11 @@ use super::cancellation::{
     SqliteCancellationEvent, SqliteCancellationGuard, SqliteCancellationObserver,
 };
 use super::{column_meta, decode};
+
+#[path = "owned_demand.rs"]
+mod demand;
+
+pub use demand::SqliteReceiverStream;
 
 #[cfg(test)]
 #[path = "owned_admission_tests.rs"]
@@ -90,7 +95,8 @@ impl SqliteOwnedLeaseState {
 /// end of a **cap-1** channel fed by a `spawn_blocking` cursor thread, so the sync,
 /// `!Send` `Connection` never crosses a thread boundary and the stream is
 /// `Send + 'static` — what lets the generic core's `for<'s> B::Stream<'s>: Send`
-/// bound hold across `tokio::spawn`.
+/// bound hold across `tokio::spawn`. A full scan prefetches one row; an
+/// early-stop open decodes each row only against a consumer demand.
 pub struct SqliteOwnedBackend {
     conn: Arc<Mutex<Connection>>,
     control: Option<Arc<dyn QueryControl>>,
@@ -168,36 +174,6 @@ impl SqliteOwnedBackend {
             generation: None,
             control: Some(control),
             observer,
-        }
-    }
-}
-
-fn send_error(
-    tx: &tokio::sync::mpsc::Sender<Result<RawTuple>>,
-    control: Option<&dyn QueryControl>,
-    error: Error,
-) {
-    // Preserve an already-classified error; checkpoint stays mandatory before send.
-    if let Some(control) = control {
-        let _ = control.checkpoint();
-    }
-    let _ = tx.blocking_send(Err(error));
-}
-
-/// The receive end of the cap-1 bridge: each `next_row` awaits the next
-/// `Result<RawTuple>` produced by the blocking cursor. `None` ⇒ clean EOF;
-/// `Some(Err)` ⇒ a HARD mid-stream marshalling/driver error (design A2), never a
-/// silent short read.
-pub struct SqliteReceiverStream {
-    rx: tokio::sync::mpsc::Receiver<Result<RawTuple>>,
-}
-
-impl BranchStream for SqliteReceiverStream {
-    async fn next_row(&mut self) -> Result<Option<RawTuple>> {
-        match self.rx.recv().await {
-            None => Ok(None), // producer finished ⇒ clean EOF
-            Some(Ok(tuple)) => Ok(Some(tuple)),
-            Some(Err(e)) => Err(e), // forwarded marshalling/driver error (A2)
         }
     }
 }
@@ -324,9 +300,30 @@ impl SqlBackend for SqliteOwnedBackend {
         sqlite_character_keys: bool,
         sqlite_lexical_keys: bool,
     ) -> Result<SqliteReceiverStream> {
+        self.open_branch_with_demand(
+            sql,
+            lexical_params,
+            metadata_sql,
+            sqlite_character_keys,
+            sqlite_lexical_keys,
+            false,
+        )
+        .await
+    }
+
+    async fn open_branch_with_demand(
+        &mut self,
+        sql: &str,
+        lexical_params: &[String],
+        metadata_sql: Option<&str>,
+        sqlite_character_keys: bool,
+        sqlite_lexical_keys: bool,
+        early_stop: bool,
+    ) -> Result<SqliteReceiverStream> {
         // cap-1, FIFO (=_bag-preserving) channel: at most one buffered row in flight
-        // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
+        // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation. The
+        // mode is fixed here, before the worker starts, for this one open only.
+        let (mut sink, stream) = demand::bridge(early_stop);
         let conn = Arc::clone(&self.conn);
         let lease = self.lease.clone();
         let operation = self.generation.as_ref().map(|g| g.register()).transpose()?;
@@ -349,7 +346,7 @@ impl SqlBackend for SqliteOwnedBackend {
             let cancellation = match control.as_ref() {
                 Some(control) => {
                     if let Err(error) = control.checkpoint() {
-                        send_error(&tx, Some(control.as_ref()), Error::QueryControl(error));
+                        sink.fail(Some(control.as_ref()), Error::QueryControl(error));
                         return;
                     }
                     match SqliteCancellationGuard::install(
@@ -359,7 +356,7 @@ impl SqlBackend for SqliteOwnedBackend {
                     ) {
                         Ok(cancellation) => Some(cancellation),
                         Err(error) => {
-                            send_error(&tx, Some(control.as_ref()), error);
+                            sink.fail(Some(control.as_ref()), error);
                             return;
                         }
                     }
@@ -373,7 +370,7 @@ impl SqlBackend for SqliteOwnedBackend {
             ) {
                 Ok(key) => key,
                 Err(error) => {
-                    send_error(&tx, control.as_deref(), error);
+                    sink.fail(control.as_deref(), error);
                     return;
                 }
             };
@@ -384,7 +381,7 @@ impl SqlBackend for SqliteOwnedBackend {
             ) {
                 Ok(key) => key,
                 Err(error) => {
-                    send_error(&tx, control.as_deref(), error);
+                    sink.fail(control.as_deref(), error);
                     return;
                 }
             };
@@ -399,14 +396,14 @@ impl SqlBackend for SqliteOwnedBackend {
                         Some(cancellation) => cancellation.map_error(e),
                         None => e,
                     };
-                    send_error(&tx, control.as_deref(), error);
+                    sink.fail(control.as_deref(), error);
                     return;
                 }
             };
             observer.observe(SqliteCancellationEvent::MetadataReady);
             if let Some(control) = control.as_ref() {
                 if let Err(error) = control.checkpoint() {
-                    send_error(&tx, Some(control.as_ref()), Error::QueryControl(error));
+                    sink.fail(Some(control.as_ref()), Error::QueryControl(error));
                     return;
                 }
             }
@@ -417,13 +414,12 @@ impl SqlBackend for SqliteOwnedBackend {
                         Some(cancellation) => cancellation.map_rusqlite_error(e),
                         None => Error::Sqlite(e),
                     };
-                    send_error(&tx, control.as_deref(), error);
+                    sink.fail(control.as_deref(), error);
                     return;
                 }
             };
             if stmt.column_count() != nproj {
-                send_error(
-                    &tx,
+                sink.fail(
                     control.as_deref(),
                     Error::Emit("SQLite metadata twin projection mismatch".into()),
                 );
@@ -436,11 +432,13 @@ impl SqlBackend for SqliteOwnedBackend {
                         Some(cancellation) => cancellation.map_rusqlite_error(e),
                         None => Error::Sqlite(e),
                     };
-                    send_error(&tx, control.as_deref(), error);
+                    sink.fail(control.as_deref(), error);
                     return;
                 }
             };
-            loop {
+            // A full scan proceeds at once; an early-stop open steps and decodes
+            // only after its consumer demands the row.
+            while sink.ready(control.as_deref()) {
                 match rows.next() {
                     Ok(Some(row)) => {
                         let work = SourceWork::new(control.as_deref());
@@ -452,12 +450,8 @@ impl SqlBackend for SqliteOwnedBackend {
                             (Ok(tuple), _) => Ok(tuple),
                             (Err(error), _) => Err(error),
                         };
-                        let terminal = item.is_err();
-                        if tx.blocking_send(item).is_err() {
+                        if !sink.row(item) {
                             break; // receiver gone (cancel-on-drop) or error sent
-                        }
-                        if terminal {
-                            break;
                         }
                     }
                     Ok(None) => {
@@ -466,7 +460,7 @@ impl SqlBackend for SqliteOwnedBackend {
                             if let Err(error) = control.checkpoint() {
                                 // The failing checkpoint is immediately before
                                 // this send; clean EOF is otherwise channel close.
-                                let _ = tx.blocking_send(Err(Error::QueryControl(error)));
+                                sink.fail(None, Error::QueryControl(error));
                             }
                         }
                         break;
@@ -476,8 +470,7 @@ impl SqlBackend for SqliteOwnedBackend {
                             Some(cancellation) => cancellation.map_rusqlite_error(e),
                             None => Error::Sqlite(e),
                         };
-                        send_error(
-                            &tx,
+                        sink.fail(
                             control.as_deref(),
                             lexical_key.map_error(key.map_error(error)),
                         );
@@ -488,12 +481,12 @@ impl SqlBackend for SqliteOwnedBackend {
             drop(rows);
             drop(stmt);
             if let Err(error) = key.finish() {
-                send_error(&tx, control.as_deref(), error);
+                sink.fail(control.as_deref(), error);
             }
             if let Err(error) = lexical_key.finish() {
-                send_error(&tx, control.as_deref(), error);
+                sink.fail(control.as_deref(), error);
             }
         });
-        Ok(SqliteReceiverStream { rx })
+        Ok(stream)
     }
 }

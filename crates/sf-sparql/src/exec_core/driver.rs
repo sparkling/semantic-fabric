@@ -252,6 +252,10 @@ where
     let mut emitted = 0usize; // solutions passed downstream (for limit)
                               // ORDER stays here, not under a source collation; ASK needs no buffer.
     let ordered = !ctx.order.is_empty() && !ctx.stop_after_first;
+    // Rows are demand-driven only where this loop may stop before EOF: ASK's
+    // first solution, or a LIMIT applied here across unordered branches rather
+    // than in SQL. Full scans and ordered plans keep the backend's prefetch.
+    let early_stop = ctx.stop_after_first || (multi && !ordered && ctx.limit.is_some());
     let order_window = crate::resource_profile::retained_order_window(ctx.offset, ctx.limit);
     let mut buffer: Vec<(usize, Bindings)> = Vec::new();
     let mut retained_payload = 0_u64;
@@ -285,12 +289,13 @@ where
         // Parameters bind once, in their emitted positional order.
         ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let mut s = b
-            .open_branch_with_identity(
+            .open_branch_with_demand(
                 &e.sql,
                 &e.params,
                 e.metadata_sql.as_deref(),
                 e.sqlite_character_keys,
                 e.sqlite_lexical_keys,
+                early_stop,
             )
             .await
             .map_err(map_sql_err)?;

@@ -161,6 +161,34 @@ async fn cancellation_interrupts_recursive_sqlite_vm_and_preserves_exact_cause()
 }
 
 #[tokio::test]
+async fn early_stop_cancellation_interrupts_the_demanded_recursive_vm() {
+    let control = budget();
+    let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+    let recorder = Arc::new(EventRecorder::default());
+    let mut backend =
+        SqliteOwnedBackend::new_controlled_observed(conn, control.clone(), recorder.observer());
+    let terminator = {
+        let control = control.clone();
+        let recorder = recorder.clone();
+        std::thread::spawn(move || {
+            recorder.wait_for(SqliteCancellationEvent::ProgressCallbackEntered);
+            control.terminate(QueryControlError::Cancelled);
+        })
+    };
+
+    let mut rows = backend
+        .open_branch_with_demand(LONG_QUERY, &[], None, false, false, true)
+        .await
+        .unwrap();
+    let error = match rows.next_row().await {
+        Err(error) => error,
+        Ok(_) => panic!("demanded VM step must be interrupted"),
+    };
+    terminator.join().unwrap();
+    assert_control_error(error, QueryControlError::Cancelled);
+}
+
+#[tokio::test]
 async fn deadline_interrupts_recursive_sqlite_vm_and_preserves_exact_cause() {
     let control = budget();
     let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
@@ -367,31 +395,40 @@ async fn checkpoint_runs_before_each_row_send() {
 
 #[tokio::test]
 async fn checkpoint_runs_before_second_row_send() {
-    let control = ArmedControl::new(QueryControlError::Cancelled);
-    let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
-    let recorder = Arc::new(EventRecorder::default());
-    let observer = stage_observer(
-        control.clone(),
-        &recorder,
-        SqliteCancellationEvent::BeforeRowSend,
-        2,
-    );
-    let mut backend = SqliteOwnedBackend::new_controlled_observed(conn, control, observer);
-    let mut rows = backend
-        .open_branch("SELECT 1 UNION ALL SELECT 2", &[])
-        .await
-        .unwrap();
-    assert!(rows.next_row().await.unwrap().is_some());
+    for early_stop in [false, true] {
+        let control = ArmedControl::new(QueryControlError::Cancelled);
+        let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let recorder = Arc::new(EventRecorder::default());
+        let observer = stage_observer(
+            control.clone(),
+            &recorder,
+            SqliteCancellationEvent::BeforeRowSend,
+            2,
+        );
+        let mut backend = SqliteOwnedBackend::new_controlled_observed(conn, control, observer);
+        let mut rows = backend
+            .open_branch_with_demand(
+                "SELECT 1 UNION ALL SELECT 2",
+                &[],
+                None,
+                false,
+                false,
+                early_stop,
+            )
+            .await
+            .unwrap();
+        assert!(rows.next_row().await.unwrap().is_some());
 
-    let error = match rows.next_row().await {
-        Err(error) => error,
-        Ok(_) => panic!("second-row checkpoint must fail"),
-    };
-    assert_control_error(error, QueryControlError::Cancelled);
-    assert_eq!(
-        recorder.last(),
-        Some(SqliteCancellationEvent::BeforeRowSend)
-    );
+        let error = match rows.next_row().await {
+            Err(error) => error,
+            Ok(_) => panic!("second-row checkpoint must fail"),
+        };
+        assert_control_error(error, QueryControlError::Cancelled);
+        assert_eq!(
+            recorder.last(),
+            Some(SqliteCancellationEvent::BeforeRowSend)
+        );
+    }
 }
 
 #[tokio::test]

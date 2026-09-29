@@ -118,6 +118,68 @@ async fn exec_core_and_sqlite_worker_use_the_exact_same_control_identity() {
     );
 }
 
+const ITEMS_MAPPING: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.test/> .
+<#Items> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "items" ] ;
+  rr:subjectMap [ rr:template "http://example.test/item/{id}" ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:value ;
+    rr:objectMap [ rr:column "value" ]
+  ] .
+"#;
+
+/// Source work one leased ASK spends over two rows whose second value differs.
+async fn ask_source_work(second_value: &str) -> u64 {
+    use sf_core::query_control::{QueryBudget, QueryLimits};
+
+    let maps = sf_mapping::parse_r2rml(ITEMS_MAPPING).expect("parse mapping");
+    let plan = parse_and_translate(
+        "ASK { ?item <http://example.test/value> ?value }",
+        &maps,
+        Dialect::Sqlite,
+    )
+    .expect("translate query");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items VALUES (1, 'one'), (2, ?1)",
+        [second_value],
+    )
+    .unwrap();
+    let member = SqliteOwnedConnection::new(conn);
+    let budget = Arc::new(QueryBudget::new(QueryLimits::new(
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+    )));
+    let shared: Arc<dyn QueryControl> = budget.clone();
+    let lease = member.acquire().await.expect("acquire serving lease");
+    let answer = exec::ask_sqlite_owned_interruptible_leased(&plan, lease, shared)
+        .await
+        .expect("ASK executes under a real budget");
+    assert!(answer);
+    // Reacquiring admission proves the worker finished before the total is read.
+    drop(member.acquire().await.expect("worker released admission"));
+    budget.consumed(QueryCharge::SourceWork)
+}
+
+/// ASK opens its branch with the early-stop demand hint: the row after its
+/// first solution is never decoded, so its size cannot reach the bill. Under
+/// the old prefetch bridge the second row raced ASK's return and was billed.
+#[tokio::test]
+async fn ask_never_decodes_a_second_row_it_does_not_read() {
+    let short = ask_source_work("two").await;
+    let long = ask_source_work(&"x".repeat(4096)).await;
+    assert_eq!(short, long, "ASK billed a speculatively decoded second row");
+}
+
 #[test]
 fn rust_group_limit_zero_answers_empty_before_any_source_probe() {
     // A base table that does not exist on the connection: any probe fails.
