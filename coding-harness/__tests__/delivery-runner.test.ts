@@ -17,7 +17,7 @@ import { selectDeliveryRoute } from '../src/delivery-contracts.js';
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 async function fixture(api = false, sonnet = false) {
-  const f = workflowFixture(roots, "import {readFileSync} from 'node:fs'; process.exit(readFileSync('../product.txt','utf8') === 'fixed\\n' ? 0 : 1);\n");
+  const f = workflowFixture(roots, "import {readFileSync} from 'node:fs'; const pass = readFileSync('../product.txt','utf8') === 'fixed\\n'; if (!pass) console.error('error[E0308]: expected &Router, found &RequestDeadlineService'); process.exit(pass ? 0 : 1);\n");
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-runner-')); roots.push(parentDirectory);
   if (api) f.task.host = 'openrouter';
   if (sonnet) f.task.host = 'claude-code';
@@ -39,7 +39,15 @@ it.each([false, true])('executes plan, author, failed checks, capable repair and
   const f = await fixture(false, sonnet), events: string[] = [], before = f.harness.snapshot().digest;
   const execute: DeliveryExecutor = async (request, _files, context) => {
     events.push(request.stage === 'implementation' && request.repair ? 'repair' : request.stage);
-    if (request.repair) expect(request.route).toMatchObject({ host: 'claude-code', model: 'cc/claude-opus-5-5[1m]', effort: 'high' });
+    if (request.repair) {
+      expect(request.route).toMatchObject({ host: 'claude-code', model: 'cc/claude-opus-5-5[1m]', effort: 'high' });
+      const packet = JSON.parse(renderDeliveryPrompt(request, _files, context));
+      expect(packet.toolsAvailable).toBe(false);
+      expect(JSON.stringify(packet.context)).toContain('error[E0308]: expected &Router, found &RequestDeadlineService');
+      expect(packet.context).toEqual(expect.arrayContaining([expect.objectContaining({ diagnosticData: expect.objectContaining({
+        checkId: 'build', stderr: expect.objectContaining({ status: 'verified' }),
+      }) })]));
+    }
     else if (sonnet) expect(request.route).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
     if (request.stage === 'review') {
       expect(context.some(value => typeof value === 'object' && value !== null && 'plan' in value)).toBe(false);

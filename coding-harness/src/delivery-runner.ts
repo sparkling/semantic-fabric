@@ -7,6 +7,7 @@ import { DeliveryApiFailure, parseDeliveryChanges, parseDeliveryPlan, type Deliv
 import { createDeliveryExecutor, type DeliveryExecution, type DeliveryExecutor } from './delivery-executor.js';
 import { bindAppliedProposal } from './delivery-proposal.js';
 import { deliveryReadPaths } from './delivery-candidate.js';
+import { repairDiagnosticContext } from './delivery-diagnostics.js';
 import { resolveWorkspacePath } from './workspace.js';
 import { atomicJson, withOperationLock } from './delivery-workspace.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
@@ -57,7 +58,7 @@ export async function runDeliveryOutcome(harness: DeliveryHarness, id: string, o
         ({ id, passed, exitCode, sourceBefore, sourceAfter, stdoutDigest, stderrDigest }));
       const guidance = policy.policy[request.stage === 'architecture' ? 'planner' : request.stage === 'review' ? 'reviewer' : 'implementation'];
       const context = request.stage === 'review' ? [...checks, { policyGuidance: guidance }] : [{ declaredChecks: run.task.checks, ...(plan ? { plan } : {}), policyGuidance: guidance,
-        ...(request.route.host !== 'openrouter' ? { modelRouting: learning.summary() } : {}) }, ...checks];
+        ...(request.route.host !== 'openrouter' ? { modelRouting: learning.summary() } : {}) }, ...checks, ...repairDiagnosticContext(harness, request)];
       let result: DeliveryExecution;
       try { result = await execute(request, files, context, options.signal); }
       catch (error) {
