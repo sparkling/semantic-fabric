@@ -12,9 +12,9 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 - **Date**: 2026-09-26
 - **Deciders**:
 
-## September 29 ordinary native route and GCP resumption
+## September 29 local coordinator repair and application pause
 
-New tasks default to native `cc/claude-sonnet-5-5[1m]` through existing 9router. Existing whole-outcome planning, authoring and fresh review consume that route; failed candidates retain Opus 5.5/high repair. Explicit assignments remain honored. Codex Astra/medium coordinates the resumed GCP programme through Herdr; parallel pool, exact source acceptance and native learning remain. Historical DeepSeek proofs do not establish Sonnet application acceptance or GCP completion.
+GCP is stopped and application goal paused; local harness repair does not accept preserved application WIP. New tasks retain native `cc/claude-sonnet-5-5[1m]` through existing 9router, Opus 5.5/high repair and explicit pins. `npm --prefix coding-harness run coordinator` resumes the existing UUID from `SEMANTIC_FABRIC_COORDINATOR_SESSION_ID` with Codex Astra/medium; stop the previous writer first. Dry-run launches nothing. Ready CLI emits durable per-outcome progress on stderr while upstream refills independent queued work. Canonical lock and source checks span the whole cohort: serial acceptance starts only after return, then accepted parents release the next cohort. This is not live DAG integration or automatic application resumption. Strict build/hardening and 80 tests across seven ready/candidate/coordinator/integration/runner/runtime/manifest suites pass, including subprocess progress, failure refill and cancellation drain; root independent review cleared this slice. Historical GCP and DeepSeek evidence below remains historical, not Sonnet application acceptance or GCP completion.
 
 ## September 28 implemented scope and exact evidence (historical)
 

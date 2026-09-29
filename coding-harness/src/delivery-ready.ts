@@ -3,13 +3,13 @@ import { isAbsolute } from 'node:path';
 import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.js';
 import { identifier, nonempty, parseDeliveryHandoff, parseDeliveryTask } from './delivery-contracts.js';
 import { createDeliveryCandidate } from './delivery-candidate.js';
-import { runDeliveryPool } from './delivery-pool.js';
+import { runDeliveryPool, type DeliveryPoolProgress } from './delivery-pool.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 
 /** Explicit ready cohort only: accepted main outcomes, never candidate success, release dependencies. */
 export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: unknown,
   execute: (candidate: DeliveryHarness, command: 'packet' | 'propose' | 'run', id: string, owner: string, signal: AbortSignal) => Promise<boolean>,
-  signal?: AbortSignal) {
+  signal?: AbortSignal, observe?: (event: DeliveryPoolProgress) => void) {
   const manifest = asRecord(input, 'ready manifest');
   assertExactKeys(manifest, ['schemaVersion', 'parentDirectory', 'maxConcurrency', 'mode', 'outcomes'], 'ready manifest');
   if (manifest.schemaVersion !== 1 || !Number.isSafeInteger(manifest.maxConcurrency) || (manifest.maxConcurrency as number) < 1
@@ -45,5 +45,5 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
       return { status: mode === 'packet' ? 'awaiting-executor' : mode === 'run' ? 'candidate-awaiting-integration' : 'proposal-awaiting-root-application',
         sourceDigest: candidate.harness.snapshot().digest, acceptedSource: candidate.acceptedSource };
     },
-  })), { maxConcurrency: manifest.maxConcurrency as number, signal });
+  })), { maxConcurrency: manifest.maxConcurrency as number, signal, observe });
 }

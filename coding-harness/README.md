@@ -1,7 +1,6 @@
 # semantic-fabric coding harness
 
-Optional, private development-only delivery harness for engineering work,
-with native Codex/ChatGPT and Claude Code executors under
+Optional, private development-only harness with native Codex/ChatGPT and Claude Code executors under
 [ADR-0055](../docs/adr/ADR-0055-v1-product-completion-and-release-profile.md).
 The older closed-candidate experiment remains separate and optional.
 
@@ -11,8 +10,8 @@ The product runtime is Rust; any future production supervisor is a separately
 packaged Rust service under ADR-0048.
 
 The delivery CLI runs declared checks and records task/handoff/evidence state;
-it never launches another native model host, creates a worktree, commits, pushes,
-publishes, deploys, or enables evolution. Ruflo is accessed only through MCP.
+ready `mode: "run"` invokes configured model adapters. It never creates worktrees,
+commits, pushes, publishes or deploys. Ruflo is accessed only through MCP.
 
 ## Delivery path
 
@@ -26,34 +25,35 @@ explicitly authorized initial proof uses real configured models.
 
 ### Native parallel execution
 
-Both configured native hosts are authorized. Preserve selected models, effort and
-the configured subscription gateway; never print or commit its credentials.
-The existing native conversation remains the sole canonical integration writer.
-The older [parallel plan](../docs/plans/native-parallel-execution-plan.md) retains
-historical provider restrictions; the September 28 owner amendment governs now.
-No repository-wide native session cap or new scheduler is imposed. Independent
-ready work may overlap; client-enforced per-session limits still apply.
+GCP is stopped; application goal remains paused. Local harness repair does not
+accept application WIP or authorize cloud work. Stop the previous coordinator
+writer before resuming its existing UUID; never launch a competing conversation.
+Set `SEMANTIC_FABRIC_COORDINATOR_SESSION_ID`, then run `npm run coordinator` here.
+Use `npm run coordinator -- --dry-run` to inspect without launching. The launcher
+pins Codex `gpt-6-astra`/`medium` on local `main`; it never resumes a paused goal.
+Preserve configured subscription gateways, ordinary Sonnet and existing Opus repair.
 
 Before dispatch, record dependencies, source revision, owned scope, read-only
 status, deliverable, acceptance checks, native model/effort and result recipient
 in the coordinator's task queue (Ruflo MCP for persistent tracking). These queue
 fields are coordination metadata, not additional `DeliveryTask` JSON fields.
-Accept each result against its inputs before releasing dependents. Refill ready
-work promptly; report active/ready/blocked/review queues and why capacity is idle.
+Run `npm run delivery -- /absolute/repo ready /absolute/manifest.json` in `run` mode.
+Upstream refills queued independent outcomes immediately, including after failure.
 
-Only the integration owner edits. Checks and formal review require stable whole
-source, including unrelated files; pause writes until their evidence is captured.
-Other read-only investigations may continue. Serialize shared generated outputs,
-Git operations and heavy builds/fixtures separately from model execution. Keep
-the current delivery locks, sequential declared checks and independent fresh-context
-review. Do not use the historical worktree launchers or dual-mode templates as a
-parallel execution path.
+JSON `delivery-pool-progress` on stderr links durable starts, candidates, settlements and drain; stdout retains final results.
+`fulfilled` means callback success, not candidate acceptance or integrated product progress.
+Canonical source stays locked throughout the cohort. Events do not authorize early
+integration. After return, sole owner serially integrates/checks/verifies/commits/
+finishes candidates; only accepted parents release children into the next cohort.
+Manifests are static cohorts, not an automatic DAG scheduler. Preserve source/read
+closure checks, resource exclusions, cancellation drain and independent fresh review.
 
 `selectDeliveryRoute` already supplies task-based model/effort defaults. Preserve
 an explicit route and the selected main model; escalate only a named unresolved
 question. Measure accepted-outcome latency, review/repair failures and total
 reported tokens (including context and rework); unavailable token data stays
-unknown. No model-provider usage budget or automatic quota-based routing is added.
+unknown. Sample effective CPU, interval utilization, memory/I/O before heavy work, every 30 seconds and at refill.
+Size local test jobs separately; report active/ready/blocked queues and idle reasons. No fixed native-session cap.
 
 ### Scoped delivery lifecycle
 

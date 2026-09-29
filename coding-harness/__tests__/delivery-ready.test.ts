@@ -1,13 +1,15 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { deliveryCli } from '../src/delivery-cli.js';
 import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 import * as executor from '../src/delivery-executor.js';
+import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
+import { runDeliveryOutcome } from '../src/delivery-runner.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -21,6 +23,59 @@ function fixture() {
     })) };
   return { ...f, manifest, parentDirectory };
 }
+
+it.each([false, true])('reports actual candidate completion and refills before slow sibling finishes (failure=%s)', async failure => {
+  const f = fixture(), progress: DeliveryPoolProgress[] = [];
+  writeFileSync(join(f.root, 'third.txt'), 'third input');
+  const manifest = { ...f.manifest, mode: 'run', outcomes: [...f.manifest.outcomes, {
+    ...f.manifest.outcomes[0], task: { ...f.manifest.outcomes[0].task, id: 'ready-2', scope: ['third.txt'] }, resources: ['third'],
+  }] };
+  let release!: () => void, refilled!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const nextStarted = new Promise<void>(resolve => { refilled = resolve; });
+  vi.spyOn(executor, 'createDeliveryExecutor').mockReturnValue(async request => {
+    if (request.taskId === 'ready-1' && request.stage === 'architecture') await slow;
+    if (request.taskId === 'ready-0' && failure) throw new Error('fixture native failure');
+    return { response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, ...request.route, executorId: request.executorId ?? 'fresh-reviewer' },
+      outcome: 'completed', summary: 'Injected native boundary', issues: [] },
+      changes: request.stage === 'implementation' ? [{ path: request.scope[0], content: 'fixed\n' }] : [],
+      ...(request.stage === 'architecture' ? { plan: { summary: 'Fix source', files: request.scope, tests: ['build', 'public'] } } : {}) };
+  });
+  let returned = false;
+  const pending = dispatchDeliveryReady(f.harness, manifest,
+    async (candidate, _mode, id, owner, signal) => (await runDeliveryOutcome(candidate, id, owner, { signal })).success,
+    undefined, event => {
+      progress.push(event);
+      if (event.event === 'outcome-started' && event.taskId === 'ready-2') refilled();
+    }).then(result => { returned = true; return result; });
+  try {
+    await nextStarted;
+    expect(returned).toBe(false);
+    expect(progress.find(event => event.event === 'outcome-settled' && event.taskId === 'ready-0'))
+      .toMatchObject({ status: failure ? 'rejected' : 'fulfilled', candidateRoot: expect.any(String), evidenceDirectory: expect.any(String) });
+    expect(progress.some(event => event.event === 'outcome-settled' && event.taskId === 'ready-1')).toBe(false);
+    expect(progress.some(event => event.event === 'cohort-drained')).toBe(false);
+    expect(f.harness.inspect().operation).not.toBeNull();
+    for (const event of progress) expect(JSON.parse(readFileSync(event.evidencePath, 'utf8'))).toEqual(event);
+  } finally { release(); }
+  const result = await pending;
+  expect(result.results.map(row => row.status)).toEqual([failure ? 'rejected' : 'fulfilled', 'fulfilled', 'fulfilled']);
+  expect(progress.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: true,
+    integration: 'await-cohort-return-and-owner-acceptance' });
+  expect(f.harness.inspect()).toEqual({ active: null, operation: null });
+});
+
+it('keeps durable progress independent of observer errors and refuses canonical source drift', async () => {
+  const f = fixture(), events: DeliveryPoolProgress[] = [];
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, async () => {
+    writeFileSync(join(f.root, 'product.txt'), 'unexpected drift'); return true;
+  }, undefined, async event => { events.push(structuredClone(event)); event.sourceDigest = 'observer mutation'; throw new Error('observer'); }))
+    .rejects.toThrow('DELIVERY_POOL_CANONICAL_SOURCE_CHANGED');
+  expect(events.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: false });
+  for (const event of events) expect(JSON.parse(readFileSync(event.evidencePath, 'utf8'))).toEqual(event);
+  expect(f.harness.inspect().operation).toBeNull();
+});
 
 it('ordinary ready run reaches complete candidate lifecycle through CLI without model calls', async () => {
   const f = fixture(), before = f.harness.snapshot().digest;
@@ -58,16 +113,19 @@ it('ordinary CLI prepares independent source-bound packets through the upstream 
 
 it('ready dispatch overlaps callbacks, drains cancellation, and retains candidates without accepting them', async () => {
   const f = fixture(), controller = new AbortController(); let count = 0, release!: () => void, started!: () => void;
+  const events: DeliveryPoolProgress[] = [];
   const barrier = new Promise<void>(resolve => { started = resolve; });
   const end = new Promise<void>(resolve => { release = resolve; });
   let settled = false;
   const pending = dispatchDeliveryReady(f.harness, f.manifest, async candidate => {
     expect(candidate.context.kind).toBe('candidate'); if (++count === 2) started(); await end; return true;
-  }, controller.signal).then(result => { settled = true; return result; });
+  }, controller.signal, event => { events.push(event); }).then(result => { settled = true; return result; });
   await barrier; controller.abort(); await new Promise(resolve => setImmediate(resolve));
   expect(settled).toBe(false); expect(f.harness.inspect().operation).not.toBeNull();
+  expect(events.some(event => event.event === 'outcome-settled' || event.event === 'cohort-drained')).toBe(false);
   release(); const result = await pending;
   expect(result.results.every(row => row.status === 'cancelled' && row.candidateRoot)).toBe(true);
+  expect(events.filter(event => event.event === 'outcome-settled').map(event => event.status)).toEqual(['cancelled', 'cancelled']);
   expect(f.harness.inspect().operation).toBeNull();
 });
 
@@ -111,7 +169,12 @@ it('resumes retained candidates across real CLI processes through checks and ind
   const manifestPath = join(f.parentDirectory, 'ready.json');
   writeFileSync(manifestPath, JSON.stringify({ ...f.manifest, outcomes: [f.manifest.outcomes[0]] }));
   // ready emits packet metadata followed by the cohort result.
-  const emitted = execFileSync(process.execPath, [entry, f.root, 'ready', manifestPath], { encoding: 'utf8' });
+  const processResult = spawnSync(process.execPath, [entry, f.root, 'ready', manifestPath], { encoding: 'utf8' });
+  expect(processResult.status).toBe(0);
+  const progress = processResult.stderr.trim().split('\n').map(line => JSON.parse(line));
+  expect(progress.map(event => event.event)).toEqual(['cohort-started', 'outcome-started', 'candidate-created', 'outcome-settled', 'cohort-drained']);
+  expect(progress.every(event => event.type === 'delivery-pool-progress' && existsSync(event.evidencePath))).toBe(true);
+  const emitted = processResult.stdout;
   const cohort = JSON.parse(emitted.slice(emitted.indexOf('\n') + 1));
   const root = cohort.results[0].candidateRoot, task = f.manifest.outcomes[0].task;
   expect(run(root, 'status', task.id).status).toBe('active');

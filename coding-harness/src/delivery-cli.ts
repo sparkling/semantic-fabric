@@ -30,7 +30,8 @@ export async function deliveryCli(args: string[], signal?: AbortSignal, candidat
   }
   if (command === 'ready') {
     const result = await dispatchDeliveryReady(harness, readJson(resolve(rest[0])),
-      (selected, mode, id, owner, signal) => deliveryCli([selected.root, mode, id, owner], signal, selected), signal);
+      (selected, mode, id, owner, signal) => deliveryCli([selected.root, mode, id, owner], signal, selected), signal,
+      event => console.error(JSON.stringify({ type: 'delivery-pool-progress', ...event })));
     console.log(JSON.stringify(result, null, 2));
     return result.results.every(row => row.status === 'fulfilled');
   }
