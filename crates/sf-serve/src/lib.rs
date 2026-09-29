@@ -46,6 +46,8 @@ mod config;
 mod correlation;
 mod deadline;
 mod federation;
+#[allow(dead_code)] // Private prerequisite; integration pending.
+mod generated_profile_identity;
 mod generation;
 mod health;
 mod http;
