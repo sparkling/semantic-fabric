@@ -225,11 +225,17 @@ const REF_ATOM_MAPPING: &str = r#"
   ] .
 "#;
 
-async fn ref_atom_source_work(query: &str) -> u64 {
-    use sf_core::query_control::{QueryBudget, QueryLimits};
+const REF_ATOM_QUERY: &str = "SELECT ?o WHERE { ?s <http://example.test/edge> ?o }";
 
-    let maps = sf_mapping::parse_r2rml(REF_ATOM_MAPPING).expect("parse mapping");
-    let plan = parse_and_translate(query, &maps, Dialect::Sqlite).expect("translate query");
+/// Fixture rows in `ref_child`; each joins the single `ref_parent` row.
+const REF_ATOM_ROW_COUNT: usize = 2;
+
+/// Parent subject template `http://example.test/n/{label}` and the one parent
+/// label the fixture joins to; both feed the reconstruction-cost derivation.
+const OBJECT_TEMPLATE_PREFIX: &str = "http://example.test/n/";
+const PARENT_LABEL: &str = "target";
+
+fn ref_atom_connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE ref_parent(k TEXT, label TEXT);
@@ -238,29 +244,101 @@ async fn ref_atom_source_work(query: &str) -> u64 {
          INSERT INTO ref_child VALUES ('one','a'), ('two','a');",
     )
     .unwrap();
-    let conn = Arc::new(Mutex::new(conn));
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
-    exec::select_each_sqlite_owned_controlled(&plan, conn, &budget, |_row| async { Ok(()) })
-        .await
-        .expect("ref-atom query executes under a real budget");
-    budget.consumed(QueryCharge::SourceWork)
+    conn
 }
+
+/// Returns the SourceWork total and the number of rows the sink received.
+async fn ref_atom_source_work(query: &str) -> (u64, usize) {
+    use sf_core::query_control::{QueryBudget, QueryLimits};
+
+    let maps = sf_mapping::parse_r2rml(REF_ATOM_MAPPING).expect("parse mapping");
+    let plan = parse_and_translate(query, &maps, Dialect::Sqlite).expect("translate query");
+    let conn = Arc::new(Mutex::new(ref_atom_connection()));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    let rows = Arc::new(AtomicUsize::new(0));
+    let sink_rows = Arc::clone(&rows);
+    exec::select_each_sqlite_owned_controlled(&plan, conn, &budget, move |_row| {
+        let sink_rows = Arc::clone(&sink_rows);
+        async move {
+            sink_rows.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+    })
+    .await
+    .expect("ref-atom query executes under a real budget");
+    (
+        budget.consumed(QueryCharge::SourceWork),
+        rows.load(Ordering::Acquire),
+    )
+}
+
+/// SourceWork billed by term reconstruction (`exec_core/row.rs`
+/// `reconstruct_controlled`) for ONE row of `?o`, derived unit by unit from the
+/// charging code rather than measured:
+/// - 1 per-binding charge in `reconstruct_controlled`
+/// - 1 `build_term`
+/// - 1 `generate_into_controlled`
+/// - `expand_controlled`: literal segment 1 + prefix bytes; column segment
+///   1 + label bytes * `PERCENT_ENCODED_WORST_CASE_WIDTH` (3)
+/// - `generate_controlled`: owned copy's `lexical_width`, prefix + label bytes
+///   (a named node has no datatype or language contribution)
+fn reconstruction_units_per_row() -> u64 {
+    let prefix = OBJECT_TEMPLATE_PREFIX.len() as u64;
+    let label = PARENT_LABEL.len() as u64;
+    let per_binding = 1 + 1 + 1;
+    let literal_segment = 1 + prefix;
+    let column_segment = 1 + label * 3;
+    let owned_copy = prefix + label;
+    per_binding + literal_segment + column_segment + owned_copy
+}
+
+/// SourceWork total before per-row term reconstruction was billed to this
+/// query: the value the pin held at `0f23b44f`'s re-pin (2026-09-23). The
+/// unchanged baseline 4bc1d85e, a D1-only candidate and a SQLite candidate each
+/// independently produced 49515 at source 60367bc3, i.e. this value plus the
+/// reconstruction charge derived above, so the movement is that charge and not
+/// drift in ref-atom SQL emission.
+const PRE_RECONSTRUCTION_BASELINE: u64 = 49369;
 
 /// Pins `ref_atom.rs`'s own single call site that passes `work` into
 /// `literal_roles::resolved_controlled`, distinct from the callee's own
-/// exact/scaling tests in `literal_roles.rs`. The exact total below was
-/// measured with the real call in place, then re-measured (48037, a 1332-unit
-/// drop) after temporarily changing that one call's `work` argument to
-/// `SourceWork::new(None)` and restoring it — proving this assertion would
-/// fail if that specific call site regressed, not just that some SourceWork
-/// is charged somewhere in a reference-atom join.
+/// exact/scaling tests in `literal_roles.rs`.
 ///
-/// Re-pinned 2026-09-23 from 47471 (drop to 46139): `0f23b44f` moved
-/// condition rendering into `emit/condition_control.rs` with prepaid per-node
-/// charges, adding 1898 legitimate units to this query. The call-site delta is
-/// unchanged at 1332, so this still isolates the same call.
+/// The expected total is the pre-reconstruction baseline plus the derived
+/// per-row reconstruction charge times the fixture row count (2 * 73 = 146,
+/// 49369 + 146 = 49515); no runtime total is accepted by measurement.
+///
+/// Call-site sensitivity is a HYPOTHESIS, not a recorded result: an earlier
+/// note expected that replacing that one call's `work` argument with
+/// `SourceWork::new(None)` drops the total by 1332 (to 49515 - 1332 = 48183
+/// under the corrected total). That mutant has NOT been run against this
+/// source; the coordinator will execute it after the cohort and record the
+/// result. Until then only the exact total below is asserted.
 #[tokio::test]
 async fn resolved_controlled_call_site_in_ref_atom_sql_is_pinned() {
-    let total = ref_atom_source_work("SELECT ?o WHERE { ?s <http://example.test/edge> ?o }").await;
-    assert_eq!(total, 49369);
+    let (total, rows) = ref_atom_source_work(REF_ATOM_QUERY).await;
+    assert_eq!(
+        rows, REF_ATOM_ROW_COUNT,
+        "fixture must yield one solution per child row"
+    );
+    let reconstruction = REF_ATOM_ROW_COUNT as u64 * reconstruction_units_per_row();
+    assert_eq!(
+        reconstruction, 146,
+        "2 rows x 73 units for ?o reconstruction"
+    );
+    assert_eq!(total, PRE_RECONSTRUCTION_BASELINE + reconstruction);
+    assert_eq!(total, 49515);
+}
+
+/// Result-side fixture check: the uncontrolled row API sees the same bag size
+/// the controlled stream billed for, so the row count in the derivation above
+/// is a property of the fixture and not of the sink.
+#[test]
+fn ref_atom_fixture_yields_one_solution_per_child_row() {
+    let maps = sf_mapping::parse_r2rml(REF_ATOM_MAPPING).expect("parse mapping");
+    let plan =
+        parse_and_translate(REF_ATOM_QUERY, &maps, Dialect::Sqlite).expect("translate query");
+    let conn = ref_atom_connection();
+    let solutions = exec::select(&plan, &conn).expect("ref-atom query executes");
+    assert_eq!(solutions.rows.len(), REF_ATOM_ROW_COUNT);
 }
