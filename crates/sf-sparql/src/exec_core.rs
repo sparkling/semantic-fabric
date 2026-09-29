@@ -65,6 +65,9 @@ mod budget_tests;
 #[path = "exec_core_deadline_tests.rs"]
 mod deadline_checkpoint_tests;
 #[cfg(test)]
+#[path = "exec_core/limit_demand_tests.rs"]
+mod limit_demand_tests;
+#[cfg(test)]
 #[path = "exec_core/order_sort_key_tests.rs"]
 mod order_sort_key_tests;
 #[cfg(test)]

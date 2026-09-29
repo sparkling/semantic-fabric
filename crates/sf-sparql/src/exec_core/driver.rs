@@ -312,14 +312,19 @@ where
         // still yields its first result quickly (the streaming invariant), then
         // grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
         let mut first_batch = true;
-        'branch_rows: loop {
-            let target = if ctx.stop_after_first {
+        loop {
+            let mut target = if ctx.stop_after_first {
                 1
             } else if first_batch {
                 TERM_GEN_FIRST_BATCH_SIZE
             } else {
                 TERM_GEN_BATCH_SIZE
             };
+            // A row yields at most one solution: pull no more than OFFSET and LIMIT still need.
+            if let (true, Some(limit)) = (early_stop, ctx.limit) {
+                let needed = ctx.offset.saturating_sub(seen);
+                target = target.min(needed.saturating_add(limit.saturating_sub(emitted)));
+            }
             let mut raw_batch: Vec<RawTuple> = Vec::with_capacity(target);
             while raw_batch.len() < target {
                 // Charge the observable pull attempt before source I/O. The final
@@ -429,15 +434,13 @@ where
                         seen += 1;
                         continue;
                     }
-                    if let Some(limit) = ctx.limit {
-                        if emitted >= limit {
-                            break 'branch_rows;
-                        }
-                    }
                 }
                 emitted += 1;
                 sink(branch, &bindings)?.await?;
                 if ctx.stop_after_first {
+                    return Ok(());
+                }
+                if multi && ctx.limit.is_some_and(|limit| emitted >= limit) {
                     return Ok(());
                 }
             }
