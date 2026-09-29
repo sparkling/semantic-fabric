@@ -6,9 +6,9 @@ tags: [dev-process, metaharness, ruflo, parallel-delivery, openrouter]
 depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 ---
 # ADR-0058: Upstream-first parallel hybrid delivery
-- **Status**: Implemented for optional whole-outcome delivery, learning and policy custody
+- **Status**: Implemented; native Claude output default and structured failure attribution corrected
 - **Date**: 2026-09-26
-- **Deciders**:
+- **September 29 output correction**: Native Claude defaults `CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000`; positive safe-integer overrides survive, while Claude Code retains its per-model clamp. No `MAX_THINKING_TOKENS`, fixed thinking budget, effort downgrade, Codex or API change. [Sonnet 5.5 overview](https://platform.claude.com/docs/en/models/sonnet-5-5/overview.md) documents 1M context/128K output; [Claude Code environment variables](https://code.claude.com/docs/en/env-vars.md) documents the unknown-alias 32000 default and model clamp. Fabric prioritizes bounded, credential-redacted stdout `is_error.result` over stderr warnings for completed processes; exact output-exhaustion attribution excludes quota/auth token limits. Process timeout/cancel/spawn/capture errors remain primary; auth failures still stop. Strict build and 33 focused regressions pass, including the actual `Claude's response exceeded the 32000 output token maximum` envelope. Local-only correction; no deployment, provider replay success or application acceptance claim.
 
 ## September 29 local coordinator repair and application pause
 

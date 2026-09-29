@@ -27,6 +27,7 @@ export const NATIVE_SUBSCRIPTION_ENV_ALLOWLIST = Object.freeze({
   'claude-code': Object.freeze([
     ...COMMON_ALLOWLIST,
     'CLAUDE_CONFIG_DIR',
+    'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
@@ -50,6 +51,9 @@ export function buildNativeSubscriptionEnvironment(
     if (value !== undefined && value.length > 0) environment[name] = value;
   }
   Object.assign(environment, NATIVE_MANAGED_ENVIRONMENT[host]);
+  if (host === 'claude-code') {
+    environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS = source.CLAUDE_CODE_MAX_OUTPUT_TOKENS ?? '128000';
+  }
   assertNativeSubscriptionEnvironment(host, environment);
   return Object.freeze(environment);
 }
@@ -67,6 +71,11 @@ export function assertNativeSubscriptionEnvironment(
     if (typeof value !== 'string' || value.includes('\0')) {
       throw new Error(`HARNESS_NATIVE_ENVIRONMENT_INVALID:${name}`);
     }
+  }
+  const output = environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+  if (host === 'claude-code' && output !== undefined
+    && (!/^[1-9]\d*$/.test(output) || !Number.isSafeInteger(Number(output)))) {
+    throw new Error('HARNESS_NATIVE_ENVIRONMENT_INVALID:CLAUDE_CODE_MAX_OUTPUT_TOKENS');
   }
   if (host === 'claude-code'
     && environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1') {

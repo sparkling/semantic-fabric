@@ -46,9 +46,22 @@ describe('native subscription environment', () => {
       PATH: '/usr/bin',
       LANG: 'C.UTF-8',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '128000',
       ANTHROPIC_BASE_URL: 'https://gateway.invalid',
       ANTHROPIC_AUTH_TOKEN: 'gateway-canary',
     });
+  });
+
+  it('preserves valid Claude output overrides without changing Codex or adaptive thinking', () => {
+    expect(buildNativeSubscriptionEnvironment('claude-code', { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' }))
+      .toMatchObject({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' });
+    expect(buildNativeSubscriptionEnvironment('codex', { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' }))
+      .not.toHaveProperty('CLAUDE_CODE_MAX_OUTPUT_TOKENS');
+    expect(buildNativeSubscriptionEnvironment('claude-code', {})).not.toHaveProperty('MAX_THINKING_TOKENS');
+    for (const value of ['', '0', '-1', '1.5', 'Infinity', '9007199254740992', '128000\n']) {
+      expect(() => buildNativeSubscriptionEnvironment('claude-code', { CLAUDE_CODE_MAX_OUTPUT_TOKENS: value }))
+        .toThrow('HARNESS_NATIVE_ENVIRONMENT_INVALID:CLAUDE_CODE_MAX_OUTPUT_TOKENS');
+    }
   });
 
   it('requires the harness-managed Claude essential-traffic control', () => {

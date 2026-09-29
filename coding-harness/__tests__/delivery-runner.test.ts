@@ -10,7 +10,7 @@ import type { NativeStageRequest } from '../src/delivery-workflow-contracts.js';
 import { createDeliveryApi, DELIVERY_API_DEFAULTS, renderDeliveryPrompt } from '../src/delivery-api.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 import { DELIVERY_ROOT_POLICY } from '../src/delivery-policy.js';
-import { createDeliveryExecutor } from '../src/delivery-executor.js';
+import { claudeStructuredError, createDeliveryExecutor } from '../src/delivery-executor.js';
 import * as processes from '../src/delivery-process.js';
 import { selectDeliveryRoute } from '../src/delivery-contracts.js';
 
@@ -150,4 +150,55 @@ it('preserves auth provider error when concurrent successful version preflight f
   if (action.kind !== 'native') throw new Error('fixture request missing');
   const request = { ...action.request, route: { host: 'claude-code' as const, model: 'cc/claude-opus-5-5[1m]', effort: 'high' as const } };
   await expect(createDeliveryExecutor(f.candidate.harness, hash(f.task))(request, [], [])).rejects.toThrow('configured gateway: requested model unavailable');
+});
+
+it.each([0, 1])('attributes structured Claude output exhaustion before stderr warnings (exit %i)', async exitCode => {
+  const f = await fixture();
+  vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, env, out, err) => {
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('128000');
+    expect(env).not.toHaveProperty('MAX_THINKING_TOKENS');
+    if (argv.includes('--version')) { writeSync(out, 'claude-code 1.0.0'); return { exitCode: 0, signal: null }; }
+    if (!argv.includes('--json-schema')) { writeSync(out, 'READY'); return { exitCode: 0, signal: null }; }
+    writeSync(out, JSON.stringify({ type: 'result', subtype: 'success', is_error: true,
+      result: "API Error: Claude's response exceeded the 32000 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable." }));
+    writeSync(err, 'unrecognized_model diagnostic');
+    return { exitCode, signal: null };
+  });
+  const action = await f.candidate.harness.next(f.task.id, f.task.owner);
+  if (action.kind !== 'native') throw new Error('fixture request missing');
+  const request = { ...action.request, route: { host: 'claude-code' as const, model: 'cc/claude-sonnet-5-5[1m]', effort: 'high' as const } };
+  await expect(createDeliveryExecutor(f.candidate.harness, hash(f.task))(request, [], []))
+    .rejects.toThrow(/DELIVERY_NATIVE_OUTPUT_EXHAUSTED:claude-code:.*Claude's response exceeded the 32000 output token maximum/);
+});
+
+it('bounds and sanitizes structured errors without exposing known environment credentials', () => {
+  const message = claudeStructuredError(JSON.stringify({ is_error: true, result: 'secret-value\n' + 'x'.repeat(3000) }), { ANTHROPIC_AUTH_TOKEN: 'secret-value' });
+  expect(message).toHaveLength(2000);
+  expect(message).toMatch(/^\[redacted\] /);
+  expect(claudeStructuredError('{"is_error":false,"result":"success"}', {})).toBeUndefined();
+  expect(claudeStructuredError('not json', {})).toBeUndefined();
+});
+
+it.each([
+  { message: "Claude's response exceeded the 32000 output token maximum", error: 'check-timeout' },
+  { message: "Claude's response exceeded the 32000 output token maximum", error: 'cancelled' },
+  { message: "Claude's response exceeded the 32000 output token maximum", error: 'check-output-limit' },
+  { message: "Claude's response exceeded the 32000 output token maximum", error: 'spawn failed' },
+  { message: 'Authentication token limit exceeded', error: undefined },
+  { message: 'Quota token limit exceeded', error: undefined },
+])('does not misclassify process errors or token quotas as output exhaustion: $message/$error', async ({ message, error }) => {
+  const f = await fixture();
+  vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, _env, out, err) => {
+    if (argv.includes('--version')) { writeSync(out, 'claude-code 1.0.0'); return { exitCode: 0, signal: null }; }
+    if (!argv.includes('--json-schema')) { writeSync(out, 'READY'); return { exitCode: 0, signal: null }; }
+    writeSync(out, JSON.stringify({ is_error: true, result: message })); writeSync(err, 'unrecognized_model');
+    return { exitCode: 1, signal: null, ...(error ? { error } : {}) };
+  });
+  const action = await f.candidate.harness.next(f.task.id, f.task.owner);
+  if (action.kind !== 'native') throw new Error('fixture request missing');
+  const request = { ...action.request, route: { host: 'claude-code' as const, model: 'cc/claude-sonnet-5-5[1m]', effort: 'high' as const } };
+  const failure = await createDeliveryExecutor(f.candidate.harness, hash(f.task))(request, [], []).catch(error => error);
+  expect(failure.message).toContain('DELIVERY_NATIVE_STOP:');
+  expect(failure.message).toContain(error ?? message);
+  expect(failure.message).not.toContain('DELIVERY_NATIVE_OUTPUT_EXHAUSTED');
 });

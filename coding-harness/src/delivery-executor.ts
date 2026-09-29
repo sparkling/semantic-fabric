@@ -15,6 +15,18 @@ export interface DeliveryExecution { response: NativeStageResponse; changes: { p
   plan?: DeliveryPlan; evidence?: unknown; evidencePath?: string }
 export type DeliveryExecutor = (request: NativeStageRequest, files: DeliverySourceFile[], checks: unknown[], signal?: AbortSignal) => Promise<DeliveryExecution>;
 
+export function claudeStructuredError(stdout: string, environment: Readonly<Record<string, string | undefined>>): string | undefined {
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return undefined; }
+  if (!value || typeof value !== 'object' || !('is_error' in value) || value.is_error !== true
+    || !('result' in value) || typeof value.result !== 'string') return undefined;
+  let message = value.result;
+  for (const [key, secret] of Object.entries(environment)) {
+    if (secret && /TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i.test(key)) message = message.split(secret).join('[redacted]');
+  }
+  return message.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 2000);
+}
+
 /** Reuse native argument/environment adapters and existing process-group custody. */
 export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: string): DeliveryExecutor {
   const api = createDeliveryApi({ directory: harness.context.apiDirectory ?? join(harness.directory, 'api') });
@@ -22,6 +34,7 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
     if (request.route.host === 'openrouter') return api(request, files, checks, taskDigest, signal);
     const invocation = join(harness.directory, `native-${randomUUID()}`); mkdirSync(invocation, { mode: 0o700 });
     let lastError = '';
+    let outputExhausted = false;
     const runner: NativeProcessRunner = { run: async input => {
       const id = randomUUID(), processRoot = join(invocation, id); mkdirSync(processRoot, { mode: 0o700 });
       return withOperationLock(processRoot, async () => {
@@ -31,9 +44,14 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
         const result = await runCommand([input.executable, ...input.args], input.cwd, { ...input.env }, out, err,
           processRoot, { timeoutMs: input.timeoutMs }, input.signal, input.stdin);
         const stdout = readFileSync(outPath, 'utf8'), stderr = readFileSync(errPath, 'utf8');
-        if (result.error || result.exitCode !== 0) lastError = result.error ?? stderr.trim();
+        const structured = !result.error && result.signal === null && request.route.host === 'claude-code'
+          ? claudeStructuredError(stdout, process.env) : undefined;
+        if (structured !== undefined) {
+          lastError = structured;
+          outputExhausted = /(?:Claude's response exceeded the \d+ output token maximum|stop_reason["'\s:]+max_tokens|finish_reason["'\s:]+max_tokens)/i.test(structured);
+        } else if (result.error || result.exitCode !== 0) lastError = result.error ?? stderr.trim();
         const digest = (text: string) => createHash('sha256').update(text).digest('hex');
-        return { executionId: `native-run:${id}`, exitCode: result.exitCode, stdout, stderr,
+        return { executionId: `native-run:${id}`, exitCode: structured !== undefined && result.exitCode === 0 ? 1 : result.exitCode, stdout, stderr,
           timedOut: result.error === 'check-timeout', cancelled: result.error === 'cancelled',
           outputLimitExceeded: result.error === 'check-output-limit', ...(result.error ? { spawnError: result.error } : {}), stdoutDigest: digest(stdout), stderrDigest: digest(stderr) };
       } finally { closeSync(out); closeSync(err); }
@@ -67,7 +85,8 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       return { response, changes: parseDeliveryChanges(value.changes, request.scope, request.stage !== 'implementation'),
         ...(request.stage === 'architecture' ? { plan: parseDeliveryPlan(value.plan, request.scope) } : {}) };
     } catch (error) {
-      throw new Error(`DELIVERY_NATIVE_STOP:${adapter.host}:${request.route.model}:${error instanceof Error ? error.message : String(error)}${lastError ? `: ${lastError}` : ''}`, { cause: error });
+      const kind = outputExhausted ? 'DELIVERY_NATIVE_OUTPUT_EXHAUSTED' : 'DELIVERY_NATIVE_STOP';
+      throw new Error(`${kind}:${adapter.host}:${request.route.model}:${error instanceof Error ? error.message : String(error)}${lastError ? `: ${lastError}` : ''}`, { cause: error });
     }
   };
 }
