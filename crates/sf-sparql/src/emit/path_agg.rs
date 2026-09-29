@@ -28,7 +28,6 @@ use super::*;
 /// `t{alias}(sf_s, sf_o)` — a plain CTE for length-1 shapes, a `WITH RECURSIVE` for `+`/`*`.
 /// Shared by [`emit_path_branch`] (a standalone path result) and the `PathExists`
 /// correlated-EXISTS emission (ADR-0025 Tier-2 gap 1); both reference `t{alias}.sf_s`/`.sf_o`.
-
 pub(super) async fn emit_path_branch(
     b: &Branch,
     pc: &PathClosure,

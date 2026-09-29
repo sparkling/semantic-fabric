@@ -6,6 +6,10 @@ mod tests;
 #[cfg(test)]
 pub(super) use super::scan::template::restrict_optional;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "existing crate-internal render boundary; signature preserved"
+)]
 pub(super) fn column(
     column: &ColRef,
     base: Option<&str>,
@@ -101,6 +105,10 @@ fn finalize(
     })
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "existing crate-internal render boundary; signature preserved"
+)]
 pub(super) fn template(
     parts: &[IriPart],
     base: Option<&str>,

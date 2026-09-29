@@ -61,6 +61,10 @@ use super::*;
 /// are ANSI-`||`-following by reputation but likewise unverified here —
 /// "sound over complete", the same bar `str_match`'s PostgreSQL-only `LIKE`
 /// pushdown already sets for an analogous dialect-behavior gap.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "existing crate-internal render boundary; signature preserved"
+)]
 pub(super) fn render_template_concat(
     segs: &[sf_core::ir::Segment],
     encode_iri: bool,

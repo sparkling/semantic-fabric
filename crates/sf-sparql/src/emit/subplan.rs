@@ -1,6 +1,9 @@
 //! Nested SubPlan derived-table SQL and placeholder rebasing.
 use super::*;
 
+type SubplanSqlFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>>;
+
 /// Render all prepared branches of a nested [`Plan`] to a single SQL SELECT string
 /// (for embedding as a derived table). Recursively probed live names override the
 /// offline lexical fallback. Multi-branch plans become a `UNION ALL`. Returns
@@ -39,8 +42,7 @@ pub(super) fn emit_subplan_sql_async_controlled<'a>(
     dialect: Dialect,
     live_catalog: &'a ColumnCatalog,
     work: sf_sql::source_work::SourceWork<'a>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>>
-{
+) -> SubplanSqlFuture<'a> {
     Box::pin(async move {
         work.charge(1).map_err(source_control::validation_error)?;
         // Preparation changes only root scalar modifiers. Borrow the forest so a

@@ -19,6 +19,10 @@ enum Step<'a> {
     PlanMerge(&'a crate::Plan, usize, metadata_subplan::Accumulator),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "alias metadata stays inline to preserve the continuation allocation model"
+)]
 enum Value {
     Branch(ActualColumns, bool),
     Alias(AliasActuals),

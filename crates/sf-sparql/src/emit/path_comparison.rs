@@ -18,6 +18,7 @@ pub(super) fn exact_text(expression: String, dialect: Dialect) -> String {
     }
 }
 
+#[cfg(test)]
 fn source_text(source: &LogicalSource, column: &str, catalog: &ColumnCatalog) -> Option<TextKey> {
     let name = resolve_col(column, catalog.columns(source));
     catalog

@@ -86,6 +86,10 @@ pub(in crate::emit) fn output_decode(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "existing crate-internal render boundary; signature preserved"
+)]
 pub(super) fn render(
     recipe: &Template,
     spec: &TermSpec,
