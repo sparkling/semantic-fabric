@@ -46,6 +46,8 @@ pub mod sqlite;
 pub mod star_decode;
 #[cfg(feature = "evidence-receipts")]
 pub mod supported_surface;
+#[cfg(test)]
+mod xml_dependency_compatibility;
 
 pub use manifest::Kind;
 pub use shacl_gate::{validate as mapping_conforms_to_t, GateOutcome};
