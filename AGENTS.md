@@ -36,6 +36,27 @@ Native subscriptions have no cost, token, request, invocation or quota budgets.
 ADR-0058 governs this repair where historical policy below conflicts. No push,
 publication or expanded evolution programme follows from harness acceptance.
 
+## Model access and spending (2026-09-26 owner amendment)
+
+Claude Code and Codex access through the configured 9router gateway is authorized.
+Direct OpenRouter access is also authorized through `OPENROUTER_API_KEY`.
+This amendment supersedes earlier provider-access bans and Claude-only access
+restrictions; preserve explicit task assignments and configured model choices.
+Keep credentials in the existing user environment/settings, never in Git or logs.
+
+For metered OpenRouter requests, enforce **at most $1 per individual request**.
+There is **no task cost cap and no cumulative spending cap**. Do not introduce
+dollar budgets for tasks, sessions, projects or programmes. Retain usage accounting,
+unknown-charge records and same-request replay protection. Where a runtime accepts
+it, the policy is `maxRequestUsd: 1` and `maxTotalUsd: null`; never use zero or a
+large finite number to represent an unlimited cumulative allowance.
+Use subscriptions through 9router for subscription-covered frontier models.
+A direct API worker must check the maximum request cost before dispatch, including
+input/output bounds and provider pricing; reject a request that could exceed $1.
+Host credentials alone do not implement this guard or an automatic API dispatcher.
+Existing native harness adapters remain as configured until an API adapter is
+explicitly integrated; do not silently substitute transports.
+
 ## Historical Claude-only build (2026-09-22; superseded above)
 
 Codex is not used for build, task execution, or review until the user

@@ -14,13 +14,7 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 
 ## September 29 ordinary native route and GCP resumption
 
-New tasks default to native `cc/claude-sonnet-5-5[1m]` through existing 9router.
-Existing whole-outcome planning, authoring and fresh review all consume that
-route; failed candidates retain configured Opus 5.5/high repair. Explicit native,
-API and reviewer assignments remain readable and honored. Codex Astra/medium
-coordinates the resumed main programme on GCP through Herdr. Existing parallel
-pool, exact source acceptance and native learning remain. Historical DeepSeek
-proofs below do not establish Sonnet application acceptance or GCP completion.
+New tasks default to native `cc/claude-sonnet-5-5[1m]` through existing 9router. Existing whole-outcome planning, authoring and fresh review consume that route; failed candidates retain Opus 5.5/high repair. Explicit assignments remain honored. Codex Astra/medium coordinates the resumed GCP programme through Herdr; parallel pool, exact source acceptance and native learning remain. Historical DeepSeek proofs do not establish Sonnet application acceptance or GCP completion.
 
 ## September 28 implemented scope and exact evidence (historical)
 

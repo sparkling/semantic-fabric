@@ -13,6 +13,19 @@ implements: []
 
 **Owner amendment (2026-09-28):** ADR-0058 authorizes direct implementation, repair, tests and builds for all work. The delivery harness remains available, not compulsory. Both native hosts and the isolated bounded OpenRouter adapter are authorized; historical Claude-only/native-only rules are superseded for ordinary engineering. Source/data isolation, independent review, public-feature acceptance and explicit application pause remain in force.
 
+## 2026-09-26 model access and spending amendment
+
+The owner authorizes Claude Code and Codex through the configured 9router gateway
+and direct OpenRouter access through the existing private environment credentials.
+This supersedes earlier access prohibitions. Existing task model assignments and
+native harness adapters remain configured; access authorization does not claim
+that an automatic OpenRouter dispatcher has been implemented here.
+Each metered OpenRouter request is limited to $1. There is no task or cumulative
+spending cap. Retain spend accounting, unknown-charge records and protection
+against replaying the same request. Subscription-covered frontier models continue
+through their subscription routes. Every API dispatcher must enforce the $1
+maximum before dispatch; credentials alone are not enforcement.
+
 ## Status boundary
 
 **Optimizer proof boundary (2026-09-12):** controlled compilation applies prospective logical-work admission and sticky cancellation to the complete optimizer cascade: candidate search, dependency inference, column/template rewrites and nested branches. Refusal discards the candidate, never falling back to raw execution. Raw compatibility remains uncontrolled but shares corrected proofs: FD elimination covers every dropped-alias reference, including filters/later OPTIONAL conditions; FK optional promotion requires catalog-proven extra predicates; composite FK elimination requires one-to-one key membership and simultaneous, non-cascading substitution. Malformed raw FK/key vectors cannot establish match/uniqueness. These are correctness restrictions, not feature exclusions. Serving still quarantines unverified constraints; public fixtures do not claim quarantined rewrites execute. The programme ledger records slice verification; cache/source obligations and G1–G6 remain open, without physical allocator/preemption or release-completion claims.
