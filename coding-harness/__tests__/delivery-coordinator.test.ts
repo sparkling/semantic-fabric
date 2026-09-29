@@ -19,6 +19,9 @@ describe('native programme coordinator entrypoint', () => {
     expect(plan.args.at(-1)).toContain('Only accepted integrated parents release children');
     expect(plan.args.at(-1)).toContain('examine every unfinished authorized outcome');
     expect(plan.args.at(-1)).toContain('previous two/three-task manifest');
+    expect(plan.args.at(-1)).toContain('A status or handoff answer does not pause authorized programme work');
+    expect(plan.args.at(-1)).toContain('An explicit owner pause always wins');
+    expect(plan.args.at(-1)).toContain('never replay planner/author merely to refresh evidence');
   });
 
   it('previews without launching and forwards native exit status without fallback', () => {

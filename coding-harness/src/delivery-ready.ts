@@ -37,7 +37,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
   });
   return runDeliveryPool(canonical, outcomes.map(({ task, handoff, resources, acceptedParent, acceptedInputs, acceptedReadPaths }) => ({
     id: task.id, mutationPaths: task.scope, resources,
-    readPaths: task.readPaths === undefined || task.checks.some(check => check.argv[0] === 'cargo') ? undefined : [...new Set([...task.readPaths, ...acceptedReadPaths,
+    readPaths: task.readPaths === undefined ? undefined : [...new Set([...task.readPaths, ...acceptedReadPaths,
       ...requiredDeliveryInputs(canonical.snapshot().files, task.checks)])],
     run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
       const candidate = withSynchronousOperationLock(canonical.directory, () => {

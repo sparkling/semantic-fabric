@@ -15,6 +15,7 @@ import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } 
 import { verifyNativeStage } from './delivery-stage.js';
 import type { DeliveryApiEvidence } from './delivery-api.js';
 import { applyIntegration, parseIntegrationInput, prepareIntegration, validateIntegrationEvidence, type CandidateIntegration } from './delivery-integration.js';
+import { integrationReviewPrerequisites } from './delivery-integration-review.js';
 
 export interface CheckResult {
   id: string; attempt: number; argv: string[]; cwd: string; startedAt: string; durationMs: number;
@@ -338,11 +339,12 @@ export class DeliveryHarness {
         || native.executorId !== run.handoffs.at(-1)?.executorId)) throw new Error('DELIVERY_IMPLEMENTATION_EXECUTOR_MISMATCH');
       if (request.stage === 'review') {
         if (run.handoffs.some(h => h.executorId === native.executorId)) throw new Error('DELIVERY_INDEPENDENT_REVIEW_REQUIRED');
+        if (run.integration?.original.workflow?.results.some(r => r.response.native.executorId === native.executorId)) throw new Error('DELIVERY_FRESH_INTEGRATION_REVIEW_REQUIRED');
         const impl = workflow.results.filter(r => r.request.stage === 'implementation'
           && r.response.outcome !== 'unavailable' && r.response.outcome !== 'cancelled').at(-1);
-        if (!impl?.accepted || impl.response.sourceDigest !== source || request.sourceDigest !== source
+        if (!impl?.accepted || (!run.integration && impl.response.sourceDigest !== source) || request.sourceDigest !== source
           || (await this.validChecks(run, source)).size !== run.task.checks.length
-          || hash(request.prerequisiteDigests) !== hash([hash(impl), ...checkDigests(run)])) {
+          || hash(request.prerequisiteDigests) !== hash(run.integration ? integrationReviewPrerequisites(run) : [hash(impl), ...checkDigests(run)])) {
           throw new Error('DELIVERY_STALE_REVIEW');
         }
       }

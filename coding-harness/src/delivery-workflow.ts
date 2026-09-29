@@ -4,6 +4,7 @@ import { selectDeliveryRoute } from './delivery-contracts.js';
 import type { DeliveryRun, CheckResult } from './delivery-runtime.js';
 import type { DeliveryAction, NativeStageRequest, NativeStageResult } from './delivery-workflow-contracts.js';
 import { integrationReady } from './delivery-integration.js';
+import { nextIntegrationAction } from './delivery-integration-review.js';
 
 export function checkDigests(run: DeliveryRun): string[] {
   return run.task.checks.map(c => hash(run.checks.filter(r => r.id === c.id).at(-1) ?? null));
@@ -35,11 +36,7 @@ function failureFeedback(check: CheckResult): string {
 
 /** Returns/persists one next transition. Does not invoke missing or failed dependents. */
 export function nextWorkflowAction(run: DeliveryRun, source: string, validChecks: ReadonlySet<string>): DeliveryAction {
-  if (run.integration) {
-    if (!integrationReady(run, source)) throw new Error('DELIVERY_INTEGRATION_SOURCE_MISMATCH');
-    const missing = run.task.checks.find(check => !validChecks.has(check.id));
-    return missing ? { kind: 'check', checkId: missing.id } : { kind: 'ready-to-commit', sourceDigest: source };
-  }
+  if (run.integration) return nextIntegrationAction(run, source, validChecks);
   const workflow = run.workflow ??= { requests: [], results: [], invalidated: [] };
   const impl = implementation(run), last = workflow.results.filter(r => !isTransport(r)).at(-1);
   const pending = workflow.requests.find(r => !workflow.invalidated.includes(r.id)
