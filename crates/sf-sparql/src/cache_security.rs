@@ -14,8 +14,8 @@ use sf_core::security_context::{PolicySnapshotId, SecurityCacheIdentity, Securit
 use spargebra::Query;
 
 use super::generated::{
-    parse_and_admit, ConstantCoverageError, ConstantOccurrence, GeneratedCompileError,
-    GeneratedQueryRefusal,
+    parse_and_admit, parse_and_admit_deferred, ConstantCoverageError, ConstantOccurrence,
+    GeneratedCompileError, GeneratedDeferred, GeneratedQueryRefusal, ParsedAdmission,
 };
 use super::{CompileProfileId, CompileScope, CompilerBinding};
 use crate::Plan;
@@ -321,6 +321,36 @@ impl SecurityScopedCompiler<'_> {
         self.compile_parsed_impl(context, &query, Some(control))
     }
 
+    /// Deferred-refusal sibling of [`Self::compile_shared_with_generated_admission`].
+    ///
+    /// Policy is checked first. An admitted query takes the unchanged security
+    /// cache path. A refusal is returned as data; its optional plan is lowered
+    /// uncached from the same parse, bypasses every cache, and is row-authorization
+    /// input ONLY: never execute it or treat it as admitted.
+    pub fn compile_shared_with_generated_admission_deferred<F>(
+        &self,
+        context: &SecurityContext,
+        sparql: &str,
+        control: &dyn QueryControl,
+        check: F,
+    ) -> Result<GeneratedDeferred, SecurityCompileError>
+    where
+        F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
+    {
+        if !context.matches_policy_snapshot(self.expected_policy) {
+            return Err(SecurityCompileError::PolicyMismatch);
+        }
+        match parse_and_admit_deferred(sparql, control, check)? {
+            ParsedAdmission::Admitted(query) => {
+                let plan = self.compile_parsed_impl(context, &query, Some(control))?;
+                Ok(GeneratedDeferred::Admitted(plan))
+            }
+            ParsedAdmission::Refused { refusal, query } => {
+                Ok(self.binding.defer_refusal(refusal, query, control)?)
+            }
+        }
+    }
+
     fn compile_shared_impl(
         &self,
         context: &SecurityContext,
@@ -423,3 +453,7 @@ mod contention_tests;
 #[cfg(test)]
 #[path = "generated_compile_security_tests.rs"]
 mod generated_tests;
+
+#[cfg(test)]
+#[path = "generated_deferred_security_tests.rs"]
+mod generated_deferred_tests;
