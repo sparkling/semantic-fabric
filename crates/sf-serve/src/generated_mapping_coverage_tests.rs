@@ -123,11 +123,11 @@ fn parse(text: &str) -> SourceMapping {
     parsed.unwrap()
 }
 
-fn unlimited() -> QueryBudget {
+pub(super) fn unlimited() -> QueryBudget {
     QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX))
 }
 
-fn limited(units: u64) -> QueryBudget {
+pub(super) fn limited(units: u64) -> QueryBudget {
     QueryBudget::new(QueryLimits::new(units, u64::MAX, u64::MAX, u64::MAX))
 }
 
@@ -145,22 +145,26 @@ fn work(mapping: &SourceMapping, role: Role, name: &str) -> u64 {
     budget.consumed(QueryCharge::CompilerWork)
 }
 
-fn constant(iri: &str) -> TermMap {
+pub(super) fn constant(iri: &str) -> TermMap {
     TermMap::Constant(Term::NamedNode(NamedNode::new_unchecked(iri)))
 }
 
-fn object(term: TermMap) -> ObjectMap {
+pub(super) fn object(term: TermMap) -> ObjectMap {
     ObjectMap::Term(term)
 }
 
-fn reference(parent: &str) -> ObjectMap {
+pub(super) fn reference(parent: &str) -> ObjectMap {
     ObjectMap::Ref(RefObjectMap {
         parent_triples_map: parent.to_owned(),
         joins: Vec::new(),
     })
 }
 
-fn pom(predicate: TermMap, object: ObjectMap, graphs: Vec<TermMap>) -> PredicateObjectMap {
+pub(super) fn pom(
+    predicate: TermMap,
+    object: ObjectMap,
+    graphs: Vec<TermMap>,
+) -> PredicateObjectMap {
     PredicateObjectMap {
         predicates: vec![predicate],
         objects: vec![object],
@@ -168,7 +172,7 @@ fn pom(predicate: TermMap, object: ObjectMap, graphs: Vec<TermMap>) -> Predicate
     }
 }
 
-fn triples_map(id: &str, subject: TermMap, poms: Vec<PredicateObjectMap>) -> TriplesMap {
+pub(super) fn triples_map(id: &str, subject: TermMap, poms: Vec<PredicateObjectMap>) -> TriplesMap {
     TriplesMap {
         id: id.to_owned(),
         source: LogicalSource::Table("items".to_owned()),
@@ -181,16 +185,16 @@ fn triples_map(id: &str, subject: TermMap, poms: Vec<PredicateObjectMap>) -> Tri
     }
 }
 
-fn bundle(maps: Vec<TriplesMap>) -> SourceMapping {
+pub(super) fn bundle(maps: Vec<TriplesMap>) -> SourceMapping {
     SourceMapping::new(SourceId::new(0).unwrap(), maps)
 }
 
-fn opaque_bundle() -> SourceMapping {
+pub(super) fn opaque_bundle_with(spec: TermSpec) -> SourceMapping {
     let template = Template::parse("http://example.test/{id}").unwrap();
     let column = TermMap::Column("c".into(), TermSpec::iri());
     let literal = TermMap::Column("v".into(), TermSpec::plain_literal());
     let link = pom(column.clone(), object(literal), Vec::new());
-    let subject = TermMap::Template(template, TermSpec::iri());
+    let subject = TermMap::Template(template, spec);
     let mut opaque = triples_map("urn:opaque", subject, vec![link]);
     opaque.subject.graphs.push(column);
     let known_pom = pom(
@@ -200,6 +204,10 @@ fn opaque_bundle() -> SourceMapping {
     );
     let known = triples_map("urn:known", constant(&full("known")), vec![known_pom]);
     bundle(vec![opaque, known])
+}
+
+fn opaque_bundle() -> SourceMapping {
+    opaque_bundle_with(TermSpec::iri().with_base("http://base.test/"))
 }
 
 struct CancelAfter {

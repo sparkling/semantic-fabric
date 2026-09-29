@@ -4,6 +4,8 @@ use sf_core::ir::{ObjectMap, RefObjectMap, TermMap, TermType, TriplesMap};
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 use sf_core::Term;
 
+use super::templates::{self, Fit};
+
 pub(super) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 pub(super) const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
 
@@ -55,9 +57,20 @@ impl<'a> Scan<'a> {
         match map {
             TermMap::Constant(Term::NamedNode(node)) => self.same(node.as_str()),
             TermMap::Constant(_) => Ok(false),
-            TermMap::Column(..) | TermMap::Template(..) => {
+            TermMap::Column(..) => {
                 self.skipped = true;
                 Ok(false)
+            }
+            TermMap::Template(template, spec) => {
+                let iri = self.iri;
+                match templates::fit(self, template, spec, iri)? {
+                    Fit::Match => Ok(true),
+                    Fit::Disjoint => Ok(false),
+                    Fit::Unknown => {
+                        self.skipped = true;
+                        Ok(false)
+                    }
+                }
             }
         }
     }
@@ -93,7 +106,13 @@ impl<'a> Scan<'a> {
                     }
                 }
                 TermMap::Constant(_) => {}
-                TermMap::Column(..) | TermMap::Template(..) => typed = Typed::Maybe,
+                TermMap::Column(..) => typed = Typed::Maybe,
+                TermMap::Template(template, spec) => {
+                    let fit = templates::fit(self, template, spec, RDF_TYPE)?;
+                    if fit != Fit::Disjoint {
+                        typed = Typed::Maybe;
+                    }
+                }
             }
         }
         Ok(typed)
