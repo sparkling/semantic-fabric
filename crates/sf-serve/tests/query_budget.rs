@@ -33,6 +33,8 @@ mod ordinary_identity;
 #[path = "query_budget/path_identity.rs"]
 mod path_identity;
 
+#[path = "query_budget/combined_governance.rs"]
+mod combined_governance;
 #[path = "query_budget/reconstruction.rs"]
 mod reconstruction;
 mod support;
