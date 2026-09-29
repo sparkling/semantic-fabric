@@ -1,21 +1,28 @@
 //! Loopback-only TLS peers, never an external database.
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::{sync::Arc, time::Duration};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 const BOUND: Duration = Duration::from_secs(3);
 
 pub(super) fn identity(name: &str) -> (CertificateDer<'static>, TlsAcceptor) {
+    identity_with_versions(name, &[&rustls::version::TLS12, &rustls::version::TLS13])
+}
+
+fn identity_with_versions(
+    name: &str,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> (CertificateDer<'static>, TlsAcceptor) {
     let identity = rcgen::generate_simple_self_signed(vec![name.to_owned()]).unwrap();
     let certificate = identity.cert.der().clone();
     let server = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
-    .with_safe_default_protocol_versions()
+    .with_protocol_versions(versions)
     .unwrap()
     .with_no_client_auth()
     .with_single_cert(
@@ -287,4 +294,100 @@ async fn refusal_and_stalled_handshake_fail_without_plaintext_startup() {
         .await
         .unwrap();
     }
+}
+
+type Negotiated = std::io::Result<rustls::ProtocolVersion>;
+
+/// Server half of one loopback exchange: complete the handshake, then echo.
+async fn serve(listener: TcpListener, acceptor: TlsAcceptor) -> Negotiated {
+    let (socket, _) = listener.accept().await?;
+    let mut stream = acceptor.accept(socket).await?;
+    let negotiated = stream.get_ref().1.protocol_version().unwrap();
+    let mut ping = [0; 4];
+    stream.read_exact(&mut ping).await?;
+    assert_eq!(&ping, b"ping");
+    stream.write_all(b"pong").await?;
+    stream.flush().await?;
+    Ok(negotiated)
+}
+
+/// Client half of one loopback exchange: dial the literal 127.0.0.1 identity.
+async fn dial(config: rustls::ClientConfig, address: SocketAddr) -> Negotiated {
+    let socket = TcpStream::connect(address).await?;
+    let name = ServerName::try_from("127.0.0.1".to_owned()).unwrap();
+    let connector = TlsConnector::from(Arc::new(config));
+    let mut stream = connector.connect(name, socket).await?;
+    let negotiated = stream.get_ref().1.protocol_version().unwrap();
+    stream.write_all(b"ping").await?;
+    stream.flush().await?;
+    let mut pong = [0; 4];
+    stream.read_exact(&mut pong).await?;
+    assert_eq!(&pong, b"pong");
+    Ok(negotiated)
+}
+
+/// One loopback handshake: a server pinned to `version` presents a certificate
+/// for `certificate_name`; the production `client_config` dials 127.0.0.1 and
+/// trusts either that certificate or an unrelated one.
+async fn exchange(
+    version: &'static rustls::SupportedProtocolVersion,
+    certificate_name: &str,
+    trust_peer: bool,
+) -> (Negotiated, Negotiated) {
+    tokio::time::timeout(BOUND, async {
+        let (certificate, acceptor) = identity_with_versions(certificate_name, &[version]);
+        let roots = if trust_peer {
+            vec![certificate]
+        } else {
+            vec![identity("other.example").0]
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve(listener, acceptor));
+        let config = super::client_config(Some(&roots)).unwrap();
+        let client = dial(config, address).await;
+        (client, server.await.unwrap())
+    })
+    .await
+    .unwrap()
+}
+
+fn is_certificate_error(error: &std::io::Error) -> bool {
+    matches!(
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>()),
+        Some(rustls::Error::InvalidCertificate(_))
+    )
+}
+
+async fn production_client_config_under(
+    version: &'static rustls::SupportedProtocolVersion,
+    expected: rustls::ProtocolVersion,
+) {
+    let (client, server) = exchange(version, "127.0.0.1", true).await;
+    assert_eq!(client.unwrap(), expected);
+    assert_eq!(server.unwrap(), expected);
+
+    for (name, trust_peer) in [("wrong.example", true), ("127.0.0.1", false)] {
+        let (client, server) = exchange(version, name, trust_peer).await;
+        let error = client.unwrap_err();
+        assert!(
+            is_certificate_error(&error),
+            "{name} trusted={trust_peer}: {error:?}"
+        );
+        assert!(server.is_err());
+    }
+}
+
+#[tokio::test]
+async fn production_client_config_negotiates_tls12_and_rejects_bad_peers() {
+    let expected = rustls::ProtocolVersion::TLSv1_2;
+    production_client_config_under(&rustls::version::TLS12, expected).await;
+}
+
+#[tokio::test]
+async fn production_client_config_negotiates_tls13_and_rejects_bad_peers() {
+    let expected = rustls::ProtocolVersion::TLSv1_3;
+    production_client_config_under(&rustls::version::TLS13, expected).await;
 }
