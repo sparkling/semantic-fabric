@@ -17,8 +17,8 @@ implementation, repair and review. Direct implementation, repair, builds and tes
 are authorized for application and harness work. Harness orchestration, parallelism
 and learning remain optional; harness execution is never a compulsory gate.
 Keep one integrator on canonical `main`, source-bound acceptance and independent
-review. GCP is stopped and the application goal paused; current work is local
-harness repair only. Its sole coordinator resumes existing Codex `gpt-6-astra` at `medium`.
+review. GCP resumption and harness deployment are now owner-authorized; preserve
+its sole coordinator, existing Codex `gpt-6-astra` at `medium`, and current app work.
 Ordinary planning, authoring and fresh-context review use native
 `cc/claude-sonnet-5-5[1m]` through existing 9router; Opus 5.5/high repairs remain.
 Explicit task/reviewer pins and native learning remain; no global Claude-only rule.

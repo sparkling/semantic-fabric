@@ -82,6 +82,16 @@ export async function withOperationLock<T>(directory: string, action: () => Prom
     } finally { closeSync(lease); }
   }
 }
+/** Same OS lease for brief synchronous source/custody transactions, without a microtask lock gap. */
+export function withSynchronousOperationLock<T>(directory: string, action: () => T): T {
+  const lease = acquireLease(directory), path = join(directory, 'operation.lock'), nonce = randomUUID();
+  try { writeFileSync(path, JSON.stringify({ pid: process.pid, start: processIdentity(process.pid), nonce, phase: 'idle' }), { flag: 'wx', mode: 0o600 }); }
+  catch (error) { closeSync(lease); throw new Error('DELIVERY_OPERATION_BUSY: inspect owner; never start another writer', { cause: error }); }
+  try { return action(); } finally {
+    try { if (existsSync(path) && (readJson(path) as OperationLock).nonce === nonce) unlinkSync(path); }
+    finally { closeSync(lease); }
+  }
+}
 // Linux flock is held by this process's shared open file description, not a
 // second long-lived writer. Kernel release on exit makes recovery itself recoverable.
 function acquireLease(directory: string): number {

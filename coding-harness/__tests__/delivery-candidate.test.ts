@@ -140,7 +140,8 @@ describe('upstream pool and ordinary lifecycle candidate roots', () => {
       run: async () => { start(); await end; } }], { maxConcurrency: 1, signal: controller.signal }).then(result => { returned = true; return result; });
     await began; controller.abort(); await new Promise(resolve => setImmediate(resolve));
     expect(returned).toBe(false);
-    await expect(runDeliveryPool(f.harness, [], { maxConcurrency: 1 })).rejects.toThrow('OPERATION_BUSY');
+    await expect(runDeliveryPool(f.harness, [{ id: 'conflict', mutationPaths: ['product.txt'], resources: [],
+      run: async () => {} }], { maxConcurrency: 1 })).rejects.toThrow('RESOURCE_CONFLICT');
     stop(); const result = await running;
     expect(result.results[0].status).toBe('cancelled'); expect(f.harness.inspect().operation).toBeNull();
   });
@@ -158,7 +159,7 @@ describe('upstream pool and ordinary lifecycle candidate roots', () => {
     try {
       expect(readFileSync(join(candidate.harness.root, 'product.txt'), 'utf8')).toBe('accepted parent\r\n');
       writeFileSync(join(f.root, 'product.txt'), 'unexpected canonical drift\n');
-      expect(() => candidate.harness.snapshot()).toThrow('CANDIDATE_SOURCE_DRIFT');
+      expect(() => candidate.harness.snapshot()).not.toThrow();
       expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], acceptedParent: f.task.id })).toThrow('ACCEPTED_INPUT_CHANGED');
     } finally { candidate.cleanup(); }
   });

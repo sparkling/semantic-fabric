@@ -14,8 +14,11 @@ describe('native programme coordinator entrypoint', () => {
     expect(plan.args.slice(0, 9)).toEqual(['resume', sessionId, '--yolo', '--model', 'gpt-6-astra',
       '--config', 'model_reasoning_effort="medium"', '--config', 'plan_mode_reasoning_effort="medium"']);
     expect(plan.args.at(-1)).toContain('ready /absolute/manifest.json with mode run');
-    expect(plan.args.at(-1)).toContain('unchanged until the cohort returns');
+    expect(plan.args.at(-1)).toContain('without waiting for unrelated siblings');
+    expect(plan.args.at(-1)).toContain('active read/write/resource reservations');
     expect(plan.args.at(-1)).toContain('Only accepted integrated parents release children');
+    expect(plan.args.at(-1)).toContain('examine every unfinished authorized outcome');
+    expect(plan.args.at(-1)).toContain('previous two/three-task manifest');
   });
 
   it('previews without launching and forwards native exit status without fallback', () => {
