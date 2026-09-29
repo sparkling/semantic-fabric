@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build/export a local versioned serving package from committed source only.
 # Usage: bash scripts/release/build-serving-image.sh /absolute/new-output-dir
-# No push, signing, tagging Git, release admission, or deployment is performed.
+# Also exports unsigned evidence (Cargo graph, SPDX SBOM, provenance) from the built image ID
+# and verifies it offline. No push, signing, tagging Git, release admission, or deployment.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
 
@@ -13,7 +14,7 @@ if [[ -n $(git status --porcelain --untracked-files=normal) ]]; then
   echo 'Commit the intended source first; refusing to label dirty work as a committed artifact.' >&2
   exit 2
 fi
-for required in docker git tar jq sha256sum; do
+for required in docker git tar jq sha256sum python3; do
   command -v "$required" >/dev/null
 done
 # Match the owned-image Cargo fixture and prevent an ambient remote Docker
@@ -59,7 +60,23 @@ jq -n --arg revision "$revision" --arg version "$version" \
     packageVersion:$packageVersion,platform:"linux/amd64",imageId:$imageId,
     imageArchive:{path:"image.tar",sha256:$archiveSha256},cargoLockSha256:$cargoLockSha256,
     buildCommand:"cargo build --locked --release -p sf-cli --no-default-features",
-    admission:"unqualified; smoke, release checks, SBOM and signing remain required"}' \
+    admission:"unqualified; live smoke, advisory review or waivers, signature and release checks remain required"}' \
   > "$artifact_dir/artifact.json"
-(cd -- "$artifact_dir" && sha256sum image.tar image.id image-inspect.json artifact.json > SHA256SUMS)
+
+# Export evidence from the exact image ID. create + cp + rm never starts the product.
+mkdir -- "$artifact_dir/evidence"
+container_id=$(docker_local create --pull never --network none "$image_id")
+trap 'docker_local rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+docker_local cp "$container_id:/usr/share/semantic-fabric/." "$artifact_dir/evidence/"
+docker_local rm --force "$container_id" >/dev/null
+trap - EXIT
+
+# Helpers are stdlib-only, non-deployable packaging code; keep the clean tree free of bytecode.
+export PYTHONDONTWRITEBYTECODE=1
+commit_epoch=$(git show -s --format=%ct "$revision")
+python3 scripts/release/serving-evidence.py assemble "$artifact_dir" \
+  --source-date-epoch "$commit_epoch"
+python3 scripts/release/verify-serving-bundle.py "$artifact_dir" \
+  --expect-image-id "$image_id" --expect-revision "$revision"
 printf 'Local package: %s\nImage ID: %s\nNo release was published or admitted.\n' "$artifact_dir" "$image_id"
+printf 'Evidence is unsigned and integrity-only; admission stays unqualified.\n'

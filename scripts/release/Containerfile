@@ -9,6 +9,9 @@ RUN cargo build --locked --release -p sf-cli --no-default-features \
     && bash scripts/check-serving-profile.sh \
     && cargo tree --locked -p sf-cli --no-default-features --edges normal,build \
        --prefix none --format '{p}|{f}' > serving-dependencies.txt \
+    && cargo metadata --locked --format-version 1 --no-default-features \
+       --filter-platform x86_64-unknown-linux-gnu \
+       --manifest-path crates/sf-cli/Cargo.toml > cargo-metadata.json \
     && rustc -Vv > rustc.txt
 
 FROM debian:trixie-slim@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
@@ -20,7 +23,7 @@ LABEL org.opencontainers.image.title="Semantic Fabric" \
       org.opencontainers.image.version=$PACKAGE_VERSION \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --from=build /build/target/release/semantic-fabric /usr/local/bin/semantic-fabric
-COPY --from=build /build/serving-dependencies.txt /build/rustc.txt /usr/share/semantic-fabric/
+COPY --from=build /build/serving-dependencies.txt /build/rustc.txt /build/cargo-metadata.json /usr/share/semantic-fabric/
 COPY Cargo.lock LICENSE-MIT LICENSE-APACHE /usr/share/semantic-fabric/
 USER 65532:65532
 WORKDIR /data
