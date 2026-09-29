@@ -8,6 +8,10 @@ use std::borrow::Cow;
 #[path = "condition_control_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "condition_scope_tests.rs"]
+mod scope_tests;
+
 #[derive(Clone, Copy)]
 enum List<'a> {
     Refs(&'a [&'a SqlCond]),
