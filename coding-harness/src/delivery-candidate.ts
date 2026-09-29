@@ -104,6 +104,7 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
     if (Object.entries(acceptedSource.inputs).some(([path, value]) => (sourceBefore.files[path] ?? null) !== value)) throw new Error('DELIVERY_ACCEPTED_INPUT_CHANGED');
   }
   const scope = input.scope.map(path => normalizeWorkspacePath(path, 'candidate scope'));
+  if (scope.some(path => /(^|\/)(\.git|\.env(?:\..*)?|\.metaharness)(\/|$)/.test(path))) throw new Error('DELIVERY_INVALID_SCOPE');
   if (scope.some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_ARTIFACT_SCOPE_REFUSED');
   if (Object.keys(sourceBefore.files).some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_TRACKED_ARTIFACT_SOURCE_REFUSED');
   if (scope.some(path => existsSync(join(canonical.root, path)) && lstatSync(join(canonical.root, path)).isDirectory())) throw new Error('DELIVERY_EXACT_FILE_SCOPE_REQUIRED');
@@ -120,6 +121,8 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
       for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory()) unseal(join(directory, entry.name));
     };
     unseal(runtime.root);
+    // Empty private parents enable new scoped files without changing the frozen source snapshot.
+    for (const path of scope) mkdirSync(dirname(join(runtime.root, path)), { recursive: true, mode: 0o700 });
     for (const [path, value] of Object.entries(sourceBefore.files)) if (value.split(':')[1] === emptyHash) {
       mkdirSync(dirname(join(runtime.root, path)), { recursive: true, mode: 0o700 });
       writeFileSync(join(runtime.root, path), '', { flag: 'wx', mode: value.startsWith('100755:') ? 0o500 : 0o400 });
