@@ -111,15 +111,23 @@ mod validation;
 
 // Moved items keep their `crate::emit` paths; siblings still resolve every
 // formerly root-owned helper through `use super::*`.
-pub(crate) use binding_view::{BindingIter, BindingView, BranchModifiers};
+// Crate-visible path kept; no in-crate use outside test builds.
+#[allow(unused_imports)]
+pub(crate) use binding_view::BindingIter;
+pub(crate) use binding_view::{BindingView, BranchModifiers};
+pub(crate) use branch::emit_branch_binding_view;
+#[cfg(test)]
+use branch::emit_branch_inner;
+use branch::emit_via_ast_governed;
 #[cfg(feature = "runtime-identity-evidence")]
 pub(crate) use branch::exercise_raw_sql_fallback_for_evidence;
 pub use branch::{emit_branch, emit_branch_with, EmittedBranch};
-pub(crate) use branch::{
-    emit_branch_binding_view, emit_branch_controlled, emit_branch_with_modifiers,
-};
-use branch::{emit_branch_inner, emit_via_ast_governed};
-use branch_keys::{emit_branch_keys, order_column, push_limit_offset, render_order};
+// Crate-visible paths kept; no in-crate use outside test builds.
+#[allow(unused_imports)]
+pub(crate) use branch::{emit_branch_controlled, emit_branch_with_modifiers};
+#[cfg(test)]
+use branch_keys::render_order;
+use branch_keys::{emit_branch_keys, order_column, push_limit_offset};
 #[cfg(test)]
 use catalog::branch_actuals;
 pub use catalog::ColumnCatalog;
@@ -127,28 +135,31 @@ use catalog::{
     colref, physical_row_identifier, resolve_col, source_key, ActualColumns, AliasActuals,
     AliasSourceKind,
 };
+#[cfg(test)]
+use from::{emit_subplan_join_controlled, render_cond, render_conjunction, scan_ref};
 use from::{
-    emit_subplan_join_controlled, render_cond_controlled, render_conjunction,
-    render_from_async_controlled, render_from_controlled, render_where,
+    render_cond_controlled, render_from_async_controlled, render_from_controlled, render_where,
 };
 #[cfg(test)]
-use from::{render_cond, scan_ref};
-use path_agg::{agg_expr_sql, emit_agg_branch, emit_path_branch};
+use path_agg::agg_expr_sql;
+use path_agg::{emit_agg_branch, emit_path_branch};
+use percent_encode::percent_encode_col_controlled;
+#[cfg(test)]
 use percent_encode::{
-    percent_encode_col, percent_encode_col_controlled, percent_encode_col_mysql,
-    percent_encode_col_postgres, percent_encode_col_sqlite, MYSQL_GROUP_CONCAT_MAX_LEN,
-    MYSQL_PACKET_RESERVE_BYTES, MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
+    percent_encode_col, percent_encode_col_mysql, percent_encode_col_postgres,
+    percent_encode_col_sqlite, MYSQL_GROUP_CONCAT_MAX_LEN, MYSQL_PACKET_RESERVE_BYTES,
+    MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
 };
 use source_oracle::synthetic_subplan_catalog_controlled;
 pub(crate) use source_oracle::{live_metadata_sources, synthetic_subplan_catalog};
 #[cfg(test)]
-use subplan::{emit_subplan_sql, emit_subplan_sql_controlled};
-use subplan::{
-    emit_subplan_sql_async_controlled, rebase_placeholders, rebase_placeholders_controlled,
-};
+use subplan::{emit_subplan_sql, emit_subplan_sql_controlled, rebase_placeholders};
+use subplan::{emit_subplan_sql_async_controlled, rebase_placeholders_controlled};
 pub(crate) use template_sql::{render_immediate_source_column, render_template_inline};
 use template_sql::{render_template_concat, sql_string_literal};
 pub(crate) use validation::validate_execution_columns;
 #[cfg(test)]
 pub(crate) use validation::{validate_live_columns, validate_live_columns_controlled};
+// Crate-visible paths kept; only test-gated siblings consume them.
+#[allow(unused_imports)]
 pub(super) use validation::{validate_source_root, ValidationRoot};
