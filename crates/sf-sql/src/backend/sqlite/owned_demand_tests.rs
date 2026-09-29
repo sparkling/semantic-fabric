@@ -246,6 +246,42 @@ async fn idle_early_stop_worker_releases_admission_on_termination() {
 }
 
 #[tokio::test]
+async fn setup_error_needs_no_demand_and_frees_admission_with_receiver_retained() {
+    // Both bridge modes: full-scan prefetch and early-stop consumer demand.
+    for early_stop in [false, true] {
+        let member = SqliteOwnedConnection::new(two_row_connection("2"));
+        let lease = member.acquire().await.unwrap();
+        let mut backend = SqliteOwnedBackend::new_controlled_leased(lease, budget());
+        let mut rows = backend
+            .open_branch_with_demand("SELECT * FROM", &[], None, false, false, early_stop)
+            .await
+            .unwrap();
+        drop(backend);
+        // The receiver stays retained and unpolled: the worker must deliver
+        // its setup error without a demand, exit, and release admission.
+        let lease = tokio::time::timeout(Duration::from_secs(2), member.acquire())
+            .await
+            .expect("setup-error worker did not release admission")
+            .expect("admission unexpectedly closed");
+        assert_eq!(rows.issued_demands(), early_stop.then_some(0));
+
+        // Admission is usable again while the stale receiver is still held.
+        let mut next = SqliteOwnedBackend::new_controlled_leased(lease, budget());
+        let mut fresh = next
+            .open_branch_with_demand(TWO_ROWS, &[], None, false, false, early_stop)
+            .await
+            .unwrap();
+        assert!(fresh.next_row().await.unwrap().is_some());
+        drop(fresh);
+        drop(next);
+
+        assert!(matches!(rows.next_row().await, Err(Error::Sqlite(_))));
+        assert!(matches!(rows.next_row().await, Ok(None)));
+        assert_eq!(rows.issued_demands(), early_stop.then_some(1));
+    }
+}
+
+#[tokio::test]
 async fn full_scan_open_still_prefetches_before_any_pull() {
     let (decoded, first_decode) = mpsc::sync_channel(2);
     let observer = SqliteCancellationObserver::new(Arc::new(move |event| {
