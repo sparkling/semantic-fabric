@@ -140,7 +140,7 @@ async function wholeOutcomeProof(preflight, native) {
     schemaVersion: 1, id: `fabric-live-fixture-${index}`, owner: 'fabric-proof-integrator', thread: 'fabric-live-whole-outcome',
     requirement: `Harness fixture only: replace the entire contents of ${path} with exactly fixed followed by one newline. Preserve all other files. This is transport/lifecycle proof, not product work. Plan against declared build and acceptance check IDs.`,
     taskClass: 'implementation', host: route.host, requested: route, reviewer: route, selectionReason: 'Explicit live fixture route, never transport fallback',
-    scope: [path], readPaths: ['coding-harness/check.mjs', 'coding-harness/build.mjs'], checks: [
+    scope: [path], readPaths: ['coding-harness/check.mjs', 'coding-harness/build.mjs', ...(index === 0 ? ['other.txt'] : [])], checks: [
       { id: 'build', kind: 'build', argv: ['node', 'build.mjs'], cwd: 'coding-harness' },
       { id: 'acceptance', kind: 'acceptance', argv: ['node', 'check.mjs', path], cwd: 'coding-harness' },
     ] }, handoff: { ...route, executorId: `live-fixture-author-${index}`, authentication: native ? 'native-subscription' : 'openrouter-api',
@@ -186,7 +186,7 @@ async function wholeOutcomeProof(preflight, native) {
   sample();
   const prerequisites = { sourceDigest: original.digest, fabricCommit: canonical.context.head(), fixtureRoot: root, fixtureCommit: git('rev-parse', 'HEAD'),
     baseline, excluded, model: route, apiKeyPresent: Boolean(process.env.OPENROUTER_API_KEY), preflight,
-    dependentProof: { status: 'pending', reason: 'Explicit canonical candidate integration and accepted-parent child execution follow pool completion.' } };
+    dependentProof: { status: 'pending', reason: 'Integrate accepted parent and launch child without waiting for the independent cohort.' } };
   atomicJson(join(proofRoot, 'prerequisites.json'), prerequisites);
   console.log(JSON.stringify({ phase: preflight ? 'preflight-complete' : 'live-start', pid: process.pid, proofRoot, fixtureRoot: root, model: route.model }));
   if (preflight) return;
@@ -205,6 +205,7 @@ async function wholeOutcomeProof(preflight, native) {
   };
   const processTimer = setInterval(sampleProcesses, 500);
   const stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  const pendingCohorts = [];
   try {
     const execute = async (candidate, mode, id, owner, signal) => {
       if (mode !== 'run') throw new Error('WHOLE_OUTCOME_MODE_REQUIRED');
@@ -222,11 +223,14 @@ async function wholeOutcomeProof(preflight, native) {
       return outcome.success;
     };
     const observe = event => console.log(JSON.stringify({ type: 'delivery-pool-progress', ...event }));
-    const result = await dispatchDeliveryReady(harness, manifest, execute, controller.signal, observe);
-    const first = outcomes.map(({ task }) => ({ id: task.id,
-      start: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'start')?.at,
-      end: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'settled')?.at }));
-    const overlapMs = Math.max(0, Math.min(...first.map(row => row.end ?? 0)) - Math.max(...first.map(row => row.start ?? Infinity)));
+    // Separate admissions reproduce the cross-cohort read/write rejection, not only same-batch overlap.
+    for (const outcome of outcomes) {
+      const pending = dispatchDeliveryReady(harness, { ...manifest, outcomes: [outcome] }, execute, controller.signal, observe);
+      // Observe early admission failures now; awaiting the original promise still propagates them.
+      void pending.catch(() => {});
+      pendingCohorts.push(pending);
+    }
+    const parentResult = await pendingCohorts[0];
     const unchanged = harness.snapshot().digest === source.digest && canonical.snapshot().digest === original.digest;
     const integrated = [];
     const integrate = async row => {
@@ -238,26 +242,36 @@ async function wholeOutcomeProof(preflight, native) {
       if (!verified.verdict?.pass) throw new Error('CANONICAL_INTEGRATION_CHECK_FAILED');
       git('add', '--', ...prepared.task.scope); git('commit', '-qm', `test: accept ${row.id}`);
       const accepted = await harness.finish(row.id, prepared.task.owner, git('rev-parse', 'HEAD'));
-      integrated.push({ taskId: row.id, commit: accepted.commit, digest: accepted.digest,
+      integrated.push({ taskId: row.id, at: Date.now(), commit: accepted.commit, digest: accepted.digest,
         sourceDigest: accepted.integration.sourceAfter.digest, originalDigest: candidateRun.digest });
       atomicJson(join(proofRoot, 'integrated.json'), integrated);
     };
     let dependentProof = prerequisites.dependentProof;
-    if (unchanged && completed.length === 2 && completed.every(row => row.success) && result.results.every(row => row.status === 'fulfilled')) {
-      for (const row of result.results) await integrate(row);
+    if (unchanged && parentResult.results[0].status === 'fulfilled') {
+      await integrate(parentResult.results[0]);
       const child = { ...outcomes[0], task: { ...outcomes[0].task, id: 'fabric-live-dependent', scope: ['child.txt'],
+        readPaths: outcomes[0].task.readPaths.filter(path => path !== 'other.txt'),
         requirement: 'Harness fixture only: read accepted product.txt input provided in files. Set child.txt to exactly two concatenated copies of that entire input, including its newline. Preserve product.txt and all other files. Plan against declared build and acceptance check IDs.',
         checks: outcomes[0].task.checks.map(check => check.id === 'acceptance' ? { ...check, argv: ['node', 'check.mjs', 'child.txt'] } : check) },
         handoff: { ...outcomes[0].handoff, executorId: 'live-fixture-dependent-author' },
         acceptedParent: outcomes[0].task.id, acceptedInputs: ['product.txt'] };
       const childManifest = { ...manifest, maxConcurrency: 1, outcomes: [child] };
       atomicJson(join(proofRoot, 'dependent-manifest.json'), childManifest);
+      const launchedAt = Date.now(), siblingActiveAtLaunch = !completed.some(row => row.taskId === outcomes[1].task.id);
       const childResult = await dispatchDeliveryReady(harness, childManifest, execute, controller.signal, observe);
       if (childResult.results[0].status === 'fulfilled') await integrate(childResult.results[0]);
       dependentProof = { status: childResult.results[0].status === 'fulfilled' ? 'accepted' : 'failed', result: childResult,
+        launchedAt, siblingActiveAtLaunch,
         acceptedParent: child.acceptedParent, acceptedInputs: child.acceptedInputs, parentCommit: integrated[0].commit,
         readbackSha256: createHash('sha256').update(readFileSync(join(root, 'product.txt'))).digest('hex') };
     }
+    const cohortResults = await Promise.all(pendingCohorts);
+    const result = { cohorts: cohortResults, results: cohortResults.flatMap(cohort => cohort.results) };
+    if (unchanged && cohortResults[1].results[0].status === 'fulfilled') await integrate(cohortResults[1].results[0]);
+    const first = outcomes.map(({ task }) => ({ id: task.id,
+      start: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'start')?.at,
+      end: events.find(event => event.taskId === task.id && event.stage === 'architecture' && event.phase === 'settled')?.at }));
+    const overlapMs = Math.max(0, Math.min(...first.map(row => row.end ?? 0)) - Math.max(...first.map(row => row.start ?? Infinity)));
     const passed = unchanged && canonical.snapshot().digest === original.digest && overlapMs > 0 && completed.length === 3
       && completed.every(row => row.success) && integrated.length === 3 && dependentProof.status === 'accepted';
     const proof = { ...prerequisites, dependentProof, result, completed, integrated, events, first, overlapMs, unchanged, passed,
@@ -267,5 +281,5 @@ async function wholeOutcomeProof(preflight, native) {
     console.log(JSON.stringify({ phase: 'live-complete', proofRoot, passed, overlapMs, knownActualUsd: proof.knownActualUsd,
       outcomes: completed.map(({ taskId, success, failure }) => ({ taskId, success, failure })), dependentProof }));
     process.exitCode = passed ? 0 : 1;
-  } finally { clearInterval(timer); clearInterval(processTimer); sampleProcesses(); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); sample(); }
+  } finally { controller.abort(); await Promise.allSettled(pendingCohorts); clearInterval(timer); clearInterval(processTimer); sampleProcesses(); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); sample(); }
 }

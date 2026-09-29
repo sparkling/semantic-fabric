@@ -66,6 +66,31 @@ describe('upstream pool and ordinary lifecycle candidate roots', () => {
       await expect(candidate.harness.next(f.task.id, f.task.owner)).rejects.toThrow('OUT_OF_SCOPE_CHANGE');
     } finally { candidate.cleanup(); }
   });
+  it('creates only private parents for new nested scope files before ordinary admission', async () => {
+    const f = workflowFixture(roots), path = 'vendor/new-parser/src/lib.rs';
+    const before = f.harness.snapshot().digest;
+    const candidate = createDeliveryCandidate(f.harness, { parentDirectory: parentDirectory(), scope: [path] });
+    try {
+      expect(statSync(join(candidate.harness.root, 'vendor/new-parser/src')).mode & 0o777).toBe(0o700);
+      expect(() => statSync(join(candidate.harness.root, path))).toThrow();
+      expect(candidate.harness.snapshot().digest).toBe(before);
+      const task = { ...f.task, scope: [path] };
+      const run = await attest(candidate.harness, task, () => writeFileSync(join(candidate.harness.root, path), 'pub fn parse() {}\n'));
+      expect(run.verdict?.pass).toBe(true);
+      expect(f.harness.snapshot().digest).toBe(before);
+      expect(() => statSync(join(f.root, 'vendor'))).toThrow();
+      writeFileSync(join(candidate.harness.root, 'vendor/new-parser/src/sibling.rs'), 'outside scope');
+      expect(() => candidate.harness.context.assert()).toThrow('OUT_OF_SCOPE_CHANGE');
+    } finally { candidate.cleanup(); }
+  });
+  it.each(['../escape.rs', '.git/hooks/write', 'product.txt/child.rs', 'target/cache/file.rs'])(
+    'refuses unsafe new parents %s without leaving a private copy', path => {
+      const f = workflowFixture(roots), directory = parentDirectory();
+      const before = f.harness.snapshot().digest;
+      expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: [path] })).toThrow();
+      expect(readdirSync(directory)).toEqual([]);
+      expect(f.harness.snapshot().digest).toBe(before);
+    });
   it('refuses out-of-scope changes before begin and tracked runtime artifacts before copying', async () => {
     const f = workflowFixture(roots), directory = parentDirectory();
     const candidate = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'] });
