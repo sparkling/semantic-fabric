@@ -14,12 +14,14 @@ import { parseStageResponse } from './delivery-workflow-contracts.js';
 import { resolveMutablePath, resolveWorkspacePath } from './workspace.js';
 import { requiredDeliveryInputs } from './delivery-lineage.js';
 import { assertIntegrationReservations } from './delivery-cohort-custody.js';
+import { integrationReviewReady, integrationReviewPaths, integrationWorkflowIntact } from './delivery-integration-review.js';
+import type { NativeStageResult } from './delivery-workflow-contracts.js';
 
 export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string }
 export interface CandidateIntegration {
   candidateRoot: string; candidateDigest: string; original: DeliveryRun;
   sourceBefore: SourceSnapshot; sourceAfter: SourceSnapshot; phase: 'applying' | 'prepared';
-  candidateSource: SourceSnapshot; readPaths: string[]; custodyDigest: string; resources: string[];
+  candidateSource: SourceSnapshot; readPaths: string[]; reviewReadPaths?: string[]; custodyDigest: string; resources: string[];
   checkLogs: Record<string, string>; outcomeReceipts: unknown[]; outcomeHistory: unknown[];
 }
 interface Custody { root: string; sourceBefore: SourceSnapshot; baseCommit: string; scope: string[];
@@ -40,18 +42,7 @@ export async function validateCandidateRun(run: DeliveryRun, source: SourceSnaps
   const { digest, ...body } = run;
   if (run.integration || hash(body) !== digest || !run.verdict?.pass || run.status !== 'active'
     || !workflowReady(run, source.digest)) throw new Error('DELIVERY_CANDIDATE_NOT_REVIEWED');
-  for (const stage of run.workflow!.results) {
-    const { id, ...request } = stage.request;
-    const response = parseStageResponse(stage.response);
-    if (hash(request) !== id || response.requestId !== id || !stage.kernel.receipts.length
-      || !ReceiptLog.fromJSON({ receipts: stage.kernel.receipts }).verify().ok
-      || hash(stage.kernel.result) !== hash({ request: stage.request, response })
-      || stage.kernel.receipts.some(receipt => receipt.outputHash !== hash({ request: stage.request, response })
-        || receipt.agent !== response.native.executorId || receipt.runId !== id)
-      || (stage.accepted && (!stage.kernel.success || response.outcome !== 'completed' || stage.reasons.length))) {
-      throw new Error('DELIVERY_CANDIDATE_RECEIPT_INVALID');
-    }
-  }
+  validateStageResults(run.workflow!.results);
   const review = run.workflow!.results.at(-1)!;
   if (run.handoffs.some(author => author.executorId === review.response.native.executorId)) throw new Error('DELIVERY_INDEPENDENT_REVIEW_REQUIRED');
   for (const declared of run.task.checks) {
@@ -66,6 +57,20 @@ export async function validateCandidateRun(run: DeliveryRun, source: SourceSnaps
     }
   }
 }
+function validateStageResults(results: NativeStageResult[]): void {
+  for (const stage of results) {
+    const { id, ...request } = stage.request;
+    const response = parseStageResponse(stage.response);
+    if (hash(request) !== id || response.requestId !== id || !stage.kernel.receipts.length
+      || !ReceiptLog.fromJSON({ receipts: stage.kernel.receipts }).verify().ok
+      || (stage.accepted && hash(stage.kernel.result) !== hash({ request: stage.request, response }))
+      || stage.kernel.receipts.some(receipt => receipt.outputHash !== hash({ request: stage.request, response })
+        || receipt.agent !== response.native.executorId || receipt.runId !== id)
+      || (stage.accepted && (!stage.kernel.success || response.outcome !== 'completed' || stage.reasons.length))) {
+      throw new Error('DELIVERY_CANDIDATE_RECEIPT_INVALID');
+    }
+  }
+}
 async function checkedLog(path: string, logs?: Record<string, string>): Promise<string> {
   if (!logs) return logDigest(path);
   if (!(path in logs)) throw new Error('DELIVERY_INTEGRATION_LOG_MISSING');
@@ -74,6 +79,7 @@ async function checkedLog(path: string, logs?: Record<string, string>): Promise<
 export async function validateIntegrationEvidence(run: DeliveryRun): Promise<void> {
   if (!run.integration) return;
   await validateCandidateRun(run.integration.original, run.integration.candidateSource, run.integration.checkLogs);
+  validateStageResults(run.workflow?.results.slice(run.integration.original.workflow!.results.length) ?? []);
   for (const receipt of run.integration.outcomeReceipts) validateOutcomeReceipt(receipt, run.integration.original, run.integration.candidateSource);
   for (const receipt of run.integration.outcomeHistory) validateOutcomeReceipt(receipt, run.integration.original);
 }
@@ -147,7 +153,8 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   return { ...structuredClone(original), baseCommit: harness.context.head(), outsideDigest: outsideDigest(before, original.task.scope),
     checks: [], events: [{ at: new Date().toISOString(), kind: 'candidate-integration', reason: input.expectedDigest }],
     verdict: undefined, digest: undefined, integration: { candidateRoot: input.candidateRoot, candidateDigest: input.expectedDigest,
-      original, sourceBefore: before, sourceAfter: after, candidateSource, readPaths, custodyDigest: hash(custody), resources: custody.resources ?? [], checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying' } };
+      original, sourceBefore: before, sourceAfter: after, candidateSource, readPaths, reviewReadPaths: custody.readPaths,
+      custodyDigest: hash(custody), resources: custody.resources ?? [], checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying' } };
 }
 
 export function findIntegratedRun(harness: DeliveryHarness, commit: string): DeliveryRun | undefined {
@@ -161,11 +168,14 @@ export function findIntegratedRun(harness: DeliveryHarness, commit: string): Del
   return undefined;
 }
 export function integrationReady(run: DeliveryRun, source: string): boolean {
+  return integrationSourceReady(run, source) && (!integrationReviewPaths(run).length || integrationReviewReady(run, source));
+}
+export function integrationSourceReady(run: DeliveryRun, source: string): boolean {
   const integration = run.integration;
   if (!integration || integration.phase !== 'prepared' || source !== integration.sourceAfter.digest) return false;
   const { digest, ...original } = integration.original;
   return digest === integration.candidateDigest && hash(original) === digest && !original.integration
-    && hash(run.task) === hash(original.task) && hash(run.workflow) === hash(original.workflow)
+    && hash(run.task) === hash(original.task) && integrationWorkflowIntact(run)
     && hash(run.handoffs) === hash(original.handoffs) && hash(integration.sourceAfter.files) === source
     && workflowReady(integration.original, integration.candidateSource.digest);
 }

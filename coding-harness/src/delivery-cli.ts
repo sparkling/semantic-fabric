@@ -12,6 +12,7 @@ import { bindAppliedProposal } from './delivery-proposal.js';
 import { dispatchDeliveryReady } from './delivery-ready.js';
 import { reopenDeliveryCandidate, deliveryReadPaths } from './delivery-candidate.js';
 import { runDeliveryOutcome } from './delivery-runner.js';
+import { integrationReviewPaths, runIntegrationReview } from './delivery-integration-review.js';
 
 /** API proposals never edit source or imply acceptance. Native handoffs and
  * optional Ruflo mirroring remain owned by the active integration host. */
@@ -38,7 +39,8 @@ export async function deliveryCli(args: string[], signal?: AbortSignal, candidat
   if (command === 'inspect') { console.log(JSON.stringify(harness.inspect(), null, 2)); return true; }
   const [id, owner, extra] = rest;
   if (command === 'run') {
-    const result = await runDeliveryOutcome(harness, id, owner, { signal });
+    const result = harness.read(id).integration ? await runIntegrationReview(harness, id, owner, { signal })
+      : await runDeliveryOutcome(harness, id, owner, { signal });
     console.log(JSON.stringify(result, null, 2)); return result.success;
   }
   if (command === 'submit') {
@@ -58,7 +60,7 @@ export async function deliveryCli(args: string[], signal?: AbortSignal, candidat
     const sourceBefore = harness.snapshot();
     if (sourceBefore.digest !== action.request.sourceDigest) throw new Error('DELIVERY_API_SOURCE_CHANGED');
     const run = harness.read(id);
-    const files = deliveryReadPaths(harness, action.request.scope, run.task.readPaths).map(path => {
+    const files = [...new Set([...deliveryReadPaths(harness, action.request.scope, run.integration?.reviewReadPaths ?? run.task.readPaths), ...integrationReviewPaths(run)])].map(path => {
       const absolute = resolveWorkspacePath(harness.root, path, { allowMissingLeaf: true, requireRegularFile: true });
       try { return { path, content: readFileSync(absolute, 'utf8') }; }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, content: null }; throw error; }
