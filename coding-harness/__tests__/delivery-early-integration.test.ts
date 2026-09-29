@@ -75,6 +75,47 @@ it('accepts parent and launches accepted-input child while disjoint sibling stay
   await accept(f.harness, events.find(row => row.taskId === 'early-1' && row.event === 'outcome-settled')!);
 });
 
+it('refills independent lanes from accepted bytes while canonical integration is prepared', async () => {
+  const f = fixture(), events: DeliveryPoolProgress[] = [];
+  const acceptedProduct = readFileSync(join(f.root, 'product.txt'), 'utf8');
+  await dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, execute,
+    undefined, event => events.push(event));
+  const event = events.find(row => row.event === 'outcome-settled')!;
+  const original = JSON.parse(readFileSync(join(event.evidenceDirectory!, `${event.taskId}.json`), 'utf8'));
+  await f.harness.integrate({ candidateRoot: event.candidateRoot, id: event.taskId, owner: original.task.owner, expectedDigest: original.digest });
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('fixed\n');
+  const child = { ...f.manifest.outcomes[1], task: { ...f.manifest.outcomes[1].task,
+    id: 'independent-child', scope: ['child.txt'] }, resources: ['independent-child'] };
+  for (const readPaths of [undefined, ['product.txt']]) {
+    const reader = structuredClone(child);
+    if (readPaths) reader.task.readPaths = readPaths;
+    else delete (reader.task as { readPaths?: string[] }).readPaths;
+    await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [reader] }, execute))
+      .rejects.toThrow('INTEGRATION_ACTIVE_DEPENDENCY');
+  }
+  const refilled: DeliveryPoolProgress[] = [];
+  const result = await dispatchDeliveryReady(f.harness, { ...f.manifest, maxConcurrency: 1,
+    outcomes: [f.manifest.outcomes[1], child] }, async (candidate, mode, id, owner, signal) => {
+    expect(readFileSync(join(candidate.root, 'product.txt'), 'utf8')).toBe(acceptedProduct);
+    expect(JSON.parse(readFileSync(join(f.harness.directory, `candidate-${(await import('@metaharness/harness')).hash(candidate.root)}.json`), 'utf8')).cleanBase).toBe(true);
+    await f.harness.pause(event.taskId!, original.task.owner, 'integration check needs resume');
+    expect((await f.harness.resume(event.taskId!, original.task.owner)).status).toBe('active');
+    return execute(candidate, mode, id, owner, signal);
+  }, undefined, event => refilled.push(event));
+  expect(result.results.map(row => row.status)).toEqual(['fulfilled', 'fulfilled']);
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[0]] }, execute))
+    .rejects.toThrow('RESOURCE_CONFLICT');
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [{ ...child, resources: ['resource-0'] }] }, execute))
+    .rejects.toThrow('RESOURCE_CONFLICT');
+  expect(readFileSync(join(f.root, 'slow.txt'), 'utf8')).toBe('before\n');
+  for (const check of original.task.checks) await f.harness.check(event.taskId!, original.task.owner, check.id);
+  expect((await f.harness.verify(event.taskId!, original.task.owner)).verdict?.pass).toBe(true);
+  git(f.root, 'add', '--', ...original.task.scope); git(f.root, 'commit', '-qm', 'accept prepared parent');
+  await f.harness.finish(event.taskId!, original.task.owner, git(f.root, 'rev-parse', 'HEAD'));
+  for (const settled of refilled.filter(row => row.event === 'outcome-settled')) await accept(f.harness, settled);
+  expect(readFileSync(join(f.root, 'child.txt'), 'utf8')).toBe('fixed\n');
+});
+
 it.each(['write', 'resource'])('rejects conflicting cross-cohort %s admission while sibling runs', async kind => {
   const f = fixture(), started = deferred(), release = deferred();
   const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [f.manifest.outcomes[1]] }, async () => {

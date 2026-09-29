@@ -2,7 +2,7 @@
 import { isAbsolute } from 'node:path';
 import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.js';
 import { identifier, nonempty, parseDeliveryHandoff, parseDeliveryTask } from './delivery-contracts.js';
-import { assertAcceptedDeliverySource, createDeliveryCandidate } from './delivery-candidate.js';
+import { assertAcceptedDeliverySource, assertCandidateAdmission, createDeliveryCandidate } from './delivery-candidate.js';
 import { runDeliveryPool, type DeliveryPoolProgress } from './delivery-pool.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 import { withSynchronousOperationLock } from './delivery-workspace.js';
@@ -44,7 +44,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
         ...(live ? requiredDeliveryInputs(files, task.checks) : liveDeliveryRuntimeInputs(Object.keys(files)))])],
       run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
         const candidate = withSynchronousOperationLock(canonical.directory, () => {
-          if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+          assertCandidateAdmission(canonical, [{ id: task.id, mutationPaths: task.scope, resources, readPaths: task.readPaths }]);
           return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources });
         });
         record(candidate);

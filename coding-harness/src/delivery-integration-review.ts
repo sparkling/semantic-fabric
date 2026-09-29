@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { mkdirSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { hash } from '@metaharness/harness';
 import { selectDeliveryRoute } from './delivery-contracts.js';
 import { checkDigests, stageEvidenceDigest } from './delivery-workflow.js';
@@ -9,6 +11,8 @@ import { integrationSourceReady } from './delivery-integration.js';
 import { createDeliveryExecutor, type DeliveryExecutor } from './delivery-executor.js';
 import { atomicJson, withOperationLock } from './delivery-workspace.js';
 import { resolveWorkspacePath } from './workspace.js';
+import { buildCheckEnvironment } from './delivery-process.js';
+import { requiredDeliveryInputs } from './delivery-lineage.js';
 import type { DeliveryHarness, DeliveryRun } from './delivery-runtime.js';
 import type { DeliveryAction, NativeStageRequest } from './delivery-workflow-contracts.js';
 
@@ -18,6 +22,51 @@ export function integrationReviewPaths(run: DeliveryRun): string[] {
   if (!evidence || (!evidence.ownerRevalidation && !run.task.checks.some(check => check.argv[0] === 'cargo'))) return [];
   return [...new Set([...Object.keys(evidence.candidateSource.files), ...Object.keys(evidence.sourceAfter.files)])]
     .filter(path => !run.task.scope.includes(path) && evidence.candidateSource.files[path] !== evidence.sourceAfter.files[path]);
+}
+
+/** Cargo identifies package boundaries; unrelated new packages need no duplicate source review. */
+export async function integrationReviewInputPaths(root: string, run: DeliveryRun, signal?: AbortSignal): Promise<string[]> {
+  const declared = [...run.task.scope, ...(run.integration!.reviewReadPaths ?? run.task.readPaths ?? [])];
+  const changed = integrationReviewPaths(run);
+  const all = () => [...new Set([...declared, ...changed])];
+  if (!changed.length || run.task.checks.some(check => check.argv[0] !== 'cargo')) return all();
+  try {
+    const roots = new Set<string>(), commands = new Map<string, { cwd: string; manifest?: string }>();
+    for (const check of run.task.checks) {
+      if (check.argv.some(arg => arg === '--config' || arg.startsWith('--config='))) return all();
+      const index = check.argv.indexOf('--manifest-path');
+      const manifest = index >= 0 ? check.argv[index + 1] : check.argv.find(arg => arg.startsWith('--manifest-path='))?.slice(16);
+      const cwd = resolve(root, check.cwd);
+      commands.set(JSON.stringify([cwd, manifest]), { cwd, manifest });
+    }
+    for (const { cwd, manifest } of commands.values()) {
+      const { stdout } = await promisify(execFile)('cargo', ['metadata', '--format-version', '1', '--no-deps', '--offline', '--locked',
+        ...(manifest ? ['--manifest-path', manifest] : [])], { cwd, env: buildCheckEnvironment(), signal, maxBuffer: 10_000_000 });
+      const metadata = JSON.parse(stdout) as { packages: { manifest_path: string; dependencies: { path?: string }[];
+        targets: { src_path: string }[] }[] };
+      if (!metadata.packages.length) return all();
+      const packages = new Set(metadata.packages.map(pkg => dirname(pkg.manifest_path)));
+      // --no-deps cannot describe transitive external path packages; retain full context in that case.
+      if (metadata.packages.some(pkg => pkg.dependencies.some(dep => dep.path && !packages.has(dep.path)))) return all();
+      if (metadata.packages.some(pkg => pkg.targets.some(target => {
+        const local = relative(dirname(pkg.manifest_path), target.src_path);
+        return local === '..' || local.startsWith('../') || isAbsolute(local);
+      }))) return all();
+      for (const path of packages) {
+        const local = relative(root, path);
+        if (!local || local === '..' || local.startsWith('../') || isAbsolute(local)) return all();
+        roots.add(local);
+      }
+    }
+    const hardInputs = new Set(requiredDeliveryInputs({ ...run.integration!.candidateSource.files, ...run.integration!.sourceAfter.files }, run.task.checks));
+    // Existing implicit inputs retain their review, including deletions and nonstandard Rust includes.
+    return [...new Set([...declared, ...changed.filter(path => run.integration!.candidateSource.files[path] || hardInputs.has(path)
+      || [...roots].some(prefix => path.startsWith(`${prefix}/`)))])];
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // Metadata is an optimisation, never a new acceptance or availability gate.
+    return all();
+  }
 }
 export function integrationReviewPrerequisites(run: DeliveryRun): string[] {
   return [hash(run.integration!.original), ...checkDigests(run)];
@@ -93,7 +142,7 @@ export async function runIntegrationReview(harness: DeliveryHarness, id: string,
       if (action.request.stage !== 'review') throw new Error('DELIVERY_INTEGRATION_REVIEW_ONLY');
       const source = harness.snapshot().digest;
       if (source !== action.request.sourceDigest) throw new Error('DELIVERY_EXECUTION_SOURCE_CHANGED');
-      const paths = [...new Set([...initial.task.scope, ...(initial.integration!.reviewReadPaths ?? initial.task.readPaths ?? []), ...integrationReviewPaths(initial)])];
+      const paths = await integrationReviewInputPaths(harness.root, initial, options.signal);
       const files = paths.map(path => {
         // A snapshot-bound deletion remains review evidence even when its parent directory is gone.
         if (initial.integration!.candidateSource.files[path] && !initial.integration!.sourceAfter.files[path]) return { path, content: null };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { hash } from '@metaharness/harness';
 import { createImmutablePrivateRuntime } from './immutable-private-runtime.js';
@@ -8,6 +9,7 @@ import { type DeliveryContext } from './delivery-context.js';
 import { DeliveryHarness } from './delivery-runtime.js';
 import { atomicJson, git, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
 import { normalizeWorkspacePath } from './contracts.js';
+import { liveDeliveryRuntimeInputs } from './delivery-lineage.js';
 
 export interface DeliveryCandidate {
   harness: DeliveryHarness;
@@ -24,6 +26,26 @@ export function deliveryReadPaths(harness: DeliveryHarness, scope: string[], dec
 }
 
 const artifactRoots = new Set(['.metaharness', 'coding-harness/dist', 'coding-harness/node_modules', 'target']);
+
+/** Integration owns working bytes; independent candidates use its last accepted commit. */
+export function assertCandidateAdmission(canonical: DeliveryHarness, tasks: readonly { id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[] }[]): void {
+  const active = canonical.inspect().active as { id: string } | null;
+  if (!active) return;
+  const run = canonical.read(active.id);
+  if (!run.integration || run.integration.phase !== 'prepared' || canonical.context.head() !== run.baseCommit) {
+    throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+  }
+  const overlaps = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+  if (tasks.some(task => task.readPaths === undefined
+    || task.readPaths.some(path => run.task.scope.some(other => overlaps(path, other))))) {
+    throw new Error('DELIVERY_INTEGRATION_ACTIVE_DEPENDENCY');
+  }
+  if (liveDeliveryRuntimeInputs(run.task.scope).length || tasks.some(task => task.id === run.task.id
+    || task.mutationPaths.some(path => run.task.scope.some(other => overlaps(path, other)))
+    || task.resources.some(resource => run.integration!.resources.includes(resource)))) {
+    throw new Error('DELIVERY_POOL_RESOURCE_CONFLICT');
+  }
+}
 
 export function candidateContext(root: string, canonical: Pick<DeliveryHarness, 'root' | 'directory'>, sourceBefore: SourceSnapshot, baseCommit: string, scope: string[], _integrationInspection = false): DeliveryContext {
   const snapshot = (): SourceSnapshot => {
@@ -98,7 +120,10 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
   }
   if (input.acceptedInputs && !input.acceptedParent) throw new Error('DELIVERY_ACCEPTED_PARENT_REQUIRED');
   const acceptedSource = input.acceptedParent ? assertAcceptedDeliverySource(canonical, input.acceptedParent, input.acceptedInputs) : undefined;
-  const sourceBefore = canonical.snapshot(), baseCommit = canonical.context.head();
+  assertCandidateAdmission(canonical, [{ id: '', mutationPaths: input.scope, resources: input.resources ?? [], readPaths: input.readPaths }]);
+  const active = canonical.inspect().active as { id: string } | null;
+  const integration = active ? canonical.read(active.id).integration : undefined;
+  const sourceBefore = integration?.sourceBefore ?? canonical.snapshot(), baseCommit = canonical.context.head();
   if (acceptedSource) {
     git(canonical.root, 'merge-base', '--is-ancestor', acceptedSource.commit, baseCommit);
     if (Object.entries(acceptedSource.inputs).some(([path, value]) => (sourceBefore.files[path] ?? null) !== value)) throw new Error('DELIVERY_ACCEPTED_INPUT_CHANGED');
@@ -109,12 +134,31 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
   if (Object.keys(sourceBefore.files).some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_TRACKED_ARTIFACT_SOURCE_REFUSED');
   if (scope.some(path => existsSync(join(canonical.root, path)) && lstatSync(join(canonical.root, path)).isDirectory())) throw new Error('DELIVERY_EXACT_FILE_SCOPE_REQUIRED');
   const emptyHash = createHash('sha256').update('').digest('hex');
-  const runtime = createImmutablePrivateRuntime({ parent: parentDirectory, prefix: 'delivery-candidate-',
+  // Restore only in-flight changed files from Git; all other copies use existing digest guards.
+  const restored = integration ? mkdtempSync(join(parentDirectory, 'accepted-source-')) : undefined;
+  let runtime: ReturnType<typeof createImmutablePrivateRuntime>;
+  try {
+  const working = integration ? canonical.snapshot() : sourceBefore;
+  const sources = new Map<string, string>();
+  for (const [path, value] of Object.entries(sourceBefore.files)) {
+    let sourcePath = join(canonical.root, path);
+    if (restored && working.files[path] !== value) {
+      normalizeWorkspacePath(path, 'accepted source');
+      sourcePath = join(restored, path);
+      mkdirSync(dirname(sourcePath), { recursive: true, mode: 0o700 });
+      const bytes = execFileSync('git', ['-C', canonical.root, 'cat-file', 'blob', `${baseCommit}:${path}`], { maxBuffer: 32 * 1024 * 1024 });
+      if (createHash('sha256').update(bytes).digest('hex') !== value.split(':')[1]) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
+      writeFileSync(sourcePath, bytes, { flag: 'wx', mode: value.startsWith('100755:') ? 0o700 : 0o600 });
+    }
+    sources.set(path, sourcePath);
+  }
+  runtime = createImmutablePrivateRuntime({ parent: parentDirectory, prefix: 'delivery-candidate-',
     files: Object.entries(sourceBefore.files).filter(([, value]) => value.split(':')[1] !== emptyHash).map(([path, value], index) => ({ key: `source-${index}`,
-      sourcePath: join(canonical.root, path), relativePath: path, executable: value.startsWith('100755:'),
+      sourcePath: sources.get(path)!, relativePath: path, executable: value.startsWith('100755:'),
       expectedDigest: value.split(':')[1], sourcePolicy: 'same-principal-cooperative-snapshot' })),
     directories: ['.metaharness/delivery'],
   });
+  } finally { if (restored) rmSync(restored, { recursive: true, force: true }); }
   try {
     const unseal = (directory: string): void => {
       chmodSync(directory, 0o700);
@@ -132,12 +176,12 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
     }
     const context = candidateContext(runtime.root, canonical, sourceBefore, baseCommit, scope);
     if (context.snapshot().digest !== sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
-    if (canonical.context.head() !== baseCommit || canonical.snapshot().digest !== sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
+    if (canonical.context.head() !== baseCommit || (!integration && canonical.snapshot().digest !== sourceBefore.digest)) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
     const readPaths = [...new Set([...(input.readPaths ?? Object.keys(sourceBefore.files)), ...Object.keys(acceptedSource?.inputs ?? {})])];
     for (const path of readPaths) normalizeWorkspacePath(path, 'candidate read path');
     atomicJson(join(canonical.directory, `candidate-${hash(runtime.root)}.json`), { root: runtime.root, sourceBefore, baseCommit, scope,
       readPaths, declaredReadPaths: input.readPaths ?? null, resources: input.resources ?? [], acceptedSource: acceptedSource ?? null,
-      cleanBase: git(canonical.root, 'status', '--porcelain') === '' });
+      cleanBase: !!integration || git(canonical.root, 'status', '--porcelain') === '' });
     atomicJson(join(context.directory, 'candidate.json'), { canonicalRoot: canonical.root });
     return { harness: new DeliveryHarness(runtime.root, context), sourceBefore, ...(acceptedSource ? { acceptedSource } : {}), cleanup: runtime.cleanup };
   } catch (error) { runtime.cleanup(); throw error; }

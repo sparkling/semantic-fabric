@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { runDeliveryOutcome } from '../src/delivery-runner.js';
-import { runIntegrationReview } from '../src/delivery-integration-review.js';
+import { integrationReviewInputPaths, runIntegrationReview } from '../src/delivery-integration-review.js';
 import { requiredDeliveryInputs } from '../src/delivery-lineage.js';
 import { git } from '../src/delivery-workspace.js';
-import type { DeliveryHarness } from '../src/delivery-runtime.js';
+import type { DeliveryHarness, DeliveryRun } from '../src/delivery-runtime.js';
 import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
 import type { DeliveryExecutor } from '../src/delivery-executor.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
@@ -15,6 +15,25 @@ import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); return { promise, resolve }; };
+it('keeps declared, package and hard inputs without re-reviewing unrelated accepted vendor source', async () => {
+  const f = workflowFixture(roots);
+  mkdirSync(join(f.root, 'crates/a/src'), { recursive: true });
+  writeFileSync(join(f.root, 'Cargo.toml'), '[workspace]\nmembers=["crates/a"]\nresolver="2"\n');
+  writeFileSync(join(f.root, 'crates/a/Cargo.toml'), '[package]\nname="a"\nversion="0.1.0"\nedition="2021"\n');
+  writeFileSync(join(f.root, 'crates/a/src/lib.rs'), 'pub fn value() {}\n');
+  const changed = ['crates/a/src/sibling.rs', 'crates/a/tests/public.rs', 'vendor/x/src/lib.rs', 'old-implicit.rs', 'Cargo.toml'];
+  const run = { task: { ...f.task, scope: ['crates/a/src/lib.rs'], readPaths: ['declared.txt'],
+    checks: [{ id: 'check', argv: ['cargo', 'check'], cwd: '.' }] },
+    integration: { candidateSource: { files: { 'old-implicit.rs': 'old' } }, sourceAfter: { files: Object.fromEntries(changed.map(p => [p, 'new'])) } },
+  } as unknown as DeliveryRun;
+  const expected = ['crates/a/src/lib.rs', 'declared.txt', ...changed.filter(p => !p.startsWith('vendor/'))];
+  expect(new Set(await integrationReviewInputPaths(f.root, run))).toEqual(new Set(expected));
+  run.integration!.reviewReadPaths = ['declared.txt', 'vendor/x/src/lib.rs'];
+  expect(await integrationReviewInputPaths(f.root, run)).toContain('vendor/x/src/lib.rs');
+  delete run.integration!.reviewReadPaths;
+  writeFileSync(join(f.root, 'Cargo.toml'), 'invalid manifest');
+  expect(new Set(await integrationReviewInputPaths(f.root, run))).toEqual(new Set(['crates/a/src/lib.rs', 'declared.txt', ...changed]));
+});
 function fixture(conflict = false, readsA = false) {
   const f = workflowFixture(roots), parentDirectory = mkdtempSync(join(tmpdir(), 'cargo-candidates-')); roots.push(parentDirectory);
   mkdirSync(join(f.root, 'src'));

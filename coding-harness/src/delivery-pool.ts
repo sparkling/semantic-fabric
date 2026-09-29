@@ -9,6 +9,7 @@ import { atomicJson, withSynchronousOperationLock } from './delivery-workspace.j
 import { assertReservationAdmission, candidateHasOperation, saveReservations } from './delivery-cohort-custody.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
 import type { DeliveryCandidate } from './delivery-candidate.js';
+import { assertCandidateAdmission } from './delivery-candidate.js';
 
 export interface DeliveryReadyCallback<T> {
   id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[]; privateSnapshot?: true;
@@ -59,7 +60,7 @@ export async function runDeliveryPool<T>(canonical: DeliveryHarness, tasks: read
       || task.resources.some(resource => previous.resources.includes(resource))) throw new Error('DELIVERY_POOL_RESOURCE_CONFLICT');
   }
   const admission = withSynchronousOperationLock(canonical.directory, () => {
-    if (canonical.inspect().active !== null) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
+    assertCandidateAdmission(canonical, tasks);
     assertReservationAdmission(canonical, tasks);
     const source = canonical.snapshot();
     const progressDirectory = mkdtempSync(join(canonical.directory, 'pool-'));
