@@ -14,6 +14,11 @@ use crate::compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuth
 use crate::runtime_identity::{CompileDigests, SemanticIdentity};
 use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 
+// Dormant structural screen; serving integration is a later slice.
+#[allow(dead_code)]
+#[path = "generated_query_shape.rs"]
+mod generated_query_shape;
+
 impl CompilerBinding {
     /// Carry request control through structural BUILD and the metered normalization, lowering
     /// and nested-cascade operations on a cache miss, plus canonical key
