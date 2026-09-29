@@ -12,12 +12,13 @@ use sf_sql::Dialect;
 use super::{SecurityCompileError, SecurityPlanCache};
 use crate::cache::generated::tests::{isolated, parse_spans};
 use crate::cache::generated::{
-    admit_parsed, ConstantCoverageError, ConstantOccurrence, GeneratedQueryRefusal,
+    admit_parsed, ConstantCoverageError, ConstantOccurrence, GeneratedQueryRefusal, ShapeRule,
 };
 use crate::{CompilerBinding, CompilerSchema, Error, Plan, Tbox};
 
 const VALUES_Q: &str =
     "SELECT ?x WHERE { VALUES ?x { 1 2 3 } FILTER EXISTS { VALUES ?inside { 7 } } }";
+const UPDATE_Q: &str = "INSERT DATA { <urn:s> <urn:p> <urn:o> }";
 const EXCEEDED: QueryControlError = QueryControlError::CompilerWorkExceeded;
 const CANCELLED: QueryControlError = QueryControlError::Cancelled;
 const DEADLINE: QueryControlError = QueryControlError::DeadlineExceeded;
@@ -90,8 +91,11 @@ fn is_coverage(error: &SecurityCompileError) -> bool {
     *refusal == GeneratedQueryRefusal::CoverageRefused
 }
 
-fn is_parse(error: &SecurityCompileError) -> bool {
-    matches!(error, SecurityCompileError::Compiler(Error::Parse(_)))
+fn is_form_refusal(error: &SecurityCompileError) -> bool {
+    let SecurityCompileError::GeneratedQueryRefused(refusal) = error else {
+        return false;
+    };
+    *refusal == GeneratedQueryRefusal::Rule(ShapeRule::FormNotAdmitted)
 }
 
 struct Fixture {
@@ -187,9 +191,45 @@ fn policy_mismatch_precedes_parse_screen_callback_and_control() {
         &fresh,
         counting(&calls, OK),
     );
-    assert!(is_parse(&result.unwrap_err()));
+    assert!(is_form_refusal(&result.unwrap_err()));
     assert_eq!(calls.get(), 0);
     assert_eq!(cache.access_counts(), (0, 0));
+}
+
+#[test]
+fn form_refusal_precedes_cache_and_callback_on_a_warm_secured_route() {
+    let fixture = Fixture::new();
+    let identity = context(1, 2, 3);
+    let calls = Cell::new(0);
+    fixture.admit(&identity, &calls, OK).unwrap();
+    let warm_calls = calls.get();
+    assert_eq!(fixture.cache.len(), 1);
+    fixture.cache.reset_access_counts();
+    for query in [UPDATE_Q, "CLEAR ALL", "not valid SPARQL", ""] {
+        let control = budget(u64::MAX);
+        let compiler = fixture
+            .binding
+            .for_security_policy(policy(1), &fixture.cache);
+        let check = counting(&calls, OK);
+        let result =
+            compiler.compile_shared_with_generated_admission(&identity, query, &control, check);
+        assert!(is_form_refusal(&result.unwrap_err()), "{query:?}");
+        assert_eq!(calls.get(), warm_calls, "{query:?}");
+        assert_eq!(fixture.cache.access_counts(), (0, 0), "{query:?}");
+        assert_eq!(fixture.cache.len(), 1, "{query:?}");
+        assert_eq!(work(&control), 0, "{query:?}");
+    }
+    let control = budget(u64::MAX);
+    control.terminate(CANCELLED);
+    let compiler = fixture
+        .binding
+        .for_security_policy(policy(1), &fixture.cache);
+    let check = counting(&calls, OK);
+    let result =
+        compiler.compile_shared_with_generated_admission(&identity, UPDATE_Q, &control, check);
+    assert_eq!(control_cause(&result.unwrap_err()), Some(CANCELLED));
+    assert_eq!(calls.get(), warm_calls);
+    assert_eq!(fixture.cache.access_counts(), (0, 0));
 }
 
 #[test]

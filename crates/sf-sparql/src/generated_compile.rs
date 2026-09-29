@@ -5,7 +5,9 @@
 //! construction, cache lookup or lowering. The check reruns on every request,
 //! cold or warm; its verdict is never cached. It is a checking seam only: not
 //! mapping proof, row authority, dataset allowlist semantics or issued identity.
-//! UPDATE stays a typed parse error; naming it as a rule is downstream work.
+//! A syntax-level parse failure (any UPDATE, or malformed input) is refused as the
+//! named `form-not-admitted` rule; resource, control and compile failures keep
+//! their original typed errors.
 
 use std::fmt;
 use std::sync::Arc;
@@ -98,7 +100,14 @@ where
     F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
 {
     control.checkpoint().map_err(crate::Error::from)?;
-    let query = crate::parse_query(sparql)?;
+    let query = match crate::parse_query(sparql) {
+        Ok(query) => query,
+        // Only a syntax failure is a form refusal; limit and control errors stay typed.
+        Err(crate::Error::Parse(_)) => {
+            return Err(GeneratedQueryRefusal::Rule(ShapeRule::FormNotAdmitted).into())
+        }
+        Err(error) => return Err(error.into()),
+    };
     admit_parsed(&query, control, check)?;
     Ok(query)
 }
@@ -142,6 +151,10 @@ impl CompilerBinding {
 #[cfg(test)]
 #[path = "generated_compile_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "generated_form_policy_tests.rs"]
+mod form_policy_tests;
 
 #[cfg(test)]
 mod test_support {

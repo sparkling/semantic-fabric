@@ -188,10 +188,6 @@ fn is_coverage_refusal(error: &GeneratedCompileError) -> bool {
     *refusal == GeneratedQueryRefusal::CoverageRefused
 }
 
-fn is_parse_error(error: &GeneratedCompileError) -> bool {
-    matches!(error, GeneratedCompileError::Compiler(Error::Parse(_)))
-}
-
 fn collect(sparql: &str) -> Vec<(String, ConstantRole)> {
     let parsed = crate::parse_query(sparql).unwrap();
     let mut seen = Vec::new();
@@ -289,13 +285,15 @@ fn refused_forms_name_their_rule_before_any_callback() {
 }
 
 #[test]
-fn update_stays_a_typed_parse_error_without_callback() {
+fn update_is_refused_as_form_not_admitted_without_callback() {
     for mode in [Mode::Cold, Mode::Uncached] {
         let binding = binding();
         let calls = Cell::new(0);
         let result = admitted_on(mode, &binding, UPDATE_Q, scripted(&calls, None, OK));
-        assert!(is_parse_error(&result.unwrap_err()));
+        let error = result.unwrap_err();
+        assert_eq!(refused_rule(&error), Some(ShapeRule::FormNotAdmitted));
         assert_eq!(calls.get(), 0);
+        assert_eq!(binding.cache_len(), 0);
     }
 }
 

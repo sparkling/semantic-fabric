@@ -27,6 +27,9 @@ pub enum ShapeRule {
     CustomFunctionUnsupported,
     CustomAggregateUnsupported,
     UnclassifiedForm,
+    /// Input is not a parseable SELECT/ASK/CONSTRUCT/DESCRIBE query. Produced only
+    /// by the generated-query parse step, never by the structural screen.
+    FormNotAdmitted,
 }
 
 impl ShapeRule {
@@ -40,6 +43,7 @@ impl ShapeRule {
             Self::CustomFunctionUnsupported => "custom-function-unsupported",
             Self::CustomAggregateUnsupported => "custom-aggregate-unsupported",
             Self::UnclassifiedForm => "unclassified-form",
+            Self::FormNotAdmitted => "form-not-admitted",
         }
     }
 }

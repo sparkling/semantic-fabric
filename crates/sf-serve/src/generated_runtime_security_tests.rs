@@ -5,7 +5,7 @@ use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError as Sto
 use sf_core::security_context::{
     PolicySnapshotId, RequestAttributesIdentity, SecurityContext, SubjectIdentity,
 };
-use sf_sparql::cache::generated::GeneratedQueryRefusal;
+use sf_sparql::cache::generated::{GeneratedQueryRefusal, ShapeRule};
 use sf_sparql::Error;
 
 use super::tests::{
@@ -45,6 +45,15 @@ fn secured(
     binding.compile_generated_secured(query, &request(Some(who), u64::MAX), policy(1))
 }
 
+fn form_refused<T>(result: &Result<T, E>) -> bool {
+    matches!(
+        result,
+        Err(E::Refused(GeneratedQueryRefusal::Rule(
+            ShapeRule::FormNotAdmitted
+        )))
+    )
+}
+
 #[test]
 fn policy_is_verified_before_control_parse_screen_and_coverage() {
     let binding = bind_default();
@@ -65,13 +74,56 @@ fn policy_is_verified_before_control_parse_screen_and_coverage() {
     ));
     let fresh = request(Some(who), u64::MAX);
     let result = binding.compile_generated_secured("not sparql", &fresh, policy(1));
-    assert!(matches!(result, Err(E::Compiler(Error::Parse(_)))));
+    assert!(form_refused(&result));
     let result =
         binding.compile_generated_secured(UNMAPPED, &request(Some(who), u64::MAX), policy(1));
     assert!(matches!(
         result,
         Err(E::Refused(GeneratedQueryRefusal::CoverageRefused))
     ));
+}
+
+#[test]
+fn update_and_malformed_forms_are_refused_on_every_route_without_identity() {
+    let forms = [
+        "INSERT DATA { <http://ex/s> <http://ex/p> <http://ex/o> }",
+        "CLEAR ALL",
+        "SELECT WHERE {",
+        "",
+    ];
+    let binding = bind_default();
+    let who = context(2, 3);
+    for warm in [false, true] {
+        if warm {
+            binding.compile_generated(SELECT, FREE).unwrap();
+            secured(&binding, SELECT, who).unwrap();
+        }
+        for query in forms {
+            let compiled = binding.compile_generated(query, FREE);
+            assert!(form_refused(&compiled), "{query:?}");
+            let preflight = binding.preflight_generated(query, FREE);
+            assert!(form_refused(&preflight), "{query:?}");
+            let result = secured(&binding, query, who);
+            assert!(form_refused(&result), "{query:?}");
+            let error = compiled.err().unwrap();
+            let text = format!("{error} {error:?}");
+            assert!(!text.contains("http://ex"), "{text}");
+        }
+    }
+    let cancelled = request(Some(who), u64::MAX);
+    QueryControl::terminate(&cancelled, Stop::Cancelled);
+    let stopped = |result: Result<super::GeneratedCompiled, E>| {
+        matches!(
+            result,
+            Err(E::Compiler(Error::QueryControl(Stop::Cancelled)))
+        )
+    };
+    assert!(stopped(binding.compile_generated(forms[0], &cancelled)));
+    assert!(stopped(binding.compile_generated_secured(
+        forms[0],
+        &cancelled,
+        policy(1)
+    )));
 }
 
 #[test]
