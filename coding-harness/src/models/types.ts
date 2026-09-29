@@ -81,7 +81,10 @@ export interface CodexInvocationRequest extends NativeInvocationBase {
   readonly outputPath: string;
 }
 
-export type ClaudeInvocationRequest = NativeInvocationBase;
+export interface ClaudeInvocationRequest extends NativeInvocationBase {
+  /** Delivery runner decodes partial events; legacy bounded runners retain JSON. */
+  readonly streamJson?: boolean;
+}
 
 export interface NativeSubscriptionAdapter {
   readonly host: NativeHost;

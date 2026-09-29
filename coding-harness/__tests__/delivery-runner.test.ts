@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -15,7 +15,7 @@ import * as processes from '../src/delivery-process.js';
 import { selectDeliveryRoute } from '../src/delivery-contracts.js';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 async function fixture(api = false, sonnet = false) {
   const f = workflowFixture(roots, "import {readFileSync} from 'node:fs'; const pass = readFileSync('../product.txt','utf8') === 'fixed\\n'; if (!pass) console.error('error[E0308]: expected &Router, found &RequestDeadlineService'); process.exit(pass ? 0 : 1);\n");
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-runner-')); roots.push(parentDirectory);
@@ -185,6 +185,56 @@ it('bounds and sanitizes structured errors without exposing known environment cr
   expect(message).toMatch(/^\[redacted\] /);
   expect(claudeStructuredError('{"is_error":false,"result":"success"}', {})).toBeUndefined();
   expect(claudeStructuredError('not json', {})).toBeUndefined();
+});
+
+it.each(['claude-code','codex'] as const)('requests %s streaming and reports inactivity distinctly without retry or fallback', async host => {
+  const f = await fixture(); let calls = 0;
+  vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, _env, out, _err, _dir, _limits, _signal, _stdin, observer) => {
+    if (argv.includes('--version')) { writeSync(out, 'claude-code 1.0.0'); return { exitCode: 0, signal: null }; }
+    if (!argv.includes('--json-schema') && !argv.includes('--output-schema')) { writeSync(out, 'READY'); return { exitCode: 0, signal: null }; }
+    calls++;
+    if(host==='claude-code'){
+      expect(argv[argv.indexOf('--output-format') + 1]).toBe('stream-json');
+      expect(argv).toContain('--include-partial-messages'); expect(argv).toContain('--verbose');
+    }else expect(argv).toContain('--json');
+    expect(observer).toBeDefined();
+    return { exitCode: null, signal: 'SIGTERM', error: 'native-inactivity' };
+  });
+  const action = await f.candidate.harness.next(f.task.id, f.task.owner);
+  if (action.kind !== 'native') throw new Error('fixture request missing');
+  const request = { ...action.request, route: { host, model: host==='codex'?'gpt-6-astra':'cc/claude-sonnet-5-5[1m]', effort: 'high' as const } };
+  const failure = await createDeliveryExecutor(f.candidate.harness, hash(f.task))(request, [], []).catch(error => error);
+  expect(failure.message).toContain(`DELIVERY_NATIVE_STALLED:${host}:${request.route.model}:`);
+  expect(failure.message).not.toContain('SUBSCRIPTION_UNAVAILABLE'); expect(calls).toBe(1);
+});
+
+it.each([['claude-code',false],['claude-code',true],['claude-code','output'],['codex',false],['codex',true]] as const)('real %s stream preserves final envelope and redacted failure attribution (failure=%s)', async (host,failure) => {
+  const f=await fixture();const bin=mkdtempSync(join(tmpdir(),'fabric-fake-native-'));roots.push(bin);
+  writeFileSync(join(bin,host==='codex'?'codex':'claude'),`#!${process.execPath}\nconst args=process.argv.slice(2);
+if(args.includes('--version')){console.log('claude-code fake');process.exit(0)}
+if(!args.includes('--json-schema')&&!args.includes('--output-schema')){console.log('READY');process.exit(0)}
+process.stdin.resume();
+process.stdin.on('end',()=>{
+  if(${failure==='output'}){console.log(JSON.stringify({type:'result',is_error:true,result:"Claude's response exceeded the 32000 output token maximum"}));process.stderr.write('unrecognized_model\\n');return;}
+  if(${failure===true}){process.stderr.write('configured-model-unavailable\\npassword=unknown-secret\\n');process.exitCode=1;return;}
+  const value={outcome:'completed',summary:'fake final',issues:[],changes:[]};
+  if(${host==='codex'}){
+    console.log(JSON.stringify({type:'error',message:'Reconnecting 1/5'}));
+    require('node:fs').writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(value));
+    console.log(JSON.stringify({type:'item.completed',item:{id:'response',type:'agent_message',text:JSON.stringify(value)}}));
+    console.log(JSON.stringify({type:'turn.completed',usage:{}}));
+  }else{
+    console.log(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',delta:{type:'text_delta',text:'private body'}}}));
+    console.log(JSON.stringify({type:'result',is_error:false,structured_output:value}));
+  }
+});\n`,{mode:0o700});
+  vi.stubEnv('PATH',bin+':'+process.env.PATH);
+  const action=await f.candidate.harness.next(f.task.id,f.task.owner);if(action.kind!=='native')throw Error('fixture');
+  const request={...action.request,route:{host,model:host==='codex'?'gpt-6-astra':'cc/claude-sonnet-5-5[1m]',effort:'high' as const}};
+  const promise=createDeliveryExecutor(f.candidate.harness,hash(f.task))(request,[],[]);
+  if(failure==='output'){await expect(promise).rejects.toThrow(/DELIVERY_NATIVE_OUTPUT_EXHAUSTED:claude-code:.*response exceeded the 32000 output token maximum/);}
+  else if(failure){const error=await promise.catch(e=>e);expect(error.message).toContain('configured-model-unavailable');expect(error.message).not.toContain('unknown-secret');}
+  else expect((await promise).response.summary).toBe('fake final');
 });
 
 it.each([

@@ -7,6 +7,8 @@ import { createDeliveryApi, parseDeliveryChanges, parseDeliveryPlan, renderDeliv
 import { ClaudeCodeSubscriptionAdapter, CodexSubscriptionAdapter } from './models/native-adapters.js';
 import type { NativeProcessRunner } from './models/types.js';
 import { runCommand } from './delivery-process.js';
+import { nativeCommandProgress } from './delivery-native-progress.js';
+import { NativeStderrTail } from './delivery-native-stderr.js';
 import { withOperationLock } from './delivery-workspace.js';
 import { parseStageResponse, type NativeStageRequest, type NativeStageResponse } from './delivery-workflow-contracts.js';
 import type { DeliveryHarness } from './delivery-runtime.js';
@@ -20,11 +22,9 @@ export function claudeStructuredError(stdout: string, environment: Readonly<Reco
   try { value = JSON.parse(stdout); } catch { return undefined; }
   if (!value || typeof value !== 'object' || !('is_error' in value) || value.is_error !== true
     || !('result' in value) || typeof value.result !== 'string') return undefined;
-  let message = value.result;
-  for (const [key, secret] of Object.entries(environment)) {
-    if (secret && /TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL/i.test(key)) message = message.split(secret).join('[redacted]');
-  }
-  return message.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 2000);
+  const tail = new NativeStderrTail(environment);
+  tail.push(Buffer.from(value.result));
+  return tail.finish().replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 2000);
 }
 
 /** Reuse native argument/environment adapters and existing process-group custody. */
@@ -35,6 +35,7 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
     const invocation = join(harness.directory, `native-${randomUUID()}`); mkdirSync(invocation, { mode: 0o700 });
     let lastError = '';
     let outputExhausted = false;
+    let stalled = false;
     const runner: NativeProcessRunner = { run: async input => {
       const id = randomUUID(), processRoot = join(invocation, id); mkdirSync(processRoot, { mode: 0o700 });
       return withOperationLock(processRoot, async () => {
@@ -42,14 +43,17 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       const out = openSync(outPath, 'wx', 0o600), err = openSync(errPath, 'wx', 0o600);
       try {
         const result = await runCommand([input.executable, ...input.args], input.cwd, { ...input.env }, out, err,
-          processRoot, { timeoutMs: input.timeoutMs }, input.signal, input.stdin);
+          processRoot, { timeoutMs: input.timeoutMs }, input.signal, input.stdin,
+          input.purpose === 'model-invocation' ? nativeCommandProgress({ directory: processRoot,
+            taskId: request.taskId, stage: request.repair ? 'repair' : request.stage, host: input.host }) : undefined);
+        stalled = result.error === 'native-inactivity';
         const stdout = readFileSync(outPath, 'utf8'), stderr = readFileSync(errPath, 'utf8');
         const structured = !result.error && result.signal === null && request.route.host === 'claude-code'
           ? claudeStructuredError(stdout, process.env) : undefined;
         if (structured !== undefined) {
           lastError = structured;
           outputExhausted = /(?:Claude's response exceeded the \d+ output token maximum|stop_reason["'\s:]+max_tokens|finish_reason["'\s:]+max_tokens)/i.test(structured);
-        } else if (result.error || result.exitCode !== 0) lastError = result.error ?? stderr.trim();
+        } else if (result.error || result.exitCode !== 0) lastError = [result.error, stderr.trim()].filter(Boolean).join(': ');
         const digest = (text: string) => createHash('sha256').update(text).digest('hex');
         return { executionId: `native-run:${id}`, exitCode: structured !== undefined && result.exitCode === 0 ? 1 : result.exitCode, stdout, stderr,
           timedOut: result.error === 'check-timeout', cancelled: result.error === 'cancelled',
@@ -74,7 +78,7 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
         workspaceAccess: 'read' as const, timeoutMs: 1_800_000, signal,
         operation: request.stage === 'implementation' && request.repair ? 'repair' as const : request.stage,
         ...(request.route.effort === 'default' ? {} : { reasoningEffort: request.route.effort }) };
-      const result = adapter.host === 'codex' ? await adapter.invoke({ ...common, schemaPath, outputPath }) : await adapter.invoke(common);
+      const result = adapter.host === 'codex' ? await adapter.invoke({ ...common, schemaPath, outputPath }) : await adapter.invoke({ ...common, streamJson: true });
       const raw = adapter.host === 'codex' ? readFileSync(outputPath, 'utf8') : result.stdout;
       const envelope = JSON.parse(raw), value = adapter.host === 'claude-code' ? envelope.structured_output ?? JSON.parse(envelope.result) : envelope;
       const response = parseStageResponse({ schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
@@ -85,7 +89,7 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       return { response, changes: parseDeliveryChanges(value.changes, request.scope, request.stage !== 'implementation'),
         ...(request.stage === 'architecture' ? { plan: parseDeliveryPlan(value.plan, request.scope) } : {}) };
     } catch (error) {
-      const kind = outputExhausted ? 'DELIVERY_NATIVE_OUTPUT_EXHAUSTED' : 'DELIVERY_NATIVE_STOP';
+      const kind = stalled ? 'DELIVERY_NATIVE_STALLED' : outputExhausted ? 'DELIVERY_NATIVE_OUTPUT_EXHAUSTED' : 'DELIVERY_NATIVE_STOP';
       throw new Error(`${kind}:${adapter.host}:${request.route.model}:${error instanceof Error ? error.message : String(error)}${lastError ? `: ${lastError}` : ''}`, { cause: error });
     }
   };

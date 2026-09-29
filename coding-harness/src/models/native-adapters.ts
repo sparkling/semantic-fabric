@@ -273,11 +273,10 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
     const [login, version] = await runAbortableCohort([
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
-          ['--safe-mode', '-p', '--model', request.requestedModel,
+          ['--safe-mode', '-p', 'Do not use tools. Reply exactly READY.', '--model', request.requestedModel,
             '--output-format', 'text', '--tools', '', '--strict-mcp-config',
             '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence',
-            '--disable-slash-commands', '--no-chrome',
-            'Do not use tools. Reply exactly READY.'],
+            '--disable-slash-commands', '--no-chrome'],
           request.cwd,
           120_000,
           cohortSignal,
@@ -348,7 +347,8 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
         '--input-format',
         'text',
         '--output-format',
-        'json',
+        request.streamJson ? 'stream-json' : 'json',
+        ...(request.streamJson ? ['--include-partial-messages', '--verbose'] : []),
         '--json-schema',
         schema,
         ...toolArguments,

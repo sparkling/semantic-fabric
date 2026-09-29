@@ -28,8 +28,15 @@ export async function logDigest(path: string): Promise<string> {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 }
+export interface NativeCommandObserver {
+  start(pid: number | undefined): void;
+  stdout(data: Buffer): void;
+  stderr(data: Buffer): void;
+  tick(): string | undefined;
+  finish(): { stdout: string; stderr: string; error?: string | undefined };
+}
 export function runCommand(argv: string[], cwd: string, env: Record<string, string>, out: number, err: number,
-  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number }, signal?: AbortSignal, stdin?: string,
+  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number }, signal?: AbortSignal, stdin?: string, native?: NativeCommandObserver,
 ): Promise<{ exitCode: number | null; signal: string | null; error?: string }> {
   return new Promise(resolve => {
     if (signal?.aborted) { resolve({ exitCode: null, signal: null, error: 'cancelled' }); return; }
@@ -61,10 +68,15 @@ export function runCommand(argv: string[], cwd: string, env: Record<string, stri
       bytes += data.length;
       if (bytes > maximum) cancel('check-output-limit');
     };
-    child.stdout.on('data', data => copy(out, data));
-    child.stderr.on('data', data => copy(err, data));
+    const observe = (action: () => void) => { try { action(); } catch { cancel('native-progress-write-failed'); } };
+    if (native) observe(() => native.start(child.pid));
+    const inactivity = native ? setInterval(() => observe(() => {
+      const reason = native.tick(); if (reason) cancel(reason);
+    }), 50) : undefined;
+    child.stdout.on('data', data => native ? observe(() => native.stdout(data)) : copy(out, data));
+    child.stderr.on('data', data => native ? observe(() => native.stderr(data)) : copy(err, data));
     const clean = () => {
-      clearTimeout(timeout); if (termination) clearTimeout(termination);
+      clearTimeout(timeout); if (inactivity) clearInterval(inactivity); if (termination) clearTimeout(termination);
       signal?.removeEventListener('abort', abort);
     };
     child.once('error', e => { error = e.message; });
@@ -78,6 +90,17 @@ export function runCommand(argv: string[], cwd: string, env: Record<string, stri
       const deadline = performance.now() + 1000;
       while (alive() && performance.now() < deadline) await new Promise(r => setTimeout(r, 20));
       if (alive()) { error = 'check-process-group-unconfirmed'; updateOperationChild(directory, 'unconfirmed', child.pid); }
+      if (native) {
+        try {
+          const final = native.finish();
+          error ??= final.error;
+          const write = (fd: number, value: string) => {
+            const data = Buffer.from(value); let offset = 0;
+            while (offset < data.length) offset += writeSync(fd, data, offset, data.length - offset);
+          };
+          write(out, final.stdout); write(err, final.stderr);
+        } catch { error ??= 'native-progress-write-failed'; }
+      }
       clean(); resolve({ exitCode: code, signal: sig, ...(error ? { error } : {}) });
     });
   });

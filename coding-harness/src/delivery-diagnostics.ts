@@ -24,12 +24,12 @@ function redactAssignments(text: string): string {
   }).join('\n');
 }
 
-function stripControls(text: string): string {
+export function stripControls(text: string): string {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, '');
 }
 
-function redact(text: string, environment: NodeJS.ProcessEnv): string {
+export function redactDiagnosticText(text: string, environment: NodeJS.ProcessEnv): string {
   // Redact before truncation: a secret straddling an excerpt boundary must not leak.
   // Normalize first so removing terminal controls cannot reconstruct a missed secret.
   text = stripControls(text);
@@ -55,7 +55,7 @@ function excerpt(directory: string, name: string, recordedPath: string, digest: 
     const after = fstatSync(fd);
     if (length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs
       || before.ctimeMs !== after.ctimeMs || after.nlink !== 1 || sha256(bytes.subarray(0, length)) !== digest) throw new Error('integrity');
-    const text = redact(bytes.subarray(0, length).toString('utf8'), environment);
+    const text = redactDiagnosticText(bytes.subarray(0, length).toString('utf8'), environment);
     const truncated = text.length > HEAD_CHARS + TAIL_CHARS;
     return { status: 'verified' as const, sha256: digest, bytes: length, truncated,
       text: truncated ? `${text.slice(0, HEAD_CHARS)}\n[diagnostic middle omitted]\n${text.slice(-TAIL_CHARS)}` : text };
