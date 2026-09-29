@@ -5,9 +5,7 @@ updated: 2026-09-29
 tags: [dev-process, metaharness, ruflo, parallel-delivery, openrouter]
 depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 ---
-
 # ADR-0058: Upstream-first parallel hybrid delivery
-
 - **Status**: Implemented for optional whole-outcome delivery, learning and policy custody
 - **Date**: 2026-09-26
 - **Deciders**:
@@ -15,6 +13,8 @@ depends-on: [ADR-0037, ADR-0048, ADR-0055, ADR-0057]
 ## September 29 local coordinator repair and application pause
 
 GCP is stopped and application goal paused; local harness repair does not accept preserved application WIP. New tasks retain native `cc/claude-sonnet-5-5[1m]` through existing 9router, Opus 5.5/high repair and explicit pins. `npm --prefix coding-harness run coordinator` resumes the existing UUID from `SEMANTIC_FABRIC_COORDINATOR_SESSION_ID` with Codex Astra/medium; stop the previous writer first. Dry-run launches nothing. Ready CLI emits durable per-outcome progress on stderr while upstream refills independent queued work. Canonical lock and source checks span the whole cohort: serial acceptance starts only after return, then accepted parents release the next cohort. This is not live DAG integration or automatic application resumption. Strict build/hardening and 80 tests across seven ready/candidate/coordinator/integration/runner/runtime/manifest suites pass, including subprocess progress, failure refill and cancellation drain; root independent review cleared this slice. Historical GCP and DeepSeek evidence below remains historical, not Sonnet application acceptance or GCP completion.
+
+Native follow-up: `node coding-harness/scripts/live-delivery-pool-proof.mjs --whole-outcome --native` passed on runtime `d81e040b` with the native proof-script extension. Evidence `.metaharness/delivery/whole-outcome-proof-NJt8uW/result.json`, SHA-256 `0360e835aef457f3ffad55aed449bf1f92ccb46cc76a336bc7af6e29e6dbbf31`; `source-binding.json` binds all 411 runtime/proof/package files and all remained unchanged after final build. Nine actual Sonnet 5.5/high stage invocations plus separate client preflights completed two parents and their accepted-input child; scratch commits `616fbf2b`, `88f031de`, `3dbc72b5`. Planner intervals overlapped 3828ms including preflight; `processes.json` independently records Claude PIDs 786034/786445 overlapping at least 1505ms under runner PID 780948. Source remained unchanged, both owners drained, fresh review and canonical checks passed. Capacity samples: 70.98-73.16% idle during proof, 82/78% before final focused build/tests, zero memory/I/O PSI. Strict build and 51 focused regressions pass; root independent review approved. This proves local native fixture lifecycle, not application completion. Root owns separately authorized GCP synchronization/restart after review; this lane performed neither.
 
 ## September 28 implemented scope and exact evidence (historical)
 

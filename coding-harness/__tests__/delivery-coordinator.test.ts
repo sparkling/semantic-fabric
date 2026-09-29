@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { coordinatorLaunch, runCoordinator } from '../scripts/run-delivery-coordinator.mjs';
 
 const root = new URL('../../', import.meta.url).pathname;
@@ -35,5 +38,26 @@ describe('native programme coordinator entrypoint', () => {
     expect(() => runCoordinator([], {}, launch)).toThrow('existing coordinator resume UUID');
     expect(() => runCoordinator(['--new'], {}, launch)).toThrow('usage');
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('preflights the native whole-outcome fixture with pinned routes and no model execution', () => {
+    const script = join(root, 'coding-harness/scripts/live-delivery-pool-proof.mjs');
+    const output = execFileSync(process.execPath, [script, '--whole-outcome', '--native', '--preflight'], { cwd: root, encoding: 'utf8' });
+    const final = JSON.parse(output.trim().split('\n').at(-1)!);
+    expect(final.phase).toBe('preflight-complete');
+    const manifest = JSON.parse(readFileSync(join(final.proofRoot, 'manifest.json'), 'utf8'));
+    expect(manifest.maxConcurrency).toBe(2);
+    for (const outcome of manifest.outcomes) {
+      expect(outcome.task.requested).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'high' });
+      expect(outcome.task.reviewer).toEqual(outcome.task.requested);
+      expect(outcome.handoff.authentication).toBe('native-subscription');
+    }
+    const prerequisite = JSON.parse(readFileSync(join(final.proofRoot, 'prerequisites.json'), 'utf8'));
+    expect(prerequisite.preflight).toBe(true);
+    expect(prerequisite.excluded).toEqual(['path', 'resource']);
+    expect(prerequisite.baseline.filter(row => row.checkId === 'acceptance').every(row => !row.passed && row.exitCode === 1)).toBe(true);
+    const invalid = spawnSync(process.execPath, [script, '--whole-outcome', '--native', '--native'], { encoding: 'utf8' });
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain('usage:');
   });
 });
