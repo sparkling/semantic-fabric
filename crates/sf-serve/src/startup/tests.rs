@@ -5,6 +5,11 @@ use sf_core::{Column, TableSchema};
 use super::*;
 use crate::SourceRef;
 
+#[path = "ordinary_federation_fixture.rs"]
+mod ordinary_federation_fixture;
+#[path = "ordinary_federation_tests.rs"]
+mod ordinary_federation_tests;
+
 const BASE: &str = "http://example.com/live/";
 
 fn table(primary_key: bool) -> TableSchema {
