@@ -53,6 +53,7 @@ describe('native programme coordinator entrypoint', () => {
     expect(final.phase).toBe('preflight-complete');
     const manifest = JSON.parse(readFileSync(join(final.proofRoot, 'manifest.json'), 'utf8'));
     expect(manifest.maxConcurrency).toBe(2);
+    expect(manifest.outcomes[0].task.readPaths).toContain(manifest.outcomes[1].task.scope[0]);
     for (const outcome of manifest.outcomes) {
       expect(outcome.task.requested).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'high' });
       expect(outcome.task.reviewer).toEqual(outcome.task.requested);
@@ -60,6 +61,7 @@ describe('native programme coordinator entrypoint', () => {
     }
     const prerequisite = JSON.parse(readFileSync(join(final.proofRoot, 'prerequisites.json'), 'utf8'));
     expect(prerequisite.preflight).toBe(true);
+    expect(prerequisite.dependentProof.reason).toContain('without waiting for the independent cohort');
     expect(prerequisite.excluded).toEqual(['path', 'resource']);
     expect(prerequisite.baseline.filter(row => row.checkId === 'acceptance').every(row => !row.passed && row.exitCode === 1)).toBe(true);
     const invalid = spawnSync(process.execPath, [script, '--whole-outcome', '--native', '--native'], { encoding: 'utf8' });
