@@ -146,6 +146,38 @@ it('healthy fragmented Unicode reasoning/text resets inactivity; cumulative byte
   expect(result.error).toBeUndefined(); expect(readFileSync(join(directory,'native-tail.jsonl')).length).toBeLessThan(32_000);
 });
 
+it('native redacted thinking deltas refresh activity without pretending content bytes exist', () => {
+  const directory=root(); let time=0;
+  const io=nativeCommandProgress({directory,taskId:'redacted-thinking',stage:'implementation',host:'claude-code',warnMs:120,cancelMs:300,now:()=>time});
+  const send=(event:unknown)=>io.stdout(Buffer.from(JSON.stringify({type:'stream_event',event})+'\n'));
+  io.start(42);
+  send({type:'content_block_start',index:0,content_block:{type:'thinking',thinking:''}});
+  for(let i=0;i<5;i++) {
+    time+=200;
+    send({type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'',estimated_tokens:12}});
+    expect(io.tick()).toBeUndefined();
+  }
+  send({type:'content_block_stop',index:0});
+  time+=300;
+  send({type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'',estimated_tokens:12}});
+  io.stdout(Buffer.from('{"type":"system","subtype":"thinking_tokens","estimated_tokens":900,"estimated_tokens_delta":12}\n'));
+  expect(io.tick()).toBe('native-inactivity');io.finish();
+  const last=JSON.parse(readFileSync(join(directory,'progress.jsonl'),'utf8').trim().split('\n').at(-1)!);
+  expect(last).toMatchObject({reasoningBytes:0,estimatedReasoningTokens:60});
+});
+
+it('invalid or unframed reasoning estimates never refresh activity', () => {
+  let activity=0;const decoder=new NativeStreamDecoder('claude-code',()=>activity++,()=>{});
+  const send=(event:unknown)=>decoder.stdout(Buffer.from(JSON.stringify({type:'stream_event',event})+'\n'));
+  const estimate=(value:unknown,index=0)=>send({type:'content_block_delta',index,delta:{type:'thinking_delta',thinking:'',estimated_tokens:value}});
+  estimate(12);
+  send({type:'content_block_start',index:0,content_block:{type:'thinking'}});
+  for(const value of [0,-1,null,'12',0.5,Number.MAX_SAFE_INTEGER+1])estimate(value);
+  estimate(12,1);expect(activity).toBe(0);
+  estimate(12);expect(activity).toBe(1);
+  send({type:'message_stop'});estimate(12);expect(activity).toBe(1);
+});
+
 it('bounded frames fail closed, malformed/empty/tool argument chunks cannot refresh activity', () => {
   let activity=0; const decoder=new NativeStreamDecoder('claude-code',()=>activity++,()=>{},128);
   decoder.stdout(Buffer.from(delta('text_delta','')));
@@ -176,6 +208,14 @@ it('healthy fake stream exceeds old cumulative ceiling and returns complete fina
   const script='let i=0;const t=setInterval(()=>{process.stdout.write('+JSON.stringify(delta('text_delta','x'.repeat(500)))+');if(++i===12){clearInterval(t);process.stdout.write(JSON.stringify({type:"result",structured_output:{ok:true}})+"\\n")}},30)';
   const {result,stdout}=await execute(script,true,2000);
   expect(result.exitCode).toBe(0); expect(result.error).toBeUndefined(); expect(JSON.parse(stdout).structured_output.ok).toBe(true);
+});
+
+it('fake native empty-thinking estimates survive longer than the idle deadline', async () => {
+  const start={type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'thinking',thinking:''}}};
+  const frame={type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'',estimated_tokens:8}}};
+  const script='process.stdout.write('+JSON.stringify(JSON.stringify(start)+'\n')+');let i=0;const t=setInterval(()=>{process.stdout.write('+JSON.stringify(JSON.stringify(frame)+'\n')+');if(++i===12){clearInterval(t);process.stdout.write(JSON.stringify({type:"result",structured_output:{ok:true}})+"\\n")}},30)';
+  const {result,stdout}=await execute(script,true,2000);
+  expect(result.exitCode).toBe(0);expect(result.error).toBeUndefined();expect(JSON.parse(stdout).structured_output.ok).toBe(true);
 });
 
 it('deterministic checks retain combined output ceiling', async () => {

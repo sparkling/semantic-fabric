@@ -7,12 +7,14 @@ type RecordValue = Record<string, unknown>;
 const object = (value: unknown): RecordValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
 export interface NativeStreamSnapshot {
   textBytes: number; reasoningBytes: number; structuredBytes: number; toolBytes: number; toolStarts: number; toolResults: number;
+  estimatedReasoningTokens: number;
   stdoutBytes: number; stderrBytes: number; malformedEvents: number;
 }
 
 /** Decode bounded frames, retain only the final Claude envelope and content-free counters. */
 export class NativeStreamDecoder {
   readonly counts: NativeStreamSnapshot = { textBytes: 0, reasoningBytes: 0, structuredBytes: 0, toolBytes: 0, toolStarts: 0, toolResults: 0,
+    estimatedReasoningTokens: 0,
     stdoutBytes: 0, stderrBytes: 0, malformedEvents: 0 };
   private decoder = new StringDecoder('utf8');
   private pending = '';
@@ -22,6 +24,7 @@ export class NativeStreamDecoder {
   private failure: string | undefined;
   private structuredBlocks = new Set<number>();
   private toolBlocks = new Set<number>();
+  private thinkingBlocks = new Set<number>();
   private tools = new Map<string, { started: boolean; completed: boolean; bytes: number; output: number }>();
   private stdoutHash = createHash('sha256');
   private stderrHash = createHash('sha256');
@@ -91,10 +94,23 @@ export class NativeStreamDecoder {
       }
       if (row.type === 'stream_event') {
         const event = object(row.event), delta = object(event.delta), block = object(event.content_block);
-        if (event.type === 'message_start' || event.type === 'message_stop') { this.structuredBlocks.clear(); this.toolBlocks.clear(); }
+        if (event.type === 'message_start' || event.type === 'message_stop') { this.structuredBlocks.clear(); this.toolBlocks.clear(); this.thinkingBlocks.clear(); }
+        if (event.type === 'content_block_start' && block.type === 'thinking'
+          && Number.isSafeInteger(event.index) && (event.index as number) >= 0 && this.thinkingBlocks.size < 1024) {
+          this.thinkingBlocks.add(event.index as number);
+        }
         if (event.type === 'content_block_delta') {
           if (delta.type === 'text_delta') this.content('textBytes', delta.text);
-          if (delta.type === 'thinking_delta') this.content('reasoningBytes', delta.thinking);
+          if (delta.type === 'thinking_delta') {
+            this.content('reasoningBytes', delta.thinking);
+            // Native redacted reasoning carries a delta estimate, not readable thinking bytes.
+            const estimate = delta.estimated_tokens;
+            if (this.thinkingBlocks.has(event.index as number) && typeof estimate === 'number'
+              && Number.isSafeInteger(estimate) && estimate > 0
+              && Number.isSafeInteger(this.counts.estimatedReasoningTokens + estimate)) {
+              this.counts.estimatedReasoningTokens += estimate; this.activity();
+            }
+          }
           if (delta.type === 'input_json_delta' && this.structuredBlocks.has(event.index as number)) this.content('structuredBytes', delta.partial_json);
           else if (delta.type === 'input_json_delta' && this.toolBlocks.has(event.index as number)) this.content('toolBytes', delta.partial_json);
         }
@@ -105,7 +121,7 @@ export class NativeStreamDecoder {
             this.tool(block.id, false);
           }
         }
-        if (event.type === 'content_block_stop') { this.structuredBlocks.delete(event.index as number); this.toolBlocks.delete(event.index as number); }
+        if (event.type === 'content_block_stop') { this.structuredBlocks.delete(event.index as number); this.toolBlocks.delete(event.index as number); this.thinkingBlocks.delete(event.index as number); }
       }
       if (row.type === 'user') {
         const content = object(row.message).content;
