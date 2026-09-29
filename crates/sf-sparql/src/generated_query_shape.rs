@@ -4,9 +4,12 @@
 use std::fmt;
 
 use sf_core::query_control::{QueryControl, QueryControlError};
-use spargebra::algebra::Function;
+use spargebra::algebra::{Function, GraphPattern};
 use spargebra::Query;
+use terms::{ConstantOccurrence, ConstantRejection, ConstantRole};
 
+#[path = "generated_query_constant_terms.rs"]
+mod terms;
 #[path = "generated_query_shape_walk.rs"]
 mod walk;
 
@@ -43,6 +46,7 @@ impl ShapeRule {
 pub(crate) enum ShapeRefusal {
     Rule(ShapeRule),
     Control(QueryControlError),
+    ConstantRejected(ConstantRejection),
 }
 
 impl fmt::Display for ShapeRefusal {
@@ -50,6 +54,7 @@ impl fmt::Display for ShapeRefusal {
         match self {
             Self::Rule(rule) => write!(f, "generated-query shape refused: {}", rule.code()),
             Self::Control(cause) => write!(f, "generated-query shape stopped: {cause}"),
+            Self::ConstantRejected(_) => f.write_str("generated-query constant visit rejected"),
         }
     }
 }
@@ -72,11 +77,10 @@ fn refuse(rule: ShapeRule) -> Result<(), ShapeRefusal> {
     Err(ShapeRefusal::Rule(rule))
 }
 
-/// Screen a parsed SELECT/ASK query. Structural-only: never proves admission.
-pub(crate) fn screen_parsed_query_structure(
-    query: &Query,
+fn screenable_pattern<'a>(
+    query: &'a Query,
     control: &dyn QueryControl,
-) -> Result<StructuralOnlyScreen, ShapeRefusal> {
+) -> Result<&'a GraphPattern, ShapeRefusal> {
     control.checkpoint().map_err(ShapeRefusal::Control)?;
     let pattern = match query {
         Query::Select { pattern, .. } | Query::Ask { pattern, .. } => pattern,
@@ -86,7 +90,35 @@ pub(crate) fn screen_parsed_query_structure(
     if query.dataset().is_some() {
         return Err(ShapeRefusal::Rule(ShapeRule::DatasetClause));
     }
+    Ok(pattern)
+}
+
+/// Screen a parsed SELECT/ASK query. Structural-only: never proves admission.
+pub(crate) fn screen_parsed_query_structure(
+    query: &Query,
+    control: &dyn QueryControl,
+) -> Result<StructuralOnlyScreen, ShapeRefusal> {
+    let pattern = screenable_pattern(query, control)?;
     let charged_compiler_work = walk::Walk::new(control).run(pattern)?;
+    Ok(StructuralOnlyScreen {
+        charged_compiler_work,
+    })
+}
+
+/// Same screen, additionally reporting every constant IRI with its role to
+/// `visit`. Each occurrence is charged and checkpointed before its callback.
+/// A callback error ends the walk. The callback is a checking seam only.
+pub(crate) fn visit_parsed_query_constants<'a, F>(
+    query: &'a Query,
+    control: &dyn QueryControl,
+    mut visit: F,
+) -> Result<StructuralOnlyScreen, ShapeRefusal>
+where
+    F: FnMut(ConstantOccurrence<'a>) -> Result<(), ConstantRejection>,
+{
+    let pattern = screenable_pattern(query, control)?;
+    let visitor = walk::Walk::with_visitor(control, &mut visit);
+    let charged_compiler_work = visitor.run(pattern)?;
     Ok(StructuralOnlyScreen {
         charged_compiler_work,
     })
@@ -157,3 +189,11 @@ fn check_function(function: &Function) -> Result<(), ShapeRefusal> {
 #[cfg(test)]
 #[path = "generated_query_shape_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "generated_query_constant_tests.rs"]
+mod constant_tests;
+
+#[cfg(test)]
+#[path = "generated_query_constant_control_tests.rs"]
+mod constant_control_tests;

@@ -8,7 +8,12 @@ use spargebra::algebra::{
 };
 use spargebra::term::{GroundTerm, Literal, NamedNodePattern, TermPattern, TriplePattern};
 
-use super::{check_function, refuse, ShapeRefusal, ShapeRule};
+use super::{
+    check_function, refuse, ConstantOccurrence, ConstantRejection, ConstantRole, ShapeRefusal,
+    ShapeRule,
+};
+
+type Sink<'a, 'c> = &'c mut dyn FnMut(ConstantOccurrence<'a>) -> Result<(), ConstantRejection>;
 
 enum Item<'a> {
     Pattern(&'a GraphPattern),
@@ -17,13 +22,14 @@ enum Item<'a> {
     Order(&'a OrderExpression),
     Aggregate(&'a AggregateExpression),
     Triple(&'a TriplePattern),
-    Term(&'a TermPattern),
-    Predicate(&'a NamedNodePattern),
+    Term(&'a TermPattern, ConstantRole),
+    Named(&'a NamedNodePattern, ConstantRole),
     Ground(&'a GroundTerm),
 }
 
 pub(super) struct Walk<'a, 'c> {
     control: &'c dyn QueryControl,
+    sink: Option<Sink<'a, 'c>>,
     stack: Vec<Item<'a>>,
     charged: u64,
 }
@@ -32,6 +38,16 @@ impl<'a, 'c> Walk<'a, 'c> {
     pub(super) fn new(control: &'c dyn QueryControl) -> Self {
         Self {
             control,
+            sink: None,
+            stack: Vec::new(),
+            charged: 0,
+        }
+    }
+
+    pub(super) fn with_visitor(control: &'c dyn QueryControl, sink: Sink<'a, 'c>) -> Self {
+        Self {
+            control,
+            sink: Some(sink),
             stack: Vec::new(),
             charged: 0,
         }
@@ -96,6 +112,27 @@ impl<'a, 'c> Walk<'a, 'c> {
         Ok(())
     }
 
+    fn emit(&mut self, iri: &'a str, role: ConstantRole) -> Result<(), ShapeRefusal> {
+        if self.sink.is_none() {
+            return Ok(());
+        }
+        self.checkpoint()?;
+        if let Some(sink) = self.sink.as_mut() {
+            if (**sink)(ConstantOccurrence::new(iri, role)).is_err() {
+                return Err(ShapeRefusal::ConstantRejected(ConstantRejection));
+            }
+        }
+        self.checkpoint()
+    }
+
+    fn literal(&mut self, literal: &'a Literal) -> Result<(), ShapeRefusal> {
+        self.charge_literal(literal)?;
+        match ConstantOccurrence::datatype_of(literal) {
+            Some(found) => self.emit(found.iri(), found.role()),
+            None => Ok(()),
+        }
+    }
+
     fn push(&mut self, item: Item<'a>) -> Result<(), ShapeRefusal> {
         self.charge(1)?;
         if self.stack.try_reserve(1).is_err() {
@@ -150,8 +187,8 @@ impl<'a, 'c> Walk<'a, 'c> {
             Item::Order(order) => self.visit_order(order),
             Item::Aggregate(aggregate) => self.visit_aggregate(aggregate),
             Item::Triple(triple) => self.visit_triple(triple),
-            Item::Term(term) => self.visit_term(term),
-            Item::Predicate(predicate) => self.visit_predicate(predicate),
+            Item::Term(term, role) => self.visit_term_pattern(term, role),
+            Item::Named(named, role) => self.visit_named_pattern(named, role),
             Item::Ground(term) => self.visit_ground(term),
         }
     }
@@ -172,9 +209,9 @@ impl<'a, 'c> Walk<'a, 'c> {
                 path,
                 object,
             } => {
-                self.push(Item::Term(subject))?;
+                self.push(Item::Term(subject, ConstantRole::Unresolved))?;
                 self.push_path(path)?;
-                self.push(Item::Term(object))
+                self.push(Item::Term(object, ConstantRole::Unresolved))
             }
             GraphPattern::Join { left, right } => self.push_pair(left, right),
             GraphPattern::Union { left, right } => self.push_pair(left, right),
@@ -195,7 +232,7 @@ impl<'a, 'c> Walk<'a, 'c> {
                 self.push_pattern(inner)
             }
             GraphPattern::Graph { name, inner } => {
-                self.push(Item::Predicate(name))?;
+                self.push(Item::Named(name, ConstantRole::NamedGraph))?;
                 self.push_pattern(inner)
             }
             GraphPattern::Extend {
@@ -261,8 +298,11 @@ impl<'a, 'c> Walk<'a, 'c> {
 
     fn visit_expression(&mut self, expression: &'a Expression) -> Result<(), ShapeRefusal> {
         match expression {
-            Expression::NamedNode(node) => self.charge_bytes(node.as_str().len()),
-            Expression::Literal(literal) => self.charge_literal(literal),
+            Expression::NamedNode(node) => {
+                self.charge_bytes(node.as_str().len())?;
+                self.emit(node.as_str(), ConstantRole::Unresolved)
+            }
+            Expression::Literal(literal) => self.literal(literal),
             Expression::Variable(variable) => self.charge_bytes(variable.as_str().len()),
             Expression::Bound(variable) => self.charge_bytes(variable.as_str().len()),
             Expression::Or(left, right) => self.push_binary(left, right),
@@ -300,7 +340,10 @@ impl<'a, 'c> Walk<'a, 'c> {
 
     fn visit_path(&mut self, path: &'a PropertyPathExpression) -> Result<(), ShapeRefusal> {
         match path {
-            PropertyPathExpression::NamedNode(node) => self.charge_bytes(node.as_str().len()),
+            PropertyPathExpression::NamedNode(node) => {
+                self.charge_bytes(node.as_str().len())?;
+                self.emit(node.as_str(), ConstantRole::Predicate)
+            }
             PropertyPathExpression::Reverse(inner) => self.push_path(inner),
             PropertyPathExpression::ZeroOrMore(inner) => self.push_path(inner),
             PropertyPathExpression::OneOrMore(inner) => self.push_path(inner),
@@ -316,6 +359,7 @@ impl<'a, 'c> Walk<'a, 'c> {
             PropertyPathExpression::NegatedPropertySet(nodes) => {
                 for node in nodes {
                     self.charge_member(node.as_str().len())?;
+                    self.emit(node.as_str(), ConstantRole::Predicate)?;
                 }
                 Ok(())
             }
@@ -356,32 +400,50 @@ impl<'a, 'c> Walk<'a, 'c> {
     }
 
     fn visit_triple(&mut self, triple: &'a TriplePattern) -> Result<(), ShapeRefusal> {
-        self.push(Item::Term(&triple.subject))?;
-        self.push(Item::Predicate(&triple.predicate))?;
-        self.push(Item::Term(&triple.object))
+        let role = ConstantRole::for_object(&triple.predicate, &triple.object);
+        self.push(Item::Term(&triple.subject, ConstantRole::Subject))?;
+        self.push(Item::Named(&triple.predicate, ConstantRole::Predicate))?;
+        self.push(Item::Term(&triple.object, role))
     }
 
-    fn visit_term(&mut self, term: &'a TermPattern) -> Result<(), ShapeRefusal> {
+    fn visit_term_pattern(
+        &mut self,
+        term: &'a TermPattern,
+        role: ConstantRole,
+    ) -> Result<(), ShapeRefusal> {
         match term {
-            TermPattern::NamedNode(node) => self.charge_bytes(node.as_str().len()),
+            TermPattern::NamedNode(node) => {
+                self.charge_bytes(node.as_str().len())?;
+                self.emit(node.as_str(), role)
+            }
             TermPattern::BlankNode(node) => self.charge_bytes(node.as_str().len()),
-            TermPattern::Literal(literal) => self.charge_literal(literal),
+            TermPattern::Literal(literal) => self.literal(literal),
             TermPattern::Variable(variable) => self.charge_bytes(variable.as_str().len()),
             TermPattern::Triple(_) => refuse(ShapeRule::RdfStarUnsupported),
         }
     }
 
-    fn visit_predicate(&mut self, predicate: &'a NamedNodePattern) -> Result<(), ShapeRefusal> {
-        match predicate {
-            NamedNodePattern::NamedNode(node) => self.charge_bytes(node.as_str().len()),
+    fn visit_named_pattern(
+        &mut self,
+        pattern: &'a NamedNodePattern,
+        role: ConstantRole,
+    ) -> Result<(), ShapeRefusal> {
+        match pattern {
+            NamedNodePattern::NamedNode(node) => {
+                self.charge_bytes(node.as_str().len())?;
+                self.emit(node.as_str(), role)
+            }
             NamedNodePattern::Variable(variable) => self.charge_bytes(variable.as_str().len()),
         }
     }
 
     fn visit_ground(&mut self, term: &'a GroundTerm) -> Result<(), ShapeRefusal> {
         match term {
-            GroundTerm::NamedNode(node) => self.charge_bytes(node.as_str().len()),
-            GroundTerm::Literal(literal) => self.charge_literal(literal),
+            GroundTerm::NamedNode(node) => {
+                self.charge_bytes(node.as_str().len())?;
+                self.emit(node.as_str(), ConstantRole::Unresolved)
+            }
+            GroundTerm::Literal(literal) => self.literal(literal),
             GroundTerm::Triple(_) => refuse(ShapeRule::RdfStarUnsupported),
         }
     }
