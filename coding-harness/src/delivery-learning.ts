@@ -59,7 +59,7 @@ export async function openDeliveryLearning(directory: string, runId: string, tas
     summary: () => ({ snapshotDigest: hash(history.snapshot()), observations: history.snapshot().observations.length,
       ...(author ? { routing: author.routeSnapshot() } : {}), authority: 'native-verifier-observations-only' }),
     selectCreditFallback(): DeliveryRoute {
-      const routes: DeliveryRoute[] = [{ host: 'claude-code', model: 'cc/claude-sonnet-5[1m]', effort: 'medium' },
+      const routes: DeliveryRoute[] = [{ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' },
         { host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' }];
       const chosen = makePool(routes, 'implementation').select('implementation');
       return routes.find(route => nativeRouteId(route) === chosen.id)!;

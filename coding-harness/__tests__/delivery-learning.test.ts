@@ -13,7 +13,7 @@ it('persists native evidence, pins assigned author, and refuses hybrid labels an
   await first.record(native, 'implementation', 10, 'a'.repeat(64));
   const next = await openDeliveryLearning(directory, 'run-two', task, native);
   expect(next.summary().observations).toBe(1);
-  const sonnet = { host: 'claude-code' as const, model: 'cc/claude-sonnet-5[1m]', effort: 'medium' as const };
+  const sonnet = { host: 'claude-code' as const, model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' as const };
   expect(next.selectCreditFallback()).toEqual(sonnet);
   await next.record(sonnet, 'implementation', 100, 'b'.repeat(64));
   const learned = await openDeliveryLearning(directory, 'run-three', task, native);
