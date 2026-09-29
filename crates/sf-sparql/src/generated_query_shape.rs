@@ -6,7 +6,10 @@ use std::fmt;
 use sf_core::query_control::{QueryControl, QueryControlError};
 use spargebra::algebra::{Function, GraphPattern};
 use spargebra::Query;
-use terms::{ConstantOccurrence, ConstantRejection, ConstantRole};
+
+pub use terms::{ConstantOccurrence, ConstantRole};
+
+pub(crate) use terms::ConstantRejection;
 
 #[path = "generated_query_constant_terms.rs"]
 mod terms;
@@ -15,7 +18,7 @@ mod walk;
 
 /// Named refusal rule. Carries no query text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ShapeRule {
+pub enum ShapeRule {
     ConstructForm,
     DescribeForm,
     DatasetClause,
@@ -27,7 +30,7 @@ pub(crate) enum ShapeRule {
 }
 
 impl ShapeRule {
-    pub(crate) const fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
             Self::ConstructForm => "construct-form",
             Self::DescribeForm => "describe-form",

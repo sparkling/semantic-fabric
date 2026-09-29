@@ -164,7 +164,7 @@ pub struct CompilerBinding {
 
 #[path = "cache_binding.rs"]
 mod binding_extensions;
-
+pub use binding_extensions::generated_compile as generated;
 impl CompilerBinding {
     pub fn new(
         mapping: SourceMapping,

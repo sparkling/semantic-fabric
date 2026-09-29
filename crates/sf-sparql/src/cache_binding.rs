@@ -14,10 +14,14 @@ use crate::compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuth
 use crate::runtime_identity::{CompileDigests, SemanticIdentity};
 use crate::{CompilerWorkMode, Error, Plan, Result, Tbox};
 
-// Dormant structural screen; serving integration is a later slice.
+// Structural screen behind the opt-in generated-query admission entry points.
+// Its screen-only function stays dormant; serving integration is a later slice.
 #[allow(dead_code)]
 #[path = "generated_query_shape.rs"]
 mod generated_query_shape;
+
+#[path = "generated_compile.rs"]
+pub mod generated_compile;
 
 impl CompilerBinding {
     /// Carry request control through structural BUILD and the metered normalization, lowering

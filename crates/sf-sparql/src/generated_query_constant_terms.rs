@@ -8,7 +8,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Syntactic position of a constant IRI. `Unresolved` claims no role.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum ConstantRole {
+pub enum ConstantRole {
     Subject,
     Predicate,
     Object,
@@ -36,7 +36,7 @@ impl ConstantRole {
 
 /// One borrowed constant IRI with its role. Duplicates are never merged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ConstantOccurrence<'a> {
+pub struct ConstantOccurrence<'a> {
     iri: &'a str,
     role: ConstantRole,
 }
@@ -57,11 +57,11 @@ impl<'a> ConstantOccurrence<'a> {
         Some(Self::new(iri, ConstantRole::LiteralDatatype))
     }
 
-    pub(crate) fn iri(&self) -> &'a str {
+    pub fn iri(&self) -> &'a str {
         self.iri
     }
 
-    pub(crate) fn role(&self) -> ConstantRole {
+    pub fn role(&self) -> ConstantRole {
         self.role
     }
 }
