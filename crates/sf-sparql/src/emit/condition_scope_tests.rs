@@ -7,6 +7,9 @@ use sf_core::query_control::{
 use std::mem::size_of;
 use std::sync::Mutex;
 
+#[path = "condition_dialect_scope_tests.rs"]
+mod dialect_scope;
+
 fn budget(units: u64) -> QueryBudget {
     QueryBudget::new(QueryLimits::new(u64::MAX, units, u64::MAX, u64::MAX))
 }
