@@ -46,7 +46,7 @@ Settled outcomes may integrate before unrelated siblings finish: sole owner seri
 integrates/checks/verifies/commits/finishes, subject to active read/write/resource
 reservations. Only accepted parents release children, including concurrent cohorts.
 Manifests remain explicit, not an automatic DAG scheduler. Whole-source/Cargo reads
-still block conflicting acceptance; preserve cancellation custody and fresh review.
+still block conflicting acceptance; preserve cancellation custody and fresh review. At an explicitly authorized owner boundary, `integrate` may add `revalidateAgainst: {commit, sourceDigest}` pinning exact clean canonical HEAD/snapshot for evaluator or declared-input migration. Default hard-pin rejection remains. Scope overlap, active reservations and invalid candidate evidence still refuse; original receipts stay immutable. This opt-in reruns every declared check and requires a fresh distinct reviewer over all changed inputs, even without Cargo. It never replans/replays the author or accepts the candidate by itself.
 
 `selectDeliveryRoute` already supplies task-based model/effort defaults. Preserve
 an explicit route and the selected main model; escalate only a named unresolved

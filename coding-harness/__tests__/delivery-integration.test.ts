@@ -7,6 +7,9 @@ import * as fs from 'node:fs';
 import { hash } from '@metaharness/harness';
 import { createDeliveryCandidate } from '../src/delivery-candidate.js';
 import { DeliveryHarness } from '../src/delivery-runtime.js';
+import { runIntegrationReview } from '../src/delivery-integration-review.js';
+import { saveReservations } from '../src/delivery-cohort-custody.js';
+import { parseIntegrationInput } from '../src/delivery-integration.js';
 import { git } from '../src/delivery-workspace.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 
@@ -19,6 +22,8 @@ const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs'], combined = false, newFirst = false) {
   const f = workflowFixture(roots);
+  mkdirSync(join(f.root, 'tests')); writeFileSync(join(f.root, 'tests/proof.rs'), '// original evaluator\n');
+  git(f.root, 'add', 'tests/proof.rs'); git(f.root, 'commit', '-qm', 'test input');
   writeFileSync(join(f.root, 'other.txt'), 'before\n'); git(f.root, 'add', 'other.txt'); git(f.root, 'commit', '-qm', 'second scope');
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-integration-')); roots.push(parentDirectory);
   const candidates = [];
@@ -134,4 +139,104 @@ it('preserves negative and superseded outcome history without treating it as cur
   expect(accepted.integration?.outcomeHistory).toHaveLength(2);
   expect(accepted.integration?.outcomeReceipts).toEqual([]);
   expect(accepted.integration?.outcomeHistory).toEqual(expect.arrayContaining(history));
+});
+
+it.each(['tests/proof.rs', 'coding-harness/check.mjs', 'other.txt'])('owner-pinned %s drift requires fresh checks/review without author replay', async path => {
+  const f = await fixture(['coding-harness/check.mjs', 'other.txt']), row = f.candidates[0];
+  const original = readFileSync(join(row.candidate.harness.directory, `${row.task.id}.json`), 'utf8');
+  const before = readFileSync(join(f.root, path), 'utf8');
+  writeFileSync(join(f.root, path), before + '\n// current input\n');
+  git(f.root, 'add', path); git(f.root, 'commit', '-qm', 'owner-reviewed input change');
+  await expect(f.harness.integrate(row.input)).rejects.toThrow('INPUT_CHANGED');
+  const pin = { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest };
+  const input = { ...row.input, revalidateAgainst: pin };
+  await f.harness.integrate(input);
+  await expect(f.harness.integrate(row.input)).rejects.toThrow('OWNER_OR_IDENTITY');
+  for (const check of row.task.checks) await f.harness.check(row.task.id, row.task.owner, check.id);
+  expect((await f.harness.verify(row.task.id, row.task.owner)).verdict?.pass).toBe(false);
+  const stages: string[] = [];
+  const result = await runIntegrationReview(f.harness, row.task.id, row.task.owner, { execute: async (request, files, checks) => {
+    stages.push(request.stage);
+    expect(files.find(file => file.path === path)?.content).toContain('current input');
+    expect(checks).toContainEqual({ ownerRevalidation: pin });
+    return { changes: [], response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'owner-current-source-reviewer' }, outcome: 'completed', summary: 'fresh review', issues: [] } };
+  } });
+  expect(result.success).toBe(true); expect(stages).toEqual(['review']);
+  expect(readFileSync(join(row.candidate.harness.directory, `${row.task.id}.json`), 'utf8')).toBe(original);
+  git(f.root, 'add', ...row.task.scope); git(f.root, 'commit', '-qm', 'accepted revalidation');
+  expect((await f.harness.finish(row.task.id, row.task.owner, git(f.root, 'rev-parse', 'HEAD'))).status).toBe('complete');
+});
+
+it.each(['commit', 'digest', 'scope', 'owner'])('owner revalidation rejects stale or unauthorized %s before writes', async kind => {
+  const f = await fixture(), row = f.candidates[0];
+  if (kind === 'scope') { writeFileSync(join(f.root, 'product.txt'), 'foreign change\n'); git(f.root, 'add', '.'); git(f.root, 'commit', '-qm', 'scope changed'); }
+  const before = readFileSync(join(f.root, 'product.txt'), 'utf8');
+  await expect(f.harness.integrate({ ...row.input, ...(kind === 'owner' ? { owner: 'intruder' } : {}),
+    revalidateAgainst: { commit: kind === 'commit' ? '0'.repeat(40) : git(f.root, 'rev-parse', 'HEAD'),
+      sourceDigest: kind === 'digest' ? '0'.repeat(64) : f.harness.snapshot().digest } })).rejects.toThrow(kind === 'owner'
+        ? 'DELIVERY_INTEGRATION_OWNER_MISMATCH' : kind === 'scope' ? 'DELIVERY_INTEGRATION_INPUT_CHANGED' : 'DELIVERY_INTEGRATION_REVALIDATION_STALE');
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe(before); expect(f.harness.inspect().active).toBeNull();
+});
+
+it('owner revalidation preserves current failed checks and never reaches reviewer', async () => {
+  const f = await fixture(), row = f.candidates[0];
+  writeFileSync(join(f.root, 'coding-harness/check.mjs'), 'process.exit(1);\n');
+  git(f.root, 'add', '.'); git(f.root, 'commit', '-qm', 'stricter current evaluator');
+  await f.harness.integrate({ ...row.input, revalidateAgainst: { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest } });
+  const execute = vi.fn();
+  const result = await runIntegrationReview(f.harness, row.task.id, row.task.owner, { execute });
+  expect(result.success).toBe(false); expect(execute).not.toHaveBeenCalled();
+  expect(f.harness.read(row.task.id).checks.at(-1)?.passed).toBe(false);
+  expect(f.harness.read(row.task.id).integration?.original.verdict?.pass).toBe(true);
+});
+
+it.each(['dirty', 'reservation', 'source', 'review', 'digest'])('opt-in still rejects %s before canonical writes', async kind => {
+  const f = await fixture(), row = f.candidates[0], before = readFileSync(join(f.root, 'product.txt'), 'utf8');
+  if (kind === 'dirty') writeFileSync(join(f.root, 'dirty.txt'), 'uncommitted');
+  if (kind === 'reservation') {
+    const directory=join(f.harness.directory,'pool-active');mkdirSync(directory);
+    saveReservations(directory,[{id:'active-reader',mutationPaths:['other.txt'],readPaths:['product.txt'],resources:[]}]);
+  }
+  if (kind === 'source') writeFileSync(join(row.candidate.harness.root, 'product.txt'), 'tampered\n');
+  if (kind === 'review') {
+    const run=structuredClone(row.original);run.workflow!.results.pop();delete run.digest;run.digest=hash(run);
+    writeFileSync(join(row.candidate.harness.directory,`${row.task.id}.json`),JSON.stringify(run));row.input.expectedDigest=run.digest;
+  }
+  if (kind === 'digest') row.input.expectedDigest='0'.repeat(64);
+  const code=kind==='dirty'?'DELIVERY_INTEGRATION_DIRTY_CANONICAL':kind==='reservation'?'DELIVERY_INTEGRATION_ACTIVE_DEPENDENCY':
+    kind==='digest'?'DELIVERY_CANDIDATE_IDENTITY':'DELIVERY_CANDIDATE_NOT_REVIEWED';
+  await expect(f.harness.integrate({...row.input,revalidateAgainst:{commit:git(f.root,'rev-parse','HEAD'),sourceDigest:f.harness.snapshot().digest}})).rejects.toThrow(code);
+  expect(readFileSync(join(f.root,'product.txt'),'utf8')).toBe(before);expect(f.harness.inspect().active).toBeNull();
+});
+
+it.each(['added', 'deleted', 'deleted-parent', 'unchanged'])('owner review receives %s input evidence and never skips fresh review', async kind => {
+  const f=await fixture(),row=f.candidates[0];
+  const path=kind==='added'?'coding-harness/new-evaluator.mjs':'tests/proof.rs';
+  if(kind==='added')writeFileSync(join(f.root,path),'// added current evaluator\n');
+  if(kind==='deleted')rmSync(join(f.root,path));
+  if(kind==='deleted-parent')rmSync(join(f.root,'tests'),{recursive:true});
+  if(kind!=='unchanged'){git(f.root,'add','.');git(f.root,'commit','-qm','input migration');}
+  await f.harness.integrate({...row.input,revalidateAgainst:{commit:git(f.root,'rev-parse','HEAD'),sourceDigest:f.harness.snapshot().digest}});
+  for(const c of row.task.checks)await f.harness.check(row.task.id,row.task.owner,c.id);
+  expect((await f.harness.verify(row.task.id,row.task.owner)).verdict?.pass).toBe(false);
+  const action=await f.harness.next(row.task.id,row.task.owner);expect(action.kind).toBe('native');
+  let calls=0;
+  const result=await runIntegrationReview(f.harness,row.task.id,row.task.owner,{execute:async(request,files)=>{
+    calls++;expect(request.stage).toBe('review');
+    if(kind==='added')expect(files.find(f=>f.path===path)?.content).toBe('// added current evaluator\n');
+    if(kind.startsWith('deleted'))expect(files.find(f=>f.path===path)).toEqual({path,content:null});
+    return{changes:[],response:{schemaVersion:1,requestId:request.id,sourceDigest:request.sourceDigest,
+      native:{...native,executorId:'fresh-migration-reviewer'},outcome:'completed',summary:'fresh current inputs',issues:[]}};
+  }});
+  expect(calls).toBe(1);expect(result.success).toBe(true);
+});
+
+it('rejects malformed owner pins at parsing boundary', async () => {
+  const f=await fixture(),row=f.candidates[0];
+  const pin={commit:git(f.root,'rev-parse','HEAD'),sourceDigest:f.harness.snapshot().digest};
+  for(const value of [{...pin,commit:'short'},{...pin,sourceDigest:'x'.repeat(64)}]) {
+    expect(()=>parseIntegrationInput({...row.input,revalidateAgainst:value})).toThrow('DELIVERY_INTEGRATION_REVALIDATION_PIN_REQUIRED');
+  }
+  expect(()=>parseIntegrationInput({...row.input,revalidateAgainst:{...pin,extra:true}})).toThrow('integration revalidation');
 });

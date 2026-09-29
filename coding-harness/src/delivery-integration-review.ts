@@ -15,7 +15,7 @@ import type { DeliveryAction, NativeStageRequest } from './delivery-workflow-con
 /** All changed implicit Cargo inputs remain review inputs; no guessed crate dependency graph. */
 export function integrationReviewPaths(run: DeliveryRun): string[] {
   const evidence = run.integration;
-  if (!evidence || !run.task.checks.some(check => check.argv[0] === 'cargo')) return [];
+  if (!evidence || (!evidence.ownerRevalidation && !run.task.checks.some(check => check.argv[0] === 'cargo'))) return [];
   return [...new Set([...Object.keys(evidence.candidateSource.files), ...Object.keys(evidence.sourceAfter.files)])]
     .filter(path => !run.task.scope.includes(path) && evidence.candidateSource.files[path] !== evidence.sourceAfter.files[path]);
 }
@@ -25,7 +25,7 @@ export function integrationReviewPrerequisites(run: DeliveryRun): string[] {
 export function integrationWorkflowIntact(run: DeliveryRun): boolean {
   const original = run.integration!.original.workflow!, current = run.workflow;
   if (!current) return false;
-  if (!integrationReviewPaths(run).length) return hash(current) === hash(original);
+  if (!run.integration!.ownerRevalidation && !integrationReviewPaths(run).length) return hash(current) === hash(original);
   return hash(current.requests.slice(0, original.requests.length)) === hash(original.requests)
     && hash(current.results.slice(0, original.results.length)) === hash(original.results)
     && hash(current.invalidated.slice(0, original.invalidated.length)) === hash(original.invalidated)
@@ -55,7 +55,7 @@ export function nextIntegrationAction(run: DeliveryRun, source: string, validChe
     return { kind: 'check', checkId: missing.id };
   }
   const changed = integrationReviewPaths(run);
-  if (!changed.length || integrationReviewReady(run, source)) return { kind: 'ready-to-commit', sourceDigest: source };
+  if ((!run.integration!.ownerRevalidation && !changed.length) || integrationReviewReady(run, source)) return { kind: 'ready-to-commit', sourceDigest: source };
   const workflow = run.workflow!;
   const pending = workflow.requests.find(request => !workflow.invalidated.includes(request.id)
     && !workflow.results.some(result => result.request.id === request.id));
@@ -72,7 +72,7 @@ export function nextIntegrationAction(run: DeliveryRun, source: string, validChe
     route: run.task.reviewer ?? selectDeliveryRoute({ ...run.task, taskClass: 'implementation', requested: undefined, preserveMainModel: false }),
     requirement: run.task.requirement, scope: run.task.scope,
     feedback: ['Review preserved candidate patch against current accepted source and fresh deterministic checks. No authoring or planning.',
-      `Accepted sibling inputs changed: ${changed.join(', ')}`] };
+      `${run.integration!.ownerRevalidation ? 'Owner-pinned canonical revalidation; previous candidate acceptance does not qualify changed evaluators or dependencies' : 'Accepted sibling inputs changed'}: ${changed.join(', ')}`] };
   const request = { ...body, id: hash(body) }; workflow.requests.push(request);
   return { kind: 'native', request };
 }
@@ -95,6 +95,8 @@ export async function runIntegrationReview(harness: DeliveryHarness, id: string,
       if (source !== action.request.sourceDigest) throw new Error('DELIVERY_EXECUTION_SOURCE_CHANGED');
       const paths = [...new Set([...initial.task.scope, ...(initial.integration!.reviewReadPaths ?? initial.task.readPaths ?? []), ...integrationReviewPaths(initial)])];
       const files = paths.map(path => {
+        // A snapshot-bound deletion remains review evidence even when its parent directory is gone.
+        if (initial.integration!.candidateSource.files[path] && !initial.integration!.sourceAfter.files[path]) return { path, content: null };
         const absolute = resolveWorkspacePath(harness.root, path, { allowMissingLeaf: true, requireRegularFile: true });
         try { return { path, content: readFileSync(absolute, 'utf8') }; }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, content: null }; throw error; }
@@ -103,6 +105,7 @@ export async function runIntegrationReview(harness: DeliveryHarness, id: string,
       const execute = options.execute ?? createDeliveryExecutor(harness, hash(initial.task));
       const result = await execute(action.request, files, [
         { preservedCandidate: initial.integration!.candidateDigest, candidateSource: initial.integration!.candidateSource.digest },
+        ...(initial.integration!.ownerRevalidation ? [{ ownerRevalidation: initial.integration!.ownerRevalidation }] : []),
         ...harness.read(id).checks,
       ], options.signal);
       atomicJson(join(directory, `${action.request.id}-${randomUUID()}.json`), { request: action.request, ...result });

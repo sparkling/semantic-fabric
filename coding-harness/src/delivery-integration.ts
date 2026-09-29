@@ -17,22 +17,33 @@ import { assertIntegrationReservations } from './delivery-cohort-custody.js';
 import { integrationReviewReady, integrationReviewPaths, integrationWorkflowIntact } from './delivery-integration-review.js';
 import type { NativeStageResult } from './delivery-workflow-contracts.js';
 
-export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string }
+interface OwnerRevalidation { commit: string; sourceDigest: string }
+export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string; revalidateAgainst?: OwnerRevalidation }
 export interface CandidateIntegration {
   candidateRoot: string; candidateDigest: string; original: DeliveryRun;
   sourceBefore: SourceSnapshot; sourceAfter: SourceSnapshot; phase: 'applying' | 'prepared';
   candidateSource: SourceSnapshot; readPaths: string[]; reviewReadPaths?: string[]; custodyDigest: string; resources: string[];
   checkLogs: Record<string, string>; outcomeReceipts: unknown[]; outcomeHistory: unknown[];
+  ownerRevalidation?: OwnerRevalidation;
 }
 interface Custody { root: string; sourceBefore: SourceSnapshot; baseCommit: string; scope: string[];
   readPaths?: string[]; declaredReadPaths?: string[] | null; cleanBase?: boolean; resources?: string[] }
 
 export function parseIntegrationInput(input: unknown): IntegrationInput {
   const value = asRecord(input, 'integration');
-  assertExactKeys(value, ['candidateRoot', 'id', 'owner', 'expectedDigest'], 'integration');
+  assertExactKeys({ revalidateAgainst: undefined, ...value }, ['candidateRoot', 'id', 'owner', 'expectedDigest', 'revalidateAgainst'], 'integration');
   if (typeof value.expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.expectedDigest)) throw new Error('DELIVERY_INTEGRATION_DIGEST_REQUIRED');
+  let revalidateAgainst: OwnerRevalidation | undefined;
+  if (value.revalidateAgainst !== undefined) {
+    const pin = asRecord(value.revalidateAgainst, 'integration revalidation');
+    assertExactKeys(pin, ['commit', 'sourceDigest'], 'integration revalidation');
+    if (typeof pin.commit !== 'string' || !/^[a-f0-9]{40}$/.test(pin.commit)
+      || typeof pin.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(pin.sourceDigest)) throw new Error('DELIVERY_INTEGRATION_REVALIDATION_PIN_REQUIRED');
+    revalidateAgainst = { commit: pin.commit, sourceDigest: pin.sourceDigest };
+  }
   return { candidateRoot: realpathSync(nonempty(value.candidateRoot, 'candidate root')), id: identifier(value.id),
-    owner: nonempty(value.owner, 'integration owner'), expectedDigest: value.expectedDigest };
+    owner: nonempty(value.owner, 'integration owner'), expectedDigest: value.expectedDigest,
+    ...(revalidateAgainst ? { revalidateAgainst } : {}) };
 }
 // Explicit read closure may narrow data dependencies, never evaluator/runtime/package inputs.
 function requiredInputs(files: Record<string, string>, run: DeliveryRun): string[] {
@@ -120,15 +131,20 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   await validateCandidateRun(original, candidateSource);
   const before = harness.snapshot(), readPaths = [...new Set([...(custody.readPaths ?? Object.keys(custody.sourceBefore.files)),
     ...requiredInputs({ ...custody.sourceBefore.files, ...before.files }, original)])].filter(path => !original.task.scope.includes(path));
-  for (const path of [...readPaths, ...original.task.scope]) if (before.files[path] !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
-  if (custody.declaredReadPaths == null
+  const revalidation = input.revalidateAgainst;
+  if (revalidation && (revalidation.commit !== harness.context.head() || revalidation.sourceDigest !== before.digest)) {
+    throw new Error('DELIVERY_INTEGRATION_REVALIDATION_STALE');
+  }
+  // Explicit owner revalidation retains every read; it never permits overwriting changed scope.
+  for (const path of [...(revalidation ? [] : readPaths), ...original.task.scope]) if (before.files[path] !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
+  if (!revalidation && custody.declaredReadPaths == null
     && outsideDigest(before, original.task.scope) !== outsideDigest(custody.sourceBefore, original.task.scope)) {
     throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
   }
   git(harness.root, 'merge-base', '--is-ancestor', custody.baseCommit, harness.context.head());
   const commits = git(harness.root, 'rev-list', `${custody.baseCommit}..HEAD`).split('\n').filter(Boolean);
   // Only exact, completed sibling integrations can account for intervening changes.
-  for (const commit of commits) {
+  for (const commit of revalidation ? [] : commits) {
     const paths = git(harness.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', commit).split('\n').filter(Boolean);
     const sibling = findIntegratedRun(harness, commit);
     if (!sibling || !paths.length || paths.some(path => !sibling.task.scope.includes(path) || readPaths.includes(path) || original.task.scope.includes(path))) {
@@ -154,7 +170,8 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
     checks: [], events: [{ at: new Date().toISOString(), kind: 'candidate-integration', reason: input.expectedDigest }],
     verdict: undefined, digest: undefined, integration: { candidateRoot: input.candidateRoot, candidateDigest: input.expectedDigest,
       original, sourceBefore: before, sourceAfter: after, candidateSource, readPaths, reviewReadPaths: custody.readPaths,
-      custodyDigest: hash(custody), resources: custody.resources ?? [], checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying' } };
+      custodyDigest: hash(custody), resources: custody.resources ?? [], checkLogs, outcomeReceipts, outcomeHistory, phase: 'applying',
+      ...(revalidation ? { ownerRevalidation: revalidation } : {}) } };
 }
 
 export function findIntegratedRun(harness: DeliveryHarness, commit: string): DeliveryRun | undefined {
@@ -168,11 +185,14 @@ export function findIntegratedRun(harness: DeliveryHarness, commit: string): Del
   return undefined;
 }
 export function integrationReady(run: DeliveryRun, source: string): boolean {
-  return integrationSourceReady(run, source) && (!integrationReviewPaths(run).length || integrationReviewReady(run, source));
+  return integrationSourceReady(run, source) && (!(run.integration?.ownerRevalidation || integrationReviewPaths(run).length) || integrationReviewReady(run, source));
 }
 export function integrationSourceReady(run: DeliveryRun, source: string): boolean {
   const integration = run.integration;
   if (!integration || integration.phase !== 'prepared' || source !== integration.sourceAfter.digest) return false;
+  if (integration.ownerRevalidation && (integration.ownerRevalidation.commit !== run.baseCommit
+    || integration.ownerRevalidation.sourceDigest !== integration.sourceBefore.digest
+    || hash(integration.sourceBefore.files) !== integration.sourceBefore.digest)) return false;
   const { digest, ...original } = integration.original;
   return digest === integration.candidateDigest && hash(original) === digest && !original.integration
     && hash(run.task) === hash(original.task) && integrationWorkflowIntact(run)
@@ -184,7 +204,7 @@ export function applyIntegration(harness: DeliveryHarness, run: DeliveryRun, inp
     (readJson(join(harness.directory, `candidate-${hash(input.candidateRoot)}.json`)) as Custody).resources);
   const evidence = run.integration;
   if (!evidence || input.expectedDigest !== evidence.candidateDigest || input.candidateRoot !== evidence.candidateRoot
-    || run.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_OWNER_OR_IDENTITY');
+    || run.task.owner !== input.owner || hash(input.revalidateAgainst ?? null) !== hash(evidence.ownerRevalidation ?? null)) throw new Error('DELIVERY_INTEGRATION_OWNER_OR_IDENTITY');
   if (harness.context.head() !== run.baseCommit) throw new Error('DELIVERY_BASE_MOVED');
   if (git(harness.root, 'diff', '--cached', '--name-only') !== '') throw new Error('DELIVERY_INTEGRATION_DIRTY_INDEX');
   if (hash(readJson(join(harness.directory, `candidate-${hash(input.candidateRoot)}.json`))) !== evidence.custodyDigest
