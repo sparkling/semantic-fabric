@@ -21,10 +21,9 @@ export function activeReservations(harness: DeliveryHarness): OutcomeReservation
   });
 }
 export function assertReservationAdmission(harness: DeliveryHarness, incoming: readonly OutcomeReservation[]): void {
+  // Reads are private snapshot inputs; guard their canonical changes at integration.
   for (const existing of activeReservations(harness)) for (const next of incoming) {
     if (existing.id === next.id || intersects(existing.mutationPaths, next.mutationPaths)
-      || (next.mutationPaths.length > 0 && reads(existing, next.mutationPaths))
-      || (existing.mutationPaths.length > 0 && reads(next, existing.mutationPaths))
       || existing.resources.some(resource => next.resources.includes(resource))) throw new Error('DELIVERY_POOL_RESOURCE_CONFLICT');
   }
 }
