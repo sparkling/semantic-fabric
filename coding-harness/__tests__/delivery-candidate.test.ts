@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDeliveryCandidate } from '../src/delivery-candidate.js';
 import { deliveryPoolIdentity, runDeliveryPool } from '../src/delivery-pool.js';
+import { dispatchDeliveryReady } from '../src/delivery-ready.js';
 import { git } from '../src/delivery-workspace.js';
 import type { DeliveryHarness } from '../src/delivery-runtime.js';
 import type { DeliveryTask } from '../src/delivery-contracts.js';
@@ -183,6 +184,15 @@ describe('upstream pool and ordinary lifecycle candidate roots', () => {
     const candidate = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], acceptedParent: f.task.id });
     try {
       expect(readFileSync(join(candidate.harness.root, 'product.txt'), 'utf8')).toBe('accepted parent\r\n');
+      let childCalls = 0;
+      const result = await dispatchDeliveryReady(f.harness, { schemaVersion: 1, parentDirectory: directory, maxConcurrency: 1,
+        mode: 'packet', outcomes: [{ task: { ...f.task, id: 'accepted-ready-child', readPaths: ['product.txt'] },
+          handoff: native, resources: [], acceptedParent: f.task.id, acceptedInputs: ['product.txt'] }] }, async child => {
+        childCalls++;
+        expect(readFileSync(join(child.root, 'product.txt'), 'utf8')).toBe('accepted parent\r\n');
+        return true;
+      });
+      expect(childCalls).toBe(1); expect(result.results[0]).toMatchObject({ status: 'fulfilled', value: { status: 'awaiting-executor' } });
       writeFileSync(join(f.root, 'product.txt'), 'unexpected canonical drift\n');
       expect(() => candidate.harness.snapshot()).not.toThrow();
       expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], acceptedParent: f.task.id })).toThrow('ACCEPTED_INPUT_CHANGED');

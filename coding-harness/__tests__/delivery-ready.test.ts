@@ -25,6 +25,91 @@ function fixture() {
   return { ...f, manifest, parentDirectory };
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+// Injected fixture width proves adapter capacity, not ready application work or native capacity.
+it.each([16, 32])('runs %i independent fixtures and refills before held sibling cleanup', async width => {
+  const f = fixture(), before = f.harness.snapshot().digest;
+  const outcomes = Array.from({ length: width + 4 }, (_, index) => {
+    const path = `wide-${index}.txt`; writeFileSync(join(f.root, path), 'fixture input\n');
+    return { ...f.manifest.outcomes[0], task: { ...f.manifest.outcomes[0].task, id: `wide-${index}`, scope: [path] }, resources: [`fixture-${index}`] };
+  });
+  const admitted = f.harness.snapshot().digest, gates = new Map(outcomes.map(({ task }) => [task.id, deferred()]));
+  const active = new Set<string>(), started: string[] = [], progress: DeliveryPoolProgress[] = [];
+  let peak = 0, returned = false;
+  const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, mode: 'run', maxConcurrency: width, outcomes },
+    async (_candidate, _mode, id) => {
+      started.push(id); active.add(id); peak = Math.max(peak, active.size);
+      try {
+        await gates.get(id)!.promise;
+        if (id === 'wide-1') throw new Error('injected verifier failure');
+        return true;
+      } finally { active.delete(id); }
+    }, undefined, event => { progress.push(event); }).then(result => { returned = true; return result; });
+  try {
+    await vi.waitFor(() => expect(active.size).toBe(width));
+    expect(started).toEqual(outcomes.slice(0, width).map(({ task }) => task.id)); expect(peak).toBe(width);
+    const conflictParent = mkdtempSync(join(tmpdir(), 'fabric-wide-conflict-')); roots.push(conflictParent);
+    const execute = vi.fn(async () => true);
+    for (const conflict of [
+      { ...outcomes[0], task: { ...outcomes[0].task, id: 'path-conflict' }, resources: [] },
+      { ...outcomes[0], task: { ...outcomes[0].task, id: 'resource-conflict', scope: ['other.txt'] } },
+    ]) {
+      await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, parentDirectory: conflictParent, outcomes: [conflict] }, execute))
+        .rejects.toThrow('CONFLICT');
+    }
+    expect(execute).not.toHaveBeenCalled(); expect(readdirSync(conflictParent)).toEqual([]);
+    for (const outcome of outcomes.slice(1, width)) gates.get(outcome.task.id)!.resolve();
+    await vi.waitFor(() => expect(started.slice(width)).toEqual(outcomes.slice(width).map(({ task }) => task.id)));
+    expect(active.has('wide-0')).toBe(true); expect(returned).toBe(false); expect(peak).toBe(width);
+    expect(progress.find(event => event.event === 'outcome-settled' && event.taskId === 'wide-1')).toMatchObject({ status: 'rejected' });
+    expect(progress.some(event => event.event === 'outcome-settled' && event.taskId === 'wide-0')).toBe(false);
+    expect(progress.some(event => event.event === 'cohort-drained')).toBe(false);
+    await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, parentDirectory: conflictParent, outcomes: [
+      { ...outcomes[1], task: { ...outcomes[1].task, id: 'failed-lane-refill' } },
+    ] }, execute)).resolves.toMatchObject({ results: [{ status: 'fulfilled' }] });
+  } finally { gates.forEach(gate => gate.resolve()); await pending; }
+  const result = await pending;
+  expect(active.size).toBe(0); expect(result.peakConcurrency).toBe(width); expect(result.results).toHaveLength(width + 4);
+  expect(result.results.filter(row => row.status === 'fulfilled')).toHaveLength(width + 3);
+  expect(progress.at(-1)).toMatchObject({ event: 'cohort-drained', sourceRevalidated: false });
+  expect(activeReservations(f.harness)).toEqual([]); expect(f.harness.snapshot().digest).toBe(admitted); expect(admitted).not.toBe(before);
+  const child = { ...outcomes[0], task: { ...outcomes[0].task, id: 'candidate-only-child', scope: ['other.txt'] }, acceptedParent: 'wide-0' };
+  const execute = vi.fn(async () => true);
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [child] }, execute)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it('drains 16 cancelled fixture callbacks before releasing shared reservations', async () => {
+  const f = fixture(), controller = new AbortController(), gate = deferred();
+  const outcomes = Array.from({ length: 20 }, (_, index) => {
+    const path = `cancel-${index}.txt`; writeFileSync(join(f.root, path), 'fixture input\n');
+    return { ...f.manifest.outcomes[0], task: { ...f.manifest.outcomes[0].task, id: `cancel-${index}`, scope: [path] }, resources: [`cancel-${index}`] };
+  });
+  const started: string[] = [], active = new Set<string>(); let returned = false;
+  const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, maxConcurrency: 16, outcomes }, async (_candidate, _mode, id) => {
+    started.push(id); active.add(id);
+    try { await gate.promise; return true; } finally { active.delete(id); }
+  }, controller.signal).then(result => { returned = true; return result; });
+  try {
+    await vi.waitFor(() => expect(active.size).toBe(16));
+    controller.abort(); await new Promise(resolve => setImmediate(resolve));
+    expect(returned).toBe(false); expect(started).toHaveLength(16); expect(active.size).toBe(16);
+    expect(activeReservations(f.harness)).toHaveLength(20);
+    await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [outcomes[0]] }, async () => true))
+      .rejects.toThrow('CONFLICT');
+  } finally { gate.resolve(); await pending; }
+  const result = await pending;
+  expect(active.size).toBe(0); expect(result.peakConcurrency).toBe(16); expect(result.results).toHaveLength(20);
+  expect(result.results.every(row => row.status === 'cancelled')).toBe(true); expect(activeReservations(f.harness)).toEqual([]);
+  await expect(dispatchDeliveryReady(f.harness, { ...f.manifest, outcomes: [outcomes[0]] }, async () => true))
+    .resolves.toMatchObject({ results: [{ status: 'fulfilled' }] });
+});
+
 it.each([false, true])('reports actual candidate completion and refills before slow sibling finishes (failure=%s)', async failure => {
   const f = fixture(), progress: DeliveryPoolProgress[] = [];
   writeFileSync(join(f.root, 'third.txt'), 'third input');
