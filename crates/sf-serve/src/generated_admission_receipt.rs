@@ -47,6 +47,27 @@ impl ValidatedMapping {
 }
 
 impl GeneratedAdmissionReceipt {
+    /// Off-path policy preparation, not query admission or an issued response.
+    /// The future consumer must still enforce graph coverage and all request
+    /// admission before using this identity. The existing receipt is unchanged.
+    pub(crate) fn for_single_default_dataset(
+        &self,
+        compiler: &CompilerBinding,
+        allowlist: &PinnedGraphAllowlist,
+    ) -> Result<Self, ReceiptMismatch> {
+        self.coverage(compiler)?;
+        Ok(Self {
+            identity: mint(
+                self.mapping,
+                self.ontology,
+                self.admission,
+                &ProfileDescriptor::single_default_dataset(),
+                allowlist,
+            ),
+            ..*self
+        })
+    }
+
     /// Borrow coverage over the compiler's own mapping, only when every sealed
     /// identity equals the compiler's stored scope. Fixed-width compares only.
     pub(crate) fn coverage<'a>(

@@ -286,3 +286,74 @@ fn no_identity_is_issued_on_refusal_wrong_policy_or_control_failure() {
         .is_err());
     assert!(binding.compile(SELECT, FREE).is_ok());
 }
+
+#[test]
+fn dataset_receipt_derivation_preserves_legacy_binding_and_admission() {
+    use crate::generated_profile_identity::PinnedGraphAllowlist;
+    let binding = bind_default();
+    let before = identity_of(&binding);
+    let allowlist = PinnedGraphAllowlist::new(["http://ex/g"]).unwrap();
+    let receipt = binding
+        .generated
+        .for_single_default_dataset(binding.compiler(), &allowlist)
+        .unwrap();
+    assert!(receipt.coverage(binding.compiler()).is_ok());
+    assert_ne!(receipt.identity(), before);
+    assert_eq!(binding.generated.identity(), before);
+    assert_eq!(identity_of(&binding), before);
+    assert_eq!(
+        secured(&binding, ASK, context(2, 3)).unwrap().identity,
+        before
+    );
+    assert_answers(
+        &binding,
+        SELECT,
+        binding.compile_generated(SELECT, FREE).unwrap().plan,
+    );
+    let equivalent = bind_default();
+    assert_eq!(
+        receipt.identity(),
+        equivalent
+            .generated
+            .for_single_default_dataset(equivalent.compiler(), &allowlist)
+            .unwrap()
+            .identity()
+    );
+    let empty = PinnedGraphAllowlist::new(std::iter::empty::<&str>()).unwrap();
+    let empty_receipt = binding
+        .generated
+        .for_single_default_dataset(binding.compiler(), &empty)
+        .unwrap();
+    assert_ne!(empty_receipt.identity(), receipt.identity());
+    assert_ne!(empty_receipt.identity(), before);
+    assert!(binding
+        .compile_generated("ASK FROM <http://ex/g> { ?s ?p ?o }", FREE)
+        .is_err());
+    let debug = format!("{receipt:?} {allowlist:?}");
+    assert!(!debug.contains("http://ex/g"));
+    assert!(!debug.contains(&receipt.identity().wire()[6..]));
+}
+
+#[test]
+fn dataset_receipt_derivation_rejects_each_foreign_sealed_dimension() {
+    use crate::generated_profile_identity::PinnedGraphAllowlist;
+    let base = mapping_text(true, false);
+    let binding = bind_default();
+    let allowlist = PinnedGraphAllowlist::new(["http://ex/g"]).unwrap();
+    let others = [
+        bind(&mapping_text(false, false), MappingOrigin::Authored, &[]),
+        bind(&base, MappingOrigin::Authored, &[EXTRA]),
+        bind(&base, MappingOrigin::Direct, &[]),
+        bind_at(1, &base, MappingOrigin::Authored, &[]),
+    ];
+    for other in others {
+        assert!(binding
+            .generated
+            .for_single_default_dataset(other.compiler(), &allowlist)
+            .is_err());
+        assert!(other
+            .generated
+            .for_single_default_dataset(binding.compiler(), &allowlist)
+            .is_err());
+    }
+}
