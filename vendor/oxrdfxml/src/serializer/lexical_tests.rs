@@ -124,3 +124,120 @@ fn quoted_triple_literal_cr_roundtrips() {
     );
     assert_sync_readers(&serialized(&triple), &triple);
 }
+
+#[cfg(feature = "rdf-12")]
+fn inherited_direction_cases() -> Vec<(String, Triple)> {
+    use oxrdf::BaseDirection::{Ltr, Rtl};
+
+    let directional = |value, direction| {
+        Literal::new_directional_language_tagged_literal(value, "ar", direction).unwrap()
+    };
+    let language = || Literal::new_language_tagged_literal("text", "ar").unwrap();
+    let mut cases = Vec::new();
+    for (version, root, node, property, value, literal) in [
+        (
+            "1.2",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "",
+            "text",
+            directional("text", Rtl),
+        ),
+        (
+            "1.2",
+            "",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "text",
+            directional("text", Rtl),
+        ),
+        (
+            "1.2",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "its:dir='ltr'",
+            "text",
+            directional("text", Ltr),
+        ),
+        (
+            "1.2",
+            "xml:lang='ar' its:dir='rtl'",
+            "its:dir='ltr'",
+            "",
+            "text",
+            directional("text", Ltr),
+        ),
+        ("1.2", "xml:lang='ar'", "", "", "text", language()),
+        (
+            "1.2",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "rdf:datatype='http://example.com/type'",
+            "text",
+            Literal::new_typed_literal("text", NamedNode::new("http://example.com/type").unwrap()),
+        ),
+        (
+            "1.2",
+            "its:dir='rtl'",
+            "",
+            "",
+            "text",
+            Literal::new_simple_literal("text"),
+        ),
+        (
+            "1.2",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "",
+            "",
+            directional("", Rtl),
+        ),
+        (
+            "1.2-basic",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "",
+            "text",
+            directional("text", Rtl),
+        ),
+        (
+            "1.1",
+            "xml:lang='ar' its:dir='rtl'",
+            "",
+            "",
+            "text",
+            language(),
+        ),
+    ] {
+        let document = format!(
+            "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:e='http://example.com/' xmlns:its='http://www.w3.org/2005/11/its' rdf:version='{version}' {root}><rdf:Description rdf:about='http://example.com/s' {node}><e:p {property}>{value}</e:p></rdf:Description></rdf:RDF>"
+        );
+        cases.push((
+            document,
+            Triple::new(
+                NamedNode::new("http://example.com/s").unwrap(),
+                NamedNode::new("http://example.com/p").unwrap(),
+                literal,
+            ),
+        ));
+    }
+    cases
+}
+
+#[cfg(feature = "rdf-12")]
+#[test]
+fn text_literals_inherit_direction_with_language() {
+    for (document, triple) in inherited_direction_cases() {
+        assert_sync_readers(document.as_bytes(), &triple);
+    }
+}
+
+#[cfg(all(feature = "rdf-12", feature = "async-tokio"))]
+#[tokio::test]
+async fn async_text_literals_inherit_direction_with_language() {
+    for (document, triple) in inherited_direction_cases() {
+        let mut reader = RdfXmlParser::new().for_tokio_async_reader(document.as_bytes());
+        assert_eq!(reader.next().await.unwrap().unwrap(), triple);
+        assert!(reader.next().await.is_none());
+    }
+}

@@ -41,4 +41,11 @@ entity-looking text and boundary/interior whitespace. Original three serializer
 tests remain unchanged. This correction does not select the root dependency or
 claim advisory closure.
 
+September 30 inherited-direction correction: text and empty property literals
+use the existing enclosing base-direction state when no local direction exists,
+matching property-attribute construction. Datatypes still take precedence and
+direction without language still produces a simple literal. Registered lexical
+tests cover root/node inheritance, local overrides, RDF version eligibility and
+slice/reader/async readers. Existing CR tests and licenses remain unchanged.
+
 This file records provenance only. It does not claim that any build, test, doctest or format check has run.
