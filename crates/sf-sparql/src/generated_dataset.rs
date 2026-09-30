@@ -13,6 +13,8 @@
 //! that constant GRAPH; VALUES and empty BGPs stay unchanged. The normalized
 //! query keys the existing cache, so graph choices never share an entry, and no
 //! verdict is ever cached. Named/variable GRAPH and EXISTS remain later work.
+//! The `_deferred` siblings share this one parse and report refusals as data,
+//! with the original query kept for authorization-only lowering.
 //! This is not mapping proof, row authority, receipt or issued identity.
 
 use std::fmt;
@@ -35,6 +37,8 @@ use crate::{CompilerWorkMode, Plan};
 
 #[path = "generated_dataset_control.rs"]
 mod dataset_control;
+#[path = "generated_dataset_deferred.rs"]
+mod deferred;
 #[path = "generated_dataset_walk.rs"]
 mod walk;
 
@@ -42,6 +46,7 @@ pub use dataset_control::{
     DatasetAllowlistError, DatasetGraphAllowlist, MAX_DATASET_GRAPHS, MAX_DATASET_IRI_BYTES,
     MAX_GRAPH_IRI_BYTES,
 };
+pub use deferred::GeneratedDatasetDeferred;
 
 /// Named, redacted refusal rule. Carries no query text, IRI or allowlist entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,33 +162,123 @@ fn from_constant(error: GeneratedCompileError) -> GeneratedDatasetError {
     }
 }
 
+/// The ORIGINAL parsed query a refusal may lower, uncached, solely as
+/// row-authorization input. It is never admitted, cached or identified.
+pub(crate) enum AuthorizationQuery {
+    /// A syntax refusal parsed nothing, so nothing may be lowered.
+    Absent,
+    /// Any other structural refusal: the original exactly as parsed, dataset
+    /// clause intact, lowered as ordinary compilation would lower it. It is
+    /// never stripped or rewritten into an admissible-looking query.
+    Original(Query),
+    /// Dataset and pattern screens passed and a check refused the request: the
+    /// original, restored exactly, still to be scoped to its requested graph.
+    Scoped(Query),
+}
+
+/// Parse-stage result of dataset admission. A refusal keeps what one parse may
+/// lower once for row authorization; nothing is normalized for it yet.
+pub(crate) enum DatasetAdmission {
+    Admitted(Query),
+    Refused {
+        refusal: DatasetRule,
+        query: AuthorizationQuery,
+    },
+}
+
 /// Checkpoint, parse once, screen, run every check, then normalize. Returns the
 /// normalized query; no key, cache or lowering work has happened yet.
 pub(crate) fn admit<G, F>(
     sparql: &str,
     allowlist: &DatasetGraphAllowlist,
     control: &dyn QueryControl,
-    mut graph_check: G,
+    graph_check: G,
     constant_check: F,
 ) -> Result<Query, GeneratedDatasetError>
 where
     G: FnMut(&str) -> Result<(), ConstantCoverageError>,
     F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
 {
-    control.checkpoint().map_err(crate::Error::from)?;
+    match parse_and_admit_dataset(sparql, allowlist, control, graph_check, constant_check)? {
+        DatasetAdmission::Admitted(query) => Ok(query),
+        DatasetAdmission::Refused { refusal, .. } => refuse(refusal),
+    }
+}
+
+/// [`admit`] reporting refusals as data. Control, resource, envelope and
+/// compiler failures stay typed errors and never become refusals.
+pub(crate) fn parse_and_admit_dataset<G, F>(
+    sparql: &str,
+    allowlist: &DatasetGraphAllowlist,
+    control: &dyn QueryControl,
+    graph_check: G,
+    constant_check: F,
+) -> crate::Result<DatasetAdmission>
+where
+    G: FnMut(&str) -> Result<(), ConstantCoverageError>,
+    F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
+{
+    control.checkpoint()?;
     let parsed = crate::parse_query(sparql);
     // Parsing observes no control; a stop raised meanwhile outranks its outcome.
-    control.checkpoint().map_err(crate::Error::from)?;
+    control.checkpoint()?;
     let mut query = match parsed {
         Ok(query) => query,
         // Only a syntax failure is a form refusal; limit and control errors stay typed.
-        Err(crate::Error::Parse(_)) => return refuse(DatasetRule::FormNotAdmitted),
-        Err(error) => return Err(error.into()),
+        Err(crate::Error::Parse(_)) => {
+            let refusal = DatasetRule::FormNotAdmitted;
+            let query = AuthorizationQuery::Absent;
+            return Ok(DatasetAdmission::Refused { refusal, query });
+        }
+        Err(error) => return Err(error),
     };
     // The original envelope bounds every later recursion and copy below.
-    AlgebraEnvelopeV1::validate_with_control(&query, control).map_err(crate::Error::from)?;
+    AlgebraEnvelopeV1::validate_with_control(&query, control)?;
     let work = BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control)));
-    let (dataset, pattern) = match &query {
+    match screen(&query, work) {
+        Ok(()) => {}
+        Err(GeneratedDatasetError::Refused(refusal)) => {
+            // Kept exactly as parsed: a refusal is never made to look admissible.
+            let query = AuthorizationQuery::Original(query);
+            return Ok(DatasetAdmission::Refused { refusal, query });
+        }
+        Err(GeneratedDatasetError::Compiler(error)) => return Err(error),
+    }
+    let checked = check(
+        &mut query,
+        allowlist,
+        control,
+        work,
+        graph_check,
+        constant_check,
+    );
+    let graph = match checked {
+        Ok(graph) => graph,
+        Err(GeneratedDatasetError::Refused(refusal)) => {
+            let query = AuthorizationQuery::Scoped(query);
+            return Ok(DatasetAdmission::Refused { refusal, query });
+        }
+        Err(GeneratedDatasetError::Compiler(error)) => return Err(error),
+    };
+    match normalize(&mut query, &graph, work) {
+        Ok(()) => {}
+        // Unreachable after the screen. A partly rewritten query is no longer
+        // the original, so no authorization plan may be derived from it.
+        Err(GeneratedDatasetError::Refused(refusal)) => {
+            let query = AuthorizationQuery::Absent;
+            return Ok(DatasetAdmission::Refused { refusal, query });
+        }
+        Err(GeneratedDatasetError::Compiler(error)) => return Err(error),
+    }
+    AlgebraEnvelopeV1::validate_with_control(&query, control)?;
+    control.checkpoint()?;
+    Ok(DatasetAdmission::Admitted(query))
+}
+
+/// Structural screen of the original parsed query: form, dataset clause and
+/// pattern shape, before any callback.
+fn screen(query: &Query, work: BuildWork<'_>) -> Result<(), GeneratedDatasetError> {
+    let (dataset, pattern) = match query {
         Query::Select {
             dataset, pattern, ..
         }
@@ -196,22 +291,38 @@ where
         return refuse(DatasetRule::MissingDataset);
     };
     dataset_control::screen_dataset(dataset, work)?;
-    walk::screen(pattern, work)?;
+    walk::screen(pattern, work)
+}
+
+/// Run every check over the screened original. Returns the selected graph;
+/// the query is left exactly as parsed.
+fn check<G, F>(
+    query: &mut Query,
+    allowlist: &DatasetGraphAllowlist,
+    control: &dyn QueryControl,
+    work: BuildWork<'_>,
+    mut graph_check: G,
+    constant_check: F,
+) -> Result<NamedNode, GeneratedDatasetError>
+where
+    G: FnMut(&str) -> Result<(), ConstantCoverageError>,
+    F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
+{
+    let Some(dataset) = query.dataset() else {
+        return refuse(DatasetRule::MissingDataset);
+    };
     dataset_control::admit_occurrences(dataset, allowlist, control, work, &mut graph_check)?;
     let graph = work.copied(&dataset.default[0])?;
     // The unchanged screen refuses any dataset clause, so the owned dataset is
     // moved out only for the constant check over the original patterns and is
     // restored before either outcome propagates.
-    let taken = dataset_slot(&mut query).take();
-    let admitted = admit_parsed(&query, control, constant_check);
-    *dataset_slot(&mut query) = taken;
+    let taken = dataset_slot(query).take();
+    let admitted = admit_parsed(query, control, constant_check);
+    *dataset_slot(query) = taken;
     // A callback that stopped the request never becomes a denial or admission.
     control.checkpoint().map_err(crate::Error::from)?;
     admitted.map_err(from_constant)?;
-    normalize(&mut query, &graph, work)?;
-    AlgebraEnvelopeV1::validate_with_control(&query, control).map_err(crate::Error::from)?;
-    control.checkpoint().map_err(crate::Error::from)?;
-    Ok(query)
+    Ok(graph)
 }
 
 /// Deduplicate the admitted repeated FROM occurrences, keep named metadata
@@ -230,6 +341,29 @@ fn normalize(
     *pattern = walk::rewrite(owned, graph, work)?;
     work.checkpoint()?;
     Ok(())
+}
+
+/// Scope a screened, refused original to its one requested default graph with
+/// the admitted path's bounded rewrite, then recheck the envelope. The result
+/// is authorization-only lowering input: it keeps exactly the requested graph's
+/// mapped dependencies and never admits, caches or identifies anything.
+pub(crate) fn scope_refused(
+    mut query: Query,
+    control: &dyn QueryControl,
+) -> crate::Result<Option<Query>> {
+    let work = BuildWork::new(CompilerWorkMode::Metered(CompileContext::new(control)));
+    let Some(first) = query.dataset().and_then(|dataset| dataset.default.first()) else {
+        return Ok(None);
+    };
+    let graph = work.copied(first)?;
+    match normalize(&mut query, &graph, work) {
+        Ok(()) => {}
+        // Unreachable after both screens; a partial rewrite is no plan input.
+        Err(GeneratedDatasetError::Refused(_)) => return Ok(None),
+        Err(GeneratedDatasetError::Compiler(error)) => return Err(error),
+    }
+    AlgebraEnvelopeV1::validate_with_control(&query, control)?;
+    Ok(Some(query))
 }
 
 impl CompilerBinding {

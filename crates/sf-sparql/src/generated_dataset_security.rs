@@ -13,6 +13,9 @@ use crate::cache::generated::{
 };
 use crate::Plan;
 
+#[path = "generated_dataset_security_deferred.rs"]
+mod deferred;
+
 /// Dataset refusals and security/compiler failures retain their typed causes.
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityDatasetCompileError {
