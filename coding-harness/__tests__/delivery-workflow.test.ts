@@ -6,6 +6,7 @@ import { hash } from '@metaharness/harness';
 import { DeliveryHarness } from '../src/delivery-runtime.js';
 import { deliveryCli } from '../src/delivery-cli.js';
 import { atomicJson, git } from '../src/delivery-workspace.js';
+import { verifyNativeStage } from '../src/delivery-stage.js';
 import { native, nextRequest, responseFor, workflowFixture } from './delivery-workflow-fixtures.js';
 
 const roots: string[] = [];
@@ -78,21 +79,61 @@ describe('native-host delivery workflow', () => {
     expect((await harness.advance('task-1', 'root')).kind).toBe('paused');
     expect(harness.inspect().active).toBeNull();
     await harness.resume('task-1', 'root'); await harness.bind('task-1', 'root', native);
-    expect((await nextRequest(harness)).feedback.join()).toContain('NO_PROGRESS');
+    const resumed = await nextRequest(harness);
+    expect(resumed.feedback.join()).toContain('NO_PROGRESS');
+    expect((await harness.submit('task-1', 'root', responseFor(harness, resumed))).status).toBe('paused');
+  });
+  it('accepts a scoped integrator repair made before issuing the resumed request', async () => {
+    const { root, harness } = await started(); const failed = await nextRequest(harness);
+    await harness.submit('task-1', 'root', responseFor(harness, failed,
+      { outcome: 'changes-requested', summary: 'Candidate needs repair', issues: ['Fix product'] }));
+    await harness.pause('task-1', 'root', 'integrator repair');
+    writeFileSync(join(root, 'product.txt'), 'fixed by integrator\n');
+    await harness.resume('task-1', 'root'); await harness.bind('task-1', 'root', native);
+    const repair = await nextRequest(harness);
+    expect(repair.repair).toBe(true); expect(repair.sourceDigest).not.toBe(failed.sourceDigest);
+    const result = await harness.submit('task-1', 'root', responseFor(harness, repair));
+    expect(result.status).toBe('active'); expect(result.workflow!.results.at(-1)?.accepted).toBe(true);
+    const review = await nextRequest(harness); expect(review.stage).toBe('review');
+    await harness.submit('task-1', 'root', responseFor(harness, review));
+    expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(true);
+  });
+  it('recovers a legacy false no-progress rejection without rewriting its receipt or source', async () => {
+    const { root, harness } = await started(); const failed = await nextRequest(harness);
+    await harness.submit('task-1', 'root', responseFor(harness, failed,
+      { outcome: 'changes-requested', summary: 'Candidate needs repair', issues: ['Fix product'] }));
+    writeFileSync(join(root, 'product.txt'), 'already fixed by integrator\n');
+    const repair = await nextRequest(harness);
+    const rejected = await verifyNativeStage(repair, responseFor(harness, repair),
+      ['DELIVERY_REPAIR_NO_PROGRESS: change the scoped source before resubmitting a repair']);
+    const run = await harness.pause('task-1', 'root', 'legacy false no-progress rejection');
+    delete run.digest; run.workflow!.results.push(rejected); run.digest = hash(run);
+    atomicJson(join(harness.directory, 'task-1.json'), run);
+    const priorReceipt = hash(rejected);
+    await harness.resume('task-1', 'root'); await harness.bind('task-1', 'root', native);
+    const resumed = await nextRequest(harness);
+    expect(resumed.sourceDigest).toBe(repair.sourceDigest);
+    const result = await harness.submit('task-1', 'root', responseFor(harness, resumed));
+    expect(result.status).toBe('active'); expect(result.workflow!.results.at(-1)?.accepted).toBe(true);
+    expect(hash(result.workflow!.results[1])).toBe(priorReceipt);
+    expect(result.workflow!.results[1].accepted).toBe(false);
+    const review = await nextRequest(harness); expect(review.stage).toBe('review');
+    await harness.submit('task-1', 'root', responseFor(harness, review));
+    expect((await harness.verify('task-1', 'root')).verdict?.pass).toBe(true);
   });
   it.each(['unavailable', 'cancelled'] as const)('persists %s and exact native error, with no fallback', async outcome => {
     const { harness } = await started(); const request = await nextRequest(harness);
     const run = await harness.submit('task-1', 'root', responseFor(harness, request,
       { outcome, summary: 'native client exact fixture error' }));
     expect(run.status).toBe('paused');
-    expect(run.events.at(-1)?.reason).toBe('codex gpt-5.6-sol: native client exact fixture error');
+    expect(run.events.at(-1)?.reason).toBe('codex gpt-6.1-sol: native client exact fixture error');
     expect(run.checks).toHaveLength(0);
   });
   it('rejects another task/route, duplicate responses, and self review', async () => {
     const { harness } = await started(); const request = await nextRequest(harness);
     await expect(harness.submit('task-1', 'root', { ...responseFor(harness, request), requestId: 'a'.repeat(64) })).rejects.toThrow('PENDING_REQUEST');
     await expect(harness.submit('task-1', 'root', responseFor(harness, request,
-      { native: { ...native, effort: 'high' } }))).rejects.toThrow('ROUTE_MISMATCH');
+      { native: { ...native, effort: 'medium' } }))).rejects.toThrow('ROUTE_MISMATCH');
     await harness.submit('task-1', 'root', responseFor(harness, request));
     await expect(harness.submit('task-1', 'root', responseFor(harness, request))).rejects.toThrow('PENDING_REQUEST');
     const review = await nextRequest(harness);

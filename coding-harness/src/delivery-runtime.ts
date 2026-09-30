@@ -349,8 +349,14 @@ export class DeliveryHarness {
           throw new Error('DELIVERY_STALE_REVIEW');
         }
       }
+      // Compare with failed source, not a fresh request already containing the integrator's repair.
+      // Prior no-progress refusals remain evidence, but must not become a new failure baseline.
+      const priorSource = workflow.results.filter(result => result.response.outcome !== 'unavailable'
+        && result.response.outcome !== 'cancelled'
+        && !result.reasons.some(reason => reason.startsWith('DELIVERY_REPAIR_NO_PROGRESS:'))).at(-1)?.response.sourceDigest;
       const noProgress = request.stage === 'implementation' && request.repair
-        && request.sourceDigest === source && response.outcome !== 'unavailable' && response.outcome !== 'cancelled';
+        && request.sourceDigest === source && (priorSource ?? request.sourceDigest) === source
+        && response.outcome !== 'unavailable' && response.outcome !== 'cancelled';
       const reasons = noProgress ? ['DELIVERY_REPAIR_NO_PROGRESS: change the scoped source before resubmitting a repair'] : [];
       if (request.stage === 'implementation' && response.outcome === 'changes-requested') reasons.push('implementation did not complete');
       workflow.results.push(await verifyNativeStage(request, response, reasons));
