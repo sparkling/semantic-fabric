@@ -341,6 +341,7 @@ fn should_reject_unrepresentable_limit_through_public_config_api() {
 #[test]
 fn should_reject_unrepresentable_limit_before_source_or_file_io() {
     let options = ServeOptions {
+        query_shape_profile: sf_serve::QueryShapeProfile::Ordinary,
         query_admission: sf_serve::QueryAdmission::Deny,
         source: SourceRef::environment("SF_POST_BODY_ADMISSION_MUST_NOT_BE_READ"),
         mapping: sf_serve::MappingRef::r2rml_file("/path/that/must/not/be/read.ttl"),

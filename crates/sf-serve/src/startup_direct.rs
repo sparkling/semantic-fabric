@@ -172,6 +172,7 @@ mod tests {
     #[test]
     fn closed_source_profile_rejects_before_files_or_connector_io() {
         let mut opts = ServeOptions {
+            query_shape_profile: crate::QueryShapeProfile::Ordinary,
             query_admission: crate::QueryAdmission::Deny,
             source: crate::SourceRef::inline("pg:host=database.invalid user=test"),
             mapping: MappingRef::direct("http://example.test/direct/"),

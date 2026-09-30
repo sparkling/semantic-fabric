@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::Cli;
 
+#[path = "generated_profile_config_tests.rs"]
+mod generated_profiles;
+
 #[test]
 fn required_generation_is_an_explicit_scalar_with_layered_false_overrides() {
     for (file, environment, cli, expected) in [

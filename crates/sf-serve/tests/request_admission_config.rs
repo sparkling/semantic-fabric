@@ -7,6 +7,7 @@ use tokio::sync::Semaphore;
 
 fn options(max_concurrent_requests: usize) -> ServeOptions {
     ServeOptions {
+        query_shape_profile: sf_serve::QueryShapeProfile::Ordinary,
         query_admission: sf_serve::QueryAdmission::Deny,
         source: SourceRef::environment("SF_REQUEST_ADMISSION_MUST_NOT_BE_READ"),
         mapping: MappingRef::r2rml_file("/mapping/that/must/not/be/read.ttl"),

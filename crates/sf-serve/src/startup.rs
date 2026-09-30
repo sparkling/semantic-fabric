@@ -46,6 +46,7 @@ pub(crate) async fn build_config(
 pub(crate) fn configure(opts: &ServeOptions, config: &mut ServeConfig) -> Result<(), ServeError> {
     config.timeout = opts.timeout;
     config.set_query_admission(opts.query_admission.clone());
+    config.set_query_shape_profile(opts.query_shape_profile);
     config.set_max_query_len(opts.max_query_len)?;
     config.set_max_concurrent_requests(opts.max_concurrent_requests)?;
     config.set_max_order_rows(opts.max_order_rows);
@@ -422,3 +423,7 @@ async fn open_source(
 #[cfg(test)]
 #[path = "startup/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "startup/generated_profile_tests.rs"]
+mod generated_profile_tests;

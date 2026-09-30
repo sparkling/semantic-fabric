@@ -26,6 +26,7 @@ pub(super) const OPTIONS: &[&str] = &[
     "pg-rls-context-env",
     "allow-unauthenticated",
     "bind",
+    "query-shape-profile",
     "log-level",
     "metrics",
     "timeout-secs",

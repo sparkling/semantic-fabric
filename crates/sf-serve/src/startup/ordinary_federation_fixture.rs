@@ -175,6 +175,7 @@ fn options(root: &Path, left: &Path, right: &Path) -> crate::run::ServeOptions {
     };
     let limits = crate::DEFAULT_QUERY_LIMITS;
     crate::run::ServeOptions {
+        query_shape_profile: crate::QueryShapeProfile::Ordinary,
         query_admission: crate::QueryAdmission::UnrestrictedDevelopment,
         source: sqlite(left),
         mapping: r2rml(root, "left.ttl"),

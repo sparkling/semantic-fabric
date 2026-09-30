@@ -68,6 +68,7 @@ struct ObservabilityConfig {
 #[serde(default, deny_unknown_fields)]
 struct ServeConfig {
     bind: Option<String>,
+    query_shape_profile: Option<String>,
     pg_pool_size: Option<usize>,
     pg_pool_wait_secs: Option<u64>,
     sqlite_pool_size: Option<usize>,
@@ -130,6 +131,7 @@ impl FileConfig {
         section!(
             serve,
             bind,
+            query_shape_profile,
             pg_pool_size,
             pg_pool_wait_secs,
             sqlite_pool_size,
