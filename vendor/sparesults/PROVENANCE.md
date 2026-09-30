@@ -27,6 +27,11 @@ private visibility changes only support access between parent and child modules.
 Existing documentation, doctests, feature gates, and assertions are retained.
 Formatting follows rustfmt. Other source files are unchanged from prepared input.
 
+September 30 local correction preserves literal boundary whitespace after XML
+character-reference decoding. Non-literal trimming is unchanged. Registered
+reader, slice, async and serializer roundtrip regressions cover exact lexical
+values; this correction is not an upstream release or root dependency acceptance.
+
 The newer upstream quick-xml port
 `e115a6a8dd9213fdf89a20cb72494ab333878218` was not selected: it requires
 `OxString`, unavailable in the retained oxrdf 0.3.3 dependency. The failed
