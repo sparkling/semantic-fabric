@@ -280,6 +280,7 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
 fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
     let opts = ServeArgs {
         config: None,
+        query_shape_profile: crate::serve_args::QueryShapeArg::Ordinary,
         source_tls_roots_env: None,
         source_tls_roots_env_2: None,
         auth_subjects_env: None,

@@ -67,7 +67,7 @@ impl<R> InternalRdfXmlParser<R> {
             language.or_else(|| self.current_language().map(ToOwned::to_owned))
         {
             #[cfg(feature = "rdf-12")]
-            if let Some(base_direction) = base_direction {
+            if let Some(base_direction) = base_direction.or_else(|| self.current_base_direction()) {
                 return Literal::new_directional_language_tagged_literal_unchecked(
                     value,
                     language,

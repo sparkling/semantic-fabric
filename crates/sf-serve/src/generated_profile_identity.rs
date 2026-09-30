@@ -88,6 +88,7 @@ impl ServicePolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DatasetPolicy {
     PinnedGraphAllowlist,
+    SingleDefaultGraphAllowlist,
     #[cfg(test)]
     TestAlternate,
 }
@@ -96,6 +97,7 @@ impl DatasetPolicy {
     const fn label(self) -> &'static [u8] {
         match self {
             Self::PinnedGraphAllowlist => b"dataset/pinned-graph-allowlist/v1",
+            Self::SingleDefaultGraphAllowlist => b"dataset/single-default-graph-allowlist/v1",
             #[cfg(test)]
             Self::TestAlternate => b"dataset/test-alternate",
         }
@@ -131,6 +133,14 @@ pub(crate) struct ProfileDescriptor {
 }
 
 impl ProfileDescriptor {
+    /// Fixed source-only dataset policy; constructing it grants no admission.
+    pub(crate) const fn single_default_dataset() -> Self {
+        Self {
+            dataset: DatasetPolicy::SingleDefaultGraphAllowlist,
+            ..Self::v1()
+        }
+    }
+
     pub(crate) const fn v1() -> Self {
         Self {
             version: ProfileVersion::V1,

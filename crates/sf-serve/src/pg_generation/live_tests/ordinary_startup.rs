@@ -57,6 +57,7 @@ fn conninfo(config: &Config) -> String {
 
 fn options(files: &Files, admission: crate::QueryAdmission) -> crate::run::ServeOptions {
     crate::run::ServeOptions {
+        query_shape_profile: crate::QueryShapeProfile::Ordinary,
         query_admission: admission,
         source: crate::SourceRef::inline("unused: prepared directly"),
         mapping: crate::MappingRef::r2rml_file(files.0.join("mapping.ttl").to_str().unwrap()),

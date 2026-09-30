@@ -79,7 +79,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let command = Cli::parse_from(argv).command;
+    let command = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli.command,
+        Err(error) => {
+            let profile_error = error
+                .get(clap::error::ContextKind::InvalidArg)
+                .is_some_and(|argument| argument.to_string().contains("query-shape-profile"));
+            if profile_error {
+                eprintln!("semantic-fabric: invalid query shape profile");
+                return ExitCode::FAILURE;
+            }
+            error.exit();
+        }
+    };
     if let Err(error) = initialize_telemetry_for(&command, telemetry::init) {
         eprintln!("semantic-fabric: {error}");
         return ExitCode::FAILURE;
@@ -162,6 +174,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         });
     let opts = ServeOptions {
         query_admission,
+        query_shape_profile: args.query_shape_profile.into(),
         source,
         mapping,
         additional_source,

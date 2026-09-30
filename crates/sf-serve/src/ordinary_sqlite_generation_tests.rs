@@ -53,6 +53,7 @@ impl Fixture {
         // ORDINARY mode: no --require-verified-generation, and reload
         // disabled, so recovery cannot come from a background supervisor.
         let opts = crate::run::ServeOptions {
+            query_shape_profile: crate::QueryShapeProfile::Ordinary,
             query_admission: crate::QueryAdmission::UnrestrictedDevelopment,
             source: crate::SourceRef::inline(format!("sqlite:{}", db.display())),
             mapping: crate::MappingRef::r2rml_file(root.join("mapping.ttl").to_str().unwrap()),

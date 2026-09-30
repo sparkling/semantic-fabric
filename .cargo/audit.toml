@@ -15,12 +15,6 @@
 
 [advisories]
 ignore = [
-    # quick-xml 0.37.5, transitive via oxrdfxml/sparesults (the Oxigraph
-    # RDF/XML + SPARQL-results stack, ADR-0004) — our pinned sparesults 0.3.3
-    # requires quick-xml "^0.37", which does not admit the fixed >=0.41.0.
-    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation (DoS, 7.5 high)
-    "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names (DoS, 7.5 high)
-
     # rustls-webpki 0.101.7, transitive via tiberius 0.12.3 (the SQL Server /
     # MSSQL driver, sf-sql's mssql backend), which pins the older rustls 0.21
     # stack. An already-patched rustls-webpki 0.103.13 coexists in the tree via

@@ -8,12 +8,31 @@ use sf_serve::{
 
 use crate::telemetry::TelemetryLevel;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub(super) enum QueryShapeArg {
+    #[default]
+    Ordinary,
+    GeneratedSelectAsk,
+}
+
+impl From<QueryShapeArg> for sf_serve::QueryShapeProfile {
+    fn from(value: QueryShapeArg) -> Self {
+        match value {
+            QueryShapeArg::Ordinary => Self::Ordinary,
+            QueryShapeArg::GeneratedSelectAsk => Self::GeneratedSelectAsk,
+        }
+    }
+}
+
 #[derive(clap::Args)]
 #[command(args_override_self = true)]
 pub(super) struct ServeArgs {
     /// Validated TOML configuration. CLI arguments override environment, then file values.
     #[arg(long)]
     pub(super) config: Option<String>,
+    /// Server-selected query shape; does not authorize callers.
+    #[arg(long, value_enum, default_value_t = QueryShapeArg::Ordinary)]
+    pub(super) query_shape_profile: QueryShapeArg,
     /// Environment variable containing exclusive PEM CA certificates for the first source.
     #[arg(long)]
     pub(super) source_tls_roots_env: Option<String>,

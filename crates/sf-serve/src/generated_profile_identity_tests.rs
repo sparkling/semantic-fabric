@@ -296,3 +296,49 @@ fn identity_depends_only_on_pinned_inputs() {
     assert_eq!(first, second);
     assert_eq!(first.wire(), second.wire());
 }
+
+#[test]
+fn single_default_policy_is_distinct_stable_and_bound_to_allowlist() {
+    let make = |iris: &[&str], profile: &ProfileDescriptor| {
+        mint(
+            mapping_digest("items"),
+            OntologyDigest::from_sha256([0x11; 32]),
+            SemanticAdmissionDigest::from_sha256([0x22; 32]),
+            profile,
+            &allow(iris),
+        )
+    };
+    let profile = ProfileDescriptor::single_default_dataset();
+    let identity = make(&[G1, G2], &profile);
+    assert_eq!(
+        identity,
+        make(&[G2, G1], &ProfileDescriptor::single_default_dataset())
+    );
+    assert_ne!(identity, baseline());
+    assert_ne!(identity, make(&[G1], &profile));
+    assert_ne!(make(&[], &profile), make(&[], &ProfileDescriptor::v1()));
+    assert!(GeneratedProfileClaim::parse(&identity.wire())
+        .unwrap()
+        .matches(&identity));
+    assert!(!identity.claim().matches(&baseline()));
+
+    let mut preimage = Vec::new();
+    for field in [
+        b"semantic-fabric/generated-profile-identity/v1".as_slice(),
+        b"generated-query-profile/v1",
+        b"forms/select-ask-only/v1",
+        b"service/refuse/v1",
+        b"dataset/single-default-graph-allowlist/v1",
+        b"coverage/pinned-mapping-constants/v1",
+        mapping_digest("items").as_bytes(),
+        &[0x11; 32],
+        &[0x22; 32],
+    ] {
+        framed(&mut preimage, field);
+    }
+    preimage.extend_from_slice(&2u64.to_be_bytes());
+    framed(&mut preimage, G1.as_bytes());
+    framed(&mut preimage, G2.as_bytes());
+    let expected = format!("sfgp1:{:x}", Sha256::digest(&preimage));
+    assert_eq!(identity.wire(), expected);
+}

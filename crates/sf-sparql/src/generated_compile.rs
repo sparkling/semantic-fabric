@@ -24,6 +24,14 @@ use crate::Plan;
 
 pub use super::generated_query_shape::{ConstantOccurrence, ConstantRole, ShapeRule};
 
+#[path = "generated_dataset.rs"]
+mod dataset;
+
+pub use dataset::{
+    DatasetAllowlistError, DatasetGraphAllowlist, DatasetRule, GeneratedDatasetError,
+    MAX_DATASET_GRAPHS, MAX_DATASET_IRI_BYTES, MAX_GRAPH_IRI_BYTES,
+};
+
 /// Failure reported by the caller's constant-coverage check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConstantCoverageError {
