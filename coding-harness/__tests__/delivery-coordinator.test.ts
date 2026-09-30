@@ -22,6 +22,8 @@ describe('native programme coordinator entrypoint', () => {
     expect(plan.args.at(-1)).toContain('A status or handoff answer does not pause authorized programme work');
     expect(plan.args.at(-1)).toContain('An explicit owner pause always wins');
     expect(plan.args.at(-1)).toContain('never replay planner/author merely to refresh evidence');
+    expect(plan.args.at(-1)).toContain('native Codex gpt-6.1-sol/high planning/author/fresh review use configured 9router');
+    expect(plan.args.at(-1)).not.toContain('Ordinary Sonnet');
   });
 
   it('previews without launching and forwards native exit status without fallback', () => {

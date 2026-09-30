@@ -36,7 +36,7 @@ export function coordinatorLaunch(root, sessionId) {
     'Respect active read/write/resource reservations. If integration reports an active dependency, retain the candidate and retry after that dependency settles.',
     'For accepted sibling drift in Cargo inputs, preserve candidate bytes and run canonical delivery run for current-source checks and fresh review; never replay planner/author merely to refresh evidence.',
     'Only accepted integrated parents release children; dispatch their ready work while independent siblings continue. Revalidate read dependencies and report real blockers.',
-    'Ordinary Sonnet 5.5 native planning/author/fresh review, existing Opus repair and learning stay configured; preserve explicit pins.',
+    'Ordinary native Codex gpt-6.1-sol/high planning/author/fresh review use configured 9router; existing Opus repair and learning stay configured; preserve explicit pins.',
     'No provider substitution, cloud launch, publication or push. Preserve WIP as unaccepted until its own checks and review pass.',
   ].join(' ');
   return { executable: 'codex', cwd, args: ['resume', sessionId, '--yolo', '--model', 'gpt-6-astra',
