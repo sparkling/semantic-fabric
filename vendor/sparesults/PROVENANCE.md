@@ -32,6 +32,18 @@ character-reference decoding. Non-literal trimming is unchanged. Registered
 reader, slice, async and serializer roundtrip regressions cover exact lexical
 values; this correction is not an upstream release or root dependency acceptance.
 
+September 30 follow-up correction encodes every literal CR as `&#13;` at the
+shared serializer seam, including interior CR and CRLF. XML escaping occurs
+before insertion of CR references, preserving literal ampersands and
+entity-looking text without escaping generated references again. The borrowed
+path remains available when no escaping or boundary encoding is needed. Existing
+boundary-whitespace encoding and parser XML newline normalization are retained.
+Registered regressions cover exact lexical values and independently specified
+serialized bodies for plain, typed and valid language literals, repeated CR,
+metacharacters, Unicode, and boundary/interior combinations. Reader, slice and
+async paths also cover raw XML CR/CRLF normalization to LF; sync and async writer
+bytes are compared directly. Existing CDATA rejection assertions remain intact.
+
 The newer upstream quick-xml port
 `e115a6a8dd9213fdf89a20cb72494ab333878218` was not selected: it requires
 `OxString`, unavailable in the retained oxrdf 0.3.3 dependency. The failed

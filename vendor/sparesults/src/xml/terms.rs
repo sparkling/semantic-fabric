@@ -119,10 +119,16 @@ pub(super) fn build_literal(
     }
 }
 
-/// Escapes whitespaces at the beginning and the end to make sure they are not removed by parsers trimming text events.
+/// Escapes boundary whitespace to prevent trimming and every CR to prevent XML newline normalization.
 fn escape_including_bound_whitespaces(value: &str) -> Cow<'_, str> {
     let trimmed = value.trim_matches(|c| matches!(c, '\t' | '\n' | '\r' | ' '));
     let trimmed_escaped = escape(trimmed);
+    // Insert CR references after escaping so their ampersands are not escaped again.
+    let trimmed_escaped = if trimmed_escaped.contains('\r') {
+        Cow::Owned(trimmed_escaped.replace('\r', "&#13;"))
+    } else {
+        trimmed_escaped
+    };
     if trimmed == value {
         return trimmed_escaped;
     }
