@@ -175,7 +175,7 @@ it.each(['invalid-plan', '402', '401'])('classifies %s planner response with exa
   if (mode === '401') { expect(outcome.failure).toBe('authentication-rejected'); expect(routes).toHaveLength(1); }
   else {
     expect(outcome.failure).toBeNull();
-    expect(routes[1]).toBe(mode === '402' ? 'claude-code:cc/claude-sonnet-5-5[1m]:medium' : 'claude-code:cc/claude-opus-5-5[1m]:high');
+    expect(routes[1]).toBe(mode === '402' ? 'codex:gpt-6.1-sol:high' : 'claude-code:cc/claude-opus-5-5[1m]:high');
     expect(outcome.knownActualUsd).toBeCloseTo(mode === '402' ? 0.02 : 0.03);
   }
 });

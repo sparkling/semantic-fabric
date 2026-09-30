@@ -179,8 +179,9 @@ export class DeliveryHarness {
       const repair = evidence.status === 'completed-invalid-output';
       const eligible = repair
         ? native.host === 'claude-code' && native.model === 'cc/claude-opus-5-5[1m]' && native.effort === 'high'
-        : credit && native.effort === 'medium' && ((native.host === 'codex' && native.model === 'gpt-5.6-sol')
-          || (native.host === 'claude-code' && native.model === 'cc/claude-sonnet-5-5[1m]'));
+        : credit && ((native.host === 'codex' && native.model === 'gpt-6.1-sol' && native.effort === 'high')
+          || (native.effort === 'medium' && ((native.host === 'codex' && native.model === 'gpt-5.6-sol')
+            || (native.host === 'claude-code' && native.model === 'cc/claude-sonnet-5-5[1m]'))));
       if (!eligible) throw new Error('DELIVERY_API_FALLBACK_NOT_AUTHORIZED');
       assertHostEnabled(native.host);
       if (run.handoffs.some(author => author.executorId === native.executorId)) throw new Error('DELIVERY_FRESH_FALLBACK_EXECUTOR_REQUIRED');

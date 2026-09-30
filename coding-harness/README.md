@@ -31,7 +31,7 @@ writer before resuming its existing UUID; never launch a competing conversation.
 Set `SEMANTIC_FABRIC_COORDINATOR_SESSION_ID`, then run `npm run coordinator` here.
 Use `npm run coordinator -- --dry-run` to inspect without launching. The launcher
 pins Codex `gpt-6-astra`/`medium` on local `main`; it never resumes a paused goal.
-Preserve configured subscription gateways, ordinary Sonnet and existing Opus repair.
+Preserve configured subscription gateways, ordinary Codex `gpt-6.1-sol`/`high` and existing Opus repair.
 
 Before dispatch, record dependencies, source revision, owned scope, read-only
 status, deliverable, acceptance checks, native model/effort and result recipient
@@ -174,15 +174,15 @@ pre-workflow records remain historical, not retroactive claims of kernel executi
 
 Native binding fields are `host`, `model`, `effort`, `executorId`,
 `authentication: "native-subscription"`, and `observation` (the actual host
-metadata/error, never credentials). Default Codex routes are Luna low for
-mechanical work, Terra medium for patterns, Sol medium for implementation, Sol
-high for a correctness proof, Astra high for difficult work. Default Claude
+metadata/error, never credentials). Default Codex routes use `gpt-6.1-sol`/`high`
+for all ordinary task classes. Explicit task/reviewer model and effort pins stay
+unchanged; configured Opus/high remains capability repair. Explicit Claude
 routes use Haiku/Sonnet/Opus at native-default effort; an explicit Claude route
 may record the actual Claude Code effort (`low`..`max`; `ultra` is Codex-only).
 Opus high is the bounded top-tier escalation (ADR-0055; it replaced Fable on
 2026-09-23) and, like Astra max, requires an explicit `requested` route. These are explicit project policy, not learned
-quality estimates. New tasks without a host default to isolated OpenRouter
-`deepseek/deepseek-v4.1-flash` at high effort; explicit native assignments stay
+quality estimates. New tasks without a host default to native Codex
+`gpt-6.1-sol` at high effort; explicit native/API assignments stay
 unchanged. Review requires a distinct executor from every author, not an implied
 cross-vendor consensus. Native unavailability pauses with exact client/model/error.
 `requested: {host, model, effort}` plus

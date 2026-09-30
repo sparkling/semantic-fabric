@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { hash } from '@metaharness/harness';
 import { PersistentRoutedAgentPool, VerifiedRoutingHistory, type RoutingObservation, type NativeModelCandidate } from './models/routing.js';
-import type { DeliveryRoute, DeliveryTask } from './delivery-contracts.js';
+import { ORDINARY_NATIVE_ROUTE, type DeliveryRoute, type DeliveryTask } from './delivery-contracts.js';
 import { atomicJson, readJson, withOperationLock } from './delivery-workspace.js';
 
 interface Delta { schemaVersion: 1; runId: string; receiptDigest: string; observations: RoutingObservation[]; digest: string }
@@ -59,8 +59,7 @@ export async function openDeliveryLearning(directory: string, runId: string, tas
     summary: () => ({ snapshotDigest: hash(history.snapshot()), observations: history.snapshot().observations.length,
       ...(author ? { routing: author.routeSnapshot() } : {}), authority: 'native-verifier-observations-only' }),
     selectCreditFallback(): DeliveryRoute {
-      const routes: DeliveryRoute[] = [{ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' },
-        { host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' }];
+      const routes: DeliveryRoute[] = [{ ...ORDINARY_NATIVE_ROUTE }];
       const chosen = makePool(routes, 'implementation').select('implementation');
       return routes.find(route => nativeRouteId(route) === chosen.id)!;
     },

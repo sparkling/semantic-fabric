@@ -31,7 +31,7 @@ function fixture() {
     ] };
   return { root, task, harness: new DeliveryHarness(root) };
 }
-const binding = { host: 'codex' as const, model: 'gpt-5.6-sol', effort: 'medium' as const,
+const binding = { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const,
   executorId: 'native-sol', authentication: 'native-subscription' as const, observation: 'native agent metadata' };
 async function started() {
   const f = fixture(); await f.harness.begin(f.task); await f.harness.bind(f.task.id, 'root', binding); return f;
@@ -49,15 +49,16 @@ async function checks(harness: DeliveryHarness, id = 'task-1') {
 }
 
 describe('mandatory main-only delivery harness', () => {
-  it('routes faster models by task and forwards explicit max/ultra without clamping', () => {
+  it('routes ordinary work through Sol 6.1/high and forwards explicit max/ultra without clamping', () => {
     const { task } = fixture();
-    expect(selectDeliveryRoute(task)).toEqual({ host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' });
-    expect(selectDeliveryRoute({ ...task, taskClass: 'pattern' }).model).toBe('gpt-5.6-terra');
-    expect(selectDeliveryRoute({ ...task, taskClass: 'mechanical' }).effort).toBe('low');
+    expect(selectDeliveryRoute(task)).toEqual({ host: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+    expect(selectDeliveryRoute({ ...task, taskClass: 'pattern' }).model).toBe('gpt-6.1-sol');
+    expect(selectDeliveryRoute({ ...task, taskClass: 'mechanical' }).effort).toBe('high');
     expect(selectDeliveryRoute({ ...task, taskClass: 'correctness' }).effort).toBe('high');
     expect(selectDeliveryRoute({ ...task, host: 'claude-code' })).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
     const { host: _host, ...ordinary } = task;
-    expect(selectDeliveryRoute(parseDeliveryTask(ordinary))).toEqual({ host: 'claude-code', model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' });
+    expect(selectDeliveryRoute(parseDeliveryTask(ordinary))).toEqual({ host: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+    expect(selectDeliveryRoute({ ...task, taskClass: 'difficult', selectionReason: 'named unresolved proof' })).toEqual({ host: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
     expect(selectDeliveryRoute(parseDeliveryTask({ ...ordinary, host: 'openrouter' })).model).toBe('deepseek/deepseek-v4.1-flash');
     const claude = { ...task, host: 'claude-code' as const, selectionReason: 'main session' };
     expect(selectDeliveryRoute({ ...claude, requested: { host: 'claude-code', model: 'opus', effort: 'xhigh' } }).effort).toBe('xhigh');
@@ -92,7 +93,7 @@ describe('mandatory main-only delivery harness', () => {
     const { task, harness } = fixture(); await harness.begin(task);
     await expect(harness.begin({ ...task, id: 'task-2' })).rejects.toThrow('WRITER_ALREADY');
     await expect(harness.check(task.id, 'root', 'build')).rejects.toThrow('NATIVE_HANDOFF');
-    await expect(harness.bind(task.id, 'root', { ...binding, effort: 'high' })).rejects.toThrow('ROUTE_MISMATCH');
+    await expect(harness.bind(task.id, 'root', { ...binding, effort: 'medium' })).rejects.toThrow('ROUTE_MISMATCH');
     await expect(harness.bind(task.id, 'wrong-owner', binding)).rejects.toThrow('WRITER_MISMATCH');
   });
   it('runs real commands and MetaHarness verification then binds only the scoped main commit', async () => {

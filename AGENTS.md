@@ -19,8 +19,8 @@ and learning remain optional; harness execution is never a compulsory gate.
 Keep one integrator on canonical `main`, source-bound acceptance and independent
 review. GCP resumption and harness deployment are now owner-authorized; preserve
 its sole coordinator, existing Codex `gpt-6-astra` at `medium`, and current app work.
-Ordinary planning, authoring and fresh-context review use native
-`cc/claude-sonnet-5-5[1m]` through existing 9router; Opus 5.5/high repairs remain.
+Ordinary planning, authoring and fresh-context review use native Codex
+`gpt-6.1-sol`/`high` through existing 9router; Opus 5.5/high repairs remain.
 Explicit task/reviewer pins and native learning remain; no global Claude-only rule.
 
 Direct OpenRouter `deepseek/deepseek-v4.1-flash` authoring and fresh-context

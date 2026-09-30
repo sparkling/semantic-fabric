@@ -31,12 +31,13 @@ function fixture(fetcher: typeof fetch) {
   return { directory, invoke: createDeliveryApi({ directory, fetch: fetcher, apiKey: () => 'fake-key' }) };
 }
 describe('ordinary API transport', () => {
-  it('defaults new tasks to API without rewriting explicit native assignments', () => {
+  it('defaults new tasks to Sol 6.1/high without rewriting explicit native/API assignments', () => {
     const input = { schemaVersion: 1, id: 'default-api', requirement: 'repair', owner: 'root', thread: 'root',
       taskClass: 'implementation', scope: ['source.ts'], checks: [
         { id: 'test', kind: 'acceptance', argv: ['npm', 'test'], cwd: 'coding-harness' },
         { id: 'build', kind: 'build', argv: ['npm', 'run', 'build'], cwd: 'coding-harness' }] };
-    expect(selectDeliveryRoute(parseDeliveryTask(input))).toEqual(request().route);
+    expect(selectDeliveryRoute(parseDeliveryTask(input))).toEqual({ host: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+    expect(selectDeliveryRoute(parseDeliveryTask({ ...input, host: 'openrouter' }))).toEqual(request().route);
     expect(selectDeliveryRoute(parseDeliveryTask({ ...input, host: 'claude-code' })).host).toBe('claude-code');
   });
   it('admits explicit API identity and configured native aliases without faking native authentication', () => {
@@ -238,14 +239,14 @@ describe('source-bound native fallback', () => {
     await f.harness.submit(f.task.id, 'root', proposal.response);
     expect((await f.harness.verify(f.task.id, 'root')).verdict?.pass).toBe(true);
   });
-  it('permits medium Sol for confirmed402, never Opus solely for credit exhaustion', async () => {
+  it.each([{ model: 'gpt-5.6-sol', effort: 'medium' as const }, { model: 'gpt-6.1-sol', effort: 'high' as const }])('permits admitted Sol $model/$effort for confirmed402, never Opus solely for credit exhaustion', async (selection) => {
     const f = await failed(async () => new Response(JSON.stringify({ error: { code: 402 } }), { status: 402 }));
     await expect(f.harness.fallback(f.task.id, 'root', f.pending.id, f.evidencePath, opus)).rejects.toThrow('FALLBACK_NOT_AUTHORIZED');
     await expect(f.harness.fallback(f.task.id, 'root', f.pending.id, f.evidencePath,
       { ...opus, model: 'cc/claude-sonnet-4-6', effort: 'medium' })).rejects.toThrow('FALLBACK_NOT_AUTHORIZED');
     await f.harness.fallback(f.task.id, 'root', f.pending.id, f.evidencePath,
-      { ...opus, host: 'codex', model: 'gpt-5.6-sol', effort: 'medium', executorId: 'native-credit-sol' });
-    expect((await nextRequest(f.harness)).route.model).toBe('gpt-5.6-sol');
+      { ...opus, host: 'codex', ...selection, executorId: 'native-credit-sol' });
+    expect((await nextRequest(f.harness)).route).toEqual({ host: 'codex', ...selection });
   });
   it('refuses auth, unknown completion, model-integrity and stale-source fallback', async () => {
     for (const fetcher of [async () => new Response(JSON.stringify({ error: { code: 401 } }), { status: 401 }),

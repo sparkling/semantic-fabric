@@ -8,7 +8,7 @@ import type { DeliveryTask } from '../src/delivery-contracts.js';
 import type { NativeStageRequest, NativeStageResponse } from '../src/delivery-workflow-contracts.js';
 import { git, sourceSnapshot } from '../src/delivery-workspace.js';
 
-export const native = { host: 'codex' as const, model: 'gpt-5.6-sol', effort: 'medium' as const,
+export const native = { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const,
   executorId: 'native-sol', authentication: 'native-subscription' as const, observation: 'fixture native host metadata' };
 export function workflowFixture(roots: string[], script = 'process.exit(0);\n') {
   const root = mkdtempSync(join(tmpdir(), 'sf-delivery-workflow-')); roots.push(root);

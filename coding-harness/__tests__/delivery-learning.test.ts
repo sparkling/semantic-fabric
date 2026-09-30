@@ -13,11 +13,12 @@ it('persists native evidence, pins assigned author, and refuses hybrid labels an
   await first.record(native, 'implementation', 10, 'a'.repeat(64));
   const next = await openDeliveryLearning(directory, 'run-two', task, native);
   expect(next.summary().observations).toBe(1);
-  const sonnet = { host: 'claude-code' as const, model: 'cc/claude-sonnet-5-5[1m]', effort: 'medium' as const };
-  expect(next.selectCreditFallback()).toEqual(sonnet);
-  await next.record(sonnet, 'implementation', 100, 'b'.repeat(64));
+  const ordinary = { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const };
+  expect(next.selectCreditFallback()).toEqual(ordinary);
+  await next.record(ordinary, 'implementation', 100, 'b'.repeat(64));
   const learned = await openDeliveryLearning(directory, 'run-three', task, native);
-  expect(learned.selectCreditFallback()).toMatchObject({ host: 'codex', model: 'gpt-5.6-sol', effort: 'medium' });
+  expect(learned.selectCreditFallback()).toEqual(ordinary);
+  expect(learned.summary().observations).toBe(2);
   const hybrid = await openDeliveryLearning(directory, 'hybrid', { ...task, host: 'openrouter' }, native);
   await expect(hybrid.record(native, 'implementation', 1, 'b'.repeat(64))).rejects.toThrow('DELIVERY_HYBRID_LEARNING_REFUSED');
   const file = join(directory, 'deltas', readdirSync(join(directory, 'deltas'))[0]);
