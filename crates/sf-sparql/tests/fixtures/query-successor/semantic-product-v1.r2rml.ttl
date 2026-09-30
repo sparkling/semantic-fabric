@@ -1,0 +1,204 @@
+@prefix hm: <https://hm.com/ns/> .
+@prefix pm: <https://hm.com/ns/semantic-product-mock/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rml: <http://w3id.org/rml/> .
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://hm.com/ns/semantic-product-mock/source-map/product-design/Style> a rr:TriplesMap ;
+    hm:sourceFile "src/services/ProductDesign/ProductDesign.Domain/Style.cs" ;
+    hm:lineNumber "25"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"StyleNumber\", \"Season\", \"Status\", \"Version\" FROM nordlys_semantic.style_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/product-design/Style/{StyleNumber}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/product-design/Style>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ; rr:objectMap [ rr:column "StyleNumber" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Season> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/product-design/SeasonReference/{Season}" ; rr:termType rr:IRI ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Status> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/product-design/StyleStatus/{Status}" ; rr:termType rr:IRI ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ; rr:objectMap [ rr:column "Version" ; rr:datatype xsd:integer ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/materials-bom/BillOfMaterials> a rr:TriplesMap ;
+    hm:sourceFile "src/services/MaterialsBom/MaterialsBom.Domain/BillOfMaterials.cs" ;
+    hm:lineNumber "85"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"Id\", \"StyleReference\", \"AggregateVersion\" FROM nordlys_semantic.bill_of_materials_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/materials-bom/BillOfMaterials/{Id}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/Id> ; rr:objectMap [ rr:column "Id" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/StyleReference> ; rr:objectMap [ rr:column "StyleReference" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/AggregateVersion> ; rr:objectMap [ rr:column "AggregateVersion" ; rr:datatype xsd:integer ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/supplier-sourcing/PurchaseOrder> a rr:TriplesMap ;
+    hm:sourceFile "src/services/SupplierSourcing/SupplierSourcing.Domain/SourcingDomain.cs" ;
+    hm:lineNumber "280"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"PoRef\", \"StyleRef\", \"FactoryRef\", \"Quantity\", \"Incoterm\", \"ExFactoryDate\" FROM nordlys_semantic.purchase_order_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/supplier-sourcing/PurchaseOrder/{PoRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/FactoryRef> ; rr:objectMap [ rr:column "FactoryRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/Quantity> ; rr:objectMap [ rr:column "Quantity" ; rr:datatype xsd:decimal ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/Incoterm> ; rr:objectMap [ rr:column "Incoterm" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/ExFactoryDate> ; rr:objectMap [ rr:column "ExFactoryDate" ; rr:datatype xsd:date ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/sampling-fit/SampleRequest> a rr:TriplesMap ;
+    hm:sourceFile "src/services/SamplingFit/SamplingFit.Domain/SamplingModel.cs" ;
+    hm:lineNumber "72"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"Id\", \"StyleRef\", \"PoRef\", \"Round\", \"Status\", \"IsFitSignedOff\", \"IsPpSignedOff\" FROM nordlys_semantic.sample_request_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/sampling-fit/SampleRequest/{Id}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/Id> ; rr:objectMap [ rr:column "Id" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/Round> ; rr:objectMap [ rr:column "Round" ; rr:datatype xsd:integer ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/Status> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/sampling-fit/SampleStatus/{Status}" ; rr:termType rr:IRI ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/IsFitSignedOff> ; rr:objectMap [ rr:column "IsFitSignedOff" ; rr:datatype xsd:boolean ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/IsPpSignedOff> ; rr:objectMap [ rr:column "IsPpSignedOff" ; rr:datatype xsd:boolean ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/costing-pricing/CostSheet> a rr:TriplesMap ;
+    hm:sourceFile "src/services/CostingPricing/CostingPricing.Domain/CostingModel.cs" ;
+    hm:lineNumber "62"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"Id\", \"StyleRef\", \"Version\", \"LandedCostPoRef\", \"Total\" FROM nordlys_semantic.cost_sheet_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/costing-pricing/CostSheet/{Id}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/Id> ; rr:objectMap [ rr:column "Id" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/Version> ; rr:objectMap [ rr:column "Version" ; rr:datatype xsd:integer ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/LandedCostPoRef> ; rr:objectMap [ rr:column "LandedCostPoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/Total> ; rr:objectMap [ rr:column "Total" ; rr:datatype xsd:decimal ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/production-planning-manufacturing-execution/ProductionRun> a rr:TriplesMap ;
+    hm:sourceFile "src/services/ProductionManufacturing/ProductionManufacturing.Domain/ProductionModel.cs" ;
+    hm:lineNumber "70"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"RunRef\", \"PoRef\", \"StyleRef\", \"PlannedQuantity\", \"State\", \"ShippedQuantity\", \"ExFactoryConfirmedAt\" FROM nordlys_semantic.production_run_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/production-planning-manufacturing-execution/ProductionRun/{RunRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/RunRef> ; rr:objectMap [ rr:column "RunRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/PlannedQuantity> ; rr:objectMap [ rr:column "PlannedQuantity" ; rr:datatype xsd:decimal ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/State> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/production-planning-manufacturing-execution/ProductionRunState/{State}" ; rr:termType rr:IRI ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/ShippedQuantity> ; rr:objectMap [ rr:column "ShippedQuantity" ; rr:datatype xsd:decimal ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/ExFactoryConfirmedAt> ; rr:objectMap [ rr:column "ExFactoryConfirmedAt" ; rr:datatype xsd:dateTime ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/quality-compliance/Inspection> a rr:TriplesMap ;
+    hm:sourceFile "src/services/QualityCompliance/QualityCompliance.Domain/QualityModel.cs" ;
+    hm:lineNumber "206"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"InspectionRef\", \"ProductionRunRef\", \"PoRef\", \"Result\" FROM nordlys_semantic.inspection_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/quality-compliance/Inspection/{InspectionRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/InspectionRef> ; rr:objectMap [ rr:column "InspectionRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/ProductionRunRef> ; rr:objectMap [ rr:column "ProductionRunRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/Result> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/quality-compliance/InspectionResult/{Result}" ; rr:termType rr:IRI ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/logistics-allocation/Shipment> a rr:TriplesMap ;
+    hm:sourceFile "src/services/LogisticsAllocation/LogisticsAllocation.Domain/LogisticsModel.cs" ;
+    hm:lineNumber "177"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"ShipmentRef\", \"PoRef\", \"StyleRef\", \"Quantity\", \"Status\" FROM nordlys_semantic.shipment_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/logistics-allocation/Shipment/{ShipmentRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/ShipmentRef> ; rr:objectMap [ rr:column "ShipmentRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/Quantity> ; rr:objectMap [ rr:column "Quantity" ; rr:datatype xsd:decimal ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/Status> ; rr:objectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/logistics-allocation/ShipmentStatus/{Status}" ; rr:termType rr:IRI ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/merchandising-assortment-planning/LinePlan> a rr:TriplesMap ;
+    hm:sourceFile "src/services/MerchandisingAssortment/MerchandisingAssortment.Domain/MerchandisingModel.cs" ;
+    hm:lineNumber "5"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"StyleRef\", \"PlannedUnits\", \"PlannedRetail\" FROM nordlys_semantic.line_plan_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/merchandising-assortment-planning/LinePlan/{StyleRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/PlannedUnits> ; rr:objectMap [ rr:column "PlannedUnits" ; rr:datatype xsd:decimal ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/PlannedRetail> ; rr:objectMap [ rr:column "PlannedRetail" ; rr:datatype xsd:decimal ] ] .
+
+<https://hm.com/ns/semantic-product-mock/source-map/finance-cost-accounting/LandedCostAccrual> a rr:TriplesMap ;
+    hm:sourceFile "src/services/FinanceCostAccounting/FinanceCostAccounting.Domain/FinanceModel.cs" ;
+    hm:lineNumber "130"^^xsd:positiveInteger ;
+    prov:wasGeneratedBy <https://hm.com/ns/semantic-product-mock/activity/generate-gold-candidate> ;
+    rr:logicalTable [
+        rr:sqlQuery "SELECT \"EntryRef\", \"StyleRef\", \"PoRef\", \"Reversed\" FROM nordlys_semantic.landed_cost_accrual_v1" ;
+        rr:sqlVersion rr:SQL2008
+    ] ;
+    rr:subjectMap [
+        rr:template "https://hm.com/ns/semantic-product-mock/resource/finance-cost-accounting/LandedCostAccrual/{EntryRef}" ;
+        rr:termType rr:IRI ;
+        rr:class <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual>
+    ] ;
+    rr:predicateObjectMap
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/EntryRef> ; rr:objectMap [ rr:column "EntryRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/StyleRef> ; rr:objectMap [ rr:column "StyleRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/PoRef> ; rr:objectMap [ rr:column "PoRef" ; rr:datatype xsd:string ] ] ,
+        [ rr:predicate <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/Reversed> ; rr:objectMap [ rr:column "Reversed" ; rr:datatype xsd:boolean ] ] .

@@ -1,0 +1,129 @@
+SELECT
+  ?subject ?class
+  ?styleNumber ?season ?styleStatus ?styleVersion ?bomVersion
+  ?poRef ?factoryRef ?orderQuantity ?incoterm ?exFactoryDate
+  ?sampleRound ?sampleStatus ?fitSignedOff ?ppSignedOff
+  ?costVersion ?costTotal
+  ?runRef ?plannedQuantity ?runState ?shippedQuantity ?confirmedAt
+  ?inspectionRef ?inspectionResult
+  ?shipmentRef ?shipmentQuantity ?shipmentStatus
+  ?plannedUnits ?plannedRetail ?accrualRef ?accrualReversed
+WHERE {
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Season> ?season ;
+      <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Status> ?styleStatus ;
+      <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ?styleVersion .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/StyleReference> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/StyleReference> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/materials-bom/BillOfMaterials/field/AggregateVersion> ?bomVersion .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/FactoryRef> ?factoryRef ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/Quantity> ?orderQuantity ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/Incoterm> ?incoterm ;
+      <https://hm.com/ns/semantic-product-mock/supplier-sourcing/PurchaseOrder/field/ExFactoryDate> ?exFactoryDate .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/Round> ?sampleRound ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/Status> ?sampleStatus ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/IsFitSignedOff> ?fitSignedOff ;
+      <https://hm.com/ns/semantic-product-mock/sampling-fit/SampleRequest/field/IsPpSignedOff> ?ppSignedOff .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/Version> ?costVersion ;
+      <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/LandedCostPoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/costing-pricing/CostSheet/field/Total> ?costTotal .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/RunRef> ?runRef ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/PlannedQuantity> ?plannedQuantity ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/State> ?runState ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/ShippedQuantity> ?shippedQuantity ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/ExFactoryConfirmedAt> ?confirmedAt .
+  }
+
+  UNION
+  {
+    ?productionForInspection
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/RunRef> ?runRef ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/production-planning-manufacturing-execution/ProductionRun/field/StyleRef> "{{STYLE_NUMBER}}" .
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/InspectionRef> ?inspectionRef ;
+      <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/ProductionRunRef> ?runRef ;
+      <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/quality-compliance/Inspection/field/Result> ?inspectionResult .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/ShipmentRef> ?shipmentRef ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/Quantity> ?shipmentQuantity ;
+      <https://hm.com/ns/semantic-product-mock/logistics-allocation/Shipment/field/Status> ?shipmentStatus .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/PlannedUnits> ?plannedUnits ;
+      <https://hm.com/ns/semantic-product-mock/merchandising-assortment-planning/LinePlan/field/PlannedRetail> ?plannedRetail .
+  }
+
+  UNION
+  {
+    ?subject
+      a ?class ;
+      <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/EntryRef> ?accrualRef ;
+      <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/StyleRef> ?styleNumber ;
+      <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/StyleRef> "{{STYLE_NUMBER}}" ;
+      <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/PoRef> ?poRef ;
+      <https://hm.com/ns/semantic-product-mock/finance-cost-accounting/LandedCostAccrual/field/Reversed> ?accrualReversed .
+  }
+}
+LIMIT 11
