@@ -34,6 +34,7 @@ const PLAN_CACHE_CAP: usize = 64;
 #[allow(dead_code)]
 #[path = "generated_runtime_binding.rs"]
 mod generated;
+pub(crate) use generated::{GeneratedDeferredOutcome, GeneratedRuntimeError};
 #[path = "binding_lineage.rs"]
 mod lineage;
 

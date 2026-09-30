@@ -10,6 +10,7 @@ use crate::binding::{BoundFederatedPlan, BoundPlan};
 use crate::budget::RequestBudget;
 use crate::config::{QueryMode, ServeConfig};
 use crate::deadline::{self, CompilerReservation, CompilerRunError};
+use crate::generated_profile_identity::GeneratedProfileIdentity;
 use crate::problem::{self, ProblemCode};
 use crate::telemetry::{in_stage_sync as traced_sync, Stage};
 
@@ -33,12 +34,17 @@ pub(crate) fn charge_input(
 /// Perform semantic and resource-shape admission without reading or populating
 /// a plan cache. Protected generations use this before any source I/O, then
 /// discards the result and compiles authoritatively only under its lease.
+/// Under the opt-in generated-query profile this delegates to the generated
+/// runtime-binding preflight, which never falls back to the raw compiler.
 pub(crate) async fn preflight(
     cfg: Arc<ServeConfig>,
     snapshot: RuntimeSnapshotLease,
     query: String,
     budget: RequestBudget,
 ) -> Result<CompilerReservation, Response> {
+    if cfg.generated_active() {
+        return crate::generated_request::preflight(cfg, snapshot, query, budget).await;
+    }
     cfg.query_admission
         .validate(&budget)
         .map_err(problem::response)?;
@@ -97,6 +103,21 @@ pub(crate) async fn preflight(
     Ok(reservation)
 }
 
+/// Authoritative compile under the opt-in generated-query profile: the exact
+/// compiled binding's identity is issued together with its bound plan, on the
+/// same pinned snapshot and compiler reservation as the ordinary path.
+pub(crate) async fn compile_generated(
+    cfg: Arc<ServeConfig>,
+    snapshot: RuntimeSnapshotLease,
+    query: String,
+    budget: RequestBudget,
+    reservation: Option<CompilerReservation>,
+) -> Result<(BoundQuery, GeneratedProfileIdentity), Response> {
+    let compiled = crate::generated_request::compile(cfg, snapshot, query, budget, reservation);
+    let (plan, identity) = compiled.await?;
+    Ok((BoundQuery::Single(Box::new(plan)), identity))
+}
+
 /// Parse/rewrite off the async runtime. Federation parses exactly once inside
 /// `sf-sparql` and compiles both source-local arms under one request budget.
 pub(crate) async fn compile(
@@ -107,6 +128,10 @@ pub(crate) async fn compile(
     reservation: Option<CompilerReservation>,
     multi_origin: bool,
 ) -> Result<BoundQuery, Response> {
+    // The generated profile must use `compile_generated`; never fall back to raw.
+    if cfg.generated_active() {
+        return Err(problem::response(ProblemCode::Internal));
+    }
     cfg.query_admission
         .validate(&budget)
         .map_err(problem::response)?;

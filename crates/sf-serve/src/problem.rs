@@ -168,6 +168,9 @@ struct ProblemDetails {
     detail: &'static str,
     instance: String,
     code: &'static str,
+    /// Citable fixed rule name of a generated-profile refusal; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule: Option<&'static str>,
     #[serde(rename = "correlationId")]
     correlation_id: CorrelationId,
 }
@@ -184,6 +187,7 @@ impl ProblemDetails {
                 correlation_id.as_str()
             ),
             code: code.value(),
+            rule: None,
             correlation_id: correlation_id.clone(),
         }
     }
@@ -197,6 +201,7 @@ fn generated_correlation_id() -> CorrelationId {
 struct PendingProblem {
     code: ProblemCode,
     include_body: bool,
+    rule: Option<&'static str>,
 }
 
 /// Build a typed pending problem. The outer request coordinator materializes it
@@ -205,11 +210,29 @@ pub(crate) fn response(code: ProblemCode) -> Response {
     pending_response(code, true)
 }
 
+/// Pending problem that also cites a fixed, non-disclosing refusal rule name.
+pub(crate) fn response_with_rule(code: ProblemCode, rule: &'static str) -> Response {
+    pending_response_with_rule(code, true, Some(rule))
+}
+
+/// Whether `response` is a not-yet-finalized typed problem.
+pub(crate) fn is_pending(response: &Response) -> bool {
+    response.extensions().get::<PendingProblem>().is_some()
+}
+
 pub(crate) fn response_without_body(code: ProblemCode) -> Response {
     pending_response(code, false)
 }
 
 fn pending_response(code: ProblemCode, include_body: bool) -> Response {
+    pending_response_with_rule(code, include_body, None)
+}
+
+fn pending_response_with_rule(
+    code: ProblemCode,
+    include_body: bool,
+    rule: Option<&'static str>,
+) -> Response {
     let mut response = Response::builder()
         .status(code.status())
         .header(header::CONTENT_TYPE, "application/problem+json")
@@ -222,9 +245,11 @@ fn pending_response(code: ProblemCode, include_body: bool) -> Response {
             .headers_mut()
             .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     }
-    response
-        .extensions_mut()
-        .insert(PendingProblem { code, include_body });
+    response.extensions_mut().insert(PendingProblem {
+        code,
+        include_body,
+        rule,
+    });
     response
 }
 
@@ -236,7 +261,8 @@ pub(crate) fn finalize(
     let pending = response.extensions_mut().remove::<PendingProblem>()?;
     debug_assert_eq!(response.status(), pending.code.status());
     let body = if pending.include_body {
-        let details = ProblemDetails::new(pending.code, correlation_id);
+        let mut details = ProblemDetails::new(pending.code, correlation_id);
+        details.rule = pending.rule;
         serde_json::to_vec(&details).expect("fixed problem details must serialize")
     } else {
         Vec::new()
