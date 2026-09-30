@@ -36,7 +36,14 @@
 //! header. Dataset clauses are all refused (nonempty allowlist semantics are an
 //! unfinished obligation) and lineage/federation requests are refused. This does
 //! not implement the whole ADR.
+//!
+//! Generated provider requests ([`generated_provider_request`], source-only): a
+//! versioned, bounded preparation contract for generated SELECT/ASK text and the
+//! exact Query C2 successor templates. Preparing a request is not parsed
+//! admission, checks no source, owner or grant, and issues no identity or
+//! endpoint; delivery stays the existing raw `POST /sparql`.
 
+pub mod generated_provider_request;
 pub mod ontology;
 pub mod run;
 pub mod source;
@@ -56,6 +63,7 @@ mod deadline;
 mod federation;
 #[allow(dead_code)] // Private; HTTP issues wire values, claim parsing is comparison-only.
 mod generated_profile_identity;
+mod generated_provider_templates;
 mod generated_request;
 mod generation;
 mod health;
@@ -115,6 +123,8 @@ mod generated_http_security_tests;
 mod generated_http_test_support;
 #[cfg(test)]
 mod generated_http_tests;
+#[cfg(test)]
+mod generated_provider_request_tests;
 #[cfg(test)]
 mod health_tests;
 #[cfg(test)]

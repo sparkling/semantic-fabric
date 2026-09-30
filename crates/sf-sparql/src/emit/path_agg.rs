@@ -1,5 +1,6 @@
 //! Property-path closure and GROUP BY branch rendering.
 use super::*;
+use crate::iq::literal_cmp::{LiteralComparison, LiteralOperand};
 
 /// Render a property-path closure branch to a (possibly `WITH RECURSIVE`) CTE
 /// (ADR-0007 *recursive paths compile to source-dialect recursive CTEs*).
@@ -220,6 +221,81 @@ pub(super) fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &ActualColumns
     match &a.arg {
         // COUNT(*) — the only argument-less form (DISTINCT is rejected upstream).
         None => format!("{func}(*)"),
-        Some(col) => format!("{func}({d}{})", colref(col, dialect, actuals)),
+        Some(col) => {
+            let mut value = colref(col, dialect, actuals);
+            // RDF string identity is byte-exact even when SQLite's declared
+            // text collation folds case. No numeric cast or CHAR recipe here.
+            if a.kind == AggKind::Count
+                && a.distinct
+                && dialect == Dialect::Sqlite
+                && path_comparison::column_text(col, actuals) == Some(TextKey::Verbatim)
+            {
+                // Declared text is not per-cell storage proof; non-text cells raise.
+                let guarded = sqlite_text_cell(&value, &value);
+                value = path_comparison::exact_text(guarded, dialect);
+            }
+            format!("{func}({d}{value})")
+        }
     }
+}
+
+/// SQLite declared text affinity is not per-cell storage evidence: BLOB,
+/// INTEGER and REAL cells order by storage class, never by RDF lexical form.
+/// Admit only TEXT/NULL cells; any other cell raises instead of comparing.
+pub(super) fn sqlite_text_cell(raw: &str, admitted: &str) -> String {
+    format!(
+        "CASE WHEN typeof({raw}) IN ('text', 'null') THEN {admitted} \
+         ELSE json_extract(typeof({raw}), '$') END"
+    )
+}
+
+/// String operands require lexical comparison, never numeric storage ordering.
+/// Offline plans defer decoder qualification until actual source preparation.
+pub(super) fn text_cells(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+) -> Result<Vec<String>> {
+    let string_bound = [&cmp.left, &cmp.right].iter().any(|operand| match operand {
+        LiteralOperand::Constant(value) => {
+            value.language().is_none()
+                && value.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#string"
+        }
+        LiteralOperand::Column { spec, .. } => {
+            spec.language.is_none()
+                && spec
+                    .datatype
+                    .as_ref()
+                    .is_some_and(|dt| dt.as_str() == "http://www.w3.org/2001/XMLSchema#string")
+        }
+    });
+    let mut cells = Vec::new();
+    if cmp.value_op.is_some() && string_bound && !catalog.datatypes_by_source.is_empty() {
+        for operand in [&cmp.left, &cmp.right] {
+            if let LiteralOperand::Column { column, spec } = operand {
+                if spec.language.is_none()
+                    && spec
+                        .datatype
+                        .as_ref()
+                        .is_none_or(|dt| dt.as_str() == "http://www.w3.org/2001/XMLSchema#string")
+                {
+                    if !matches!(
+                        dialect,
+                        Dialect::Sqlite | Dialect::Postgres | Dialect::MySql
+                    ) || path_comparison::column_text(column, actuals).is_none()
+                    {
+                        return Err(Error::Unsupported(
+                            "string value comparison requires a qualified text source decoder"
+                                .into(),
+                        ));
+                    }
+                    if dialect == Dialect::Sqlite {
+                        cells.push(colref(column, dialect, actuals));
+                    }
+                }
+            }
+        }
+    }
+    Ok(cells)
 }

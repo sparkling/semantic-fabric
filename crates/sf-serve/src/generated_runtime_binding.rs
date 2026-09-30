@@ -295,6 +295,9 @@ impl RuntimeBinding {
     }
 }
 
+#[path = "generated_dataset_runtime.rs"]
+mod dataset;
+
 #[cfg(test)]
 #[path = "generated_runtime_binding_tests.rs"]
 mod tests;

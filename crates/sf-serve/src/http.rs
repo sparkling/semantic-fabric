@@ -242,7 +242,7 @@ async fn process(
     )
     .await;
     match identity {
-        Some(issued) => crate::generated_request::attach(response, &issued, &budget).await,
+        Some(issued) => crate::generated_request::attach_issued(response, &issued, &budget).await,
         None => response,
     }
 }

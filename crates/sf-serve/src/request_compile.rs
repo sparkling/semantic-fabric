@@ -10,7 +10,7 @@ use crate::binding::{BoundFederatedPlan, BoundPlan};
 use crate::budget::RequestBudget;
 use crate::config::{QueryMode, ServeConfig};
 use crate::deadline::{self, CompilerReservation, CompilerRunError};
-use crate::generated_profile_identity::GeneratedProfileIdentity;
+use crate::generated_request::GeneratedResponseIdentity;
 use crate::problem::{self, ProblemCode};
 use crate::telemetry::{in_stage_sync as traced_sync, Stage};
 
@@ -112,7 +112,7 @@ pub(crate) async fn compile_generated(
     query: String,
     budget: RequestBudget,
     reservation: Option<CompilerReservation>,
-) -> Result<(BoundQuery, GeneratedProfileIdentity), Response> {
+) -> Result<(BoundQuery, GeneratedResponseIdentity), Response> {
     let compiled = crate::generated_request::compile(cfg, snapshot, query, budget, reservation);
     let (plan, identity) = compiled.await?;
     Ok((BoundQuery::Single(Box::new(plan)), identity))

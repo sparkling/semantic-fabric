@@ -20,6 +20,10 @@ use super::generated::{
 use super::{CompileProfileId, CompileScope, CompilerBinding};
 use crate::Plan;
 
+#[path = "generated_dataset_security.rs"]
+mod dataset;
+pub use dataset::SecurityDatasetCompileError;
+
 /// A security-scoped compilation failure carrying no identity material.
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityCompileError {

@@ -32,6 +32,24 @@ pub(super) fn render_controlled(
     work: sf_sql::source_work::SourceWork<'_>,
 ) -> Result<String> {
     work.charge(1).map_err(source_control::validation_error)?;
+    let cells = path_agg::text_cells(cmp, dialect, catalog, actuals)?;
+    let sql = render_qualified(cmp, dialect, catalog, actuals, params, pidx, work)?;
+    // Innermost guard is the last operand, so cells are checked in SQL order.
+    Ok(cells
+        .iter()
+        .rev()
+        .fold(sql, |sql, raw| path_agg::sqlite_text_cell(raw, &sql)))
+}
+
+fn render_qualified(
+    cmp: &LiteralComparison,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    actuals: &ActualColumns,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+    work: sf_sql::source_work::SourceWork<'_>,
+) -> Result<String> {
     if let Some(sql) = literal_datatype::mismatch(cmp, dialect, actuals)? {
         return Ok(sql);
     }

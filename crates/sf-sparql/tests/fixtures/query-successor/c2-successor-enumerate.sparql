@@ -1,0 +1,17 @@
+SELECT DISTINCT ?styleNumber ?styleCount
+WHERE {
+  {
+    SELECT (COUNT(DISTINCT ?countedStyle) AS ?styleCount)
+    WHERE {
+      ?countedSubject
+        a <https://hm.com/ns/semantic-product-mock/product-design/Style> ;
+        <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?countedStyle .
+    }
+  }
+  ?subject
+    a <https://hm.com/ns/semantic-product-mock/product-design/Style> ;
+    <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?styleNumber .
+  FILTER(STR(?styleNumber) > "{{AFTER_STYLE_NUMBER}}")
+}
+ORDER BY ?styleNumber
+LIMIT 65

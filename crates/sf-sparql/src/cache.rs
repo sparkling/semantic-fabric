@@ -37,7 +37,9 @@ use profile::ProfiledPlanCaches;
 
 #[path = "cache_security.rs"]
 mod security;
-pub use security::{SecurityCompileError, SecurityPlanCache, SecurityScopedCompiler};
+pub use security::{
+    SecurityCompileError, SecurityDatasetCompileError, SecurityPlanCache, SecurityScopedCompiler,
+};
 
 /// Closed compiler-governance profile used to partition cache authority.
 ///

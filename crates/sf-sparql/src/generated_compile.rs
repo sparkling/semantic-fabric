@@ -10,7 +10,8 @@
 //! their original typed errors.
 //!
 //! The `_deferred` siblings also parse once but report a refusal as data, next to
-//! an optional uncached plan that exists only for later row authorization.
+//! an optional uncached plan that exists only for later row authorization. The
+//! single-default dataset profile has equivalent `_deferred` siblings.
 
 use std::fmt;
 use std::sync::Arc;
@@ -27,9 +28,14 @@ pub use super::generated_query_shape::{ConstantOccurrence, ConstantRole, ShapeRu
 #[path = "generated_dataset.rs"]
 mod dataset;
 
+pub(crate) use dataset::admit as admit_single_default_dataset;
+pub(crate) use dataset::{
+    parse_and_admit_dataset as parse_and_admit_single_default_dataset, DatasetAdmission,
+};
+
 pub use dataset::{
-    DatasetAllowlistError, DatasetGraphAllowlist, DatasetRule, GeneratedDatasetError,
-    MAX_DATASET_GRAPHS, MAX_DATASET_IRI_BYTES, MAX_GRAPH_IRI_BYTES,
+    DatasetAllowlistError, DatasetGraphAllowlist, DatasetRule, GeneratedDatasetDeferred,
+    GeneratedDatasetError, MAX_DATASET_GRAPHS, MAX_DATASET_IRI_BYTES, MAX_GRAPH_IRI_BYTES,
 };
 
 /// Failure reported by the caller's constant-coverage check.
