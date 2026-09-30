@@ -9,6 +9,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{BackendKind, IntrospectedSource, SemanticOntology};
 
+#[allow(dead_code)]
+#[path = "generated_admission_receipt.rs"]
+pub(crate) mod generated_admission_receipt;
+#[allow(dead_code)]
+#[path = "generated_mapping_coverage.rs"]
+pub(crate) mod generated_mapping_coverage;
+pub(crate) use generated_admission_receipt::GeneratedAdmissionReceipt;
+
 const ADMISSION_DOMAIN: &[u8] = b"semantic-fabric/m-join-t-admission/v2";
 const PROJECTION_DOMAIN: &[u8] = b"semantic-fabric/m-join-t-projection/v1";
 
@@ -120,6 +128,11 @@ impl ValidatedMapping {
 
     pub(crate) const fn mapping_digest(&self) -> MappingDigest {
         self.mapping_digest
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn coverage(&self) -> generated_mapping_coverage::MappingCoverage<'_> {
+        generated_mapping_coverage::MappingCoverage::new(&self.mapping)
     }
 
     pub(crate) fn ensure_context(

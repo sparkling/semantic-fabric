@@ -13,6 +13,10 @@ use sf_core::query_control::{QueryControl, UncontrolledQueryControl};
 use sf_core::security_context::{PolicySnapshotId, SecurityCacheIdentity, SecurityContext};
 use spargebra::Query;
 
+use super::generated::{
+    parse_and_admit, parse_and_admit_deferred, ConstantCoverageError, ConstantOccurrence,
+    GeneratedCompileError, GeneratedDeferred, GeneratedQueryRefusal, ParsedAdmission,
+};
 use super::{CompileProfileId, CompileScope, CompilerBinding};
 use crate::Plan;
 
@@ -27,8 +31,20 @@ pub enum SecurityCompileError {
     CacheProfileMismatch,
     #[error("security cache entry does not match the request security partition")]
     CacheIdentityMismatch,
+    /// Opt-in generated-query admission refused the query; carries no query text.
+    #[error(transparent)]
+    GeneratedQueryRefused(GeneratedQueryRefusal),
     #[error(transparent)]
     Compiler(#[from] crate::Error),
+}
+
+impl From<GeneratedCompileError> for SecurityCompileError {
+    fn from(error: GeneratedCompileError) -> Self {
+        match error {
+            GeneratedCompileError::Refused(refusal) => Self::GeneratedQueryRefused(refusal),
+            GeneratedCompileError::Compiler(error) => Self::Compiler(error),
+        }
+    }
 }
 
 /// A separate cache key that cannot be constructed without request security
@@ -281,6 +297,60 @@ impl SecurityScopedCompiler<'_> {
         self.compile_shared_impl(context, sparql, Some(control))
     }
 
+    /// Opt-in generated-query admission over the work-controlled security path.
+    ///
+    /// A wrong policy snapshot fails before checkpoint, parse, screen and
+    /// callback. Otherwise the query is parsed once, structurally screened and
+    /// passed to `check` before key construction, cache lookup or lowering, on
+    /// cold and warm requests alike. `check` reruns every request; its verdict
+    /// is never cached and is not mapping proof, row authority or identity.
+    pub fn compile_shared_with_generated_admission<F>(
+        &self,
+        context: &SecurityContext,
+        sparql: &str,
+        control: &dyn QueryControl,
+        check: F,
+    ) -> Result<Arc<Plan>, SecurityCompileError>
+    where
+        F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
+    {
+        if !context.matches_policy_snapshot(self.expected_policy) {
+            return Err(SecurityCompileError::PolicyMismatch);
+        }
+        let query = parse_and_admit(sparql, control, check)?;
+        self.compile_parsed_impl(context, &query, Some(control))
+    }
+
+    /// Deferred-refusal sibling of [`Self::compile_shared_with_generated_admission`].
+    ///
+    /// Policy is checked first. An admitted query takes the unchanged security
+    /// cache path. A refusal is returned as data; its optional plan is lowered
+    /// uncached from the same parse, bypasses every cache, and is row-authorization
+    /// input ONLY: never execute it or treat it as admitted.
+    pub fn compile_shared_with_generated_admission_deferred<F>(
+        &self,
+        context: &SecurityContext,
+        sparql: &str,
+        control: &dyn QueryControl,
+        check: F,
+    ) -> Result<GeneratedDeferred, SecurityCompileError>
+    where
+        F: FnMut(ConstantOccurrence<'_>) -> Result<(), ConstantCoverageError>,
+    {
+        if !context.matches_policy_snapshot(self.expected_policy) {
+            return Err(SecurityCompileError::PolicyMismatch);
+        }
+        match parse_and_admit_deferred(sparql, control, check)? {
+            ParsedAdmission::Admitted(query) => {
+                let plan = self.compile_parsed_impl(context, &query, Some(control))?;
+                Ok(GeneratedDeferred::Admitted(plan))
+            }
+            ParsedAdmission::Refused { refusal, query } => {
+                Ok(self.binding.defer_refusal(refusal, query, control)?)
+            }
+        }
+    }
+
     fn compile_shared_impl(
         &self,
         context: &SecurityContext,
@@ -293,12 +363,22 @@ impl SecurityScopedCompiler<'_> {
         let control = work_control.unwrap_or(&UncontrolledQueryControl);
         control.checkpoint().map_err(crate::Error::from)?;
         let query = crate::parse_query(sparql)?;
+        self.compile_parsed_impl(context, &query, work_control)
+    }
+
+    fn compile_parsed_impl(
+        &self,
+        context: &SecurityContext,
+        query: &Query,
+        work_control: Option<&dyn QueryControl>,
+    ) -> Result<Arc<Plan>, SecurityCompileError> {
+        let control = work_control.unwrap_or(&UncontrolledQueryControl);
         let profile = CompileProfileId::Uncontrolled;
         let security_identity = context.cache_identity();
         let key = match work_control {
             Some(control) => {
                 let key = super::bounded_key::plan_key_with_work_control(
-                    &query,
+                    query,
                     self.binding.scope(),
                     profile,
                     control,
@@ -311,12 +391,9 @@ impl SecurityScopedCompiler<'_> {
                     key.canonical,
                 )
             }
-            None => SecurityPlanKey::from_query(
-                &query,
-                self.binding.scope(),
-                profile,
-                security_identity,
-            ),
+            None => {
+                SecurityPlanKey::from_query(query, self.binding.scope(), profile, security_identity)
+            }
         };
         control.checkpoint().map_err(crate::Error::from)?;
         let cached = match work_control {
@@ -341,8 +418,8 @@ impl SecurityScopedCompiler<'_> {
         let plan = match work_control {
             Some(control) => self
                 .binding
-                .compile_parsed_uncached_shared_with_work_control(&query, control)?,
-            None => self.binding.compile_parsed_uncached_shared(&query)?,
+                .compile_parsed_uncached_shared_with_work_control(query, control)?,
+            None => self.binding.compile_parsed_uncached_shared(query)?,
         };
         control.checkpoint().map_err(crate::Error::from)?;
         let cached = SecurityCachedPlan::from_shared(
@@ -372,3 +449,11 @@ mod tests;
 #[cfg(test)]
 #[path = "cache_security_contention_tests.rs"]
 mod contention_tests;
+
+#[cfg(test)]
+#[path = "generated_compile_security_tests.rs"]
+mod generated_tests;
+
+#[cfg(test)]
+#[path = "generated_deferred_security_tests.rs"]
+mod generated_deferred_tests;
