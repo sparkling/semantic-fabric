@@ -159,7 +159,7 @@ fn from_constant(error: GeneratedCompileError) -> GeneratedDatasetError {
 
 /// Checkpoint, parse once, screen, run every check, then normalize. Returns the
 /// normalized query; no key, cache or lowering work has happened yet.
-fn admit<G, F>(
+pub(crate) fn admit<G, F>(
     sparql: &str,
     allowlist: &DatasetGraphAllowlist,
     control: &dyn QueryControl,

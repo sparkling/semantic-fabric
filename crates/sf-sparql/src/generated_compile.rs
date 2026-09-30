@@ -27,6 +27,8 @@ pub use super::generated_query_shape::{ConstantOccurrence, ConstantRole, ShapeRu
 #[path = "generated_dataset.rs"]
 mod dataset;
 
+pub(crate) use dataset::admit as admit_single_default_dataset;
+
 pub use dataset::{
     DatasetAllowlistError, DatasetGraphAllowlist, DatasetRule, GeneratedDatasetError,
     MAX_DATASET_GRAPHS, MAX_DATASET_IRI_BYTES, MAX_GRAPH_IRI_BYTES,
