@@ -166,6 +166,10 @@ pub(crate) struct PinnedGraphAllowlist {
 }
 
 impl PinnedGraphAllowlist {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &str> {
+        self.graphs.iter().map(String::as_str)
+    }
+
     pub(crate) fn new<I>(iris: I) -> Result<Self, IdentityError>
     where
         I: IntoIterator,
