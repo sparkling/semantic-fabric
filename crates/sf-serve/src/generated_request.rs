@@ -33,6 +33,13 @@ use crate::generated_profile_identity::GeneratedProfileIdentity;
 use crate::problem::{self, ProblemCode};
 use crate::telemetry::{in_stage_sync as traced_sync, Stage};
 
+#[path = "generated_execution_identity.rs"]
+mod execution;
+pub(crate) use execution::GeneratedResponseIdentity;
+#[cfg(test)]
+#[path = "generated_execution_http_tests.rs"]
+mod execution_http_tests;
+
 /// Documented ASCII response header carrying the issued profile identity on a
 /// successful generated SELECT/ASK response only.
 pub(crate) const PROFILE_HEADER: &str = "x-semantic-fabric-profile";
@@ -46,7 +53,7 @@ enum Verdict {
 }
 
 type Admitted<T> = sf_sparql::Result<Result<T, Verdict>>;
-type Issued = (BoundPlan, GeneratedProfileIdentity);
+type Issued = (BoundPlan, GeneratedResponseIdentity);
 
 fn refuse(rule: &'static str) -> Response {
     problem::response_with_rule(ProblemCode::UnsupportedQuery, rule)
@@ -276,7 +283,8 @@ pub(crate) async fn compile(
             traced_sync(Stage::ShapeAdmission, || {
                 crate::admission::admit(compiled.plan.plan(), max_order_rows, &worker)
             })?;
-            Ok(Ok((compiled.plan, compiled.identity)))
+            let identity = execution::mint(binding, &cfg, &query, compiled.identity, &worker)?;
+            Ok(Ok((compiled.plan, identity)))
         })
     };
     let compiled = match reservation {
@@ -292,12 +300,34 @@ pub(crate) async fn compile(
 
 /// Attach the issued identity only to an actual successful (200, non-problem)
 /// response. No request header is consulted.
+#[cfg(test)]
 pub(crate) async fn attach(
     response: Response,
     identity: &GeneratedProfileIdentity,
     budget: &RequestBudget,
 ) -> Response {
+    attach_pair(response, identity, None, budget).await
+}
+
+pub(crate) async fn attach_issued(
+    response: Response,
+    identity: &GeneratedResponseIdentity,
+    budget: &RequestBudget,
+) -> Response {
+    attach_pair(response, identity.profile(), Some(identity), budget).await
+}
+
+async fn attach_pair(
+    response: Response,
+    identity: &GeneratedProfileIdentity,
+    execution: Option<&GeneratedResponseIdentity>,
+    budget: &RequestBudget,
+) -> Response {
     let mut response = response;
+    response.headers_mut().remove(PROFILE_HEADER);
+    response
+        .headers_mut()
+        .remove(self::execution::EXECUTION_HEADER);
     if response.status() == StatusCode::OK && !problem::is_pending(&response) {
         let (parts, body) = response.into_parts();
         let mut stream = body.into_data_stream();
@@ -319,6 +349,13 @@ pub(crate) async fn attach(
         response = Response::from_parts(parts, body);
         if let Ok(value) = HeaderValue::from_str(&identity.wire()) {
             response.headers_mut().insert(PROFILE_HEADER, value);
+        }
+        if let Some(identity) = execution {
+            if let Ok(value) = HeaderValue::from_str(&identity.execution_wire()) {
+                response
+                    .headers_mut()
+                    .insert(self::execution::EXECUTION_HEADER, value);
+            }
         }
     }
     response
