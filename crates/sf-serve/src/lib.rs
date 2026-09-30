@@ -28,6 +28,14 @@
 //! blocking-task waits, busy timeouts, blocking UDF/VFS/I/O, compiler work,
 //! raw/conformance paths, or committed response prefixes. Pre-response policy
 //! limits map to 429; every post-200 failure stays a redacted body error.
+//!
+//! Opt-in generated-query profile (ADR-0056, source-only): an embedding may
+//! select [`QueryShapeProfile::GeneratedSelectAsk`]. Subject admission still
+//! runs first; only SELECT/ASK with mapping-covered constants are admitted and
+//! a successful response carries the `x-semantic-fabric-profile` attestation
+//! header. Dataset clauses are all refused (nonempty allowlist semantics are an
+//! unfinished obligation) and lineage/federation requests are refused. This does
+//! not implement the whole ADR.
 
 pub mod ontology;
 pub mod run;
@@ -46,8 +54,9 @@ mod config;
 mod correlation;
 mod deadline;
 mod federation;
-#[allow(dead_code)] // Private prerequisite; integration pending.
+#[allow(dead_code)] // Private; HTTP issues wire values, claim parsing is comparison-only.
 mod generated_profile_identity;
+mod generated_request;
 mod generation;
 mod health;
 mod http;
@@ -101,6 +110,12 @@ mod deadline_tests;
 #[cfg(test)]
 mod federated_union_tests;
 #[cfg(test)]
+mod generated_http_security_tests;
+#[cfg(test)]
+mod generated_http_test_support;
+#[cfg(test)]
+mod generated_http_tests;
+#[cfg(test)]
 mod health_tests;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -131,8 +146,8 @@ pub use activation::{
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::BackendProfile;
 pub use config::{
-    ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
-    DEFAULT_QUERY_LIMITS,
+    QueryShapeProfile, ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES,
+    DEFAULT_MAX_ORDER_ROWS, DEFAULT_QUERY_LIMITS,
 };
 pub use http::{router, router_with_metrics};
 pub use lifecycle::DEFAULT_SHUTDOWN_TIMEOUT;

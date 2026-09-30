@@ -15,7 +15,7 @@ Upstream commit `e115a6a8dd9213fdf89a20cb72494ab333878218` (quick-xml 0.41 port)
 
 ## Local changes
 
-Mechanical module decomposition only, so that every authored source file is at most 500 lines:
+Mechanical module decomposition and the scoped lexical correction below keep every authored source file at most 500 lines:
 
 - `src/parser.rs` is now a module index plus public re-exports. Its content lives in `src/parser/`: `builder`, `reader`, `async_reader`, `slice`, `prefixes`, `state`, `events`, `node`, `property`, `literal`, `entities`, `version`.
 - `src/serializer.rs` keeps the public serializer types. The internal writer moved to `src/serializer/writer.rs` and the unit tests to `src/serializer/tests.rs`.
@@ -31,5 +31,14 @@ Mechanical module decomposition only, so that every authored source file is at m
 - The doctests are in `README.md`, the `src/parser/` modules (`builder`, `reader`, `async_reader`, `slice`) and `src/serializer.rs`.
 
 ## Status
+
+September 30 lexical correction: the shared serializer emits every literal CR
+as an XML character reference after XML escaping. Raw XML CR/CRLF parsing still
+normalizes according to XML; literal character references remain distinct.
+Registered `src/serializer/lexical_tests.rs` covers slice/reader/async parsing,
+sync/async serialization, typed/language/directional literals, quoted triples,
+entity-looking text and boundary/interior whitespace. Original three serializer
+tests remain unchanged. This correction does not select the root dependency or
+claim advisory closure.
 
 This file records provenance only. It does not claim that any build, test, doctest or format check has run.

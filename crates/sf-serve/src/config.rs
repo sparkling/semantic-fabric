@@ -29,7 +29,9 @@ use crate::telemetry::CorrelationId;
 use crate::Backend;
 use crate::{IntrospectedSource, SemanticOntology, ServeError};
 
+mod generated;
 mod parser;
+pub use generated::QueryShapeProfile;
 use parser::ParserSetup;
 
 /// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
@@ -77,6 +79,7 @@ impl QueryMode {
 pub struct ServeConfig {
     parser: ParserSetup,
     pub(crate) query_admission: crate::QueryAdmission,
+    query_shape: QueryShapeProfile,
     runtime: Arc<RuntimeManager>,
     query_mode: QueryMode,
     pub timeout: Duration,
@@ -164,6 +167,7 @@ impl ServeConfig {
         Self {
             parser: ParserSetup::Missing,
             query_admission: crate::QueryAdmission::Deny,
+            query_shape: QueryShapeProfile::Ordinary,
             runtime: Arc::new(RuntimeManager::new(snapshot)),
             query_mode,
             timeout: DEFAULT_TIMEOUT,

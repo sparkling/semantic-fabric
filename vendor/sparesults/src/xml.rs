@@ -5,6 +5,9 @@ mod state;
 mod terms;
 mod writer;
 
+#[cfg(test)]
+mod whitespace_tests;
+
 pub use self::reader::{
     ReaderXmlQueryResultsParserOutput, ReaderXmlSolutionsParser, SliceXmlQueryResultsParserOutput,
     SliceXmlSolutionsParser,

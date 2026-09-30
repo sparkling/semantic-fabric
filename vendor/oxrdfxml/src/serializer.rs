@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 #[cfg(test)]
+mod lexical_tests;
+#[cfg(test)]
 #[expect(clippy::panic_in_result_fn)]
 mod tests;
 mod writer;

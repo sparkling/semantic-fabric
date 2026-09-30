@@ -123,6 +123,8 @@ impl XmlInnerSolutionsParser {
                         self.state_stack.push(State::BNode);
                         Ok(None)
                     } else if event.local_name().as_ref() == b"literal" {
+                        // Parent indentation is not part of the literal lexical value.
+                        self.text_buffer.clear();
                         for attr in event.attributes() {
                             let attr = attr.map_err(Error::from)?;
                             if attr.key.as_ref() == b"xml:lang" {
@@ -208,12 +210,18 @@ impl XmlInnerSolutionsParser {
             }
             Event::End(_) => {
                 let value = take(&mut self.text_buffer);
-                let value = value.trim_matches(|c| matches!(c, '\t' | '\n' | '\r' | ' '));
-                match self.state_stack.pop().ok_or_else(|| {
+                let state = self.state_stack.pop().ok_or_else(|| {
                     QueryResultsSyntaxError::msg(
                         "Extra XML is not allowed at the end of the document",
                     )
-                })? {
+                })?;
+                // Literal whitespace is RDF data, including decoded character references.
+                let value = if matches!(&state, State::Literal) {
+                    value.as_str()
+                } else {
+                    value.trim_matches(|c| matches!(c, '\t' | '\n' | '\r' | ' '))
+                };
+                match state {
                     State::Start => Ok(None),
                     State::Result => Ok(Some(take(&mut self.new_bindings))),
                     State::Binding => {

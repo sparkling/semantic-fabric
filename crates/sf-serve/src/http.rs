@@ -18,6 +18,7 @@ use crate::config::ServeConfig;
 use crate::deadline::{self, JoinedTaskError};
 use crate::generation::VerifiedGenerationLease;
 use crate::metrics::MetricsEndpoint;
+use crate::pg_generation::VerifiedGenerationLeases;
 use crate::problem::{self, ProblemCode};
 use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
@@ -145,20 +146,36 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
+    // The embedding-selected generated profile keeps subject admission,
+    // source-RLS and (for a refused lineage request) portable row authorization
+    // first, then refuses federation and lineage before any bypass path can run.
+    let generated = cfg.generated_active();
+    if generated {
+        let guarded =
+            crate::generated_request::guard(&cfg, &snapshot, &query, accept.as_deref(), &budget);
+        if let Err(response) = guarded.await {
+            return response;
+        }
+    }
+
     // Prove the requested provenance profile before generation admission can
     // perform source I/O. The same pinned snapshot and unchanged query are used
     // below; neither public caller plans nor another generation can be substituted.
-    let lineage = match crate::lineage::prepare(
-        cfg.clone(),
-        snapshot.clone(),
-        &query,
-        accept.as_deref(),
-        &budget,
-    )
-    .await
-    {
-        Ok(proof) => proof,
-        Err(response) => return response,
+    let lineage: Option<Arc<crate::lineage::Lineage>> = if generated {
+        None
+    } else {
+        match crate::lineage::prepare(
+            cfg.clone(),
+            snapshot.clone(),
+            &query,
+            accept.as_deref(),
+            &budget,
+        )
+        .await
+        {
+            Ok(proof) => proof,
+            Err(response) => return response,
+        }
     };
 
     let generation_admission = match traced(
@@ -170,28 +187,75 @@ async fn process(
         Ok(admission) => admission,
         Err(response) => return response,
     };
-    let (mut generations, compiler) = generation_admission.into_parts();
-    let bound = match traced(
-        Stage::Compile,
-        crate::request_compile::compile(
-            cfg.clone(),
-            snapshot.clone(),
-            query,
-            budget.clone(),
-            compiler,
-            lineage.as_ref().is_some_and(|proof| proof.multi_origin),
-        ),
-    )
-    .await
-    {
-        Ok(p) => p,
-        Err(response) => {
-            let _ = generations.finish().await;
-            return response;
+    let (generations, compiler) = generation_admission.into_parts();
+    let mut identity = None;
+    let bound = if generated {
+        match traced(
+            Stage::Compile,
+            crate::request_compile::compile_generated(
+                cfg.clone(),
+                snapshot.clone(),
+                query,
+                budget.clone(),
+                compiler,
+            ),
+        )
+        .await
+        {
+            Ok((bound, issued)) => {
+                identity = Some(issued);
+                bound
+            }
+            Err(response) => {
+                let _ = generations.finish().await;
+                return response;
+            }
+        }
+    } else {
+        match traced(
+            Stage::Compile,
+            crate::request_compile::compile(
+                cfg.clone(),
+                snapshot.clone(),
+                query,
+                budget.clone(),
+                compiler,
+                lineage.as_ref().is_some_and(|proof| proof.multi_origin),
+            ),
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(response) => {
+                let _ = generations.finish().await;
+                return response;
+            }
         }
     };
-    let accept = accept.as_deref();
+    let response = dispatch(
+        snapshot,
+        bound,
+        generations,
+        lineage,
+        accept.as_deref(),
+        budget.clone(),
+    )
+    .await;
+    match identity {
+        Some(issued) => crate::generated_request::attach(response, &issued, &budget).await,
+        None => response,
+    }
+}
 
+/// Execute a compiled query on its exact bound backend and build the response.
+async fn dispatch(
+    snapshot: RuntimeSnapshotLease,
+    bound: BoundQuery,
+    mut generations: VerifiedGenerationLeases,
+    lineage: Option<Arc<crate::lineage::Lineage>>,
+    accept: Option<&str>,
+    budget: RequestBudget,
+) -> Response {
     match bound {
         BoundQuery::Single(bound) => {
             let execution = match traced_sync(Stage::BindExecution, || {
