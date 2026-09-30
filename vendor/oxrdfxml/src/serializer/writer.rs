@@ -166,7 +166,15 @@ impl InnerRdfXmlWriter {
                     ));
                 }
                 output.push(Event::Start(property_open));
-                output.push(Event::Text(BytesText::new(literal.value())));
+                // Raw CR is normalized by XML readers; character references preserve it.
+                let text = if literal.value().contains('\r') {
+                    BytesText::from_escaped(
+                        quick_xml::escape::escape(literal.value()).replace('\r', "&#13;"),
+                    )
+                } else {
+                    BytesText::new(literal.value())
+                };
+                output.push(Event::Text(text));
                 output.push(Event::End(BytesEnd::new(prop_qname)));
             }
             #[cfg(feature = "rdf-12")]
