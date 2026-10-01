@@ -39,6 +39,19 @@ describe('native programme coordinator entrypoint', () => {
     expect(plan.args.at(-1)).not.toContain('Ordinary Sonnet');
   });
 
+  it('keeps direct recovery available when one native invocation stalls', () => {
+    const prompt = coordinatorLaunch(root, sessionId).args.at(-1)!;
+    expect(prompt).toContain('Authorized direct implementation, repair and preparation remain available');
+    expect(prompt).toContain('pause only that invocation');
+    expect(prompt).toContain('after its process group is confirmed drained');
+    expect(prompt).toContain('continue independent ready work or direct scoped repair');
+    expect(prompt).toContain('original outcome, source custody, checks and fresh independent review');
+    expect(prompt).toContain('Capacity backoff applies only to confirmed capacity failures');
+    expect(prompt).toContain('inactivity alone proves neither capacity failure nor healthy reasoning');
+    expect(prompt).toContain('Do not retry unchanged silent calls, increase timeouts or substitute model/transport');
+    expect(prompt).not.toContain('Use existing delivery ready manifests and runDeliveryOutcome;');
+  });
+
   it('previews without launching and forwards native exit status without fallback', () => {
     const launch = vi.fn(() => ({ status: 7 }));
     const output = vi.spyOn(console, 'log').mockImplementation(() => {});
