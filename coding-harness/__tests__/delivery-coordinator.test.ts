@@ -16,6 +16,11 @@ describe('native programme coordinator entrypoint', () => {
       '--config', 'model_reasoning_effort="medium"', '--config', 'plan_mode_reasoning_effort="medium"']);
     expect(plan.args.at(-1)).toContain('ready /absolute/manifest.json with mode run');
     expect(plan.args.at(-1)).toContain('without waiting for unrelated siblings');
+    expect(plan.args.at(-1)).toContain('upstream runBoundedPool with existing createDeliveryExecutor on immutable source-pinned packets');
+    expect(plan.args.at(-1)).toContain('require empty changes and report accepted:false');
+    expect(plan.args.at(-1)).toContain('Do not use canonical runDeliveryPool for advisory preparation');
+    expect(plan.args.at(-1)).toContain('Candidate writers still use the existing ready adapter and reservations');
+    expect(plan.args.at(-1)).toContain('Keep canonical check/verify/finish in the normal npm delivery entrypoint environment');
     expect(plan.args.at(-1)).toContain('exact approved replacement candidateRoot and expectedDigest');
     expect(plan.args.at(-1)).toContain('paused rejected prepared integration');
     expect(plan.args.at(-1)).toContain('explicit recover:true once');
