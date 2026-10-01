@@ -16,6 +16,13 @@ describe('native programme coordinator entrypoint', () => {
       '--config', 'model_reasoning_effort="medium"', '--config', 'plan_mode_reasoning_effort="medium"']);
     expect(plan.args.at(-1)).toContain('ready /absolute/manifest.json with mode run');
     expect(plan.args.at(-1)).toContain('without waiting for unrelated siblings');
+    expect(plan.args.at(-1)).toContain('exact approved replacement candidateRoot and expectedDigest');
+    expect(plan.args.at(-1)).toContain('paused rejected prepared integration');
+    expect(plan.args.at(-1)).toContain('explicit recover:true once');
+    expect(plan.args.at(-1)).toContain('interrupted apply resumes through ordinary integrate without recover:true');
+    expect(plan.args.at(-1)).toContain('revalidateAgainst:{commit,sourceDigest} from current canonical HEAD/snapshot');
+    expect(plan.args.at(-1)).toContain('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED refusal');
+    expect(plan.args.at(-1)).toContain('Rerun every canonical check and fresh independent review before verify/commit/finish');
     expect(plan.args.at(-1)).toContain('active read/write/resource reservations');
     expect(plan.args.at(-1)).toContain('Only accepted integrated parents release children');
     expect(plan.args.at(-1)).toContain('examine every unfinished authorized outcome');
