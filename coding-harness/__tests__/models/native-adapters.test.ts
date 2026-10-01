@@ -30,6 +30,7 @@ class FakeRunner implements NativeProcessRunner {
 
   async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
     this.requests.push(request);
+    if (request.purpose === 'configuration-discovery') return ok('[]');
     return await this.respond(request);
   }
 }
@@ -108,7 +109,7 @@ describe('native subscription adapters', () => {
       'chatgpt-subscription',
       'claude-subscription',
     ]);
-    expect(runner.requests).toHaveLength(4);
+    expect(runner.requests).toHaveLength(5);
     for (const request of runner.requests) {
       expect(request.env.OPENAI_API_KEY).toBeUndefined();
       expect(request.env.ANTHROPIC_BASE_URL).toBe(request.host === 'claude-code' ? 'https://gateway.invalid' : undefined);
@@ -168,7 +169,7 @@ describe('native subscription adapters', () => {
       operation: 'review',
     });
 
-    const [codexRequest, claudeRequest] = runner.requests;
+    const [codexRequest, claudeRequest] = runner.requests.filter(request => request.purpose === 'model-invocation');
     expect(codexRequest?.args).toEqual(
       expect.arrayContaining([
         'exec',
@@ -227,7 +228,7 @@ describe('native subscription adapters', () => {
     })).toThrow('HARNESS_NATIVE_OUTPUT_PATH_OUTSIDE_CWD');
   });
 
-  it('forwards every explicit Astra effort unchanged for every operation, including max and ultra', () => {
+  it('forwards every explicit Astra effort unchanged for every operation, including max and ultra', async () => {
     const root = mkdtempSync(join(tmpdir(), 'coding-harness-effort-'));
     roots.push(root);
     const schemaPath = join(root, 'response.schema.json');
@@ -240,6 +241,7 @@ describe('native subscription adapters', () => {
       cwd: root, model: 'gpt-6-astra', prompt: 'bounded task', schema: {}, schemaPath,
       outputPath: join(root, 'response.json'), workspaceAccess: 'read' as const, timeoutMs: 1_000,
     };
+    await adapter.invoke({ ...base, operation: 'review' });
     for (const operation of ['architecture', 'implementation', 'repair', 'review'] as const) {
       for (const reasoningEffort of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const) {
         const request = adapter.buildInvocation({ ...base, operation, reasoningEffort });

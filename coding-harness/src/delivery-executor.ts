@@ -6,6 +6,7 @@ import { hash } from '@metaharness/harness';
 import { createDeliveryApi, parseDeliveryChanges, parseDeliveryPlan, renderDeliveryPrompt, type DeliveryPlan, type DeliverySourceFile } from './delivery-api.js';
 import { ClaudeCodeSubscriptionAdapter, CodexSubscriptionAdapter } from './models/native-adapters.js';
 import type { NativeProcessRunner } from './models/types.js';
+import { CodexMcpInventory } from './models/codex-mcp-isolation.js';
 import { ordinaryRustEnvironment, runCommand } from './delivery-process.js';
 import { nativeCommandProgress } from './delivery-native-progress.js';
 import { NativeStderrTail } from './delivery-native-stderr.js';
@@ -30,6 +31,7 @@ export function claudeStructuredError(stdout: string, environment: Readonly<Reco
 /** Reuse native argument/environment adapters and existing process-group custody. */
 export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: string): DeliveryExecutor {
   const api = createDeliveryApi({ directory: harness.context.apiDirectory ?? join(harness.directory, 'api') });
+  const mcpInventory = new CodexMcpInventory();
   return async (request, files, checks, signal) => {
     if (request.route.host === 'openrouter') return api(request, files, checks, taskDigest, signal);
     const invocation = join(harness.directory, `native-${randomUUID()}`); mkdirSync(invocation, { mode: 0o700 });
@@ -42,21 +44,26 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       const outPath = join(processRoot, 'stdout'), errPath = join(processRoot, 'stderr');
       const out = openSync(outPath, 'wx', 0o600), err = openSync(errPath, 'wx', 0o600);
       try {
+        const privateOutput = input.purpose === 'configuration-discovery';
+        const captured: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
         const args = input.host === 'codex' && input.purpose === 'model-invocation'
           ? [...input.args.slice(0, -1), ...Object.entries(ordinaryRustEnvironment({})).flatMap(([name, value]) =>
             ['-c', `shell_environment_policy.set.${name}=${JSON.stringify(value)}`]), input.args.at(-1)!] : input.args;
         const result = await runCommand([input.executable, ...args], input.cwd, ordinaryRustEnvironment(input.env), out, err,
-          processRoot, { timeoutMs: input.timeoutMs }, input.signal, input.stdin,
+          processRoot, { timeoutMs: input.timeoutMs, ...(privateOutput ? {
+            privateCapture: (stream: 'stdout' | 'stderr', data: Buffer) => captured[stream].push(data),
+          } : {}) }, input.signal, input.stdin,
           input.purpose === 'model-invocation' ? nativeCommandProgress({ directory: processRoot,
             taskId: request.taskId, stage: request.repair ? 'repair' : request.stage, host: input.host }) : undefined);
         stalled = result.error === 'native-inactivity';
-        const stdout = readFileSync(outPath, 'utf8'), stderr = readFileSync(errPath, 'utf8');
+        const stdout = privateOutput ? Buffer.concat(captured.stdout).toString('utf8') : readFileSync(outPath, 'utf8');
+        const stderr = privateOutput ? Buffer.concat(captured.stderr).toString('utf8') : readFileSync(errPath, 'utf8');
         const structured = !result.error && result.signal === null && request.route.host === 'claude-code'
           ? claudeStructuredError(stdout, process.env) : undefined;
         if (structured !== undefined) {
           lastError = structured;
           outputExhausted = /(?:Claude's response exceeded the \d+ output token maximum|stop_reason["'\s:]+max_tokens|finish_reason["'\s:]+max_tokens)/i.test(structured);
-        } else if (result.error || result.exitCode !== 0) lastError = [result.error, stderr.trim()].filter(Boolean).join(': ');
+        } else if (!privateOutput && (result.error || result.exitCode !== 0)) lastError = [result.error, stderr.trim()].filter(Boolean).join(': ');
         const digest = (text: string) => createHash('sha256').update(text).digest('hex');
         return { executionId: `native-run:${id}`, exitCode: structured !== undefined && result.exitCode === 0 ? 1 : result.exitCode, stdout, stderr,
           timedOut: result.error === 'check-timeout', cancelled: result.error === 'cancelled',
@@ -64,7 +71,7 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       } finally { closeSync(out); closeSync(err); }
     }); } };
     const adapter = request.route.host === 'codex'
-      ? new CodexSubscriptionAdapter({ executable: 'codex', evidenceRoot: invocation, runner, sourceEnvironment: process.env })
+      ? new CodexSubscriptionAdapter({ executable: 'codex', evidenceRoot: invocation, runner, sourceEnvironment: process.env, mcpInventory })
       : new ClaudeCodeSubscriptionAdapter({ executable: 'claude', runner, sourceEnvironment: process.env });
     const properties = { outcome: { type: 'string', enum: ['completed', 'changes-requested'] }, summary: { type: 'string' },
       issues: { type: 'array', items: { type: 'string' } }, changes: { type: 'array', items: { type: 'object', additionalProperties: false,

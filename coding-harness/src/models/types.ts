@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 export type NativeHost = 'codex' | 'claude-code';
-export type NativeProcessPurpose = 'authentication-preflight' | 'version-preflight' | 'model-invocation';
+export type NativeProcessPurpose = 'authentication-preflight' | 'version-preflight' | 'model-invocation' | 'configuration-discovery';
 export type NativeProcessOperation = 'architecture' | 'implementation' | 'repair' | 'review';
 
 export interface NativeProcessRequest {

@@ -52,6 +52,7 @@ class FakeRunner implements NativeProcessRunner {
   constructor(private readonly response: (request: NativeProcessRequest) => NativeProcessResult) {}
 
   async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
+    if (request.purpose === 'configuration-discovery') return ok('[]');
     return this.response(request);
   }
 }

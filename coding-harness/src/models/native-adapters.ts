@@ -29,6 +29,7 @@ import {
   validateScopedPath,
 } from './native-adapter-contracts.js';
 import { runAbortableCohort } from '../parallel.js';
+import { CodexMcpInventory, codexMcpInventoryFor } from './codex-mcp-isolation.js';
 
 const PREFLIGHT_TIMEOUT_MS = 30_000;
 const MAX_SCHEMA_BYTES = 64_000;
@@ -45,7 +46,6 @@ const CODEX_FIXED_CONFIG = Object.freeze([
   'web_search="disabled"',
   'agents.enabled=false',
   'apps._default.enabled=false',
-  'mcp_servers={}',
   'features.apps=false',
   'features.auth_elicitation=false',
   'features.browser_use=false',
@@ -71,6 +71,7 @@ interface AdapterOptions {
 
 interface CodexAdapterOptions extends AdapterOptions {
   readonly evidenceRoot: string;
+  readonly mcpInventory?: CodexMcpInventory;
 }
 
 export class NativeAuthPreflightError extends Error {
@@ -109,11 +110,14 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
   readonly #runner: NativeProcessRunner;
   readonly #environment: Readonly<Record<string, string>>;
   readonly #evidenceRoot: string;
+  readonly #mcpInventory: CodexMcpInventory;
+  readonly #mcpNames = new Map<string, readonly string[]>();
 
   constructor(options: CodexAdapterOptions) {
     assertAdapterExecutable(options.executable);
     this.#executable = options.executable;
     this.#runner = options.runner;
+    this.#mcpInventory = options.mcpInventory ?? codexMcpInventoryFor(options.runner);
     this.#environment = buildNativeSubscriptionEnvironment(
       this.host,
       options.sourceEnvironment,
@@ -123,6 +127,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
 
   async preflight(request: NativePreflightRequest): Promise<NativeAuthEvidence> {
     validatePreflightRequest(request);
+    const mcpNames = await this.#discoverMcp(request.cwd, request.requestedModel, request.signal);
     const [login, version] = await runAbortableCohort([
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
@@ -131,6 +136,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
             '--skip-git-repo-check', '--sandbox', 'read-only',
             '--model', request.requestedModel,
             ...CODEX_FIXED_CONFIG.flatMap((value) => ['-c', value]),
+            ...mcpNames.flatMap(name => ['-c', `mcp_servers.${name}.enabled=false`]),
             'Do not use tools. Reply exactly READY.',
           ],
           request.cwd,
@@ -173,6 +179,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     });
   }
 
+  /** Synchronous argv construction requires discovery from preflight/invoke for this cwd. */
   buildInvocation(request: CodexInvocationRequest): NativeProcessRequest {
     validateInvocation(request);
     validateScopedPath(this.#evidenceRoot, request.schemaPath, 'SCHEMA_PATH', true);
@@ -180,6 +187,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     if (request.schemaPath === request.outputPath) {
       throw new Error('HARNESS_NATIVE_OUTPUT_PATH_INVALID');
     }
+    const mcpNames = this.#mcpNames.get(request.cwd);
+    if (!mcpNames) throw new Error('HARNESS_CODEX_MCP_CONFIGURATION_REQUIRED');
     const args = [
       'exec',
       '--cd',
@@ -200,6 +209,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       '--color',
       'never',
       ...CODEX_FIXED_CONFIG.flatMap((value) => ['-c', value]),
+      ...mcpNames.flatMap(name => ['-c', `mcp_servers.${name}.enabled=false`]),
       ...codexReasoningArguments(request.reasoningEffort),
       '-',
     ];
@@ -218,7 +228,18 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
   }
 
   async invoke(request: CodexInvocationRequest): Promise<NativeProcessResult> {
+    validateInvocation(request);
+    await this.#discoverMcp(request.cwd, request.model, request.signal);
     return await invokeChecked(this.#runner, this.buildInvocation(request));
+  }
+
+  async #discoverMcp(cwd: string, model: string, signal?: AbortSignal): Promise<readonly string[]> {
+    const names = await this.#mcpInventory.read(this.#runner, this.#processRequest([
+      'mcp', 'list', '--json', '-c', 'features.plugins=false', '-c', 'features.hooks=false',
+      ...CODEX_ESSENTIAL_TRAFFIC_CONFIG.flatMap(value => ['-c', value]),
+    ], cwd, PREFLIGHT_TIMEOUT_MS, signal, 'configuration-discovery', model));
+    this.#mcpNames.set(cwd, names);
+    return names;
   }
 
   #processRequest(

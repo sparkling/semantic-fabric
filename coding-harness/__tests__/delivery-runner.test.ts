@@ -222,9 +222,36 @@ it('bounds and sanitizes structured errors without exposing known environment cr
   expect(claudeStructuredError('not json', {})).toBeUndefined();
 });
 
+it.each([0, 1])('keeps discovery journals empty and failures private (inventory exit %i)', async exitCode => {
+  const f = await fixture(); const discoveryRoots: string[] = []; let modelCalls = 0;
+  vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, _env, _out, _err, directory, limits) => {
+    if (argv.includes('mcp')) {
+      discoveryRoots.push(directory);
+      limits.privateCapture!('stdout', Buffer.from(JSON.stringify([{ name: 'ruflo', enabled: true, env: { secret: 'private-value' } }])));
+      limits.privateCapture!('stderr', Buffer.from('private-value'));
+      return { exitCode, signal: null };
+    }
+    if (argv.includes('--version')) { writeSync(_out, 'codex-cli fixture'); return { exitCode: 0, signal: null }; }
+    modelCalls++;
+    expect(argv).toContain('mcp_servers.ruflo.enabled=false');
+    return { exitCode: 1, signal: null };
+  });
+  const action = await f.candidate.harness.next(f.task.id, f.task.owner);
+  if (action.kind !== 'native') throw new Error('fixture request missing');
+  const request = { ...action.request, route: { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const } };
+  const error = await createDeliveryExecutor(f.candidate.harness, hash(f.task))(request, [], []).catch(error => error);
+  expect(error.message).not.toContain('private-value'); expect(modelCalls).toBe(exitCode === 0 ? 1 : 0);
+  expect(discoveryRoots).toHaveLength(1);
+  for (const directory of discoveryRoots) {
+    expect(readFileSync(join(directory, 'stdout'), 'utf8')).toBe('');
+    expect(readFileSync(join(directory, 'stderr'), 'utf8')).toBe('');
+  }
+});
+
 it.each(['claude-code','codex'] as const)('requests %s streaming and reports inactivity distinctly without retry or fallback', async host => {
   const f = await fixture(); let calls = 0;
   vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, _env, out, _err, _dir, _limits, _signal, _stdin, observer) => {
+    if (argv.includes('mcp')) { _limits.privateCapture!('stdout', Buffer.from('[]')); return { exitCode: 0, signal: null }; }
     if (argv.includes('--version')) { writeSync(out, 'claude-code 1.0.0'); return { exitCode: 0, signal: null }; }
     if (!argv.includes('--json-schema') && !argv.includes('--output-schema')) { writeSync(out, 'READY'); return { exitCode: 0, signal: null }; }
     calls++;
@@ -251,6 +278,7 @@ it.each(['claude-code','codex'] as const)('requests %s streaming and reports ina
 it.each([['claude-code',false],['claude-code',true],['claude-code','output'],['codex',false],['codex',true]] as const)('real %s stream preserves final envelope and redacted failure attribution (failure=%s)', async (host,failure) => {
   const f=await fixture();const bin=mkdtempSync(join(tmpdir(),'fabric-fake-native-'));roots.push(bin);
   writeFileSync(join(bin,host==='codex'?'codex':'claude'),`#!${process.execPath}\nconst args=process.argv.slice(2);
+if(args.includes('mcp')){console.log(JSON.stringify([{name:'ruflo',enabled:true,env:{token:'private-inventory-value'}}]));process.stderr.write('private-inventory-value');process.exit(0)}
 if(args.includes('--version')){console.log('claude-code fake');process.exit(0)}
 if(!args.includes('--json-schema')&&!args.includes('--output-schema')){console.log('READY');process.exit(0)}
 process.stdin.resume();
@@ -275,6 +303,12 @@ process.stdin.on('end',()=>{
   if(failure==='output'){await expect(promise).rejects.toThrow(/DELIVERY_NATIVE_OUTPUT_EXHAUSTED:claude-code:.*response exceeded the 32000 output token maximum/);}
   else if(failure){const error=await promise.catch(e=>e);expect(error.message).toContain('configured-model-unavailable');expect(error.message).not.toContain('unknown-secret');}
   else expect((await promise).response.summary).toBe('fake final');
+  for (const entry of readdirSync(f.candidate.harness.directory).filter(name => name.startsWith('native-'))) {
+    const invocation = join(f.candidate.harness.directory, entry);
+    for (const process of readdirSync(invocation).filter(name => /^[0-9a-f-]{36}$/.test(name))) {
+      for (const log of ['stdout', 'stderr']) expect(readFileSync(join(invocation, process, log), 'utf8')).not.toContain('private-inventory-value');
+    }
+  }
 });
 
 it.each([

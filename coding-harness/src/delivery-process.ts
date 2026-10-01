@@ -43,7 +43,8 @@ export interface NativeCommandObserver {
   finish(): { stdout: string; stderr: string; error?: string | undefined };
 }
 export function runCommand(argv: string[], cwd: string, env: Record<string, string>, out: number, err: number,
-  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number }, signal?: AbortSignal, stdin?: string, native?: NativeCommandObserver,
+  directory: string, limits: { timeoutMs?: number; maxOutputBytes?: number;
+    privateCapture?: (stream: 'stdout' | 'stderr', data: Buffer) => void }, signal?: AbortSignal, stdin?: string, native?: NativeCommandObserver,
 ): Promise<{ exitCode: number | null; signal: string | null; error?: string }> {
   return new Promise(resolve => {
     if (signal?.aborted) { resolve({ exitCode: null, signal: null, error: 'cancelled' }); return; }
@@ -70,7 +71,10 @@ export function runCommand(argv: string[], cwd: string, env: Record<string, stri
       const available = Math.max(0, maximum - bytes);
       const keep = data.subarray(0, available);
       let offset = 0;
-      try { while (offset < keep.length) offset += writeSync(fd, keep, offset, keep.length - offset); }
+      try {
+        if (limits.privateCapture) limits.privateCapture(fd === out ? 'stdout' : 'stderr', keep);
+        else while (offset < keep.length) offset += writeSync(fd, keep, offset, keep.length - offset);
+      }
       catch (e) { cancel(`log-write-failed:${String(e)}`); }
       bytes += data.length;
       if (bytes > maximum) cancel('check-output-limit');

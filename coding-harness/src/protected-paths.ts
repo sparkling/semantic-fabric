@@ -161,7 +161,7 @@ const BASE_REQUIRED_PROTECTED_PATHS = Object.freeze([
   'coding-harness/src/native-system-filesystem.ts',
   'coding-harness/src/models/environment.ts',
   'coding-harness/src/models/index.ts',
-  'coding-harness/src/models/native-adapters.ts',
+  'coding-harness/src/models/native-adapters.ts', 'coding-harness/src/models/codex-mcp-isolation.ts',
   'coding-harness/src/models/native-adapter-contracts.ts',
   'coding-harness/src/models/recovery.ts',
   'coding-harness/src/models/review.ts',
