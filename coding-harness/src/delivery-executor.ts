@@ -6,7 +6,7 @@ import { hash } from '@metaharness/harness';
 import { createDeliveryApi, parseDeliveryChanges, parseDeliveryPlan, renderDeliveryPrompt, type DeliveryPlan, type DeliverySourceFile } from './delivery-api.js';
 import { ClaudeCodeSubscriptionAdapter, CodexSubscriptionAdapter } from './models/native-adapters.js';
 import type { NativeProcessRunner } from './models/types.js';
-import { runCommand } from './delivery-process.js';
+import { ordinaryRustEnvironment, runCommand } from './delivery-process.js';
 import { nativeCommandProgress } from './delivery-native-progress.js';
 import { NativeStderrTail } from './delivery-native-stderr.js';
 import { withOperationLock } from './delivery-workspace.js';
@@ -42,7 +42,10 @@ export function createDeliveryExecutor(harness: DeliveryHarness, taskDigest: str
       const outPath = join(processRoot, 'stdout'), errPath = join(processRoot, 'stderr');
       const out = openSync(outPath, 'wx', 0o600), err = openSync(errPath, 'wx', 0o600);
       try {
-        const result = await runCommand([input.executable, ...input.args], input.cwd, { ...input.env }, out, err,
+        const args = input.host === 'codex' && input.purpose === 'model-invocation'
+          ? [...input.args.slice(0, -1), ...Object.entries(ordinaryRustEnvironment({})).flatMap(([name, value]) =>
+            ['-c', `shell_environment_policy.set.${name}=${JSON.stringify(value)}`]), input.args.at(-1)!] : input.args;
+        const result = await runCommand([input.executable, ...args], input.cwd, ordinaryRustEnvironment(input.env), out, err,
           processRoot, { timeoutMs: input.timeoutMs }, input.signal, input.stdin,
           input.purpose === 'model-invocation' ? nativeCommandProgress({ directory: processRoot,
             taskId: request.taskId, stage: request.repair ? 'repair' : request.stage, host: input.host }) : undefined);

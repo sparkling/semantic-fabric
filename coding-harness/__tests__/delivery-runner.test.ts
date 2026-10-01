@@ -197,6 +197,8 @@ it.each([0, 1])('attributes structured Claude output exhaustion before stderr wa
   const f = await fixture();
   vi.spyOn(processes, 'runCommand').mockImplementation(async (argv, _cwd, env, out, err) => {
     expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('128000');
+    expect(env).toMatchObject({ CARGO_PROFILE_DEV_DEBUG: '1', CARGO_PROFILE_TEST_DEBUG: '1',
+      CARGO_PROFILE_DEV_INCREMENTAL: 'false', CARGO_PROFILE_TEST_INCREMENTAL: 'false' });
     expect(env).not.toHaveProperty('MAX_THINKING_TOKENS');
     if (argv.includes('--version')) { writeSync(out, 'claude-code 1.0.0'); return { exitCode: 0, signal: null }; }
     if (!argv.includes('--json-schema')) { writeSync(out, 'READY'); return { exitCode: 0, signal: null }; }
@@ -229,7 +231,12 @@ it.each(['claude-code','codex'] as const)('requests %s streaming and reports ina
     if(host==='claude-code'){
       expect(argv[argv.indexOf('--output-format') + 1]).toBe('stream-json');
       expect(argv).toContain('--include-partial-messages'); expect(argv).toContain('--verbose');
-    }else expect(argv).toContain('--json');
+    }else {
+      expect(argv).toContain('--json');
+      for (const [name, value] of Object.entries(processes.ordinaryRustEnvironment({}))) {
+        expect(argv).toContain(`shell_environment_policy.set.${name}=${JSON.stringify(value)}`);
+      }
+    }
     expect(observer).toBeDefined();
     return { exitCode: null, signal: 'SIGTERM', error: 'native-inactivity' };
   });

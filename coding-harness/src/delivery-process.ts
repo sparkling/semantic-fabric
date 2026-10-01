@@ -4,6 +4,12 @@ import { createHash } from 'node:crypto';
 import { createReadStream, writeSync } from 'node:fs';
 import { updateOperationChild } from './delivery-workspace.js';
 
+/** Apply only after ordinary environment sanitization; frozen evaluators stay unchanged. */
+export function ordinaryRustEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
+  return { ...environment, CARGO_PROFILE_DEV_DEBUG: '1', CARGO_PROFILE_TEST_DEBUG: '1',
+    CARGO_PROFILE_DEV_INCREMENTAL: 'false', CARGO_PROFILE_TEST_INCREMENTAL: 'false' };
+}
+
 /** Environment for trusted repository checks, not a model invocation or sandbox. */
 export function buildCheckEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -11,7 +17,7 @@ export function buildCheckEnvironment(): Record<string, string> {
     if (/^(?:PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_ALL|LC_CTYPE|TERM|NO_COLOR|TMPDIR|TMP|TEMP|CI|RUSTUP_HOME|RUSTUP_TOOLCHAIN|CARGO_HOME|CARGO_TARGET_DIR|RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|RUST_BACKTRACE|CARGO_BUILD_JOBS|CARGO_INCREMENTAL|CARGO_NET_OFFLINE|SF_TEST_[A-Z0-9_]+)$/.test(name)
       && !/(?:API_KEY|TOKEN|SECRET|OPENROUTER|PROXY|BASE_URL)/.test(name)) env[name] = process.env[name]!;
   }
-  return env;
+  return ordinaryRustEnvironment(env);
 }
 export function checkEnvironmentEvidence(environment: Record<string, string>): Record<string, string> {
   const evidence = { ...environment };
