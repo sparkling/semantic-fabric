@@ -20,7 +20,7 @@ vi.mock('node:fs', async importOriginal => {
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs'], combined = false, newFirst = false) {
+async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs'], combined = false, newFirst = false, resources: string[] = []) {
   const f = workflowFixture(roots);
   mkdirSync(join(f.root, 'tests')); writeFileSync(join(f.root, 'tests/proof.rs'), '// original evaluator\n');
   git(f.root, 'add', 'tests/proof.rs'); git(f.root, 'commit', '-qm', 'test input');
@@ -29,7 +29,7 @@ async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs']
   const candidates = [];
   for (const [i, path] of (combined ? ['product.txt'] : [newFirst ? 'new.txt' : 'product.txt', 'other.txt']).entries()) {
     const task = { ...f.task, id: `candidate-${i}`, scope: combined ? ['product.txt', 'other.txt'] : [path], ...(readPaths ? { readPaths } : {}) };
-    const candidate = createDeliveryCandidate(f.harness, { parentDirectory, scope: task.scope, readPaths: readPaths ?? undefined });
+    const candidate = createDeliveryCandidate(f.harness, { parentDirectory, scope: task.scope, readPaths: readPaths ?? undefined, resources });
     const h = candidate.harness;
     await h.begin(task); await h.bind(task.id, task.owner, native);
     let action = await h.advance(task.id, task.owner);
@@ -239,4 +239,136 @@ it('rejects malformed owner pins at parsing boundary', async () => {
     expect(()=>parseIntegrationInput({...row.input,revalidateAgainst:value})).toThrow('DELIVERY_INTEGRATION_REVALIDATION_PIN_REQUIRED');
   }
   expect(()=>parseIntegrationInput({...row.input,revalidateAgainst:{...pin,extra:true}})).toThrow('integration revalidation');
+});
+
+async function reviewedReplacement(f: Awaited<ReturnType<typeof fixture>>, text: string, resources: string[]) {
+  const row = f.candidates[0];
+  const replacement = createDeliveryCandidate(f.harness, { parentDirectory: f.parentDirectory,
+    scope: row.task.scope, readPaths: row.task.readPaths, resources });
+  const h = replacement.harness;
+  await h.begin(row.task); await h.bind(row.task.id, row.task.owner, native);
+  let action = await h.advance(row.task.id, row.task.owner);
+  if (action.kind !== 'native') throw new Error('missing repair implementation');
+  writeFileSync(join(h.root, 'product.txt'), text);
+  await h.submit(row.task.id, row.task.owner, { schemaVersion: 1, requestId: action.request.id,
+    sourceDigest: h.snapshot().digest, native, outcome: 'completed', summary: 'repaired proposal', issues: [] });
+  action = await h.advance(row.task.id, row.task.owner);
+  if (action.kind !== 'native') throw new Error('missing repair review');
+  await h.submit(row.task.id, row.task.owner, { schemaVersion: 1, requestId: action.request.id,
+    sourceDigest: h.snapshot().digest, native: { ...native, executorId: 'repair-proposal-reviewer' },
+    outcome: 'completed', summary: 'fresh repaired proposal review', issues: [] });
+  const repaired = await h.verify(row.task.id, row.task.owner);
+  return { replacement, input: { ...row.input, candidateRoot: h.root, expectedDigest: repaired.digest!, recover: true as const } };
+}
+async function rejectedIntegration(resources: string[] = [], secondRound = false) {
+  const f = await fixture(undefined, false, false, resources), row = f.candidates[0];
+  const repair = await reviewedReplacement(f, 'repaired\n', resources);
+  const next = secondRound ? await reviewedReplacement(f, 'repaired again\n', resources) : undefined;
+  const pin = { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest };
+  await f.harness.integrate({ ...row.input, revalidateAgainst: pin });
+  await runIntegrationReview(f.harness, row.task.id, row.task.owner, { execute: async request => ({ changes: [],
+    response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'rejected-canonical-reviewer' }, outcome: 'changes-requested',
+      summary: 'canonical behavior defect', issues: ['repair scoped behavior'] } }) });
+  return { ...f, row, ...repair, next, previous: f.harness.read(row.task.id) };
+}
+
+it('recovers a rejected same-task integration with fresh canonical checks/review and retained history', async () => {
+  const f = await rejectedIntegration();
+  const { recover: _recover, ...ordinary } = f.input;
+  await expect(f.harness.integrate(ordinary)).rejects.toThrow('RUN_NOT_ACTIVE');
+  const original = readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`), 'utf8');
+  const rejectedLog = readFileSync(f.previous.checks[0].stdout);
+  const recovered = await f.harness.integrate(f.input);
+  expect(recovered.task.id).toBe(f.previous.task.id);
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('repaired\n');
+  const archive = recovered.events.find(event => event.kind === 'integration-recovery')!.reason;
+  expect(JSON.parse(readFileSync(join(archive, 'run.json'), 'utf8'))).toEqual(f.previous);
+  expect(readFileSync(join(archive, 'source/product.txt'), 'utf8')).toBe('fixed\n');
+  expect((await f.harness.verify(f.row.task.id, f.row.task.owner)).verdict?.pass).toBe(false);
+  for (const check of f.row.task.checks) await f.harness.check(f.row.task.id, f.row.task.owner, check.id);
+  expect(readFileSync(f.previous.checks[0].stdout)).toEqual(rejectedLog);
+  expect(f.harness.read(f.row.task.id).checks.at(-1)!.attempt).toBe(2);
+  expect((await f.harness.verify(f.row.task.id, f.row.task.owner)).verdict?.pass).toBe(false);
+  const stages: string[] = [];
+  const reviewed = await runIntegrationReview(f.harness, f.row.task.id, f.row.task.owner, { execute: async (request, files) => {
+    stages.push(request.stage); expect(files.find(file => file.path === 'product.txt')?.content).toBe('repaired\n');
+    return { changes: [], response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'recovery-current-source-reviewer' }, outcome: 'completed', summary: 'fresh canonical repair review', issues: [] } };
+  } });
+  expect(reviewed.success).toBe(true); expect(stages).toEqual(['review']);
+  git(f.root, 'add', 'product.txt'); git(f.root, 'commit', '-qm', 'accepted same-task recovery');
+  expect((await f.harness.finish(f.row.task.id, f.row.task.owner, git(f.root, 'rev-parse', 'HEAD'))).status).toBe('complete');
+  expect(readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`), 'utf8')).toBe(original);
+});
+
+it.each(['owner', 'source', 'task', 'reservation'])('refuses unauthorized or stale recovery %s without replacing rejected bytes', async kind => {
+  const f = await rejectedIntegration();
+  if (kind === 'source') writeFileSync(join(f.root, 'product.txt'), 'foreign replacement\n');
+  if (kind === 'task') {
+    const run = f.replacement.harness.read(f.row.task.id); run.task.requirement = 'different outcome';
+    delete run.digest; run.digest = hash(run);
+    writeFileSync(join(f.replacement.harness.directory, `${f.row.task.id}.json`), JSON.stringify(run)); f.input.expectedDigest = run.digest;
+  }
+  if (kind === 'reservation') {
+    const directory = join(f.harness.directory, 'pool-held-reader'); mkdirSync(directory);
+    saveReservations(directory, [{ id: 'held-reader', mutationPaths: ['product.txt'], resources: [], readPaths: [] }]);
+  }
+  const before = f.harness.snapshot().digest;
+  await expect(f.harness.integrate({ ...f.input, ...(kind === 'owner' ? { owner: 'intruder' } : {}) })).rejects.toThrow();
+  expect(f.harness.snapshot().digest).toBe(before);
+  expect(f.harness.read(f.row.task.id)).toEqual(f.previous);
+  expect(f.harness.inspect().active).toBeNull();
+});
+
+it.each(['resources', 'readPaths', 'acceptedSource'])('retains admitted %s custody during same-task recovery', async field => {
+  const f = await rejectedIntegration(['fixture-resource']);
+  const file = join(f.harness.directory, `candidate-${hash(f.replacement.harness.root)}.json`);
+  const custody = JSON.parse(readFileSync(file, 'utf8'));
+  custody[field] = field === 'acceptedSource' ? { forged: true } : [];
+  writeFileSync(file, JSON.stringify(custody));
+  const directory = join(f.harness.directory, 'pool-independent-resource'); mkdirSync(directory);
+  saveReservations(directory, [{ id: 'independent', mutationPaths: ['other.txt'], resources: ['fixture-resource'], readPaths: [] }]);
+  await expect(f.harness.integrate(f.input)).rejects.toThrow('RECOVERY_CUSTODY_CHANGED');
+  expect(f.harness.read(f.row.task.id)).toEqual(f.previous);
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('fixed\n');
+});
+
+it('recovers two rejected rounds from original admitted scope and preserves every failed join', async () => {
+  const f = await rejectedIntegration([], true);
+  await f.harness.integrate(f.input);
+  await runIntegrationReview(f.harness, f.row.task.id, f.row.task.owner, { execute: async request => ({ changes: [],
+    response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'second-rejected-reviewer' }, outcome: 'changes-requested', summary: 'second defect', issues: ['repair again'] } }) });
+  const second = f.harness.read(f.row.task.id);
+  expect(second.status).toBe('paused');
+  const recovered = await f.harness.integrate(f.next!.input);
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('repaired again\n');
+  const archives = recovered.events.filter(event => event.kind === 'integration-recovery').map(event => event.reason);
+  expect(archives).toHaveLength(2);
+  expect(JSON.parse(readFileSync(join(archives[0], 'run.json'), 'utf8'))).toEqual(f.previous);
+  expect(JSON.parse(readFileSync(join(archives[1], 'run.json'), 'utf8'))).toEqual(second);
+  expect(readFileSync(join(archives[1], 'source/product.txt'), 'utf8')).toBe('repaired\n');
+  const reviewed = await runIntegrationReview(f.harness, f.row.task.id, f.row.task.owner, { execute: async request => ({ changes: [],
+    response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'third-fresh-reviewer' }, outcome: 'completed', summary: 'final repair review', issues: [] } }) });
+  expect(reviewed.success).toBe(true);
+  expect(f.harness.read(f.row.task.id).checks.at(-1)!.attempt).toBe(3);
+});
+
+it('resumes interrupted recovery through ordinary integrate without losing archived rejection', async () => {
+  const f = await rejectedIntegration();
+  const { renameSync: rename } = await vi.importActual<typeof import('node:fs')>('node:fs');
+  vi.mocked(fs.renameSync).mockImplementation((from, to) => {
+    if (to === join(f.root, 'product.txt')) throw new Error('interrupted recovery apply');
+    return rename(from, to);
+  });
+  await expect(f.harness.integrate(f.input)).rejects.toThrow('interrupted recovery apply');
+  vi.mocked(fs.renameSync).mockImplementation(rename);
+  const { recover: _recover, ...ordinary } = f.input;
+  const run = await new DeliveryHarness(f.root).integrate(ordinary);
+  expect(run.integration?.phase).toBe('prepared');
+  expect(run.events.filter(event => event.kind === 'integration-recovery')).toHaveLength(1);
+  expect(run.checks).toEqual(f.previous.checks);
+  expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('repaired\n');
 });

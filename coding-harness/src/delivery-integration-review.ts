@@ -74,7 +74,7 @@ export function integrationReviewPrerequisites(run: DeliveryRun): string[] {
 export function integrationWorkflowIntact(run: DeliveryRun): boolean {
   const original = run.integration!.original.workflow!, current = run.workflow;
   if (!current) return false;
-  if (!run.integration!.ownerRevalidation && !integrationReviewPaths(run).length) return hash(current) === hash(original);
+  if (!run.integration!.ownerRevalidation && !run.events.some(event => event.kind === 'integration-recovery') && !integrationReviewPaths(run).length) return hash(current) === hash(original);
   return hash(current.requests.slice(0, original.requests.length)) === hash(original.requests)
     && hash(current.results.slice(0, original.results.length)) === hash(original.results)
     && hash(current.invalidated.slice(0, original.invalidated.length)) === hash(original.invalidated)
@@ -104,7 +104,7 @@ export function nextIntegrationAction(run: DeliveryRun, source: string, validChe
     return { kind: 'check', checkId: missing.id };
   }
   const changed = integrationReviewPaths(run);
-  if ((!run.integration!.ownerRevalidation && !changed.length) || integrationReviewReady(run, source)) return { kind: 'ready-to-commit', sourceDigest: source };
+  if ((!run.integration!.ownerRevalidation && !run.events.some(event => event.kind === 'integration-recovery') && !changed.length) || integrationReviewReady(run, source)) return { kind: 'ready-to-commit', sourceDigest: source };
   const workflow = run.workflow!;
   const pending = workflow.requests.find(request => !workflow.invalidated.includes(request.id)
     && !workflow.results.some(result => result.request.id === request.id));

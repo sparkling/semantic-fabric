@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { hash, ReceiptLog, type RunResult } from '@metaharness/harness';
 import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.js';
 import { identifier, nonempty } from './delivery-contracts.js';
 import { candidateContext } from './delivery-candidate.js';
 import { DeliveryHarness, type DeliveryRun } from './delivery-runtime.js';
-import { git, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
+import { atomicJson, git, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
 import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest } from './delivery-process.js';
 import { workflowReady } from './delivery-workflow.js';
 import { parseStageResponse } from './delivery-workflow-contracts.js';
@@ -18,7 +18,7 @@ import { integrationReviewReady, integrationReviewPaths, integrationWorkflowInta
 import type { NativeStageResult } from './delivery-workflow-contracts.js';
 
 interface OwnerRevalidation { commit: string; sourceDigest: string }
-export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string; revalidateAgainst?: OwnerRevalidation }
+export interface IntegrationInput { candidateRoot: string; id: string; owner: string; expectedDigest: string; revalidateAgainst?: OwnerRevalidation; recover?: true }
 export interface CandidateIntegration {
   candidateRoot: string; candidateDigest: string; original: DeliveryRun;
   sourceBefore: SourceSnapshot; sourceAfter: SourceSnapshot; phase: 'applying' | 'prepared';
@@ -27,11 +27,12 @@ export interface CandidateIntegration {
   ownerRevalidation?: OwnerRevalidation;
 }
 interface Custody { root: string; sourceBefore: SourceSnapshot; baseCommit: string; scope: string[];
-  readPaths?: string[]; declaredReadPaths?: string[] | null; cleanBase?: boolean; resources?: string[] }
+  readPaths?: string[]; declaredReadPaths?: string[] | null; cleanBase?: boolean; resources?: string[]; acceptedSource?: unknown }
 
 export function parseIntegrationInput(input: unknown): IntegrationInput {
   const value = asRecord(input, 'integration');
-  assertExactKeys({ revalidateAgainst: undefined, ...value }, ['candidateRoot', 'id', 'owner', 'expectedDigest', 'revalidateAgainst'], 'integration');
+  assertExactKeys({ revalidateAgainst: undefined, recover: undefined, ...value }, ['candidateRoot', 'id', 'owner', 'expectedDigest', 'revalidateAgainst', 'recover'], 'integration');
+  if (value.recover !== undefined && value.recover !== true) throw new Error('DELIVERY_INTEGRATION_RECOVERY_FLAG');
   if (typeof value.expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.expectedDigest)) throw new Error('DELIVERY_INTEGRATION_DIGEST_REQUIRED');
   let revalidateAgainst: OwnerRevalidation | undefined;
   if (value.revalidateAgainst !== undefined) {
@@ -43,7 +44,7 @@ export function parseIntegrationInput(input: unknown): IntegrationInput {
   }
   return { candidateRoot: realpathSync(nonempty(value.candidateRoot, 'candidate root')), id: identifier(value.id),
     owner: nonempty(value.owner, 'integration owner'), expectedDigest: value.expectedDigest,
-    ...(revalidateAgainst ? { revalidateAgainst } : {}) };
+    ...(revalidateAgainst ? { revalidateAgainst } : {}), ...(value.recover ? { recover: true } : {}) };
 }
 // Explicit read closure may narrow data dependencies, never evaluator/runtime/package inputs.
 function requiredInputs(files: Record<string, string>, run: DeliveryRun): string[] {
@@ -112,12 +113,20 @@ function mutableIntegrationPath(root: string, path: string): string {
   }
   return resolveMutablePath(root, path);
 }
-export async function prepareIntegration(harness: DeliveryHarness, input: IntegrationInput): Promise<DeliveryRun> {
+export async function prepareIntegration(harness: DeliveryHarness, input: IntegrationInput, previous?: DeliveryRun): Promise<DeliveryRun> {
   if (harness.context.kind !== 'main') throw new Error('DELIVERY_CANONICAL_SOURCE_REQUIRED');
-  if (git(harness.root, 'status', '--porcelain') !== '') throw new Error('DELIVERY_INTEGRATION_DIRTY_CANONICAL');
+  if (!previous && git(harness.root, 'status', '--porcelain') !== '') throw new Error('DELIVERY_INTEGRATION_DIRTY_CANONICAL');
   const custody = readJson(join(harness.directory, `candidate-${hash(input.candidateRoot)}.json`)) as Custody;
   if (custody.root !== input.candidateRoot || hash(custody.sourceBefore.files) !== custody.sourceBefore.digest || !custody.cleanBase) {
     throw new Error('DELIVERY_CANDIDATE_CUSTODY_INVALID');
+  }
+  const priorCustody = previous ? readJson(join(harness.directory, `candidate-${hash(previous.integration!.candidateRoot)}.json`)) as Custody : undefined;
+  if (priorCustody) {
+    const contract = (value: Custody) => hash([value.readPaths?.slice().sort() ?? null,
+      value.declaredReadPaths?.slice().sort() ?? null, value.resources?.slice().sort() ?? [], value.acceptedSource ?? null]);
+    if (hash(priorCustody) !== previous!.integration!.custodyDigest || contract(custody) !== contract(priorCustody)) {
+      throw new Error('DELIVERY_INTEGRATION_RECOVERY_CUSTODY_CHANGED');
+    }
   }
   const context = candidateContext(input.candidateRoot, harness, custody.sourceBefore, custody.baseCommit, custody.scope, true);
   const candidate = new DeliveryHarness(input.candidateRoot, context), original = candidate.read(input.id), candidateSource = candidate.snapshot();
@@ -129,6 +138,7 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   }
   if (existsSync(join(candidate.directory, 'operation.lock')) || existsSync(join(candidate.directory, 'runner/operation.lock'))) throw new Error('DELIVERY_CANDIDATE_BUSY');
   await validateCandidateRun(original, candidateSource);
+  if (previous && hash(original.task) !== hash(previous.task)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_TASK_CHANGED');
   const before = harness.snapshot(), readPaths = [...new Set([...(custody.readPaths ?? Object.keys(custody.sourceBefore.files)),
     ...requiredInputs({ ...custody.sourceBefore.files, ...before.files }, original)])].filter(path => !original.task.scope.includes(path));
   const revalidation = input.revalidateAgainst;
@@ -136,7 +146,8 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
     throw new Error('DELIVERY_INTEGRATION_REVALIDATION_STALE');
   }
   // Explicit owner revalidation retains every read; it never permits overwriting changed scope.
-  for (const path of [...(revalidation ? [] : readPaths), ...original.task.scope]) if (before.files[path] !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
+  for (const path of revalidation ? [] : readPaths) if (before.files[path] !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
+  for (const path of original.task.scope) if ((priorCustody ? priorCustody.sourceBefore.files[path] : before.files[path]) !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
   if (!revalidation && custody.declaredReadPaths == null
     && outsideDigest(before, original.task.scope) !== outsideDigest(custody.sourceBefore, original.task.scope)) {
     throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
@@ -185,7 +196,41 @@ export function findIntegratedRun(harness: DeliveryHarness, commit: string): Del
   return undefined;
 }
 export function integrationReady(run: DeliveryRun, source: string): boolean {
-  return integrationSourceReady(run, source) && (!(run.integration?.ownerRevalidation || integrationReviewPaths(run).length) || integrationReviewReady(run, source));
+  return integrationSourceReady(run, source) && (!(run.integration?.ownerRevalidation || run.events.some(event => event.kind === 'integration-recovery') || integrationReviewPaths(run).length) || integrationReviewReady(run, source));
+}
+
+/** Explicit same-task recovery preserves the rejected run and its source bytes. */
+export async function recoverIntegration(harness: DeliveryHarness, input: IntegrationInput, previous?: DeliveryRun): Promise<DeliveryRun> {
+  if (!previous?.integration || previous.status !== 'paused' || previous.integration.phase !== 'prepared' || previous.commit
+    || previous.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_RECOVERY_REQUIRED');
+  const before = harness.snapshot(), evidence = previous.integration;
+  if (harness.context.head() !== previous.baseCommit || before.digest !== evidence.sourceAfter.digest
+    || git(harness.root, 'diff', '--cached', '--name-only') !== '') throw new Error('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED');
+  const reviews = previous.workflow?.results.slice(evidence.original.workflow!.results.length) ?? [];
+  if (!previous.checks.some(check => !check.passed && check.sourceBefore === before.digest)
+    && !reviews.some(result => !result.accepted && result.response.sourceDigest === before.digest)) {
+    throw new Error('DELIVERY_INTEGRATION_RECOVERY_REJECTION_REQUIRED');
+  }
+  await validateIntegrationEvidence(previous);
+  const run = await prepareIntegration(harness, input, previous);
+  if (run.integration!.sourceAfter.digest === before.digest) throw new Error('DELIVERY_INTEGRATION_RECOVERY_NO_CHANGE');
+  const archive = join(harness.directory, `integration-recovery-${previous.digest}`);
+  mkdirSync(archive, { recursive: true, mode: 0o700 });
+  resolveWorkspacePath(harness.directory, basename(archive), { requireDirectory: true });
+  for (const path of previous.task.scope) {
+    if (!before.files[path]) continue;
+    const target = mutableIntegrationPath(archive, `source/${path}`), bytes = readFileSync(resolveWorkspacePath(harness.root, path, { requireRegularFile: true }));
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    if (!existsSync(target)) writeFileSync(target, bytes, { flag: 'wx', mode: 0o400 });
+    else if (!readFileSync(target).equals(bytes)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_ARCHIVE_CHANGED');
+  }
+  const record = join(archive, 'run.json');
+  if (!existsSync(record)) atomicJson(record, previous);
+  else if (hash(readJson(record)) !== hash(previous)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_ARCHIVE_CHANGED');
+  run.checks = structuredClone(previous.checks);
+  run.events = [...structuredClone(previous.events), ...run.events,
+    { at: new Date().toISOString(), kind: 'integration-recovery', reason: archive }];
+  return run;
 }
 export function integrationSourceReady(run: DeliveryRun, source: string): boolean {
   const integration = run.integration;

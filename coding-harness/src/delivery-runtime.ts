@@ -14,7 +14,7 @@ import { parseStageResponse, type DeliveryAction, type DeliveryWorkflow, type Na
 import { checkDigests, nextWorkflowAction, stageEvidenceDigest, workflowReady } from './delivery-workflow.js';
 import { verifyNativeStage } from './delivery-stage.js';
 import type { DeliveryApiEvidence } from './delivery-api.js';
-import { applyIntegration, parseIntegrationInput, prepareIntegration, validateIntegrationEvidence, type CandidateIntegration } from './delivery-integration.js';
+import { applyIntegration, parseIntegrationInput, prepareIntegration, recoverIntegration, validateIntegrationEvidence, type CandidateIntegration } from './delivery-integration.js';
 import { integrationReviewPrerequisites } from './delivery-integration-review.js';
 
 export interface CheckResult {
@@ -133,10 +133,10 @@ export class DeliveryHarness {
       if (existing && !existing.integration) throw new Error('DELIVERY_RUN_ALREADY_EXISTS');
       const active = this.inspect().active as { id: string } | null;
       if (active && active.id !== input.id) throw new Error('DELIVERY_WRITER_ALREADY_CLAIMED');
-      const run = existing ?? await prepareIntegration(this, input);
+      const run = input.recover ? await recoverIntegration(this, input, existing) : existing ?? await prepareIntegration(this, input);
       if (run.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_OWNER_MISMATCH');
       if (run.status !== 'active') throw new Error('DELIVERY_RUN_NOT_ACTIVE');
-      if (!existing) this.save(run);
+      if (!existing || input.recover) this.save(run);
       if (!active) this.claim(input.id);
       applyIntegration(this, run, input);
       return this.save(run);
