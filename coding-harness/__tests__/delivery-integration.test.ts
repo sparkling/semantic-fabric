@@ -28,7 +28,7 @@ async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs']
   const parentDirectory = mkdtempSync(join(tmpdir(), 'fabric-integration-')); roots.push(parentDirectory);
   const candidates = [];
   for (const [i, path] of (combined ? ['product.txt'] : [newFirst ? 'new.txt' : 'product.txt', 'other.txt']).entries()) {
-    const task = { ...f.task, id: `candidate-${i}`, scope: combined ? ['product.txt', 'other.txt'] : [path], ...(readPaths ? { readPaths } : {}) };
+    const task = { ...f.task, id: `candidate-${i}`, scope: combined ? ['product.txt', 'other.txt', ...(newFirst ? ['new.txt'] : [])] : [path], ...(readPaths ? { readPaths } : {}) };
     const candidate = createDeliveryCandidate(f.harness, { parentDirectory, scope: task.scope, readPaths: readPaths ?? undefined, resources });
     const h = candidate.harness;
     await h.begin(task); await h.bind(task.id, task.owner, native);
@@ -250,6 +250,7 @@ async function reviewedReplacement(f: Awaited<ReturnType<typeof fixture>>, text:
   let action = await h.advance(row.task.id, row.task.owner);
   if (action.kind !== 'native') throw new Error('missing repair implementation');
   writeFileSync(join(h.root, 'product.txt'), text);
+  if (row.task.scope.includes('new.txt')) writeFileSync(join(h.root, 'new.txt'), 'repaired new\n');
   await h.submit(row.task.id, row.task.owner, { schemaVersion: 1, requestId: action.request.id,
     sourceDigest: h.snapshot().digest, native, outcome: 'completed', summary: 'repaired proposal', issues: [] });
   action = await h.advance(row.task.id, row.task.owner);
@@ -260,8 +261,8 @@ async function reviewedReplacement(f: Awaited<ReturnType<typeof fixture>>, text:
   const repaired = await h.verify(row.task.id, row.task.owner);
   return { replacement, input: { ...row.input, candidateRoot: h.root, expectedDigest: repaired.digest!, recover: true as const } };
 }
-async function rejectedIntegration(resources: string[] = [], secondRound = false) {
-  const f = await fixture(undefined, false, false, resources), row = f.candidates[0];
+async function rejectedIntegration(resources: string[] = [], secondRound = false, combined = false, newScope = false) {
+  const f = await fixture(undefined, combined, newScope, resources), row = f.candidates[0];
   const repair = await reviewedReplacement(f, 'repaired\n', resources);
   const next = secondRound ? await reviewedReplacement(f, 'repaired again\n', resources) : undefined;
   const pin = { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest };
@@ -272,6 +273,54 @@ async function rejectedIntegration(resources: string[] = [], secondRound = false
       summary: 'canonical behavior defect', issues: ['repair scoped behavior'] } }) });
   return { ...f, row, ...repair, next, previous: f.harness.read(row.task.id) };
 }
+
+it('recovers all restored scope with an exact pin, truthful entry archive and normal finish', async () => {
+  const f = await rejectedIntegration([], false, true, true);
+  const candidateRun = readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`));
+  for (const path of f.row.task.scope) {
+    if (f.previous.integration!.sourceBefore.files[path]) writeFileSync(join(f.root, path), 'before\n');
+    else rmSync(join(f.root, path));
+  }
+  const entry = f.harness.snapshot();
+  expect(f.row.task.scope.every(path => entry.files[path] === f.previous.integration!.sourceBefore.files[path])).toBe(true);
+  const recovered = await f.harness.integrate({ ...f.input,
+    revalidateAgainst: { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: entry.digest } });
+  const archive = recovered.events.find(event => event.kind === 'integration-recovery')!.reason;
+  expect(JSON.parse(readFileSync(join(archive, 'run.json'), 'utf8'))).toEqual(f.previous);
+  expect(JSON.parse(readFileSync(join(archive, 'entry-source.json'), 'utf8'))).toEqual({
+    source: entry, scopeState: 'original', rejectedSourceDigest: f.previous.integration!.sourceAfter.digest });
+  expect(recovered.integration!.sourceBefore).toEqual(entry);
+  for (const path of f.row.task.scope) {
+    if (entry.files[path]) expect(readFileSync(join(archive, 'source', path), 'utf8')).toBe('before\n');
+    else expect(fs.existsSync(join(archive, 'source', path))).toBe(false);
+    expect(readFileSync(join(f.row.candidate.harness.root, path), 'utf8')).toBe('fixed\n');
+  }
+  expect(entry.files['new.txt']).toBeUndefined();
+  expect(readFileSync(join(f.root, 'new.txt'), 'utf8')).toBe('repaired new\n');
+  expect((await f.harness.verify(f.row.task.id, f.row.task.owner)).verdict?.pass).toBe(false);
+  const reviewed = await runIntegrationReview(f.harness, f.row.task.id, f.row.task.owner, { execute: async request => ({
+    changes: [], response: { schemaVersion: 1, requestId: request.id, sourceDigest: request.sourceDigest,
+      native: { ...native, executorId: 'restored-scope-fresh-reviewer' }, outcome: 'completed',
+      summary: 'fresh restored-scope review', issues: [] } }) });
+  expect(reviewed.success).toBe(true);
+  expect(f.harness.read(f.row.task.id).checks.slice(-2).every(check => check.passed && check.attempt === 2)).toBe(true);
+  git(f.root, 'add', '--', ...f.row.task.scope); git(f.root, 'commit', '-qm', 'accept restored-scope recovery');
+  expect((await f.harness.finish(f.row.task.id, f.row.task.owner, git(f.root, 'rev-parse', 'HEAD'))).status).toBe('complete');
+  expect(readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`))).toEqual(candidateRun);
+});
+
+it.each(['mixed', 'unknown', 'no-pin'])('refuses %s rollback without changing source or rejected evidence', async kind => {
+  const f = await rejectedIntegration([], false, true);
+  writeFileSync(join(f.root, 'product.txt'), kind === 'unknown' ? 'unknown\n' : 'before\n');
+  if (kind !== 'mixed') writeFileSync(join(f.root, 'other.txt'), 'before\n');
+  const before = f.harness.snapshot();
+  await expect(f.harness.integrate({ ...f.input, ...(kind === 'no-pin' ? {} : {
+    revalidateAgainst: { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: before.digest } }) }))
+    .rejects.toThrow('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED');
+  expect(f.harness.snapshot()).toEqual(before);
+  expect(f.harness.read(f.row.task.id)).toEqual(f.previous);
+  expect(fs.existsSync(join(f.harness.directory, `integration-recovery-${f.previous.digest}`))).toBe(false);
+});
 
 it.each(['unchanged', 'canonical-drift', 'environment-drift'])('recovers rejected integration after %s with fresh checks/review and retained history', async migration => {
   const f = await rejectedIntegration();

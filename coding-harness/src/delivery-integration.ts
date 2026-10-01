@@ -201,7 +201,7 @@ export function integrationReady(run: DeliveryRun, source: string): boolean {
   return integrationSourceReady(run, source) && (!(run.integration?.ownerRevalidation || run.events.some(event => event.kind === 'integration-recovery') || integrationReviewPaths(run).length) || integrationReviewReady(run, source));
 }
 
-/** Explicit same-task recovery preserves the rejected run and its source bytes. */
+/** Explicit same-task recovery preserves the rejected run and truthfully archives entry bytes. */
 export async function recoverIntegration(harness: DeliveryHarness, input: IntegrationInput, previous?: DeliveryRun): Promise<DeliveryRun> {
   if (!previous?.integration || previous.status !== 'paused' || previous.integration.phase !== 'prepared' || previous.commit
     || previous.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_RECOVERY_REQUIRED');
@@ -210,8 +210,10 @@ export async function recoverIntegration(harness: DeliveryHarness, input: Integr
   if (revalidation && (revalidation.commit !== harness.context.head() || revalidation.sourceDigest !== before.digest)) {
     throw new Error('DELIVERY_INTEGRATION_REVALIDATION_STALE');
   }
+  const rejectedScope = previous.task.scope.every(path => before.files[path] === evidence.sourceAfter.files[path]);
+  const originalScope = previous.task.scope.every(path => before.files[path] === evidence.sourceBefore.files[path]);
   if ((!revalidation && (harness.context.head() !== previous.baseCommit || before.digest !== evidence.sourceAfter.digest))
-    || previous.task.scope.some(path => before.files[path] !== evidence.sourceAfter.files[path])
+    || (!rejectedScope && !(revalidation && originalScope))
     || git(harness.root, 'diff', '--cached', '--name-only') !== '') throw new Error('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED');
   if (revalidation) {
     git(harness.root, 'merge-base', '--is-ancestor', previous.baseCommit, harness.context.head());
@@ -242,6 +244,12 @@ export async function recoverIntegration(harness: DeliveryHarness, input: Integr
   const record = join(archive, 'run.json');
   if (!existsSync(record)) atomicJson(record, previous);
   else if (hash(readJson(record)) !== hash(previous)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_ARCHIVE_CHANGED');
+  // source/ contains actual recovery-entry bytes, not reconstructed rejected bytes.
+  // The exact negative run retains its original candidate and rejected source binding.
+  const entry = { source: before, scopeState: rejectedScope ? 'rejected' : 'original', rejectedSourceDigest: evidence.sourceAfter.digest };
+  const entryRecord = join(archive, 'entry-source.json');
+  if (!existsSync(entryRecord)) atomicJson(entryRecord, entry);
+  else if (hash(readJson(entryRecord)) !== hash(entry)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_ARCHIVE_CHANGED');
   run.checks = structuredClone(previous.checks);
   run.events = [...structuredClone(previous.events), ...run.events,
     { at: new Date().toISOString(), kind: 'integration-recovery', reason: archive }];
