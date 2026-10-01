@@ -6,7 +6,8 @@ import { updateOperationChild } from './delivery-workspace.js';
 
 /** Apply only after ordinary environment sanitization; frozen evaluators stay unchanged. */
 export function ordinaryRustEnvironment(environment: Readonly<Record<string, string>>): Record<string, string> {
-  return { ...environment, CARGO_PROFILE_DEV_DEBUG: '1', CARGO_PROFILE_TEST_DEBUG: '1',
+  // CARGO_INCREMENTAL takes precedence over profile settings, including inherited "1".
+  return { ...environment, CARGO_INCREMENTAL: '0', CARGO_PROFILE_DEV_DEBUG: '1', CARGO_PROFILE_TEST_DEBUG: '1',
     CARGO_PROFILE_DEV_INCREMENTAL: 'false', CARGO_PROFILE_TEST_INCREMENTAL: 'false' };
 }
 

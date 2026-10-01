@@ -168,7 +168,7 @@ describe('mandatory main-only delivery harness', () => {
     vi.stubEnv('RUSTFLAGS', '-C debuginfo=1'); vi.stubEnv('SF_TEST_MARKER', 'owned-fixture');
     vi.stubEnv('CODEX_HOME', '/not-a-build-input'); vi.stubEnv('ANTHROPIC_API_KEY', 'test-placeholder');
     vi.stubEnv('CARGO_PROFILE_DEV_DEBUG', '2'); vi.stubEnv('CARGO_PROFILE_TEST_INCREMENTAL', 'true');
-    vi.stubEnv('CARGO_PROFILE_RELEASE_DEBUG', '2'); vi.stubEnv('CARGO_INCREMENTAL', '0');
+    vi.stubEnv('CARGO_PROFILE_RELEASE_DEBUG', '2'); vi.stubEnv('CARGO_INCREMENTAL', '1');
     const env = buildCheckEnvironment();
     expect(env.RUSTFLAGS).toBe('-C debuginfo=1'); expect(env.SF_TEST_MARKER).toBe('owned-fixture');
     expect(env).toMatchObject({ CARGO_PROFILE_DEV_DEBUG: '1', CARGO_PROFILE_TEST_DEBUG: '1',
