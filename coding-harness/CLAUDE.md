@@ -16,8 +16,10 @@ repository instructions come from `../AGENTS.md`.
   bind the actual model/effort, then use `advance`/`submit` for source-bound
   implementation, automatic checks, feedback-directed repair and independent
   read-only native review. Kernel verification runs per ready stage, while the
-  existing host executes requests; do not launch a second build host. Honor user
-  review holds. The remaining candidate-specific rules describe the optional experiment.
+  assigned native host executes each request. Independent lanes may use separate
+  hosts/worktrees; never duplicate the same active request or integration writer.
+  Honor current user review holds. The next three bullets describe only the
+  historical optional candidate experiment, not ordinary delivery or direct repair.
 - Run historical candidate commands offline in an enforced process boundary. Dependency
   resolution is a separate, registry-pinned `npm ci` stage.
 - Preserve the frozen evaluator, policy, lockfile, ADR, manifest, and `.mcp.json`

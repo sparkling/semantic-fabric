@@ -18,15 +18,16 @@ Claude Code invokes skills with `/skill-name`. (Codex uses `$skill-name`.)
 The `Agent` tool and `SendMessage` are Claude Code features; Codex uses its own native agent surface. Named native agents coordinate by messaging, not by polling shared state. Native agents are not automatically Ruflo-tracked.
 
 - Name every agent and tell it who receives which result.
-- Launch independent read-only agents together; the existing integration owner is the sole writer on canonical main. Follow the shared parallel execution plan in AGENTS.md.
+- Launch independent writing and read-only lanes together; writers use isolated task branches/worktrees or existing candidate snapshots. One owner integrates into main. Follow shared AGENTS.md policy.
 - For Ruflo-tracked work, create the structured swarm/agent records before launching matching native agents.
 - After spawning, continue independent work. Wait only when a real dependency blocks progress.
 - Do not poll repeatedly; agents message back or complete through the native host.
 
 ## Model routing
 
-Claude's model lineup, so it lives here and not in `AGENTS.md`. Route by complexity, not by habit:
-the cheapest tier that can do the job correctly.
+Follow shared `AGENTS.md`: ordinary engineering Sol 6.1/high, coordinator
+Astra/medium, declared Opus capability repair. Claude examples below are not
+a competing project routing policy.
 
 | Tier | Handler | Use cases |
 |------|---------|-----------|

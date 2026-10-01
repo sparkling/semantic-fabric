@@ -31,7 +31,9 @@ API credentials remain only in the API adapter, never check/native environments.
 Capability/output failure admits configured Opus/high repair; only confirmed
 nonexecuted HTTP 402 credit rejection admits lighter Sonnet or authorized Sol
 subscription execution. Preserve actual executor identities and configured
-native gateway transport. Native client/model failure pauses with its exact error.
+native gateway transport. Native client/model failure pauses only that invocation
+with its exact error; independent ready work continues. Inspect transient capacity
+errors, then retry unchanged route after backoff, without a blind loop or fallback.
 Native subscriptions have no cost, token, request, invocation or quota budgets.
 ADR-0058 governs this repair where historical policy below conflicts. No push,
 publication or expanded evolution programme follows from harness acceptance.
@@ -57,63 +59,18 @@ Host credentials alone do not implement this guard or an automatic API dispatche
 Existing native harness adapters remain as configured until an API adapter is
 explicitly integrated; do not silently substitute transports.
 
-## Historical Claude-only build (2026-09-22; superseded above)
+## Parallel execution (2026-10-01 clarification)
 
-Codex is not used for build, task execution, or review until the user
-explicitly re-authorizes it. Every delivery task uses `host: 'claude-code'`;
-independent review is a second, distinct Claude Code executor identity, not
-Codex. This restores the same-provider policy last active 2026-09-15 through
-2026-09-19 (commit `02736d56`, superseded 2026-09-19 by `1ad11c8f` when Codex
-returned); the historical dual-provider sections below (session-capacity
-amendment, parallel-execution policy) describe that later, now-paused period
-and are retained as history, not current instruction.
+No fixed repository-wide model-session cap. Assign every useful independent
+ready packet, with explicit source, ownership, checks and recipient. Separate
+model fan-out from CPU/RAM-heavy checks and isolate mutable outputs/resources.
+One integration owner accepts reviewed commits as lanes finish, then releases
+source-dependent work; unrelated siblings need not drain first.
 
-Native subscription transport for Claude Code in this repository runs through
-the user-authorized `9router` gateway on the Mac
-(`ANTHROPIC_BASE_URL=http://macbook-pro.tail448fa.ts.net:20128/v1`,
-already configured in `~/.claude/settings.json` with its own
-`ANTHROPIC_AUTH_TOKEN` and `cc/claude-*` model aliases). This is a native
-subscription transport substitution, not a provider-API-key or OpenRouter
-exception: no other provider's API key, base URL, or fallback route is
-permitted. Never print, log, or commit that token; it stays in the existing
-untracked settings file.
-
-### Independent model session capacity (2026-09-19 user amendment — historical, Codex paused)
-
-Do not impose a fixed repository-wide session-count cap on independent Codex
-(ChatGPT subscription) or Claude Code subscription processes. Four distinct
-concurrent Codex sessions completed successfully on Codex 0.155.1; Claude
-session capacity was not benchmarked. Do not add repository overrides for
-native subagent counts. Client defaults and enforced per-session limits still
-apply; independent sessions do not establish infinite capacity.
-Select parallel work from ready dependencies and file ownership; preserve the
-single integration writer and existing build/resource isolation. Historical
-in-session capacity observations are not a global model-session limit.
-
-### Parallel execution operating policy (historical Codex coordinator; superseded above)
-
-The programme coordinator used native Codex `gpt-6-astra` with `xhigh`
-reasoning effort (explicit user selection, 2026-09-20) while Codex was active.
-With Codex paused (2026-09-22), the coordinating conversation is Claude Code
-at Sonnet high effort via the 9router transport above; worker and reviewer
-routes remain task-specific. Record actual runtime settings in harness
-bindings, never a requested setting that the running host has not adopted.
-
-Follow `docs/plans/native-parallel-execution-plan.md` and the delivery harness
-README. Keep the existing coordinating conversation; provider capacity does not
-determine coordination ownership. Dispatch bounded dependency-ready work through
-native agents or independent native sessions, with explicit input revision,
-scope, deliverable, acceptance checks and result recipient. Refill on accepted
-completion; report active, ready, blocked and review queues and resource waits.
-Keep one integration writer and stable source during checks and formal review.
-Native agent concurrency and build/resource concurrency are separate controls.
-
-Route each worker by its task, preserving the selected main model. Prefer tools
-for deterministic work and escalate only a named unresolved question. The user's
-2026-09-19 efficiency instruction permits comparing total tokens per accepted
-outcome, including repeated context and rework, alongside latency and accuracy.
-This is efficiency evidence, never a subscription price, usage budget, quota,
-availability gate or reason to substitute an explicitly requested model.
+Historical Claude-only, mandatory-harness and main-only instructions are retired.
+Their original evidence remains in Git history and ADR-0055/0058; it is not active
+execution policy. Current ordinary roles are Sol 6.1/high and Astra/medium
+coordination, with declared capability repair and task-specific pins preserved.
 
 ## Rules
 
@@ -148,7 +105,7 @@ Use the smallest capable structure derived from dependency edges, shared-state r
 - Independent one-shot native agents need no Ruflo swarm.
 - For persistent topology, shared memory, or tracked handoffs, discover the live schemas, call `swarm_init`, then register each worker with `agent_spawn({agentType: "...", agentId: "..."})`.
 - A tracked record does not launch a native Claude/Codex agent; launch the matching executor separately.
-- Use exactly one integration writer on canonical `main`. Never create/switch branches or worktrees; historical recovery refs are read-only integration inputs.
+- Task branches and isolated Git worktrees are authorized (2026-10-01). One writer owns each lane; one integrator accepts into `main`. Existing non-Git candidates remain valid. Preserve historical evidence and running work; do not switch another writer's checkout.
 - Read-only research may run concurrently. Continue independent work after spawning and wait only on a real dependency.
 - Role strings such as `researcher`, `architect`, `coder`, and `reviewer` are labels, not proof of a specialized runtime.
 
@@ -228,19 +185,15 @@ Direct implementation, repair, tests and builds are permitted for all work.
 Use the delivery harness when useful for orchestration and learning; it is not
 a prerequisite. Both native hosts and the isolated ADR-0058 API adapter are
 authorized. Retain one integrator, scoped tests/builds, independent review,
-source/data isolation and the current application pause; harness launch does not resume it.
+source/data isolation. Main programme resumption is authorized by the September 29
+amendment; only explicit current user pauses hold execution.
 
-### Historical delivery execution (ADR-0055, superseded by September 28 amendment)
+### Historical delivery policy
 
-- Every building task must use the main-only delivery harness in `coding-harness/` (ADR-0055, user corrections 2026-09-10, 2026-09-19 and 2026-09-22). Begin a scoped task before editing, bind the actual native executor/model/effort, then use `advance`/`submit` for source-bound implementation, declared checks, failure-directed repair and independent read-only review. With Codex paused (2026-09-22), the host is Claude Code for both implementation and review; independent review uses a second, distinct Claude Code executor identity, not a second provider. The existing native host executes each returned request; do not start another implementation host. Verify, commit only that slice, then finish against the exact commit. See `coding-harness/README.md` for response schemas, recovery and trust boundaries. Ruflo MCP records coordination/results; local receipts do not prove remote synchronization. Manifests use `latest`, with exact tested dependency resolution retained in the lockfile. The historical closed candidate experiment remains optional and its worktree launchers remain prohibited.
-- After an explicit user pause/review request, do not resume application tasks from the scheduler or an active goal until the user releases that pause. Preserve interrupted patches; explicit adoption records starting changes without treating them as verified.
-- Finish integration and public request behavior before starting another foundation. Use the finite G1–G6 ledger in `docs/plans/sota-application-completion-programme.md`, not a next-unmetered-helper queue. Audit prerequisite test callsites before freezing task scope; group compatible work by complete phase/public outcome, retaining incremental verified commits. Count reduced named obligations and public acceptance, not commits, tests, scores, reviews or receipts alone.
-- Preserve the selected main model. Use tools for deterministic work, and Haiku for bounded mechanical tasks, Sonnet for established patterns and normal implementation/review (Sonnet high for a specific correctness proof). With Codex paused, Claude Code writes and a second, distinct Claude Code executor identity reviews; a `reviewer` route is same-provider by policy while Codex is paused, and must still use a different executor ID than every implementation handoff. Escalate to Opus only for a named unresolved problem; Opus high is the top Claude tier, reserved for a bounded exceptional task (Fable is no longer routed, 2026-09-23). `ultra`/ultra-tier effort is Codex-only and unavailable while Codex is paused. Route each new task afresh and stop stronger reviewers once their question is answered.
-- Astra `max` and `ultra` are supported choices. Forward explicit effort unchanged; never clamp it based on an obsolete adapter or silently substitute a model. Use stronger effort for demonstrated task difficulty, not as a blanket default.
-- Native subscription authentication only: no API keys, OpenRouter, or spend/token/request/invocation/quota budgets. If the native subscription/requested model is unavailable, pause model execution and report the exact client, model and error.
-- Do not expand Darwin/GEPA/AVO, retrieval tuning, benchmark trains or release research during v1 completion. Required security, exactness, boundedness, lifecycle, federation and minimum release checks remain blockers.
-- Use the tracked six-hour prompt at `docs/plans/programme-six-hour-review-prompt.md`. Scheduled delivery queues into the existing conversation; never launch a competing writer/resume. A missed outcome requires a concrete course correction and an evidence-based forecast.
-- Update the authoritative gate row and only affected living ADR decisions/status/date in the verified slice; avoid duplicating implementation diaries across ADRs. Refresh source-bound catalogue evidence when affected, without rerunning unrelated historical checks. Commit only scoped changes on `main`; push, tag, deploy or publish only when the current task explicitly authorizes it.
+Earlier Claude-only, mandatory-harness and no-worktree rules are superseded.
+See ADR-0055/0058 and Git history for original evidence. Current direct-work,
+parallel isolation and selected-route policies above govern execution.
+Explicit user pauses, protected data and publication authority remain separate.
 
 - **Skill syntax**: invoke skills with `$skill-name`. (Claude Code uses `/skill-name`; see `CLAUDE.md`.)
 - **Execution model**: `claude-flow` = LEDGER (coordinates memory, routing, swarm state); **Codex = EXECUTOR** (writes code, runs tests, creates files). Coordination commands return instantly, so DON'T STOP after them; continue immediately with the next implementation step.
