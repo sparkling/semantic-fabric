@@ -9,6 +9,7 @@ import { git } from '../src/delivery-workspace.js';
 import type { DeliveryHarness } from '../src/delivery-runtime.js';
 import type { DeliveryTask } from '../src/delivery-contracts.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
+import { coordinatorEnvironment } from '../scripts/run-delivery-coordinator.mjs';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -29,6 +30,20 @@ async function attest(harness: DeliveryHarness, task: DeliveryTask, edit?: () =>
 }
 
 describe('upstream pool and ordinary lifecycle candidate roots', () => {
+  it('uses coordinator sibling scratch without capturing retained candidates into source', () => {
+    const f = workflowFixture(roots), before = f.harness.snapshot().digest;
+    const directory = coordinatorEnvironment(f.root, {}).TMPDIR; roots.push(directory);
+    const candidate = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'] });
+    try {
+      expect(candidate.harness.root.startsWith(`${directory}/delivery-candidate-`)).toBe(true);
+      expect(candidate.harness.snapshot().digest).toBe(before);
+      expect(f.harness.snapshot().digest).toBe(before);
+      expect(readdirSync(candidate.harness.root).some(name => name.startsWith('delivery-candidate-'))).toBe(false);
+      const next = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'] });
+      try { expect(next.harness.snapshot().digest).toBe(before); }
+      finally { next.cleanup(); }
+    } finally { candidate.cleanup(); }
+  });
   it('rejects canonical source-visible parents before copying, including symlink aliases', () => {
     const f = workflowFixture(roots), directory = parentDirectory();
     const visible = join(f.root, 'candidates'); mkdirSync(visible);

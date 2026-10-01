@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { execFileSync, spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -22,6 +22,7 @@ export function coordinatorLaunch(root, sessionId) {
     'A status or handoff answer does not pause authorized programme work; afterward service active workers/results and refill ready work. An explicit owner pause always wins.',
     'Own decomposition into useful outcomes, dependency admission, file/read/resource ownership, independent review and serial integration.',
     'Use existing delivery ready manifests and runDeliveryOutcome; do not build another scheduler or use one monolithic programme worker.',
+    'Use inherited TMPDIR for new temporary candidate parents; preserve explicit parentDirectory in existing manifests and running commands.',
     'For each ready cohort record task/owner/source/read closure/checks, actual handoff, named resources and recipient.',
     'Choose maxConcurrency from independently ready disjoint work and observed client/host capacity, not a fixed native-session cap.',
     'At each refill examine every unfinished authorized outcome: assign useful independent work or name its actual prerequisite, read/write conflict, resource or authority blocker.',
@@ -43,11 +44,27 @@ export function coordinatorLaunch(root, sessionId) {
     '--config', 'model_reasoning_effort="medium"', '--config', 'plan_mode_reasoning_effort="medium"', prompt] };
 }
 
+export function coordinatorEnvironment(root, environment) {
+  if (environment.TMPDIR || environment.TMP || environment.TEMP) return { ...environment };
+  const canonicalRoot = realpathSync(root);
+  // Retained candidates belong beside the checkout on its storage volume, never inside source.
+  const scratch = resolve(dirname(canonicalRoot), `.${basename(canonicalRoot)}-delivery-tmp`);
+  mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  const physicalScratch = realpathSync(scratch);
+  const relativeScratch = relative(canonicalRoot, physicalScratch);
+  if (physicalScratch !== scratch || !relativeScratch
+    || (!isAbsolute(relativeScratch) && relativeScratch !== '..' && !relativeScratch.startsWith('../'))) {
+    throw new Error('DELIVERY_COORDINATOR_SCRATCH_NOT_ISOLATED');
+  }
+  return { ...environment, TMPDIR: physicalScratch };
+}
+
 export function runCoordinator(args = process.argv.slice(2), environment = process.env, launch = spawnSync) {
   if (args.length > 1 || (args.length === 1 && args[0] !== '--dry-run')) throw new Error('usage: coordinator [--dry-run]');
   const plan = coordinatorLaunch(repositoryRoot, environment.SEMANTIC_FABRIC_COORDINATOR_SESSION_ID);
   if (args[0] === '--dry-run') { console.log(JSON.stringify({ ...plan, executionStarted: false }, null, 2)); return 0; }
-  const result = launch(plan.executable, plan.args, { cwd: plan.cwd, stdio: 'inherit' });
+  const result = launch(plan.executable, plan.args, { cwd: plan.cwd, stdio: 'inherit',
+    env: coordinatorEnvironment(plan.cwd, environment) });
   if (result.error) throw result.error;
   return result.status ?? 1;
 }

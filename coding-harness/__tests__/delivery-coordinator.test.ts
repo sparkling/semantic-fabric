@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { coordinatorLaunch, runCoordinator } from '../scripts/run-delivery-coordinator.mjs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
+import { coordinatorEnvironment, coordinatorLaunch, runCoordinator } from '../scripts/run-delivery-coordinator.mjs';
 
 const root = new URL('../../', import.meta.url).pathname;
 const sessionId = '01a0dd65-d69a-7841-9e52-c1c8617c333a';
@@ -30,15 +31,65 @@ describe('native programme coordinator entrypoint', () => {
     const launch = vi.fn(() => ({ status: 7 }));
     const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const environment = { SEMANTIC_FABRIC_COORDINATOR_SESSION_ID: sessionId };
+      const environment = { SEMANTIC_FABRIC_COORDINATOR_SESSION_ID: sessionId,
+        TMPDIR: '/explicit/operator/scratch', ANTHROPIC_BASE_URL: 'http://gateway.invalid',
+        ANTHROPIC_AUTH_TOKEN: 'fixture-only', CODEX_HOME: '/configured/codex' };
       expect(runCoordinator(['--dry-run'], environment, launch)).toBe(0);
       expect(launch).not.toHaveBeenCalled();
       expect(JSON.parse(output.mock.calls[0][0])).toMatchObject({ executionStarted: false, executable: 'codex' });
       expect(runCoordinator([], environment, launch)).toBe(7);
       expect(launch).toHaveBeenCalledTimes(1);
       expect(launch.mock.calls[0]).toEqual(['codex', coordinatorLaunch(root, sessionId).args,
-        { cwd: coordinatorLaunch(root, sessionId).cwd, stdio: 'inherit' }]);
+        { cwd: coordinatorLaunch(root, sessionId).cwd, stdio: 'inherit', env: environment }]);
     } finally { output.mockRestore(); }
+  });
+
+  it('creates private sibling scratch on the checkout volume without mutating inherited environment', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fabric-coordinator-storage-'));
+    try {
+      const canonical = join(directory, 'semantic-fabric'); mkdirSync(canonical);
+      const environment = { SEMANTIC_FABRIC_COORDINATOR_SESSION_ID: sessionId, NATIVE_ROUTE: 'unchanged' };
+      const scoped = coordinatorEnvironment(canonical, environment);
+      expect(scoped).toEqual({ ...environment, TMPDIR: join(realpathSync(directory), '.semantic-fabric-delivery-tmp') });
+      expect(dirname(scoped.TMPDIR)).toBe(dirname(realpathSync(canonical)));
+      expect(statSync(scoped.TMPDIR).mode & 0o777).toBe(0o700);
+      expect(environment).not.toHaveProperty('TMPDIR');
+      expect(coordinatorEnvironment(canonical, environment)).toEqual(scoped);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('does not prepare scratch during dry-run', () => {
+    const launch = vi.fn(), scratchRead = vi.fn(() => { throw new Error('scratch preparation forbidden'); });
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const environment = { SEMANTIC_FABRIC_COORDINATOR_SESSION_ID: sessionId, get TMPDIR() { return scratchRead(); } };
+      expect(runCoordinator(['--dry-run'], environment, launch)).toBe(0);
+      expect(scratchRead).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+    } finally { output.mockRestore(); }
+  });
+
+  it.each(['TMPDIR', 'TMP', 'TEMP'])('preserves explicit %s without touching operator scratch', key => {
+    const environment = { [key]: '/explicit/operator/scratch', NATIVE_ROUTE: 'unchanged' };
+    expect(coordinatorEnvironment('/does-not-exist', environment)).toEqual(environment);
+  });
+
+  it('refuses default scratch symlinked into canonical source', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fabric-coordinator-storage-'));
+    try {
+      const canonical = join(directory, 'semantic-fabric'); mkdirSync(canonical);
+      symlinkSync(canonical, join(directory, `.${basename(canonical)}-delivery-tmp`), 'dir');
+      expect(() => coordinatorEnvironment(canonical, {})).toThrow('DELIVERY_COORDINATOR_SCRATCH_NOT_ISOLATED');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('refuses default scratch redirected to external host tmp', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fabric-coordinator-storage-'));
+    try {
+      const canonical = join(directory, 'semantic-fabric'); mkdirSync(canonical);
+      symlinkSync(tmpdir(), join(directory, `.${basename(canonical)}-delivery-tmp`), 'dir');
+      expect(() => coordinatorEnvironment(canonical, {})).toThrow('DELIVERY_COORDINATOR_SCRATCH_NOT_ISOLATED');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   it('refuses missing session and unsupported launch options before execution', () => {
