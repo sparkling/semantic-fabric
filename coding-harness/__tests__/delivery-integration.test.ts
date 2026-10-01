@@ -9,7 +9,7 @@ import { createDeliveryCandidate } from '../src/delivery-candidate.js';
 import { DeliveryHarness } from '../src/delivery-runtime.js';
 import { runIntegrationReview } from '../src/delivery-integration-review.js';
 import { saveReservations } from '../src/delivery-cohort-custody.js';
-import { parseIntegrationInput } from '../src/delivery-integration.js';
+import { parseIntegrationInput, validateIntegrationEvidence } from '../src/delivery-integration.js';
 import { git } from '../src/delivery-workspace.js';
 import { native, workflowFixture } from './delivery-workflow-fixtures.js';
 
@@ -19,7 +19,7 @@ vi.mock('node:fs', async importOriginal => {
 });
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 async function fixture(readPaths: string[] | null = ['coding-harness/check.mjs'], combined = false, newFirst = false, resources: string[] = []) {
   const f = workflowFixture(roots);
   mkdirSync(join(f.root, 'tests')); writeFileSync(join(f.root, 'tests/proof.rs'), '// original evaluator\n');
@@ -273,13 +273,22 @@ async function rejectedIntegration(resources: string[] = [], secondRound = false
   return { ...f, row, ...repair, next, previous: f.harness.read(row.task.id) };
 }
 
-it('recovers a rejected same-task integration with fresh canonical checks/review and retained history', async () => {
+it.each(['unchanged', 'canonical-drift', 'environment-drift'])('recovers rejected integration after %s with fresh checks/review and retained history', async migration => {
   const f = await rejectedIntegration();
+  if (migration === 'canonical-drift') {
+    writeFileSync(join(f.root, 'coding-harness/check.mjs'), 'process.exit(0);\n// accepted harness change\n');
+    git(f.root, 'add', 'coding-harness/check.mjs'); git(f.root, 'commit', '-qm', 'accepted harness change');
+  }
+  if (migration === 'environment-drift') vi.stubEnv('SF_TEST_REVALIDATION', 'current');
+  if (migration !== 'unchanged') await expect(f.harness.integrate(f.input)).rejects.toThrow(migration === 'canonical-drift'
+    ? 'DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED' : 'DELIVERY_CANDIDATE_CHECK_INVALID');
+  const input = migration === 'unchanged' ? f.input : { ...f.input,
+    revalidateAgainst: { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest } };
   const { recover: _recover, ...ordinary } = f.input;
   await expect(f.harness.integrate(ordinary)).rejects.toThrow('RUN_NOT_ACTIVE');
   const original = readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`), 'utf8');
   const rejectedLog = readFileSync(f.previous.checks[0].stdout);
-  const recovered = await f.harness.integrate(f.input);
+  const recovered = await f.harness.integrate(input);
   expect(recovered.task.id).toBe(f.previous.task.id);
   expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('repaired\n');
   const archive = recovered.events.find(event => event.kind === 'integration-recovery')!.reason;
@@ -297,12 +306,18 @@ it('recovers a rejected same-task integration with fresh canonical checks/review
       native: { ...native, executorId: 'recovery-current-source-reviewer' }, outcome: 'completed', summary: 'fresh canonical repair review', issues: [] } };
   } });
   expect(reviewed.success).toBe(true); expect(stages).toEqual(['review']);
+  if (migration === 'environment-drift') {
+    vi.stubEnv('SF_TEST_REVALIDATION', 'changed-again');
+    expect((await f.harness.verify(f.row.task.id, f.row.task.owner)).verdict?.pass).toBe(false);
+    vi.stubEnv('SF_TEST_REVALIDATION', 'current');
+    expect((await f.harness.verify(f.row.task.id, f.row.task.owner)).verdict?.pass).toBe(true);
+  }
   git(f.root, 'add', 'product.txt'); git(f.root, 'commit', '-qm', 'accepted same-task recovery');
   expect((await f.harness.finish(f.row.task.id, f.row.task.owner, git(f.root, 'rev-parse', 'HEAD'))).status).toBe('complete');
   expect(readFileSync(join(f.row.candidate.harness.directory, `${f.row.task.id}.json`), 'utf8')).toBe(original);
 });
 
-it.each(['owner', 'source', 'task', 'reservation'])('refuses unauthorized or stale recovery %s without replacing rejected bytes', async kind => {
+it.each(['owner', 'source', 'task', 'reservation', 'pin-commit', 'pin-source', 'index', 'uncommitted-input', 'deleted-new-input'])('refuses unauthorized or stale recovery %s without replacing rejected bytes', async kind => {
   const f = await rejectedIntegration();
   if (kind === 'source') writeFileSync(join(f.root, 'product.txt'), 'foreign replacement\n');
   if (kind === 'task') {
@@ -314,11 +329,36 @@ it.each(['owner', 'source', 'task', 'reservation'])('refuses unauthorized or sta
     const directory = join(f.harness.directory, 'pool-held-reader'); mkdirSync(directory);
     saveReservations(directory, [{ id: 'held-reader', mutationPaths: ['product.txt'], resources: [], readPaths: [] }]);
   }
+  if (kind === 'index') git(f.root, 'add', 'product.txt');
+  if (kind === 'uncommitted-input') writeFileSync(join(f.root, 'coding-harness/check.mjs'), '// foreign input\n');
+  if (kind === 'deleted-new-input') {
+    writeFileSync(join(f.root, 'coding-harness/new.mjs'), '// accepted new evaluator\n');
+    git(f.root, 'add', 'coding-harness/new.mjs'); git(f.root, 'commit', '-qm', 'accepted new evaluator');
+    rmSync(join(f.root, 'coding-harness/new.mjs'));
+  }
   const before = f.harness.snapshot().digest;
-  await expect(f.harness.integrate({ ...f.input, ...(kind === 'owner' ? { owner: 'intruder' } : {}) })).rejects.toThrow();
+  await expect(f.harness.integrate({ ...f.input, ...(kind === 'owner' ? { owner: 'intruder' } : {}),
+    revalidateAgainst: { commit: kind === 'pin-commit' ? '0'.repeat(40) : git(f.root, 'rev-parse', 'HEAD'),
+      sourceDigest: kind === 'pin-source' ? '0'.repeat(64) : before } })).rejects.toThrow();
   expect(f.harness.snapshot().digest).toBe(before);
   expect(f.harness.read(f.row.task.id)).toEqual(f.previous);
   expect(f.harness.inspect().active).toBeNull();
+});
+
+it('ignores deletion of managed paths excluded from source snapshots during pinned recovery', async () => {
+  const f = await rejectedIntegration();
+  mkdirSync(join(f.root, '.swarm')); writeFileSync(join(f.root, '.swarm/helper.json'), '{}');
+  git(f.root, 'add', '.swarm/helper.json'); git(f.root, 'commit', '-qm', 'managed helper fixture');
+  rmSync(join(f.root, '.swarm/helper.json'));
+  const pin = { commit: git(f.root, 'rev-parse', 'HEAD'), sourceDigest: f.harness.snapshot().digest };
+  expect((await f.harness.integrate({ ...f.input, revalidateAgainst: pin })).integration?.phase).toBe('prepared');
+});
+
+it('rejects altered archived check logs even when historical environment is allowed', async () => {
+  const f = await rejectedIntegration(), archived = structuredClone(f.previous);
+  vi.stubEnv('SF_TEST_REVALIDATION', 'current');
+  archived.integration!.checkLogs[archived.integration!.original.checks[0].stdout] = Buffer.from('altered log').toString('base64');
+  await expect(validateIntegrationEvidence(archived)).rejects.toThrow('DELIVERY_CANDIDATE_CHECK_INVALID');
 });
 
 it.each(['resources', 'readPaths', 'acceptedSource'])('retains admitted %s custody during same-task recovery', async field => {

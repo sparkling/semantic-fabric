@@ -7,7 +7,7 @@ import { asRecord, assertExactKeys, normalizeWorkspacePath } from './contracts.j
 import { identifier, nonempty } from './delivery-contracts.js';
 import { candidateContext } from './delivery-candidate.js';
 import { DeliveryHarness, type DeliveryRun } from './delivery-runtime.js';
-import { atomicJson, git, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
+import { atomicJson, git, isSnapshotSourcePath, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
 import { buildCheckEnvironment, checkEnvironmentEvidence, logDigest } from './delivery-process.js';
 import { workflowReady } from './delivery-workflow.js';
 import { parseStageResponse } from './delivery-workflow-contracts.js';
@@ -50,7 +50,7 @@ export function parseIntegrationInput(input: unknown): IntegrationInput {
 function requiredInputs(files: Record<string, string>, run: DeliveryRun): string[] {
   return requiredDeliveryInputs(files, run.task.checks);
 }
-export async function validateCandidateRun(run: DeliveryRun, source: SourceSnapshot, logs?: Record<string, string>): Promise<void> {
+export async function validateCandidateRun(run: DeliveryRun, source: SourceSnapshot, logs?: Record<string, string>, historicalEnvironment = false): Promise<void> {
   const { digest, ...body } = run;
   if (run.integration || hash(body) !== digest || !run.verdict?.pass || run.status !== 'active'
     || !workflowReady(run, source.digest)) throw new Error('DELIVERY_CANDIDATE_NOT_REVIEWED');
@@ -63,7 +63,8 @@ export async function validateCandidateRun(run: DeliveryRun, source: SourceSnaps
     if (!check?.passed || check.sourceBefore !== source.digest || check.sourceAfter !== source.digest
       || hash(check.argv) !== hash(declared.argv) || check.cwd !== declared.cwd || check.exitCode !== 0 || check.signal !== null
       || start?.reason !== `${check.id}:${check.attempt}`
-      || check.environmentDigest !== hash(checkEnvironmentEvidence(buildCheckEnvironment()))
+      || typeof check.environmentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(check.environmentDigest)
+      || (!historicalEnvironment && check.environmentDigest !== hash(checkEnvironmentEvidence(buildCheckEnvironment())))
       || await checkedLog(check.stdout, logs) !== check.stdoutDigest || await checkedLog(check.stderr, logs) !== check.stderrDigest) {
       throw new Error('DELIVERY_CANDIDATE_CHECK_INVALID');
     }
@@ -90,7 +91,8 @@ async function checkedLog(path: string, logs?: Record<string, string>): Promise<
 }
 export async function validateIntegrationEvidence(run: DeliveryRun): Promise<void> {
   if (!run.integration) return;
-  await validateCandidateRun(run.integration.original, run.integration.candidateSource, run.integration.checkLogs);
+  // Archived candidate evidence proves its own execution, never current canonical check fitness.
+  await validateCandidateRun(run.integration.original, run.integration.candidateSource, run.integration.checkLogs, true);
   validateStageResults(run.workflow?.results.slice(run.integration.original.workflow!.results.length) ?? []);
   for (const receipt of run.integration.outcomeReceipts) validateOutcomeReceipt(receipt, run.integration.original, run.integration.candidateSource);
   for (const receipt of run.integration.outcomeHistory) validateOutcomeReceipt(receipt, run.integration.original);
@@ -137,7 +139,6 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
     throw new Error('DELIVERY_CANDIDATE_IDENTITY');
   }
   if (existsSync(join(candidate.directory, 'operation.lock')) || existsSync(join(candidate.directory, 'runner/operation.lock'))) throw new Error('DELIVERY_CANDIDATE_BUSY');
-  await validateCandidateRun(original, candidateSource);
   if (previous && hash(original.task) !== hash(previous.task)) throw new Error('DELIVERY_INTEGRATION_RECOVERY_TASK_CHANGED');
   const before = harness.snapshot(), readPaths = [...new Set([...(custody.readPaths ?? Object.keys(custody.sourceBefore.files)),
     ...requiredInputs({ ...custody.sourceBefore.files, ...before.files }, original)])].filter(path => !original.task.scope.includes(path));
@@ -145,6 +146,7 @@ export async function prepareIntegration(harness: DeliveryHarness, input: Integr
   if (revalidation && (revalidation.commit !== harness.context.head() || revalidation.sourceDigest !== before.digest)) {
     throw new Error('DELIVERY_INTEGRATION_REVALIDATION_STALE');
   }
+  await validateCandidateRun(original, candidateSource, undefined, !!revalidation);
   // Explicit owner revalidation retains every read; it never permits overwriting changed scope.
   for (const path of revalidation ? [] : readPaths) if (before.files[path] !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
   for (const path of original.task.scope) if ((priorCustody ? priorCustody.sourceBefore.files[path] : before.files[path]) !== custody.sourceBefore.files[path]) throw new Error('DELIVERY_INTEGRATION_INPUT_CHANGED');
@@ -204,11 +206,24 @@ export async function recoverIntegration(harness: DeliveryHarness, input: Integr
   if (!previous?.integration || previous.status !== 'paused' || previous.integration.phase !== 'prepared' || previous.commit
     || previous.task.owner !== input.owner) throw new Error('DELIVERY_INTEGRATION_RECOVERY_REQUIRED');
   const before = harness.snapshot(), evidence = previous.integration;
-  if (harness.context.head() !== previous.baseCommit || before.digest !== evidence.sourceAfter.digest
+  const revalidation = input.revalidateAgainst;
+  if (revalidation && (revalidation.commit !== harness.context.head() || revalidation.sourceDigest !== before.digest)) {
+    throw new Error('DELIVERY_INTEGRATION_REVALIDATION_STALE');
+  }
+  if ((!revalidation && (harness.context.head() !== previous.baseCommit || before.digest !== evidence.sourceAfter.digest))
+    || previous.task.scope.some(path => before.files[path] !== evidence.sourceAfter.files[path])
     || git(harness.root, 'diff', '--cached', '--name-only') !== '') throw new Error('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED');
+  if (revalidation) {
+    git(harness.root, 'merge-base', '--is-ancestor', previous.baseCommit, harness.context.head());
+    const dirtyPaths = [...git(harness.root, 'diff', 'HEAD', '--name-only', '-z').split('\0'),
+      ...git(harness.root, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')].filter(Boolean);
+    if (dirtyPaths.some(path => isSnapshotSourcePath(path) && !previous.task.scope.includes(path))) {
+      throw new Error('DELIVERY_INTEGRATION_RECOVERY_SOURCE_CHANGED');
+    }
+  }
   const reviews = previous.workflow?.results.slice(evidence.original.workflow!.results.length) ?? [];
-  if (!previous.checks.some(check => !check.passed && check.sourceBefore === before.digest)
-    && !reviews.some(result => !result.accepted && result.response.sourceDigest === before.digest)) {
+  if (!previous.checks.some(check => !check.passed && check.sourceBefore === evidence.sourceAfter.digest)
+    && !reviews.some(result => !result.accepted && result.response.sourceDigest === evidence.sourceAfter.digest)) {
     throw new Error('DELIVERY_INTEGRATION_RECOVERY_REJECTION_REQUIRED');
   }
   await validateIntegrationEvidence(previous);

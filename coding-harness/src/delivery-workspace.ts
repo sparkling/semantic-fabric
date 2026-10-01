@@ -23,14 +23,17 @@ export function mainRoot(root: string): string {
   return actual;
 }
 export interface SourceSnapshot { digest: string; files: Record<string, string> }
+/** Managed memory is never opened, even if accidentally tracked. */
+export function isSnapshotSourcePath(name: string): boolean {
+  return !(/^(\.swarm|\.hive-mind)\//.test(name)
+    || /^\.claude-flow\/(?:embeddings\.json|system\/)/.test(name)
+    || /(^|\/)memory\.db(?:-|$)/.test(name));
+}
 export function sourceSnapshot(root: string): SourceSnapshot {
   const names = git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0').filter(Boolean);
   const files: Record<string, string> = {};
   for (const name of [...new Set(names)].sort()) {
-    // Managed memory is never opened, even if accidentally tracked.
-    if (/^(\.swarm|\.hive-mind)\//.test(name)
-      || /^\.claude-flow\/(?:embeddings\.json|system\/)/.test(name)
-      || /(^|\/)memory\.db(?:-|$)/.test(name)) continue;
+    if (!isSnapshotSourcePath(name)) continue;
     const path = join(root, name);
     if (!existsSync(path)) continue;
     if (!lstatSync(path).isFile()) throw new Error(`DELIVERY_NONREGULAR_SOURCE:${name}`);
