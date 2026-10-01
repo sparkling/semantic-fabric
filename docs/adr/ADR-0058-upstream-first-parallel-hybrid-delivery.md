@@ -465,7 +465,7 @@ Keep the existing external-host contract usable while establishing compatibility
    has separate admission; do not pool CPU capacity across hosts. Account for Cargo jobs, Rust test
    threads, nextest and Vitest children. Give each candidate a private Cargo target,
    SQLite files, PostgreSQL/MySQL database/schema, ports and output directory.
-   Test conflicting claims, crash recovery and cleanup of owned fixtures only.
+   Test conflicting claims, crash recovery and cleanup of owned fixtures only. October 1 storage fix: workspace dev/test use limited `debug=1`, `incremental=false`; real offline Cargo build/test graphs retain assertions/overflow checks. Existing lock-protected incremental cleaner now discovers shared targets as well as private lanes; bins, source, receipts and frozen evidence remain. Historical compiled variants still need owner-confirmed retirement; no cloud adoption or bounded-total-storage claim.
    A skipped database suite remains not-run. Never equate model count to CPU count.
 5. **Prove one useful parallel outcome.** Record overlapping native/API worker
    timestamps and PIDs/request IDs, exact source and accepted handoff hashes,

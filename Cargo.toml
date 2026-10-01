@@ -83,3 +83,9 @@ rusqlite = "0.40.2"
 #   virtualizer streaming (ADR-0010): async-stream 0.3, tokio-util 0.7, axum 0.8.
 #   SHACL gate (sf-conformance, ADR-0005): shacl 0.3.
 #   (DataFusion / Arrow / connector_arrow / polars dropped; DuckDB is not a selected coordinator/spill architecture.)
+
+# Test inherits dev. Keep limited debug info without full per-test payloads or
+# incremental graphs duplicated across isolated parallel targets.
+[profile.dev]
+debug = 1
+incremental = false
