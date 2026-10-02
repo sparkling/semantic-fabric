@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,6 +30,72 @@ async function attest(harness: DeliveryHarness, task: DeliveryTask, edit?: () =>
 }
 
 describe('upstream pool and ordinary lifecycle candidate roots', () => {
+  it('copies explicit committed bytes while preserving dirty, staged and untracked owner work', () => {
+    const f = workflowFixture(roots), directory = parentDirectory();
+    writeFileSync(join(f.root, 'binary.dat'), Buffer.from([0, 255, 10]));
+    writeFileSync(join(f.root, 'empty.txt'), ''); chmodSync(join(f.root, 'product.txt'), 0o755);
+    git(f.root, 'add', '.'); git(f.root, 'commit', '-qm', 'accepted source');
+    const sourceCommit = f.harness.context.head(), accepted = f.harness.snapshot();
+    writeFileSync(join(f.root, 'product.txt'), 'staged owner work'); git(f.root, 'add', 'product.txt');
+    writeFileSync(join(f.root, 'product.txt'), 'newer owner work');
+    unlinkSync(join(f.root, 'binary.dat')); writeFileSync(join(f.root, 'pending.txt'), 'unaccepted');
+    const status = git(f.root, 'status', '--porcelain'), index = git(f.root, 'write-tree');
+    const candidate = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], sourceCommit });
+    try {
+      expect(candidate.sourceBefore).toEqual(accepted);
+      expect(readFileSync(join(candidate.harness.root, 'product.txt'), 'utf8')).toBe('before\n');
+      expect(statSync(join(candidate.harness.root, 'product.txt')).mode & 0o100).toBe(0o100);
+      expect(readFileSync(join(candidate.harness.root, 'binary.dat'))).toEqual(Buffer.from([0, 255, 10]));
+      expect(readFileSync(join(candidate.harness.root, 'empty.txt'))).toHaveLength(0);
+      expect(candidate.sourceBefore.files).not.toHaveProperty('pending.txt');
+      const custody = readdirSync(f.harness.directory).find(name => name.startsWith('candidate-'))!;
+      expect(JSON.parse(readFileSync(join(f.harness.directory, custody), 'utf8')).cleanBase).toBe(true);
+      expect(git(f.root, 'status', '--porcelain')).toBe(status); expect(git(f.root, 'write-tree')).toBe(index);
+      expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('newer owner work');
+    } finally { candidate.cleanup(); }
+  });
+  it('rejects stale or abbreviated source commits before creating a candidate', () => {
+    const f = workflowFixture(roots), directory = parentDirectory(), old = f.harness.context.head();
+    git(f.root, 'commit', '--allow-empty', '-qm', 'new accepted head');
+    for (const sourceCommit of [old, old.slice(0, 8), 'HEAD', 'f'.repeat(40)]) {
+      expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], sourceCommit }))
+        .toThrow('DELIVERY_CANDIDATE_SOURCE_COMMIT_CHANGED');
+      expect(readdirSync(directory)).toEqual([]);
+    }
+  });
+  it('revalidates canonical branch custody before explicit committed-source admission', () => {
+    const f = workflowFixture(roots), directory = parentDirectory(), sourceCommit = f.harness.context.head();
+    git(f.root, 'switch', '-qc', 'different-owner');
+    expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], sourceCommit }))
+      .toThrow('DELIVERY_MAIN_ONLY');
+    expect(readdirSync(directory)).toEqual([]);
+  });
+  it('keeps owner WIP protected through candidate verification and canonical integration', async () => {
+    const f = workflowFixture(roots), directory = parentDirectory(), sourceCommit = f.harness.context.head();
+    writeFileSync(join(f.root, 'owner-wip.txt'), 'preserve owner work');
+    const candidate = createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], sourceCommit });
+    try {
+      const run = await attest(candidate.harness, f.task, () => writeFileSync(join(candidate.harness.root, 'product.txt'), 'fixed\n'));
+      const input = { candidateRoot: candidate.harness.root, id: f.task.id, owner: f.task.owner, expectedDigest: run.digest };
+      await expect(f.harness.integrate(input)).rejects.toThrow('DELIVERY_INTEGRATION_DIRTY_CANONICAL');
+      expect(readFileSync(join(f.root, 'owner-wip.txt'), 'utf8')).toBe('preserve owner work');
+      expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('before\n');
+      unlinkSync(join(f.root, 'owner-wip.txt'));
+      const integrated = await f.harness.integrate(input);
+      expect(integrated.integration?.phase).toBe('prepared'); expect(integrated.checks).toEqual([]);
+      expect(integrated.verdict).toBeUndefined();
+      expect(readFileSync(join(f.root, 'product.txt'), 'utf8')).toBe('fixed\n');
+    } finally { candidate.cleanup(); }
+  });
+  it('refuses committed symlinks even when working bytes replaced them with a regular file', () => {
+    const f = workflowFixture(roots), directory = parentDirectory();
+    symlinkSync('product.txt', join(f.root, 'link.txt')); git(f.root, 'add', 'link.txt'); git(f.root, 'commit', '-qm', 'link fixture');
+    const sourceCommit = f.harness.context.head();
+    unlinkSync(join(f.root, 'link.txt')); writeFileSync(join(f.root, 'link.txt'), 'owner replacement');
+    expect(() => createDeliveryCandidate(f.harness, { parentDirectory: directory, scope: ['product.txt'], sourceCommit }))
+      .toThrow('DELIVERY_NONREGULAR_SOURCE');
+    expect(readdirSync(directory)).toEqual([]);
+  });
   it('uses coordinator sibling scratch without capturing retained candidates into source', () => {
     const f = workflowFixture(roots), before = f.harness.snapshot().digest;
     const directory = coordinatorEnvironment(f.root, {}).TMPDIR; roots.push(directory);

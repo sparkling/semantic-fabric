@@ -11,6 +11,7 @@ import * as executor from '../src/delivery-executor.js';
 import type { DeliveryPoolProgress } from '../src/delivery-pool.js';
 import { runDeliveryOutcome } from '../src/delivery-runner.js';
 import { activeReservations } from '../src/delivery-cohort-custody.js';
+import { git } from '../src/delivery-workspace.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -30,6 +31,29 @@ function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+it('launches two committed-source candidates while unrelated canonical authoring remains dirty', async () => {
+  const f = fixture();
+  git(f.root, 'add', 'other.txt'); git(f.root, 'commit', '-qm', 'accepted independent inputs');
+  const sourceCommit = f.harness.context.head(), accepted = f.harness.snapshot().digest;
+  writeFileSync(join(f.root, 'owner-wip.txt'), 'unfinished owner slice');
+  const before = f.harness.snapshot().digest, gate = deferred(), started: string[] = [];
+  const pending = dispatchDeliveryReady(f.harness, { ...f.manifest, sourceCommit }, async (candidate, _mode, id) => {
+    expect(candidate.context.head()).toBe(sourceCommit); expect(candidate.snapshot().digest).toBe(accepted);
+    expect(existsSync(join(candidate.root, 'owner-wip.txt'))).toBe(false);
+    started.push(id); await gate.promise; return true;
+  });
+  try {
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+    expect(f.harness.snapshot().digest).toBe(before);
+    writeFileSync(join(f.root, 'owner-wip.txt'), 'owner continues without waiting');
+  } finally { gate.resolve(); await pending; }
+  const result = await pending;
+  expect(result.peakConcurrency).toBe(2);
+  expect(result.results.every(row => row.status === 'fulfilled')).toBe(true);
+  expect(readFileSync(join(f.root, 'owner-wip.txt'), 'utf8')).toBe('owner continues without waiting');
+  expect(f.harness.context.head()).toBe(sourceCommit);
+});
 
 // Injected fixture width proves adapter capacity, not ready application work or native capacity.
 it.each([16, 32])('runs %i independent fixtures and refills before held sibling cleanup', async width => {

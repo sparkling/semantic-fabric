@@ -7,7 +7,7 @@ import { hash } from '@metaharness/harness';
 import { createImmutablePrivateRuntime } from './immutable-private-runtime.js';
 import { type DeliveryContext } from './delivery-context.js';
 import { DeliveryHarness } from './delivery-runtime.js';
-import { atomicJson, git, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
+import { atomicJson, git, isSnapshotSourcePath, outsideDigest, readJson, type SourceSnapshot } from './delivery-workspace.js';
 import { normalizeWorkspacePath } from './contracts.js';
 import { liveDeliveryRuntimeInputs } from './delivery-lineage.js';
 
@@ -26,6 +26,27 @@ export function deliveryReadPaths(harness: DeliveryHarness, scope: string[], dec
 }
 
 const artifactRoots = new Set(['.metaharness', 'coding-harness/dist', 'coding-harness/node_modules', 'target']);
+
+/** Read raw Git blobs, never the index, filters or another author's working bytes. */
+function committedSource(root: string, commit: string) {
+  const files: Record<string, string> = {}, blobs = new Map<string, Buffer>();
+  const entries = git(root, 'ls-tree', '-r', '-z', '--full-tree', commit).split('\0').filter(Boolean);
+  for (const entry of entries) {
+    const separator = entry.indexOf('\t'), path = entry.slice(separator + 1);
+    if (!isSnapshotSourcePath(path)) continue;
+    normalizeWorkspacePath(path, 'committed source');
+    const metadata = /^(100644|100755) blob ([a-f0-9]{40}|[a-f0-9]{64})$/.exec(entry.slice(0, separator));
+    if (!metadata) throw new Error(`DELIVERY_NONREGULAR_SOURCE:${path}`);
+    if ([...artifactRoots].some(root => path === root || path.startsWith(`${root}/`))) {
+      throw new Error('DELIVERY_TRACKED_ARTIFACT_SOURCE_REFUSED');
+    }
+    const bytes = execFileSync('git', ['-C', root, 'cat-file', 'blob', metadata[2]], { maxBuffer: 32 * 1024 * 1024 });
+    files[path] = `${metadata[1]}:${createHash('sha256').update(bytes).digest('hex')}`;
+    blobs.set(path, bytes);
+  }
+  const ordered = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  return { snapshot: { files: ordered, digest: hash(ordered) }, blobs };
+}
 
 /** Integration owns working bytes; independent candidates use its last accepted commit. */
 export function assertCandidateAdmission(canonical: DeliveryHarness, tasks: readonly { id: string; mutationPaths: string[]; resources: string[]; readPaths?: string[] }[]): void {
@@ -110,9 +131,15 @@ export function assertAcceptedDeliverySource(harness: DeliveryHarness, parentId:
 
 export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
   parentDirectory: string; scope: string[]; acceptedParent?: string; acceptedInputs?: string[]; readPaths?: string[];
-  resources?: string[];
+  resources?: string[]; sourceCommit?: string;
 }): DeliveryCandidate {
   if (canonical.context.kind !== 'main') throw new Error('DELIVERY_CANONICAL_SOURCE_REQUIRED');
+  canonical.context.assert();
+  const baseCommit = canonical.context.head();
+  if (input.sourceCommit !== undefined && (typeof input.sourceCommit !== 'string'
+    || !/^[a-f0-9]{40}$/.test(input.sourceCommit) || input.sourceCommit !== baseCommit)) {
+    throw new Error('DELIVERY_CANDIDATE_SOURCE_COMMIT_CHANGED');
+  }
   const parentDirectory = realpathSync(input.parentDirectory);
   const relativeParent = relative(realpathSync(canonical.root), parentDirectory);
   if (!relativeParent || (!isAbsolute(relativeParent) && relativeParent !== '..' && !relativeParent.startsWith('../'))) {
@@ -123,7 +150,8 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
   assertCandidateAdmission(canonical, [{ id: '', mutationPaths: input.scope, resources: input.resources ?? [], readPaths: input.readPaths }]);
   const active = canonical.inspect().active as { id: string } | null;
   const integration = active ? canonical.read(active.id).integration : undefined;
-  const sourceBefore = integration?.sourceBefore ?? canonical.snapshot(), baseCommit = canonical.context.head();
+  const committed = input.sourceCommit === undefined ? undefined : committedSource(canonical.root, baseCommit);
+  const sourceBefore = committed?.snapshot ?? integration?.sourceBefore ?? canonical.snapshot();
   if (acceptedSource) {
     git(canonical.root, 'merge-base', '--is-ancestor', acceptedSource.commit, baseCommit);
     if (Object.entries(acceptedSource.inputs).some(([path, value]) => (sourceBefore.files[path] ?? null) !== value)) throw new Error('DELIVERY_ACCEPTED_INPUT_CHANGED');
@@ -134,19 +162,19 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
   if (Object.keys(sourceBefore.files).some(path => [...artifactRoots].some(root => path === root || path.startsWith(`${root}/`)))) throw new Error('DELIVERY_TRACKED_ARTIFACT_SOURCE_REFUSED');
   if (scope.some(path => existsSync(join(canonical.root, path)) && lstatSync(join(canonical.root, path)).isDirectory())) throw new Error('DELIVERY_EXACT_FILE_SCOPE_REQUIRED');
   const emptyHash = createHash('sha256').update('').digest('hex');
-  // Restore only in-flight changed files from Git; all other copies use existing digest guards.
-  const restored = integration ? mkdtempSync(join(parentDirectory, 'accepted-source-')) : undefined;
+  // Explicit commit mode copies only blobs; legacy integration restores its changed files.
+  const restored = committed || integration ? mkdtempSync(join(parentDirectory, 'accepted-source-')) : undefined;
   let runtime: ReturnType<typeof createImmutablePrivateRuntime>;
   try {
-  const working = integration ? canonical.snapshot() : sourceBefore;
+  const working = integration && !committed ? canonical.snapshot() : sourceBefore;
   const sources = new Map<string, string>();
   for (const [path, value] of Object.entries(sourceBefore.files)) {
     let sourcePath = join(canonical.root, path);
-    if (restored && working.files[path] !== value) {
+    if (restored && (committed || working.files[path] !== value)) {
       normalizeWorkspacePath(path, 'accepted source');
       sourcePath = join(restored, path);
       mkdirSync(dirname(sourcePath), { recursive: true, mode: 0o700 });
-      const bytes = execFileSync('git', ['-C', canonical.root, 'cat-file', 'blob', `${baseCommit}:${path}`], { maxBuffer: 32 * 1024 * 1024 });
+      const bytes = committed?.blobs.get(path) ?? execFileSync('git', ['-C', canonical.root, 'cat-file', 'blob', `${baseCommit}:${path}`], { maxBuffer: 32 * 1024 * 1024 });
       if (createHash('sha256').update(bytes).digest('hex') !== value.split(':')[1]) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
       writeFileSync(sourcePath, bytes, { flag: 'wx', mode: value.startsWith('100755:') ? 0o700 : 0o600 });
     }
@@ -176,12 +204,13 @@ export function createDeliveryCandidate(canonical: DeliveryHarness, input: {
     }
     const context = candidateContext(runtime.root, canonical, sourceBefore, baseCommit, scope);
     if (context.snapshot().digest !== sourceBefore.digest) throw new Error('DELIVERY_CANDIDATE_COPY_MISMATCH');
-    if (canonical.context.head() !== baseCommit || (!integration && canonical.snapshot().digest !== sourceBefore.digest)) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
+    canonical.context.assert();
+    if (canonical.context.head() !== baseCommit || (!committed && !integration && canonical.snapshot().digest !== sourceBefore.digest)) throw new Error('DELIVERY_CANDIDATE_SOURCE_DRIFT');
     const readPaths = [...new Set([...(input.readPaths ?? Object.keys(sourceBefore.files)), ...Object.keys(acceptedSource?.inputs ?? {})])];
     for (const path of readPaths) normalizeWorkspacePath(path, 'candidate read path');
     atomicJson(join(canonical.directory, `candidate-${hash(runtime.root)}.json`), { root: runtime.root, sourceBefore, baseCommit, scope,
       readPaths, declaredReadPaths: input.readPaths ?? null, resources: input.resources ?? [], acceptedSource: acceptedSource ?? null,
-      cleanBase: !!integration || git(canonical.root, 'status', '--porcelain') === '' });
+      cleanBase: !!committed || !!integration || git(canonical.root, 'status', '--porcelain') === '' });
     atomicJson(join(context.directory, 'candidate.json'), { canonicalRoot: canonical.root });
     return { harness: new DeliveryHarness(runtime.root, context), sourceBefore, ...(acceptedSource ? { acceptedSource } : {}), cleanup: runtime.cleanup };
   } catch (error) { runtime.cleanup(); throw error; }

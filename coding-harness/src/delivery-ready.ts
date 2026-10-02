@@ -13,7 +13,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
   execute: (candidate: DeliveryHarness, command: 'packet' | 'propose' | 'run', id: string, owner: string, signal: AbortSignal) => Promise<boolean>,
   signal?: AbortSignal, observe?: (event: DeliveryPoolProgress) => void) {
   const manifest = asRecord(input, 'ready manifest');
-  assertExactKeys(manifest, ['schemaVersion', 'parentDirectory', 'maxConcurrency', 'mode', 'outcomes'], 'ready manifest');
+  assertExactKeys({ sourceCommit: undefined, ...manifest }, ['schemaVersion', 'parentDirectory', 'maxConcurrency', 'mode', 'outcomes', 'sourceCommit'], 'ready manifest');
   if (manifest.schemaVersion !== 1 || !Number.isSafeInteger(manifest.maxConcurrency) || (manifest.maxConcurrency as number) < 1
     || !['packet', 'propose', 'run'].includes(String(manifest.mode)) || !Array.isArray(manifest.outcomes) || !manifest.outcomes.length) {
     throw new Error('DELIVERY_INVALID_READY_MANIFEST');
@@ -21,6 +21,9 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
   const parentDirectory = nonempty(manifest.parentDirectory, 'parentDirectory');
   if (!isAbsolute(parentDirectory)) throw new Error('DELIVERY_ABSOLUTE_CANDIDATE_PARENT_REQUIRED');
   const mode = manifest.mode as 'packet' | 'propose' | 'run';
+  const sourceCommit = manifest.sourceCommit;
+  if (sourceCommit !== undefined && (typeof sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(sourceCommit)
+    || sourceCommit !== canonical.context.head())) throw new Error('DELIVERY_CANDIDATE_SOURCE_COMMIT_CHANGED');
   const outcomes = manifest.outcomes.map(value => {
     const row = asRecord(value, 'ready outcome');
     assertExactKeys({ acceptedParent: undefined, acceptedInputs: undefined, ...row },
@@ -45,7 +48,7 @@ export async function dispatchDeliveryReady(canonical: DeliveryHarness, input: u
       run: async (signal: AbortSignal, record: Parameters<Parameters<typeof runDeliveryPool>[1][number]['run']>[1]) => {
         const candidate = withSynchronousOperationLock(canonical.directory, () => {
           assertCandidateAdmission(canonical, [{ id: task.id, mutationPaths: task.scope, resources, readPaths: task.readPaths }]);
-          return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources });
+          return createDeliveryCandidate(canonical, { parentDirectory, scope: task.scope, acceptedParent, acceptedInputs, readPaths: task.readPaths, resources, sourceCommit });
         });
         record(candidate);
         await candidate.harness.begin(task);

@@ -23,6 +23,7 @@ export function coordinatorLaunch(root, sessionId) {
     'Own decomposition into useful outcomes, dependency admission, file/read/resource ownership, independent review and serial integration.',
     'Authorized direct implementation, repair and preparation remain available; harness orchestration is optional. When using the harness, use existing delivery ready manifests and runDeliveryOutcome; do not build another scheduler or use one monolithic programme worker.',
     'Use inherited TMPDIR for new temporary candidate parents; preserve explicit parentDirectory in existing manifests and running commands.',
+    'For independent work from accepted HEAD while canonical has unrelated WIP, set sourceCommit to that exact full HEAD in the ready manifest or createDeliveryCandidate input. This copies committed blobs, not dirty working bytes; do not wait for unrelated authoring to finish merely to snapshot. Preserve real dependencies, reservations, existing candidates and source-bound integration checks.',
     'For each ready cohort record task/owner/source/read closure/checks, actual handoff, named resources and recipient.',
     'Choose maxConcurrency from independently ready disjoint work and observed client/host capacity, not a fixed native-session cap.',
     'At each refill examine every unfinished authorized outcome: assign useful independent work or name its actual prerequisite, read/write conflict, resource or authority blocker.',
